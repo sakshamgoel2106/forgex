@@ -20,6 +20,9 @@ import type {
   CopilotMessage,
   Citation,
   MessageFeedback,
+  VisualAsset,
+  VisualAssetType,
+  ComponentLabel,
 } from '@forgex/shared-types';
 
 export interface CreateOrganizationDTO {
@@ -213,6 +216,42 @@ export interface IDataStore {
   getMessageWithCitations(messageId: string): Promise<CopilotMessage | null>;
   listMessages(conversationId: string): Promise<CopilotMessage[]>;
   recordMessageFeedback(dto: CreateFeedbackDTO): Promise<MessageFeedback>;
+
+  // Visual Assets (Phase 5)
+  createVisualAsset(dto: CreateVisualAssetDTO): Promise<VisualAsset>;
+  getVisualAssetById(organizationId: string, id: string): Promise<VisualAsset | null>;
+  listVisualAssets(organizationId: string, filter?: VisualAssetFilterOptions): Promise<VisualAsset[]>;
+  deleteVisualAsset(organizationId: string, id: string): Promise<boolean>;
+}
+
+export interface CreateVisualAssetDTO {
+  organizationId: string;
+  plantId?: string | null;
+  documentId?: string | null;
+  documentVersionId?: string | null;
+  pageNumber?: number | null;
+  assetType: VisualAssetType;
+  storageKey: string;
+  filename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  width?: number | null;
+  height?: number | null;
+  description?: string | null;
+  equipmentTags?: string[];
+  componentLabels?: ComponentLabel[];
+  extractionMethod: string;
+  modelUsed: string;
+  confidenceScore?: number;
+  isAmbiguous?: boolean;
+}
+
+export interface VisualAssetFilterOptions {
+  plantId?: string;
+  documentId?: string;
+  documentVersionId?: string;
+  assetType?: VisualAssetType;
+  equipmentTag?: string;
 }
 
 export interface CreateConversationDTO {

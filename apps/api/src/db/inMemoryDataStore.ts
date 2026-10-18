@@ -16,6 +16,7 @@ import type {
   CopilotMessage,
   Citation,
   MessageFeedback,
+  VisualAsset,
 } from '@forgex/shared-types';
 import type {
   IDataStore,
@@ -35,6 +36,8 @@ import type {
   CreateMessageDTO,
   CreateCitationDTO,
   CreateFeedbackDTO,
+  CreateVisualAssetDTO,
+  VisualAssetFilterOptions,
 } from './dataStore.interface.js';
 
 export class InMemoryDataStore implements IDataStore {
@@ -57,6 +60,9 @@ export class InMemoryDataStore implements IDataStore {
   private messages = new Map<string, CopilotMessage>();
   private citations = new Map<string, Citation>();
   private messageFeedbacks = new Map<string, MessageFeedback>();
+
+  // Phase 5 Visual Industrial Intelligence
+  private visualAssets = new Map<string, VisualAsset>();
 
   // --------------------------------------------------------------------------
   // Organizations
@@ -868,6 +874,70 @@ export class InMemoryDataStore implements IDataStore {
     return feedback;
   }
 
+  // --------------------------------------------------------------------------
+  // Phase 5: Visual Industrial Intelligence
+  // --------------------------------------------------------------------------
+  public async createVisualAsset(dto: CreateVisualAssetDTO): Promise<VisualAsset> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const asset: VisualAsset = {
+      id,
+      organizationId: dto.organizationId,
+      plantId: dto.plantId ?? null,
+      documentId: dto.documentId ?? null,
+      documentVersionId: dto.documentVersionId ?? null,
+      pageNumber: dto.pageNumber ?? null,
+      assetType: dto.assetType,
+      storageKey: dto.storageKey,
+      filename: dto.filename,
+      mimeType: dto.mimeType,
+      fileSizeBytes: dto.fileSizeBytes,
+      width: dto.width ?? null,
+      height: dto.height ?? null,
+      description: dto.description ?? null,
+      equipmentTags: dto.equipmentTags ?? [],
+      componentLabels: dto.componentLabels ?? [],
+      extractionMethod: dto.extractionMethod,
+      modelUsed: dto.modelUsed,
+      confidenceScore: dto.confidenceScore ?? 1.0,
+      isAmbiguous: dto.isAmbiguous ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.visualAssets.set(id, asset);
+    return asset;
+  }
+
+  public async getVisualAssetById(organizationId: string, id: string): Promise<VisualAsset | null> {
+    const asset = this.visualAssets.get(id);
+    if (!asset || asset.organizationId !== organizationId) return null;
+    return asset;
+  }
+
+  public async listVisualAssets(
+    organizationId: string,
+    filter?: VisualAssetFilterOptions
+  ): Promise<VisualAsset[]> {
+    const results: VisualAsset[] = [];
+    for (const a of this.visualAssets.values()) {
+      if (a.organizationId !== organizationId) continue;
+      if (filter?.plantId && a.plantId !== filter.plantId) continue;
+      if (filter?.documentId && a.documentId !== filter.documentId) continue;
+      if (filter?.documentVersionId && a.documentVersionId !== filter.documentVersionId) continue;
+      if (filter?.assetType && a.assetType !== filter.assetType) continue;
+      if (filter?.equipmentTag && !a.equipmentTags.includes(filter.equipmentTag)) continue;
+      results.push(a);
+    }
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async deleteVisualAsset(organizationId: string, id: string): Promise<boolean> {
+    const asset = this.visualAssets.get(id);
+    if (!asset || asset.organizationId !== organizationId) return false;
+    this.visualAssets.delete(id);
+    return true;
+  }
+
   public clear(): void {
     this.organizations.clear();
     this.users.clear();
@@ -884,5 +954,6 @@ export class InMemoryDataStore implements IDataStore {
     this.messages.clear();
     this.citations.clear();
     this.messageFeedbacks.clear();
+    this.visualAssets.clear();
   }
 }

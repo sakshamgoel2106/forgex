@@ -19,6 +19,7 @@ import type {
   CopilotMessage,
   Citation,
   MessageFeedback,
+  VisualAsset,
 } from '@forgex/shared-types';
 import type {
   IDataStore,
@@ -38,6 +39,8 @@ import type {
   CreateMessageDTO,
   CreateCitationDTO,
   CreateFeedbackDTO,
+  CreateVisualAssetDTO,
+  VisualAssetFilterOptions,
 } from './dataStore.interface.js';
 
 export class PgDataStore implements IDataStore {
@@ -1514,6 +1517,125 @@ export class PgDataStore implements IDataStore {
       rating: row.rating,
       comment: row.comment,
       createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 5: Visual Industrial Intelligence
+  // --------------------------------------------------------------------------
+  public async createVisualAsset(dto: CreateVisualAssetDTO): Promise<VisualAsset> {
+    const res = await this.pool.query(
+      `INSERT INTO visual_assets (
+         organization_id, plant_id, document_id, document_version_id, page_number,
+         asset_type, storage_key, filename, mime_type, file_size_bytes, width, height,
+         description, equipment_tags, component_labels, extraction_method, model_used,
+         confidence_score, is_ambiguous
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       RETURNING *`,
+      [
+        dto.organizationId,
+        dto.plantId ?? null,
+        dto.documentId ?? null,
+        dto.documentVersionId ?? null,
+        dto.pageNumber ?? null,
+        dto.assetType,
+        dto.storageKey,
+        dto.filename,
+        dto.mimeType,
+        dto.fileSizeBytes,
+        dto.width ?? null,
+        dto.height ?? null,
+        dto.description ?? null,
+        dto.equipmentTags ?? [],
+        JSON.stringify(dto.componentLabels ?? []),
+        dto.extractionMethod,
+        dto.modelUsed,
+        dto.confidenceScore ?? 1.0,
+        dto.isAmbiguous ?? false,
+      ]
+    );
+    return this.mapVisualAssetRow(res.rows[0]);
+  }
+
+  public async getVisualAssetById(organizationId: string, id: string): Promise<VisualAsset | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM visual_assets WHERE id = $1 AND organization_id = $2`,
+      [id, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapVisualAssetRow(res.rows[0]);
+  }
+
+  public async listVisualAssets(
+    organizationId: string,
+    filter?: VisualAssetFilterOptions
+  ): Promise<VisualAsset[]> {
+    const conditions: string[] = ['organization_id = $1'];
+    const params: any[] = [organizationId];
+
+    if (filter?.plantId) {
+      params.push(filter.plantId);
+      conditions.push(`plant_id = $${params.length}`);
+    }
+    if (filter?.documentId) {
+      params.push(filter.documentId);
+      conditions.push(`document_id = $${params.length}`);
+    }
+    if (filter?.documentVersionId) {
+      params.push(filter.documentVersionId);
+      conditions.push(`document_version_id = $${params.length}`);
+    }
+    if (filter?.assetType) {
+      params.push(filter.assetType);
+      conditions.push(`asset_type = $${params.length}`);
+    }
+    if (filter?.equipmentTag) {
+      params.push(filter.equipmentTag);
+      conditions.push(`$${params.length} = ANY(equipment_tags)`);
+    }
+
+    const res = await this.pool.query(
+      `SELECT * FROM visual_assets WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`,
+      params
+    );
+    return res.rows.map((row) => this.mapVisualAssetRow(row));
+  }
+
+  public async deleteVisualAsset(organizationId: string, id: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM visual_assets WHERE id = $1 AND organization_id = $2 RETURNING id`,
+      [id, organizationId]
+    );
+    return res.rows.length > 0;
+  }
+
+  private mapVisualAssetRow(row: any): VisualAsset {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      documentId: row.document_id,
+      documentVersionId: row.document_version_id,
+      pageNumber: row.page_number,
+      assetType: row.asset_type,
+      storageKey: row.storage_key,
+      filename: row.filename,
+      mimeType: row.mime_type,
+      fileSizeBytes: Number(row.file_size_bytes),
+      width: row.width,
+      height: row.height,
+      description: row.description,
+      equipmentTags: row.equipment_tags || [],
+      componentLabels: typeof row.component_labels === 'string'
+        ? JSON.parse(row.component_labels)
+        : (row.component_labels || []),
+      extractionMethod: row.extraction_method,
+      modelUsed: row.model_used,
+      confidenceScore: Number(row.confidence_score),
+      isAmbiguous: row.is_ambiguous,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
     };
   }
 }
