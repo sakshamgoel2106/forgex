@@ -1,0 +1,66 @@
+import pg from 'pg';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { logger } from '../utils/logger.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export async function runMigrations(pool: pg.Pool): Promise<string[]> {
+  const client = await pool.connect();
+  const appliedMigrations: string[] = [];
+
+  try {
+    // Ensure migrations ledger exists
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        name VARCHAR(255) PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    const migrationsDir = path.resolve(__dirname, 'migrations');
+    if (!fs.existsSync(migrationsDir)) {
+      logger.warn({ migrationsDir }, 'Migrations directory not found');
+      return [];
+    }
+
+    const files = fs
+      .readdirSync(migrationsDir)
+      .filter((file) => file.endsWith('.sql'))
+      .sort();
+
+    for (const file of files) {
+      const existing = await client.query(
+        'SELECT name FROM schema_migrations WHERE name = $1',
+        [file]
+      );
+
+      if (existing.rows.length === 0) {
+        logger.info({ migration: file }, 'Applying database migration...');
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
+
+        await client.query('BEGIN');
+        try {
+          await client.query(sql);
+          await client.query(
+            'INSERT INTO schema_migrations (name) VALUES ($1)',
+            [file]
+          );
+          await client.query('COMMIT');
+          appliedMigrations.push(file);
+          logger.info({ migration: file }, 'Successfully applied migration');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          logger.error({ migration: file, err }, 'Failed to apply migration');
+          throw err;
+        }
+      }
+    }
+
+    return appliedMigrations;
+  } finally {
+    client.release();
+  }
+}

@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  # =========================================================================
+  # Primary Relational Store: PostgreSQL 16
+  # Stores users, RBAC permissions, document metadata, SOP runs & audit logs
+  # =========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: forgex-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forgex_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forgex_dev_secret_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-forgex_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - forgex_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forgex_admin} -d ${POSTGRES_DB:-forgex_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # Asynchronous Queue Broker & Cache: Redis 7
+  # Powers BullMQ queues for document ingestion and heavy extraction jobs
+  # =========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: forgex-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - forgex_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # Multimodal Vector Store: Qdrant
+  # Stores dense embeddings with strict tenant/asset payload filters
+  # =========================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: forgex-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_REST_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - forgex_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e \"GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && cat <&3 | grep -q \"200 OK\"' || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # Object Storage: MinIO (S3-compatible)
+  # Stores raw technical PDFs, CAD/TIFF files, and extracted diagram figures
+  # =========================================================================
+  minio:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    container_name: forgex-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-forgex_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-forgex_minio_secret_2026}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - forgex_minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =========================================================================
+  # Local Enterprise Inference: Ollama
+  # Provides air-gapped LLM reasoning and multimodal vision-language models
+  # =========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: forgex-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - forgex_ollama_models:/root/.ollama
+
+volumes:
+  forgex_pg_data:
+    driver: local
+  forgex_redis_data:
+    driver: local
+  forgex_qdrant_data:
+    driver: local
+  forgex_minio_data:
+    driver: local
+  forgex_ollama_models:
+    driver: local
