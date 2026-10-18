@@ -33,7 +33,7 @@ export function createGenerationProvider(): IMultimodalGenerationProvider {
 
   // SaaS Cloud Mode: Cloud provider enabled ONLY through explicit configuration
   if (config.DEPLOYMENT_MODE === 'saas') {
-    if (mode === 'saas' || mode === 'cloud' || mode === 'openai' || mode === 'azure') {
+    if (mode === 'saas' || mode === 'cloud' || mode === 'openai' || mode === 'azure' || mode === 'gemini') {
       defaultGenerationProvider = new CloudSaasAdapter(config.CLOUD_AI_API_KEY, config.CLOUD_AI_MODEL);
       return defaultGenerationProvider;
     }
@@ -45,7 +45,7 @@ export function createGenerationProvider(): IMultimodalGenerationProvider {
   // Local Dev / Default
   if (mode === 'ollama') {
     defaultGenerationProvider = new OllamaEnterpriseAdapter(config.OLLAMA_BASE_URL, config.OLLAMA_DEFAULT_MODEL);
-  } else if (mode === 'saas' || mode === 'cloud') {
+  } else if (mode === 'saas' || mode === 'cloud' || mode === 'gemini') {
     defaultGenerationProvider = new CloudSaasAdapter(config.CLOUD_AI_API_KEY, config.CLOUD_AI_MODEL);
   } else {
     defaultGenerationProvider = new LocalDevInferenceAdapter();

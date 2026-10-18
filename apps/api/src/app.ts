@@ -85,9 +85,12 @@ export function createApp(deps: AppDependencies = {}): express.Application {
 
   // Security hardening
   app.use(helmet());
+  const allowedOrigins = config.CORS_ORIGIN.includes(',')
+    ? config.CORS_ORIGIN.split(',').map((s) => s.trim())
+    : config.CORS_ORIGIN;
   app.use(
     cors({
-      origin: config.CORS_ORIGIN,
+      origin: allowedOrigins,
       credentials: true,
     })
   );

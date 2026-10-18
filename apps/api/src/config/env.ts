@@ -39,7 +39,7 @@ const envSchema = z.object({
 
   // Inference Provider
   INFERENCE_MODE: z.enum(['local_ollama', 'saas_cloud']).default('local_ollama'),
-  INFERENCE_PROVIDER: z.enum(['ollama', 'azure', 'openai', 'saas', 'cloud', 'local']).default('ollama'),
+  INFERENCE_PROVIDER: z.enum(['ollama', 'azure', 'openai', 'saas', 'cloud', 'local', 'gemini']).default('ollama'),
   OLLAMA_BASE_URL: z.string().default('http://localhost:11434'),
   OLLAMA_DEFAULT_MODEL: z.string().default('llama3.2'),
   OLLAMA_VISION_MODEL: z.string().default('llava'),
@@ -88,7 +88,7 @@ export function validateModeSpecificRequirements(cfg: EnvConfig): void {
         'Enterprise Air-Gap Violation: TELEMETRY_ENABLED must be false in enterprise mode to prevent data egress.'
       );
     }
-    if (cfg.INFERENCE_PROVIDER === 'openai' || cfg.INFERENCE_PROVIDER === 'azure' || cfg.INFERENCE_PROVIDER === 'saas') {
+    if (cfg.INFERENCE_PROVIDER === 'openai' || cfg.INFERENCE_PROVIDER === 'azure' || cfg.INFERENCE_PROVIDER === 'saas' || cfg.INFERENCE_PROVIDER === 'gemini') {
       throw new Error(
         'Enterprise Air-Gap Violation: External cloud inference provider cannot be active in enterprise mode without explicit air-gapped override.'
       );
@@ -105,8 +105,78 @@ export function validateModeSpecificRequirements(cfg: EnvConfig): void {
   }
 }
 
+function normalizeEnv(raw: NodeJS.ProcessEnv): Record<string, unknown> {
+  const env: Record<string, unknown> = { ...raw };
+
+  // Environment alias
+  if (!env.NODE_ENV && env.ENVIRONMENT) {
+    env.NODE_ENV = env.ENVIRONMENT;
+  }
+
+  // CORS origins alias
+  if (!env.CORS_ORIGIN && env.CORS_ORIGINS) {
+    env.CORS_ORIGIN = env.CORS_ORIGINS;
+  }
+
+  // Secret keys alias
+  if (!env.JWT_SECRET && env.APP_SECRET_KEY) {
+    env.JWT_SECRET = env.APP_SECRET_KEY;
+  }
+
+  // Database URL alias
+  if (!env.DATABASE_URL && env.POSTGRES_SERVER && env.POSTGRES_PASSWORD) {
+    const user = env.POSTGRES_USER || 'postgres';
+    const port = env.POSTGRES_PORT || '5432';
+    const db = env.POSTGRES_DB || 'postgres';
+    env.DATABASE_URL = `postgresql://${user}:${encodeURIComponent(String(env.POSTGRES_PASSWORD))}@${env.POSTGRES_SERVER}:${port}/${db}`;
+  }
+
+  // Storage / MinIO / S3 aliases
+  if (!env.S3_ENDPOINT && env.MINIO_ENDPOINT) {
+    const minioEndpoint = String(env.MINIO_ENDPOINT);
+    const isSecure = env.MINIO_SECURE === 'true' || env.MINIO_SECURE === true;
+    const proto = isSecure ? 'https' : 'http';
+    env.S3_ENDPOINT = minioEndpoint.startsWith('http') ? minioEndpoint : `${proto}://${minioEndpoint}`;
+  }
+  if (!env.S3_ACCESS_KEY_ID && env.MINIO_ROOT_USER) {
+    env.S3_ACCESS_KEY_ID = env.MINIO_ROOT_USER;
+  }
+  if (!env.S3_SECRET_ACCESS_KEY && env.MINIO_ROOT_PASSWORD) {
+    env.S3_SECRET_ACCESS_KEY = env.MINIO_ROOT_PASSWORD;
+  }
+  if (!env.S3_BUCKET_NAME && env.MINIO_BUCKET_NAME) {
+    env.S3_BUCKET_NAME = env.MINIO_BUCKET_NAME;
+  }
+  if (!env.S3_REGION && env.MINIO_REGION) {
+    env.S3_REGION = env.MINIO_REGION;
+  }
+
+  // LLM / Gemini aliases
+  if (!env.CLOUD_AI_API_KEY && (env.LLM_API_KEY || env.GEMINI_API_KEY)) {
+    env.CLOUD_AI_API_KEY = env.LLM_API_KEY || env.GEMINI_API_KEY;
+  }
+  if (!env.CLOUD_AI_MODEL && env.LLM_MODEL) {
+    env.CLOUD_AI_MODEL = env.LLM_MODEL;
+  }
+  if (!env.INFERENCE_PROVIDER && env.LLM_PROVIDER) {
+    env.INFERENCE_PROVIDER = env.LLM_PROVIDER;
+  }
+
+  // Supabase JWT / URL aliases
+  if (!env.SUPABASE_JWT_SECRET && env.APP_SECRET_KEY) {
+    env.SUPABASE_JWT_SECRET = env.APP_SECRET_KEY;
+  }
+  if (!env.SUPABASE_PROJECT_URL && typeof env.POSTGRES_SERVER === 'string' && env.POSTGRES_SERVER.includes('.supabase.co')) {
+    const host = env.POSTGRES_SERVER.replace(/^db\./, '');
+    env.SUPABASE_PROJECT_URL = `https://${host}`;
+  }
+
+  return env;
+}
+
 function validateEnv(): EnvConfig {
-  const result = envSchema.safeParse(process.cwd() ? process.env : {});
+  const normalized = normalizeEnv(process.env);
+  const result = envSchema.safeParse(normalized);
   if (!result.success) {
     console.error('❌ FATAL: Environment validation failed:');
     console.error(JSON.stringify(result.error.format(), null, 2));
