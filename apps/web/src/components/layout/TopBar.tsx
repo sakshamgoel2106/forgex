@@ -42,22 +42,22 @@ export const TopBar: React.FC<TopBarProps> = ({
   onNavigate,
 }) => {
   return (
-    <header className="h-16 border-b border-[#1A2332] bg-[#0B0F15] px-4 md:px-6 flex items-center justify-between gap-4 shrink-0 z-30 select-none">
+    <header className="h-16 border-b border-[#182333] bg-[#070B10] px-4 md:px-6 flex items-center justify-between gap-4 shrink-0 z-30 select-none">
       {/* Left: Brand & Tagline */}
       <div className="flex items-center gap-6 min-w-0">
         <button
           onClick={onOpenMobileNav}
-          className="md:hidden p-1.5 rounded text-slate-400 hover:text-white hover:bg-[#151E28]"
+          className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#111A26] transition"
           aria-label="Open mobile navigation"
         >
           <Menu className="w-5 h-5" />
         </button>
 
-        <div className="flex items-center gap-3 cursor-pointer" onClick={() => onNavigate('overview')}>
+        <div className="flex items-center gap-3 cursor-pointer group" onClick={() => onNavigate('overview')}>
           {/* Stylized ForgeX Logo from Screenshot */}
           <div className="relative flex items-center justify-center">
             <svg
-              className="w-8 h-8 text-[#A3E635]"
+              className="w-8 h-8 text-[#A3E635] filter drop-shadow-[0_0_8px_rgba(163,230,53,0.3)]"
               viewBox="0 0 32 32"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
@@ -78,7 +78,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             </span>
           </div>
 
-          <div className="hidden xl:block h-4 w-px bg-[#1E293B] mx-1" />
+          <div className="hidden xl:block h-4 w-px bg-[#182333] mx-1" />
 
           <span className="hidden xl:block text-xs text-slate-400 font-sans tracking-wide">
             Industrial Intelligence. Real Answers.
@@ -90,13 +90,15 @@ export const TopBar: React.FC<TopBarProps> = ({
       <div className="flex-1 max-w-xl mx-2">
         <button
           onClick={onOpenSearch}
-          className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg bg-[#111722] border border-[#1E293B] hover:border-[#334155] text-slate-400 hover:text-slate-200 transition text-xs font-sans group shadow-inner"
+          className="w-full flex items-center justify-between px-3.5 py-2 rounded-xl bg-[#0D141F] border border-[#182333] hover:border-[#283C56] text-slate-300 hover:text-white transition text-xs font-sans group shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]"
         >
           <div className="flex items-center gap-2.5 truncate">
             <Search className="w-4 h-4 text-slate-400 group-hover:text-[#A3E635] transition" />
-            <span className="truncate">Search documents, assets, questions... (Ctrl + K)</span>
+            <span className="truncate text-slate-400 group-hover:text-slate-200">
+              Search documents, assets, questions... (Ctrl + K)
+            </span>
           </div>
-          <Clock className="w-4 h-4 text-slate-500 group-hover:text-slate-400 shrink-0" />
+          <Clock className="w-4 h-4 text-slate-500 group-hover:text-slate-300 shrink-0" />
         </button>
       </div>
 
@@ -105,7 +107,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Plant Selector Dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="hidden sm:flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-[#111722] border border-[#1E293B] hover:border-[#334155] transition text-left outline-none">
+            <button className="hidden sm:flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-[#0D141F] border border-[#182333] hover:border-[#283C56] transition text-left outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
               <Building2 className="w-4 h-4 text-[#A3E635] shrink-0" />
               <div className="min-w-0">
                 <div className="text-xs font-bold text-white leading-tight truncate">
@@ -118,25 +120,25 @@ export const TopBar: React.FC<TopBarProps> = ({
               <ChevronDown className="w-3.5 h-3.5 text-slate-400 ml-1" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56 bg-[#151E28] border-[#283543] text-white">
+          <DropdownMenuContent align="end" className="w-56 bg-[#0E1622] border-[#182333] text-white shadow-2xl">
             <DropdownMenuLabel className="text-xs text-slate-400 font-mono">
               Industrial Complexes
             </DropdownMenuLabel>
             <DropdownMenuItem
               onClick={() => onPlantChange('RIVERSIDE')}
-              className="text-xs cursor-pointer focus:bg-[#1E293B] font-medium"
+              className="text-xs cursor-pointer focus:bg-[#182434] font-medium"
             >
               Riverside Plant (Plant 1 • North Area)
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => onPlantChange('GULF')}
-              className="text-xs cursor-pointer focus:bg-[#1E293B]"
+              className="text-xs cursor-pointer focus:bg-[#182434]"
             >
               Gulf Coast Refinery (Unit 4B)
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => onPlantChange('MIDWEST')}
-              className="text-xs cursor-pointer focus:bg-[#1E293B]"
+              className="text-xs cursor-pointer focus:bg-[#182434]"
             >
               Midwest Cracker (Train 2)
             </DropdownMenuItem>
@@ -146,11 +148,11 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Notification Bell with Badge 3 */}
         <button
           onClick={onOpenNotifications}
-          className="relative p-2 rounded-lg bg-[#111722] border border-[#1E293B] text-slate-300 hover:text-white hover:border-[#334155] transition"
+          className="relative p-2 rounded-xl bg-[#0D141F] border border-[#182333] text-slate-300 hover:text-white hover:border-[#283C56] transition shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]"
           aria-label="View notifications"
         >
           <Bell className="w-4 h-4" />
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#EF4444] text-white text-[10px] font-bold flex items-center justify-center font-mono">
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#EF4444] text-white text-[10px] font-bold flex items-center justify-center font-mono shadow-[0_0_8px_rgba(239,68,68,0.7)]">
             3
           </span>
         </button>

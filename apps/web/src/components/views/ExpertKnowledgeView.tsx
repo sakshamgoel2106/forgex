@@ -93,9 +93,9 @@ export const ExpertKnowledgeView: React.FC = () => {
   );
 
   return (
-    <div className="flex-1 p-5 md:p-6 overflow-y-auto bg-[#070B10] space-y-6">
+    <div className="flex-1 p-5 md:p-6 overflow-y-auto bg-[#06090E] space-y-6">
       {/* Top Banner Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-[#1E293B] gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-[#182333] gap-3">
         <div>
           <div className="flex items-center gap-2">
             <GraduationCap className="w-5 h-5 text-[#A3E635]" />
@@ -113,7 +113,7 @@ export const ExpertKnowledgeView: React.FC = () => {
           size="sm"
           onClick={() => setIsSubmitOpen(true)}
           leftIcon={<Plus className="w-3.5 h-3.5" />}
-          className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold rounded-lg"
+          className="bg-[#A3E635] text-[#06090E] hover:bg-[#b2f043] font-bold rounded-lg shadow-[0_4px_16px_rgba(163,230,53,0.3)]"
         >
           Submit Field Note
         </Button>
@@ -127,14 +127,14 @@ export const ExpertKnowledgeView: React.FC = () => {
           placeholder="Search expert notes by equipment or topic..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-3 py-1.5 bg-[#101722] border border-[#1E293B] rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] transition"
+          className="w-full pl-9 pr-3 py-1.5 bg-[#0D141F] border border-[#182333] rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
         />
       </div>
 
       {/* Grid of Expert Knowledge Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {filtered.map((note) => (
-          <div key={note.id} className="rounded-xl border border-[#1E293B] bg-[#101722] p-5 space-y-3">
+          <div key={note.id} className="rounded-xl border border-[#182333] bg-[#0D141F] p-5 space-y-3 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <span className="text-[10px] font-mono text-[#A3E635] uppercase font-bold tracking-wider">
@@ -144,7 +144,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                   {note.title}
                 </h4>
               </div>
-              <span className="text-[10px] font-mono text-[#A3E635] bg-[#12241A] px-2 py-0.5 rounded border border-[#1E4028] shrink-0 font-bold">
+              <span className="text-[10px] font-mono text-[#A3E635] bg-[#10241A] px-2 py-0.5 rounded border border-[#1E4D2B] shrink-0 font-bold">
                 {note.assetTag}
               </span>
             </div>
@@ -153,7 +153,7 @@ export const ExpertKnowledgeView: React.FC = () => {
               {note.content}
             </p>
 
-            <div className="pt-3 border-t border-[#1E293B] flex items-center justify-between text-[11px] font-mono text-slate-400">
+            <div className="pt-3 border-t border-[#182333] flex items-center justify-between text-[11px] font-mono text-slate-400">
               <div className="flex items-center gap-1.5">
                 <User className="w-3.5 h-3.5 text-slate-400" />
                 <span>{note.author}</span>

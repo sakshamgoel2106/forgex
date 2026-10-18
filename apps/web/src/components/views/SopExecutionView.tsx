@@ -535,9 +535,9 @@ export const SopExecutionView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10] font-sans">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E] font-sans">
       {/* Top Telemetry Header */}
-      <div className="p-3 border-b border-[#1E293B] bg-[#0B0F15] flex items-center justify-between text-xs font-mono">
+      <div className="p-3 border-b border-[#182333] bg-[#070B10] flex items-center justify-between text-xs font-mono">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-[#A3E635] font-semibold">
             <Wrench className="w-4 h-4" />
@@ -550,7 +550,7 @@ export const SopExecutionView: React.FC = () => {
 
         <div className="flex items-center gap-3">
           <StatusBadge label={activeCase.status} tone={getStatusTone(activeCase.status)} />
-          <Button size="sm" onClick={() => setIsNewCaseModalOpen(true)} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
+          <Button size="sm" onClick={() => setIsNewCaseModalOpen(true)} className="bg-[#A3E635] text-[#06090E] hover:bg-[#b2f043] font-bold shadow-[0_4px_16px_rgba(163,230,53,0.3)]">
             <Plus className="w-3.5 h-3.5 mr-1" />
             Report Case
           </Button>
@@ -560,9 +560,9 @@ export const SopExecutionView: React.FC = () => {
       {/* Main Split: Case Explorer (Left) + Evidence-to-Action Workspace (Right) */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Case Explorer & Filters */}
-        <div className="w-80 border-r border-[#1E293B] bg-[#0B0F15] flex flex-col justify-between overflow-hidden">
+        <div className="w-80 border-r border-[#182333] bg-[#070B10] flex flex-col justify-between overflow-hidden">
           {/* Filter Pills */}
-          <div className="p-3 border-b border-[#1E293B] space-y-2">
+          <div className="p-3 border-b border-[#182333] space-y-2">
             <div className="text-[10px] font-mono uppercase text-slate-400 font-semibold">
               Filter by Operational State
             </div>
@@ -574,8 +574,8 @@ export const SopExecutionView: React.FC = () => {
                     onClick={() => setStatusFilter(filter)}
                     className={`px-2 py-0.5 rounded text-[10px] font-mono transition border ${
                       statusFilter === filter
-                        ? 'bg-[#12241A] text-[#A3E635] border-[#1E4028] font-semibold'
-                        : 'bg-[#101722] text-slate-400 border-[#1E293B] hover:text-white'
+                        ? 'bg-[#10241A] text-[#A3E635] border-[#1E4D2B] font-semibold shadow-[0_0_8px_rgba(163,230,53,0.15)]'
+                        : 'bg-[#0D141F] text-slate-400 border-[#182333] hover:text-white hover:bg-[#121B27]'
                     }`}
                   >
                     {filter === 'EXPERT_CANDIDATE' ? '⭐ Expert Candidates' : filter}

@@ -76,9 +76,9 @@ export const AuditLedgerView: React.FC = () => {
   );
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10]">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E]">
       {/* Sub-header Toolbar */}
-      <div className="p-3.5 border-b border-[#1E293B] bg-[#0B0F15] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+      <div className="p-3.5 border-b border-[#182333] bg-[#070B10] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <Lock className="w-4 h-4 text-[#A3E635]" />
@@ -93,18 +93,18 @@ export const AuditLedgerView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 bg-[#101722] border border-[#1E293B] rounded-lg px-2.5 py-1">
+          <div className="flex items-center gap-1.5 bg-[#0D141F] border border-[#182333] rounded-lg px-2.5 py-1">
             <Filter className="w-3 h-3 text-slate-400" />
             <select
               value={filterAction}
               onChange={(e) => setFilterAction(e.target.value)}
               className="bg-transparent text-xs font-mono text-white outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-[#101722]">All Actions</option>
-              <option value="LOTO_SIGNOFF" className="bg-[#101722]">LOTO Signoff</option>
-              <option value="DIAGNOSTIC_QUERY" className="bg-[#101722]">Diagnostic Query</option>
-              <option value="DEVIATION_RECORDED" className="bg-[#101722]">Deviation Recorded</option>
-              <option value="DOCUMENT_INGEST" className="bg-[#101722]">Document Ingest</option>
+              <option value="ALL" className="bg-[#0D141F]">All Actions</option>
+              <option value="LOTO_SIGNOFF" className="bg-[#0D141F]">LOTO Signoff</option>
+              <option value="DIAGNOSTIC_QUERY" className="bg-[#0D141F]">Diagnostic Query</option>
+              <option value="DEVIATION_RECORDED" className="bg-[#0D141F]">Deviation Recorded</option>
+              <option value="DOCUMENT_INGEST" className="bg-[#0D141F]">Document Ingest</option>
             </select>
           </div>
 
@@ -118,7 +118,7 @@ export const AuditLedgerView: React.FC = () => {
               size="sm"
               onClick={handleExport}
               leftIcon={<Download className="w-3.5 h-3.5 text-[#A3E635]" />}
-              className="bg-[#12241A] text-[#A3E635] border border-[#1E4028] hover:bg-[#1a3324] font-semibold rounded-lg"
+              className="bg-[#10241A] text-[#A3E635] border border-[#1E4D2B] hover:bg-[#1a3824] font-semibold rounded-lg shadow-sm"
             >
               Export Signed Audit Bundle
             </Button>
@@ -128,10 +128,10 @@ export const AuditLedgerView: React.FC = () => {
 
       {/* Ledger Table */}
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="rounded-xl border border-[#1E293B] bg-[#101722] overflow-hidden">
+        <div className="rounded-xl border border-[#182333] bg-[#0D141F] overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-[#1E293B] bg-[#0D141F] text-slate-400 font-mono text-[11px]">
+              <tr className="border-b border-[#182333] bg-[#0A0F17] text-slate-400 font-mono text-[11px] uppercase tracking-wider">
                 <th className="py-3 px-4 font-semibold uppercase tracking-wider">TIMESTAMP (UTC)</th>
                 <th className="py-3 px-4 font-semibold uppercase tracking-wider">ACTOR</th>
                 <th className="py-3 px-4 font-semibold uppercase tracking-wider">ACTION</th>
@@ -141,9 +141,9 @@ export const AuditLedgerView: React.FC = () => {
                 <th className="py-3 px-4 font-semibold uppercase tracking-wider">STATUS</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#1E293B]/60 font-mono">
+            <tbody className="divide-y divide-[#131E2C] font-mono">
               {filtered.map((entry) => (
-                <tr key={entry.id} className="hover:bg-[#15202E] text-slate-300 transition">
+                <tr key={entry.id} className="hover:bg-[#111B28]/70 text-slate-300 transition">
                   <td className="py-3 px-4 text-[11px] text-slate-400 tabular-nums">
                     {entry.timestamp}
                   </td>
@@ -176,7 +176,7 @@ export const AuditLedgerView: React.FC = () => {
       </div>
 
       {/* Footer Info */}
-      <div className="p-3 border-t border-[#1E293B] bg-[#0B0F15] flex items-center justify-between text-xs font-mono text-slate-400">
+      <div className="p-3 border-t border-[#182333] bg-[#070B10] flex items-center justify-between text-xs font-mono text-slate-400">
         <span>Showing {filtered.length} Immutable Ledger Events</span>
         <span className="text-slate-500 text-[11px]">Key Id: 0x4B9E...7F01 (Hardware HSM)</span>
       </div>

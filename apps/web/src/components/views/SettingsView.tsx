@@ -23,9 +23,9 @@ export const SettingsView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 p-5 md:p-6 overflow-y-auto bg-[#070B10] space-y-6 max-w-4xl mx-auto">
+    <div className="flex-1 p-5 md:p-6 overflow-y-auto bg-[#06090E] space-y-6 max-w-4xl mx-auto">
       {/* Page Header */}
-      <div className="flex items-center justify-between pb-4 border-b border-[#1E293B]">
+      <div className="flex items-center justify-between pb-4 border-b border-[#182333]">
         <div>
           <div className="flex items-center gap-2">
             <SettingsIcon className="w-5 h-5 text-[#A3E635]" />
@@ -47,7 +47,7 @@ export const SettingsView: React.FC = () => {
 
       {/* Inference Provider Selection */}
       <Card>
-        <CardHeader className="p-5 border-b border-[#1E293B] flex flex-row items-center justify-between">
+        <CardHeader className="p-5 border-b border-[#182333] flex flex-row items-center justify-between">
           <div className="flex items-center gap-2">
             <Cpu className="w-4 h-4 text-[#A3E635]" />
             <CardTitle className="text-sm font-bold font-mono uppercase tracking-wider text-white">
@@ -61,7 +61,7 @@ export const SettingsView: React.FC = () => {
         </CardHeader>
         <CardContent className="p-5 space-y-4">
           <p className="text-xs text-slate-300 font-sans leading-relaxed">
-            ForgeX AI isolates all LLM execution behind the unified <code className="text-[#A3E635] font-mono bg-[#070B10] px-1.5 py-0.5 rounded border border-[#1E293B]">IInferenceProvider</code> contract. Switching engines preserves all session state, citations, and vector indices.
+            ForgeX AI isolates all LLM execution behind the unified <code className="text-[#A3E635] font-mono bg-[#0A0F17] px-1.5 py-0.5 rounded border border-[#182333]">IInferenceProvider</code> contract. Switching engines preserves all session state, citations, and vector indices.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -70,8 +70,8 @@ export const SettingsView: React.FC = () => {
               onClick={() => setInferenceMode('local_ollama')}
               className={`p-4 rounded-xl border cursor-pointer transition ${
                 inferenceMode === 'local_ollama'
-                  ? 'bg-[#12241A] border-[#1E4028] shadow-md'
-                  : 'bg-[#070B10] border-[#1E293B] hover:border-slate-700'
+                  ? 'bg-[#10241A] border-[#1E4D2B] shadow-[0_0_8px_rgba(163,230,53,0.15)]'
+                  : 'bg-[#0A0F17] border-[#182333] hover:border-[#24374E]'
               }`}
             >
               <div className="flex justify-between items-center">
@@ -95,8 +95,8 @@ export const SettingsView: React.FC = () => {
               onClick={() => setInferenceMode('saas_cloud')}
               className={`p-4 rounded-xl border cursor-pointer transition ${
                 inferenceMode === 'saas_cloud'
-                  ? 'bg-[#12241A] border-[#1E4028] shadow-md'
-                  : 'bg-[#070B10] border-[#1E293B] hover:border-slate-700'
+                  ? 'bg-[#10241A] border-[#1E4D2B] shadow-[0_0_8px_rgba(163,230,53,0.15)]'
+                  : 'bg-[#0A0F17] border-[#182333] hover:border-[#24374E]'
               }`}
             >
               <div className="flex justify-between items-center">

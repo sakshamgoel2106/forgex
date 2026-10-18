@@ -476,9 +476,9 @@ export const TechnicalManualsView: React.FC = () => {
       : null;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10] text-slate-100 font-sans">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E] text-slate-100 font-sans">
       {/* Top Action Bar */}
-      <div className="p-4 border-b border-[#1E293B] bg-[#0E1520] flex flex-wrap items-center justify-between gap-4">
+      <div className="p-4 border-b border-[#182333] bg-[#070B10] flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3 flex-1 min-w-[320px]">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
@@ -487,39 +487,39 @@ export const TechnicalManualsView: React.FC = () => {
               placeholder="Search by Document #, Title, or Asset Tag..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-[#111722] border border-[#1E293B] rounded-lg text-xs font-sans text-white placeholder-slate-400 focus:outline-none focus:border-[#A3E635] transition"
+              className="w-full pl-9 pr-4 py-2 bg-[#0D141F] border border-[#182333] rounded-lg text-xs font-sans text-white placeholder-slate-400 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
             />
           </div>
 
           {/* Classification Filter */}
-          <div className="flex items-center gap-1.5 bg-[#111722] border border-[#1E293B] rounded-lg px-3 py-1.5">
+          <div className="flex items-center gap-1.5 bg-[#0D141F] border border-[#182333] rounded-lg px-3 py-1.5">
             <Filter className="w-3.5 h-3.5 text-slate-400" />
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="bg-transparent text-xs font-sans text-slate-200 outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-[#151E28]">All Categories</option>
-              <option value="SOP" className="bg-[#151E28]">SOPs</option>
-              <option value="OEM_MANUAL" className="bg-[#151E28]">OEM Manuals</option>
-              <option value="SCHEMATIC_PID" className="bg-[#151E28]">P&IDs</option>
-              <option value="WIRING_DIAGRAM" className="bg-[#151E28]">Wiring Diagrams</option>
+              <option value="ALL" className="bg-[#0D141F]">All Categories</option>
+              <option value="SOP" className="bg-[#0D141F]">SOPs</option>
+              <option value="OEM_MANUAL" className="bg-[#0D141F]">OEM Manuals</option>
+              <option value="SCHEMATIC_PID" className="bg-[#0D141F]">P&IDs</option>
+              <option value="WIRING_DIAGRAM" className="bg-[#0D141F]">Wiring Diagrams</option>
             </select>
           </div>
 
           {/* Status Filter */}
-          <div className="flex items-center gap-1.5 bg-[#111722] border border-[#1E293B] rounded-lg px-3 py-1.5">
+          <div className="flex items-center gap-1.5 bg-[#0D141F] border border-[#182333] rounded-lg px-3 py-1.5">
             <Clock className="w-3.5 h-3.5 text-slate-400" />
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
               className="bg-transparent text-xs font-sans text-slate-200 outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-[#151E28]">All Statuses</option>
-              <option value="INDEXED" className="bg-[#151E28]">Indexed</option>
-              <option value="PROCESSING" className="bg-[#151E28]">Processing</option>
-              <option value="FAILED" className="bg-[#151E28]">Failed</option>
-              <option value="QUEUED" className="bg-[#151E28]">Queued</option>
+              <option value="ALL" className="bg-[#0D141F]">All Statuses</option>
+              <option value="INDEXED" className="bg-[#0D141F]">Indexed</option>
+              <option value="PROCESSING" className="bg-[#0D141F]">Processing</option>
+              <option value="FAILED" className="bg-[#0D141F]">Failed</option>
+              <option value="QUEUED" className="bg-[#0D141F]">Queued</option>
             </select>
           </div>
         </div>
@@ -527,7 +527,7 @@ export const TechnicalManualsView: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsUploadModalOpen(true)}
-            className="px-4 py-2 rounded-lg bg-[#A3E635] hover:bg-[#bef264] text-[#070B10] text-xs font-bold flex items-center gap-2 shadow-lg transition"
+            className="px-4 py-2 rounded-lg bg-[#A3E635] hover:bg-[#b2f043] text-[#06090E] text-xs font-bold flex items-center gap-2 shadow-[0_4px_16px_rgba(163,230,53,0.3)] transition"
           >
             <UploadCloud className="w-4 h-4" />
             Ingest Document
@@ -538,11 +538,11 @@ export const TechnicalManualsView: React.FC = () => {
       {/* Main Split Layout: Document List + Detail Inspector */}
       <div className="flex-1 flex overflow-hidden">
         {/* Document Table */}
-        <div className="flex-1 flex flex-col overflow-hidden border-r border-[#1E293B]">
+        <div className="flex-1 flex flex-col overflow-hidden border-r border-[#182333]">
           <div className="flex-1 overflow-y-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-[#1E293B] bg-[#0E1520] sticky top-0 z-10 text-slate-400 font-sans text-[11px]">
+                <tr className="border-b border-[#182333] bg-[#0A0F17] sticky top-0 z-10 text-slate-400 font-sans text-[11px] uppercase tracking-wider">
                   <th className="py-2.5 px-4 font-semibold">DOCUMENT #</th>
                   <th className="py-2.5 px-4 font-semibold">TITLE</th>
                   <th className="py-2.5 px-4 font-semibold">CLASS</th>
@@ -553,7 +553,7 @@ export const TechnicalManualsView: React.FC = () => {
                   <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#182333]">
+              <tbody className="divide-y divide-[#131E2C]">
                 {filteredDocs.map((doc) => {
                   const isSelected = selectedDoc?.id === doc.id;
                   const isFailed = doc.status === 'FAILED';
@@ -568,8 +568,8 @@ export const TechnicalManualsView: React.FC = () => {
                       }}
                       className={`cursor-pointer transition ${
                         isSelected
-                          ? 'bg-[#141E2B] text-white font-medium'
-                          : 'hover:bg-[#141E2B]/50 text-slate-300'
+                          ? 'bg-[#10241A] border-l-2 border-l-[#A3E635] text-white font-medium'
+                          : 'hover:bg-[#111B28]/70 text-slate-300'
                       }`}
                     >
                       <td className="py-3 px-4 font-mono font-semibold text-[#A3E635] flex items-center gap-2">

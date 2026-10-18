@@ -17,24 +17,24 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
 }) => {
   const toneClasses: Record<StatusTone, { badge: string; dot: string }> = {
     healthy: {
-      badge: 'bg-lime-500/10 border-lime-500/30 text-lime-400',
-      dot: 'bg-lime-400',
+      badge: 'bg-[#0E2317] border-[#1B4E2B] text-[#A3E635]',
+      dot: 'bg-[#A3E635] shadow-[0_0_6px_#A3E635]',
     },
     warning: {
-      badge: 'bg-amber-500/10 border-amber-500/30 text-amber-300',
-      dot: 'bg-amber-400',
+      badge: 'bg-[#2A1D0B] border-[#523812] text-amber-400',
+      dot: 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]',
     },
     critical: {
-      badge: 'bg-rose-500/10 border-rose-500/30 text-rose-400',
-      dot: 'bg-rose-400',
+      badge: 'bg-[#2D1217] border-[#641A24] text-[#F87171]',
+      dot: 'bg-[#F87171] shadow-[0_0_6px_#F87171]',
     },
     neutral: {
-      badge: 'bg-slate-800/70 border-slate-700 text-slate-300',
+      badge: 'bg-[#131E2C] border-[#203044] text-slate-300',
       dot: 'bg-slate-400',
     },
     info: {
-      badge: 'bg-sky-500/10 border-sky-500/30 text-sky-400',
-      dot: 'bg-sky-400',
+      badge: 'bg-[#0B2035] border-[#13426A] text-[#38BDF8]',
+      dot: 'bg-[#38BDF8] shadow-[0_0_6px_#38BDF8]',
     },
   };
 

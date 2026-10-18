@@ -97,9 +97,9 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
   });
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10]">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E]">
       {/* Search & Filter Toolbar */}
-      <div className="p-3.5 border-b border-[#1E293B] bg-[#0B0F15] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+      <div className="p-3.5 border-b border-[#182333] bg-[#070B10] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
         <div className="flex items-center gap-3 flex-1 min-w-[280px]">
           <div className="relative flex-1 max-w-md">
             <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
@@ -108,21 +108,21 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
               placeholder="Filter by Tag, Machine Name, Area..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-[#101722] border border-[#1E293B] rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] transition"
+              className="w-full pl-9 pr-3 py-1.5 bg-[#0D141F] border border-[#182333] rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
             />
           </div>
 
-          <div className="flex items-center gap-1.5 bg-[#101722] border border-[#1E293B] rounded-lg px-2.5 py-1">
+          <div className="flex items-center gap-1.5 bg-[#0D141F] border border-[#182333] rounded-lg px-2.5 py-1">
             <Filter className="w-3 h-3 text-slate-400" />
             <select
               value={filterState}
               onChange={(e) => setFilterState(e.target.value)}
               className="bg-transparent text-xs font-mono text-white outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-[#101722]">All States</option>
-              <option value="OPTIMAL" className="bg-[#101722]">Optimal</option>
-              <option value="ADVISORY" className="bg-[#101722]">Advisory</option>
-              <option value="TRIPPED" className="bg-[#101722]">Tripped</option>
+              <option value="ALL" className="bg-[#0D141F]">All States</option>
+              <option value="OPTIMAL" className="bg-[#0D141F]">Optimal</option>
+              <option value="ADVISORY" className="bg-[#0D141F]">Advisory</option>
+              <option value="TRIPPED" className="bg-[#0D141F]">Tripped</option>
             </select>
           </div>
         </div>
@@ -136,10 +136,10 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* Table of Assets */}
         <div className="flex-1 overflow-y-auto p-4">
-          <div className="rounded-xl border border-[#1E293B] bg-[#101722] overflow-hidden">
+          <div className="rounded-xl border border-[#182333] bg-[#0D141F] overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-[#1E293B] bg-[#0D141F] text-slate-400 font-mono text-[11px]">
+                <tr className="border-b border-[#182333] bg-[#0A0F17] text-slate-400 font-mono text-[11px]">
                   <th className="py-3 px-4 font-semibold uppercase tracking-wider">ASSET TAG</th>
                   <th className="py-3 px-4 font-semibold uppercase tracking-wider">EQUIPMENT DESCRIPTION</th>
                   <th className="py-3 px-4 font-semibold uppercase tracking-wider">PLANT AREA</th>
@@ -149,7 +149,7 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
                   <th className="py-3 px-4 font-semibold uppercase tracking-wider">STATUS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1E293B]/60 font-mono">
+              <tbody className="divide-y divide-[#131E2C] font-mono">
                 {filtered.map((asset) => {
                   const isSelected = selectedAsset.id === asset.id;
                   return (
@@ -158,8 +158,8 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
                       onClick={() => setSelectedAsset(asset)}
                       className={`cursor-pointer transition ${
                         isSelected
-                          ? 'bg-[#12241A] border-l-2 border-l-[#A3E635] text-white'
-                          : 'hover:bg-[#15202E] text-slate-300'
+                          ? 'bg-[#10241A] border-l-2 border-l-[#A3E635] text-white'
+                          : 'hover:bg-[#111B28]/70 text-slate-300'
                       }`}
                     >
                       <td className="py-3 px-4 font-mono font-bold text-[#A3E635]">
@@ -203,8 +203,8 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
         </div>
 
         {/* Right Asset Telemetry Inspector Panel */}
-        <div className="w-80 md:w-96 border-l border-[#1E293B] bg-[#0B0F15] p-5 space-y-4 overflow-y-auto shrink-0">
-          <div className="pb-3 border-b border-[#1E293B]">
+        <div className="w-80 md:w-96 border-l border-[#182333] bg-[#070B10] p-5 space-y-4 overflow-y-auto shrink-0">
+          <div className="pb-3 border-b border-[#182333]">
             <span className="text-[10px] font-mono text-[#A3E635] uppercase tracking-wider font-semibold">
               Live Telemetry Inspector
             </span>
@@ -216,7 +216,7 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
 
           {/* Metric Badges */}
           <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-            <div className="p-3.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+            <div className="p-3.5 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
               <div className="text-[10px] text-slate-400 flex items-center gap-1 font-semibold uppercase tracking-wider">
                 <Activity className="w-3.5 h-3.5 text-[#A3E635]" />
                 VIBRATION RMS
@@ -231,7 +231,7 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
               </div>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+            <div className="p-3.5 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
               <div className="text-[10px] text-slate-400 flex items-center gap-1 font-semibold uppercase tracking-wider">
                 <Thermometer className="w-3.5 h-3.5 text-rose-400" />
                 BEARING TEMP
@@ -244,7 +244,7 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
           </div>
 
           {/* Machine Metadata Details */}
-          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2 text-xs font-mono">
+          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-2 text-xs font-mono shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">
               Equipment Specification
             </div>
@@ -269,7 +269,7 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
           </div>
 
           {/* Associated Manuals & SOPs */}
-          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-3 text-xs font-mono">
+          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-3 text-xs font-mono shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <div className="flex items-center justify-between">
               <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">
                 Indexed Procedures ({selectedAsset.linkedManualsCount})
@@ -277,18 +277,18 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
               <FileText className="w-3.5 h-3.5 text-[#A3E635]" />
             </div>
             <div className="space-y-2">
-              <div className="p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-[11px] space-y-1">
+              <div className="p-2.5 rounded-lg bg-[#0A0F17] border border-[#182333] text-[11px] space-y-1">
                 <div className="flex justify-between text-[#A3E635] font-semibold">
                   <span>SOP-MTR-042</span>
-                  <span className="text-[#A3E635] text-[10px] bg-[#12241A] px-1.5 py-0.5 rounded border border-[#1E4028]">VERIFIED</span>
+                  <span className="text-[#A3E635] text-[10px] bg-[#10241A] px-1.5 py-0.5 rounded border border-[#1E4D2B]">VERIFIED</span>
                 </div>
                 <div className="text-slate-200 text-[11px]">Mechanical Seal Overhaul & Star Torque</div>
               </div>
 
-              <div className="p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-[11px] space-y-1">
+              <div className="p-2.5 rounded-lg bg-[#0A0F17] border border-[#182333] text-[11px] space-y-1">
                 <div className="flex justify-between text-[#A3E635] font-semibold">
                   <span>OEM-MAN-883</span>
-                  <span className="text-slate-400 text-[10px] bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700">OEM REV C</span>
+                  <span className="text-slate-400 text-[10px] bg-[#131E2C] px-1.5 py-0.5 rounded border border-[#203044]">OEM REV C</span>
                 </div>
                 <div className="text-slate-200 text-[11px]">Flowserve Mark 3 ANSI Centrifugal Manual</div>
               </div>

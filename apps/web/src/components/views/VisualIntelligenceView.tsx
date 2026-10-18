@@ -289,9 +289,9 @@ export const VisualIntelligenceView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10]">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E]">
       {/* Top Telemetry Header */}
-      <div className="p-3 border-b border-[#1E293B] bg-[#0B0F15] flex items-center justify-between text-xs font-mono">
+      <div className="p-3 border-b border-[#182333] bg-[#070B10] flex items-center justify-between text-xs font-mono">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-[#A3E635] font-semibold">
             <ImageIcon className="w-4 h-4" />
@@ -330,7 +330,7 @@ export const VisualIntelligenceView: React.FC = () => {
       </div>
 
       {/* Scenario / Quick Loader Bar */}
-      <div className="px-4 py-2 bg-[#0B0F15] border-b border-[#1E293B] flex items-center justify-between gap-4 overflow-x-auto">
+      <div className="px-4 py-2 bg-[#070B10] border-b border-[#182333] flex items-center justify-between gap-4 overflow-x-auto">
         <div className="flex items-center gap-2 text-xs font-mono shrink-0">
           <span className="text-slate-400 text-[11px] uppercase tracking-wider">
             PRELOADED SCENARIO:
@@ -341,8 +341,8 @@ export const VisualIntelligenceView: React.FC = () => {
               onClick={() => handleSelectScenario(s)}
               className={`px-3 py-1 rounded-lg text-xs transition border ${
                 activeScenario.id === s.id
-                  ? 'bg-[#12241A] text-[#A3E635] border-[#1E4028] font-semibold'
-                  : 'bg-[#101722] text-slate-400 border-[#1E293B] hover:text-white hover:bg-[#15202E]'
+                  ? 'bg-[#10241A] text-[#A3E635] border-[#1E4D2B] font-semibold shadow-[0_0_8px_rgba(163,230,53,0.15)]'
+                  : 'bg-[#0D141F] text-slate-400 border-[#182333] hover:text-white hover:bg-[#121B27]'
               }`}
             >
               {s.category === 'PHOTOGRAPH' && '📷 Photo Walkdown'}
@@ -354,7 +354,7 @@ export const VisualIntelligenceView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#101722] hover:bg-[#15202E] text-slate-200 text-xs font-mono transition border border-[#1E293B]">
+          <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#0D141F] hover:bg-[#121B27] text-slate-200 text-xs font-mono transition border border-[#182333]">
             <Upload className="w-3.5 h-3.5 text-[#A3E635]" />
             <span>Upload Visual Asset</span>
             <input
@@ -382,13 +382,13 @@ export const VisualIntelligenceView: React.FC = () => {
       {/* Main Split: Visual Canvas (Left) + Evidence / SOP Cross-Retrieval (Right) */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Interactive Visual Canvas */}
-        <div className="flex-1 p-4 flex flex-col justify-between overflow-hidden bg-[#070B10] border-r border-[#1E293B]">
+        <div className="flex-1 p-4 flex flex-col justify-between overflow-hidden bg-[#06090E] border-r border-[#182333]">
           {/* Canvas Controls */}
           <div className="flex items-center justify-between pb-3">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setZoomLevel((z) => Math.max(50, z - 25))}
-                className="p-1.5 rounded-lg bg-[#101722] hover:bg-[#15202E] border border-[#1E293B] text-slate-300 transition"
+                className="p-1.5 rounded-lg bg-[#0D141F] hover:bg-[#121B27] border border-[#182333] text-slate-300 transition"
                 title="Zoom Out"
               >
                 <ZoomOut className="w-4 h-4" />
@@ -398,14 +398,14 @@ export const VisualIntelligenceView: React.FC = () => {
               </span>
               <button
                 onClick={() => setZoomLevel((z) => Math.min(200, z + 25))}
-                className="p-1.5 rounded-lg bg-[#101722] hover:bg-[#15202E] border border-[#1E293B] text-slate-300 transition"
+                className="p-1.5 rounded-lg bg-[#0D141F] hover:bg-[#121B27] border border-[#182333] text-slate-300 transition"
                 title="Zoom In"
               >
                 <ZoomIn className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setZoomLevel(100)}
-                className="px-2.5 py-1 rounded-lg bg-[#101722] hover:bg-[#15202E] border border-[#1E293B] text-xs font-mono text-slate-400 transition"
+                className="px-2.5 py-1 rounded-lg bg-[#0D141F] hover:bg-[#121B27] border border-[#182333] text-xs font-mono text-slate-400 transition"
               >
                 Reset
               </button>
@@ -417,7 +417,7 @@ export const VisualIntelligenceView: React.FC = () => {
                   type="checkbox"
                   checked={showBoundingBoxes}
                   onChange={(e) => setShowBoundingBoxes(e.target.checked)}
-                  className="rounded border-[#1E293B] text-[#A3E635] focus:ring-0 cursor-pointer"
+                  className="rounded border-[#182333] text-[#A3E635] focus:ring-0 cursor-pointer"
                 />
                 <span>Render AI Bounding Boxes</span>
               </label>
@@ -429,14 +429,14 @@ export const VisualIntelligenceView: React.FC = () => {
           </div>
 
           {/* Canvas Viewport */}
-          <div className="relative flex-1 rounded-xl border border-[#1E293B] bg-[#0B0F15] overflow-hidden flex items-center justify-center p-6 select-none">
+          <div className="relative flex-1 rounded-xl border border-[#182333] bg-[#070B10] overflow-hidden flex items-center justify-center p-6 select-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             {/* Background Engineering Blueprint Grid */}
             <div className="absolute inset-0 bg-grid-pattern opacity-25" />
 
             {/* Simulated Industrial Asset Canvas Container */}
             <div
               style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'center' }}
-              className="relative transition-transform duration-200 w-full max-w-xl aspect-[4/3] rounded-xl bg-[#101722] border border-[#1E293B] shadow-2xl p-6 flex flex-col justify-between"
+              className="relative transition-transform duration-200 w-full max-w-xl aspect-[4/3] rounded-xl bg-[#0D141F] border border-[#182333] shadow-2xl p-6 flex flex-col justify-between"
             >
               {/* Header inside schematic */}
               <div className="flex justify-between items-center text-[10px] font-mono text-slate-400 border-b border-[#1E293B] pb-2">

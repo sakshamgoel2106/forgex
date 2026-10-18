@@ -69,9 +69,9 @@ export const SystemHealthView: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-[#070B10] space-y-6">
+    <div className="flex-1 p-6 overflow-y-auto bg-[#06090E] space-y-6">
       {/* Top Banner */}
-      <div className="flex items-center justify-between pb-4 border-b border-[#1E293B]">
+      <div className="flex items-center justify-between pb-4 border-b border-[#182333]">
         <div>
           <div className="flex items-center gap-2">
             <Activity className="w-5 h-5 text-[#A3E635]" />
@@ -87,7 +87,7 @@ export const SystemHealthView: React.FC = () => {
         <button
           onClick={fetchHealth}
           disabled={loading}
-          className="px-3.5 py-1.5 rounded-lg bg-[#101722] hover:bg-[#15202E] border border-[#1E293B] text-xs font-mono font-medium text-slate-200 flex items-center gap-2 transition"
+          className="px-3.5 py-1.5 rounded-lg bg-[#0D141F] hover:bg-[#121B27] border border-[#182333] text-xs font-mono font-medium text-slate-200 flex items-center gap-2 transition"
         >
           <RefreshCw className={`w-3.5 h-3.5 text-[#A3E635] ${loading ? 'animate-spin' : ''}`} />
           Probe Health
@@ -104,7 +104,7 @@ export const SystemHealthView: React.FC = () => {
       {/* Primary KPI Cards */}
       {healthData && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">OVERALL SYSTEM</div>
             <div className="flex items-center justify-between">
               <span className="text-sm font-bold font-mono text-white">
@@ -118,21 +118,21 @@ export const SystemHealthView: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">VERSION</div>
             <div className="text-sm font-bold font-mono text-[#A3E635]">
               v{healthData.version}
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">ENVIRONMENT</div>
             <div className="text-sm font-bold font-mono text-[#A3E635] uppercase">
               {healthData.environment}
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
             <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">UPTIME</div>
             <div className="text-sm font-bold font-mono text-white">
               {healthData.uptimeSeconds}s
@@ -150,7 +150,7 @@ export const SystemHealthView: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* PostgreSQL */}
-            <div className="p-4.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2">
+            <div className="p-4.5 rounded-xl bg-[#0D141F] border border-[#182333] space-y-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs font-mono font-bold text-white">
                   <Database className="w-4 h-4 text-[#A3E635]" />

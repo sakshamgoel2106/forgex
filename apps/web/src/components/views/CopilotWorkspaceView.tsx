@@ -396,17 +396,17 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
   };
 
   return (
-    <div className="flex-1 flex h-full overflow-hidden bg-graphite-950 font-sans">
+    <div className="flex-1 flex h-full overflow-hidden bg-[#06090E] font-sans">
       {/* Left Column: Asset Context & Conversation History */}
-      <div className="w-80 border-r border-[#1E293B] bg-[#0B0F15] flex flex-col justify-between overflow-hidden">
+      <div className="w-80 border-r border-[#182333] bg-[#070B10] flex flex-col justify-between overflow-hidden">
         {/* Top Scope Selector */}
-        <div className="p-4 border-b border-[#1E293B] space-y-3">
+        <div className="p-4 border-b border-[#182333] space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-mono font-bold tracking-wider text-slate-200 uppercase flex items-center gap-1.5">
               <Filter className="w-3.5 h-3.5 text-[#A3E635]" />
               AUTHORIZATION SCOPE
             </span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-950/70 text-blue-400 border border-blue-800">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#0D1F35] text-[#38BDF8] border border-[#173D66]">
               RBAC ENFORCED
             </span>
           </div>
@@ -417,11 +417,11 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
               <select
                 value={plantId}
                 onChange={(e) => setPlantId(e.target.value)}
-                className="w-full mt-1 bg-[#111722] border border-[#1E293B] rounded-lg px-2.5 py-1.5 text-xs font-sans text-white focus:outline-none focus:border-[#A3E635] transition"
+                className="w-full mt-1 bg-[#0D141F] border border-[#182333] rounded-lg px-2.5 py-1.5 text-xs font-sans text-white focus:outline-none focus:border-[#A3E635] transition shadow-inner"
               >
-                <option value="RIVERSIDE" className="bg-[#151E28]">Riverside Plant (Plant 1 • North Area)</option>
-                <option value="PLANT-TX-04" className="bg-[#151E28]">PLANT-TX-04 (Houston Refinery)</option>
-                <option value="PLANT-LA-02" className="bg-[#151E28]">PLANT-LA-02 (Baton Rouge Chemical)</option>
+                <option value="RIVERSIDE" className="bg-[#0D141F]">Riverside Plant (Plant 1 • North Area)</option>
+                <option value="PLANT-TX-04" className="bg-[#0D141F]">PLANT-TX-04 (Houston Refinery)</option>
+                <option value="PLANT-LA-02" className="bg-[#0D141F]">PLANT-LA-02 (Baton Rouge Chemical)</option>
               </select>
             </div>
 
@@ -430,20 +430,20 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
               <select
                 value={selectedAssetId}
                 onChange={(e) => setSelectedAssetId(e.target.value)}
-                className="w-full mt-1 bg-[#111722] border border-[#1E293B] rounded-lg px-2.5 py-1.5 text-xs font-sans text-[#A3E635] focus:outline-none focus:border-[#A3E635] transition"
+                className="w-full mt-1 bg-[#0D141F] border border-[#182333] rounded-lg px-2.5 py-1.5 text-xs font-sans text-[#A3E635] focus:outline-none focus:border-[#A3E635] transition shadow-inner"
               >
-                <option value="" className="bg-[#151E28]">All Authorized Plant Equipment</option>
-                <option value="P-101-A" className="bg-[#151E28]">P-101-A (Centrifugal Pump)</option>
-                <option value="C-201" className="bg-[#151E28]">C-201 (Gas Compressor)</option>
-                <option value="B-101" className="bg-[#151E28]">B-101 (Boiler Section)</option>
-                <option value="T-301" className="bg-[#151E28]">T-301 (Turbine Unit)</option>
+                <option value="" className="bg-[#0D141F]">All Authorized Plant Equipment</option>
+                <option value="P-101-A" className="bg-[#0D141F]">P-101-A (Centrifugal Pump)</option>
+                <option value="C-201" className="bg-[#0D141F]">C-201 (Gas Compressor)</option>
+                <option value="B-101" className="bg-[#0D141F]">B-101 (Boiler Section)</option>
+                <option value="T-301" className="bg-[#0D141F]">T-301 (Turbine Unit)</option>
               </select>
             </div>
           </div>
 
           <button
             onClick={handleStartNewConversation}
-            className="w-full py-2 bg-[#17212F] hover:bg-[#202C3E] border border-[#1E293B] hover:border-[#A3E635]/60 rounded-lg text-xs font-semibold text-white flex items-center justify-center gap-2 transition"
+            className="w-full py-2 bg-[#101A26] hover:bg-[#182638] border border-[#182333] hover:border-[#A3E635]/60 rounded-lg text-xs font-semibold text-white flex items-center justify-center gap-2 transition"
           >
             <PlusCircle className="w-3.5 h-3.5 text-[#A3E635]" />
             New Consultation Thread
@@ -497,9 +497,9 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
       </div>
 
       {/* Center Column: Chat Stream Workspace */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10] relative text-slate-100 font-sans">
+      <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E] relative text-slate-100 font-sans">
         {/* Workspace Top Bar */}
-        <div className="p-3.5 border-b border-[#1E293B] bg-[#0E1520] flex items-center justify-between text-xs font-sans">
+        <div className="p-3.5 border-b border-[#182333] bg-[#070B10] flex items-center justify-between text-xs font-sans">
           <div className="flex items-center gap-2.5">
             <Sparkles className="w-4 h-4 text-[#A3E635]" />
             <span className="font-bold text-white tracking-wide">INDUSTRIAL AI COPILOT WORKSPACE</span>
@@ -522,14 +522,14 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {messages.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-4 max-w-lg mx-auto">
-              <div className="w-12 h-12 rounded-full bg-graphite-900 border border-graphite-700 flex items-center justify-center text-amber-400">
+              <div className="w-12 h-12 rounded-2xl bg-[#0D141F] border border-[#182333] flex items-center justify-center text-[#A3E635]">
                 <BookOpen className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-sm font-mono font-bold text-graphite-200">
+                <h3 className="text-sm font-mono font-bold text-white">
                   ForgeX Industrial Knowledge Copilot
                 </h3>
-                <p className="text-xs text-graphite-400 mt-1 leading-relaxed">
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                   Ask operational queries against indexed engineering manuals, SOPs, and mechanical schematics.
                   All answers are strictly grounded in authorized evidence with verified page-level citations.
                 </p>
@@ -545,7 +545,7 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                     <button
                       key={idx}
                       onClick={() => handleSendQuery(preset.query)}
-                      className="p-3 rounded-xl bg-[#101722] hover:bg-[#151E28] border border-[#1E293B] hover:border-[#A3E635]/50 text-left text-xs font-sans text-slate-200 flex items-center justify-between group transition"
+                      className="p-3 rounded-xl bg-[#0D141F] hover:bg-[#121B27] border border-[#182333] hover:border-[#24374E] text-left text-xs font-sans text-slate-200 flex items-center justify-between group transition shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]"
                     >
                       <span className="text-white font-medium">{preset.label}</span>
                       <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-[#A3E635] transition" />
@@ -565,9 +565,9 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
             >
               {/* User Message Bubble */}
               {msg.senderType === 'USER' ? (
-                <div className="max-w-2xl bg-[#111722] border border-[#1E293B] rounded-xl p-4 shadow-sm space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pb-1 border-b border-[#1E293B]">
-                    <span className="text-[#A3E635] font-bold">OPERATING ENGINEER INQUIRY</span>
+                <div className="max-w-2xl bg-[#0D1F35] border border-[#173D66] rounded-xl p-4 shadow-sm space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pb-1 border-b border-[#173D66]/60">
+                    <span className="text-[#38BDF8] font-bold">OPERATING ENGINEER INQUIRY</span>
                     <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
                   </div>
                   <p className="text-xs font-sans text-white whitespace-pre-wrap leading-relaxed mt-1">
@@ -576,9 +576,9 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                 </div>
               ) : (
                 /* Assistant Grounded Response Card */
-                <div className="w-full max-w-4xl bg-[#0E1520] border border-[#1E293B] rounded-xl p-5 shadow-xl space-y-4">
+                <div className="w-full max-w-4xl bg-[#0D141F] border border-[#182333] rounded-xl p-5 shadow-xl space-y-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
                   {/* Status & Grounding Header */}
-                  <div className="flex items-center justify-between pb-3 border-b border-[#1E293B]">
+                  <div className="flex items-center justify-between pb-3 border-b border-[#182333]">
                     <div className="flex items-center gap-2">
                       <FileCheck2 className="w-4 h-4 text-[#A3E635]" />
                       <span className="text-xs font-sans font-bold text-white tracking-wide">
@@ -751,7 +751,7 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
         </div>
 
         {/* Bottom Query Input Box */}
-        <div className="p-4 border-t border-[#1E293B] bg-[#0E1520]">
+        <div className="p-4 border-t border-[#182333] bg-[#070B10]">
           <div className="flex items-center gap-3 max-w-5xl mx-auto">
             <input
               type="text"
@@ -759,12 +759,12 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
               onChange={(e) => setQueryInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSendQuery()}
               placeholder="Ask an operational question (e.g., 'What is the required seal oil delta pressure for Pump P-101?')..."
-              className="flex-1 px-4 py-2.5 bg-[#111722] border border-[#1E293B] rounded-lg text-xs font-sans text-white placeholder-slate-400 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
+              className="flex-1 px-4 py-2.5 bg-[#0D141F] border border-[#182333] rounded-xl text-xs font-sans text-white placeholder-slate-400 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
             />
             <button
               onClick={() => handleSendQuery()}
               disabled={isQuerying || !queryInput.trim()}
-              className="px-5 py-2.5 bg-[#A3E635] hover:bg-[#bef264] disabled:opacity-50 disabled:cursor-not-allowed text-[#070B10] font-bold text-xs rounded-lg flex items-center gap-2 transition shadow-lg shrink-0"
+              className="px-5 py-2.5 bg-[#A3E635] hover:bg-[#b2f043] disabled:opacity-50 disabled:cursor-not-allowed text-[#06090E] font-bold text-xs rounded-xl flex items-center gap-2 transition shadow-[0_4px_16px_rgba(163,230,53,0.3)] shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
               Query Copilot

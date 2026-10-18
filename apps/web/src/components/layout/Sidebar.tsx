@@ -63,7 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       aria-label="Application navigation"
-      className={`h-full border-r border-[#1A2332] bg-[#0B0F15] flex flex-col justify-between shrink-0 select-none transition-all duration-200 z-20 ${
+      className={`h-full border-r border-[#182333] bg-[#070B10] flex flex-col justify-between shrink-0 select-none transition-all duration-200 z-20 ${
         collapsed ? 'w-16' : 'w-60'
       }`}
     >
@@ -77,14 +77,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={item.id}
               onClick={() => onSelectModule(item.id)}
-              className={`w-full flex items-center rounded-lg transition group text-xs font-medium ${
+              className={`w-full flex items-center rounded-xl transition group text-xs font-medium ${
                 collapsed
                   ? 'justify-center h-10 w-10 mx-auto'
                   : 'px-3 py-2.5 justify-between'
               } ${
                 isActive
-                  ? 'bg-[#12241A] text-[#A3E635] font-semibold border border-[#1E4028]'
-                  : 'text-slate-400 hover:text-white hover:bg-[#111722] border border-transparent'
+                  ? 'bg-[#10241A] text-[#A3E635] font-semibold border border-[#1E4D2B] shadow-[0_0_12px_rgba(163,230,53,0.12)]'
+                  : 'text-slate-400 hover:text-white hover:bg-[#0D141F] border border-transparent'
               }`}
             >
               <div className="flex items-center gap-3 truncate">
@@ -121,27 +121,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {!collapsed ? (
         <div className="p-3 space-y-4">
           {/* Deployment Mode Card from Screenshot */}
-          <div className="p-3 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2">
-            <div className="text-[11px] text-slate-400 font-medium">Deployment Mode</div>
+          <div className="p-3 rounded-xl bg-[#0D141F] border border-[#182333] space-y-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+            <div className="text-[11px] text-slate-300 font-medium">Deployment Mode</div>
             <div className="flex items-center gap-2">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#A3E635]" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#A3E635] shadow-[0_0_6px_#A3E635]" />
               </span>
               <span className="text-xs font-bold text-[#A3E635]">SaaS</span>
             </div>
-            <div className="text-[10px] text-slate-500 font-sans">Cloud Inference</div>
+            <div className="text-[10px] text-slate-400 font-sans">Cloud Inference</div>
           </div>
 
           {/* Footer Branding from Screenshot */}
           <div className="px-1 text-[11px] text-slate-500 space-y-0.5">
             <div className="font-mono text-slate-400">ForgeX AI v1.0.0</div>
-            <div className="text-[10px] text-slate-500">Build for a safer, smarter industry.</div>
+            <div className="text-[10px] text-slate-400">Build for a safer, smarter industry.</div>
           </div>
         </div>
       ) : (
         <div className="p-2 pb-4 flex justify-center">
-          <div className="w-8 h-8 rounded-lg bg-[#101722] border border-[#1E293B] flex items-center justify-center text-[#A3E635] text-[10px] font-bold">
+          <div className="w-8 h-8 rounded-xl bg-[#0D141F] border border-[#182333] flex items-center justify-center text-[#A3E635] text-[10px] font-bold">
             SaaS
           </div>
         </div>

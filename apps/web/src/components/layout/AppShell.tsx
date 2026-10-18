@@ -47,7 +47,7 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   return (
     <TooltipProvider>
-      <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#070B10] text-slate-100 font-sans antialiased">
+      <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#06090E] text-slate-100 font-sans antialiased">
         {/* Full-width Top Navigation Rail */}
         <TopBar
           activeModule={activeModule}
@@ -78,7 +78,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             <SheetContent
               side="left"
               showCloseButton={false}
-              className="p-0 w-64 bg-[#0B0F15] border-r border-[#1A2332]"
+              className="p-0 w-64 bg-[#080D14] border-r border-[#182333]"
             >
               <Sidebar
                 activeModule={activeModule}
@@ -94,7 +94,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           </Sheet>
 
           {/* Main Center & Right Workspaces */}
-          <main className="flex-1 overflow-hidden relative flex flex-col bg-[#070B10]">
+          <main className="flex-1 overflow-hidden relative flex flex-col bg-[#06090E]">
             {children}
           </main>
         </div>
