@@ -396,6 +396,7 @@ describe('Phase 7: SaaS and Private Enterprise Release Suite', () => {
         validateModeSpecificRequirements({
           ...config,
           DEPLOYMENT_MODE: 'enterprise',
+          TELEMETRY_ENABLED: false,
           INFERENCE_PROVIDER: 'openai',
         });
       }).toThrow(/Enterprise Air-Gap Violation: External cloud inference provider cannot be active/);

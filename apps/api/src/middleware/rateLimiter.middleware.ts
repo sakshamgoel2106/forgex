@@ -107,8 +107,8 @@ export class RateLimiterService {
         return next();
       }
 
-      const user = (req as any).user;
-      const orgId = user?.organizationId || req.ip || 'global-tenant';
+      const orgId =
+        req.auth?.organization?.id || (req as any).user?.organizationId || req.ip || 'global-tenant';
       const now = Date.now();
       const windowMs = 60 * 1000;
       const limit = config.RATE_LIMIT_AI_PER_MINUTE;
