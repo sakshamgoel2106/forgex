@@ -1,32 +1,58 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
+        industrial: {
+          bg: '#0B0F14',       // Main background
+          sidebar: '#101720',  // Sidebar background
+          surface: '#151E28',  // Surface / Card background
+          border: '#283543',   // Primary borders
+          borderLight: '#37475A', // Hover/elevated borders
+          accent: '#A3E635',   // Primary accent (Lime)
+          accentHover: '#BEF264',
+          accentMuted: '#4D7C0F',
+          text: '#F1F5F9',     // Primary text
+          secondary: '#94A3B8',// Secondary text
+          muted: '#64748B',    // Muted text / tertiary
+        },
         graphite: {
-          950: '#0b0e12', // deep chassis background
-          900: '#11161d', // panel surface
-          850: '#171e27', // elevated card / header
-          800: '#1f2834', // container border & dividers
-          700: '#2b3644', // active hover state
-          600: '#3e4d60', // subtle borders / disabled
-          500: '#64748b', // muted labels
-          400: '#94a3b8', // secondary text
-          300: '#cbd5e1', // primary labels
-          200: '#e2e8f0', // primary text
-          100: '#f8fafc', // bright highlights
+          950: '#0B0F14', // Main chassis background
+          900: '#101720', // Sidebar background
+          850: '#151E28', // Surface / Card
+          800: '#283543', // Borders / Dividers
+          750: '#2F3E50', // Subtle elevated borders
+          700: '#37475A', // Active hover state
+          600: '#475569', // Subtle borders / disabled
+          500: '#64748B', // Muted labels
+          400: '#94A3B8', // Secondary text
+          300: '#CBD5E1', // Primary labels
+          200: '#E2E8F0', // Primary text
+          100: '#F1F5F9', // Bright white highlights
+        },
+        accent: {
+          DEFAULT: '#A3E635',
+          foreground: '#0B0F14',
+          hover: '#BEF264',
+        },
+        semantic: {
+          green: '#10B981',
+          amber: '#F59E0B',
+          red: '#EF4444',
+          blue: '#3B82F6',
         },
         hazard: {
-          500: '#f59e0b', // safety amber / LOTO warning
-          400: '#fbbf24',
-          600: '#d97706',
+          500: '#F59E0B',
+          400: '#FBBF24',
+          600: '#D97706',
         },
         telemetry: {
-          cyan: '#06b6d4',
-          emerald: '#10b981',
-          rose: '#f43f5e',
-          amber: '#f59e0b',
+          cyan: '#38BDF8',
+          emerald: '#10B981',
+          rose: '#EF4444',
+          amber: '#F59E0B',
         },
       },
       fontFamily: {
@@ -48,6 +74,9 @@ export default {
           'Consolas',
           'monospace',
         ],
+      },
+      borderRadius: {
+        industrial: '6px',
       },
     },
   },

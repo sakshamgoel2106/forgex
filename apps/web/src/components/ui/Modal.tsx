@@ -47,32 +47,32 @@ export const Modal: React.FC<ModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
       <div
-        className={`w-full ${widthClasses[maxWidth]} bg-graphite-900 border border-graphite-700 rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]`}
+        className={`w-full ${widthClasses[maxWidth]} bg-industrial-surface border border-industrial-border rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]`}
       >
         {/* Modal Header */}
-        <div className="px-5 py-3.5 border-b border-graphite-800 flex items-center justify-between bg-graphite-950/60">
+        <div className="px-5 py-3.5 border-b border-industrial-border flex items-center justify-between bg-industrial-sidebar">
           <div>
-            <h3 className="text-sm font-bold font-mono text-graphite-100 uppercase tracking-wide">
+            <h3 className="text-sm font-bold font-mono text-industrial-text uppercase tracking-wide">
               {title}
             </h3>
             {subtitle && (
-              <p className="text-[11px] font-mono text-graphite-400 mt-0.5">{subtitle}</p>
+              <p className="text-[11px] font-mono text-industrial-secondary mt-0.5">{subtitle}</p>
             )}
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-graphite-800 text-graphite-400 hover:text-graphite-100 transition"
+            className="p-1 rounded hover:bg-industrial-surface text-industrial-secondary hover:text-industrial-text transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 overflow-y-auto flex-1 text-xs text-graphite-200">{children}</div>
+        <div className="p-5 overflow-y-auto flex-1 text-xs text-industrial-text">{children}</div>
 
         {/* Modal Footer */}
         {footer && (
-          <div className="px-5 py-3 border-t border-graphite-800 bg-graphite-950/60 flex items-center justify-end gap-2">
+          <div className="px-5 py-3 border-t border-industrial-border bg-industrial-sidebar flex items-center justify-end gap-2">
             {footer}
           </div>
         )}

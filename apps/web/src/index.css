@@ -3,9 +3,66 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --background: #0B0F14;
+  --foreground: #F1F5F9;
+  --sidebar: #101720;
+  --sidebar-foreground: #F1F5F9;
+  --sidebar-border: #283543;
+  --sidebar-accent: #151E28;
+  --sidebar-accent-foreground: #A3E635;
+  --card: #151E28;
+  --card-foreground: #F1F5F9;
+  --popover: #151E28;
+  --popover-foreground: #F1F5F9;
+  --primary: #A3E635;
+  --primary-foreground: #0B0F14;
+  --secondary: #101720;
+  --secondary-foreground: #94A3B8;
+  --muted: #151E28;
+  --muted-foreground: #94A3B8;
+  --accent: #A3E635;
+  --accent-foreground: #0B0F14;
+  --destructive: #EF4444;
+  --destructive-foreground: #F1F5F9;
+  --border: #283543;
+  --input: #283543;
+  --ring: #A3E635;
+  --radius: 0.375rem;
+}
+
+.dark {
+  --background: #0B0F14;
+  --foreground: #F1F5F9;
+  --sidebar: #101720;
+  --sidebar-foreground: #F1F5F9;
+  --sidebar-border: #283543;
+  --sidebar-accent: #151E28;
+  --sidebar-accent-foreground: #A3E635;
+  --card: #151E28;
+  --card-foreground: #F1F5F9;
+  --popover: #151E28;
+  --popover-foreground: #F1F5F9;
+  --primary: #A3E635;
+  --primary-foreground: #0B0F14;
+  --secondary: #101720;
+  --secondary-foreground: #94A3B8;
+  --muted: #151E28;
+  --muted-foreground: #94A3B8;
+  --accent: #A3E635;
+  --accent-foreground: #0B0F14;
+  --destructive: #EF4444;
+  --destructive-foreground: #F1F5F9;
+  --border: #283543;
+  --input: #283543;
+  --ring: #A3E635;
+}
+
 @layer base {
   body {
-    @apply bg-graphite-950 text-graphite-200 antialiased font-sans;
+    background-color: #0B0F14;
+    color: #F1F5F9;
+    @apply antialiased font-sans;
   }
 
   /* Custom scrollbars for industrial density */
@@ -15,27 +72,29 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: #0b0e12;
+    background: #0B0F14;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #1f2834;
+    background: #283543;
     border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #2b3644;
+    background: #37475A;
   }
 }
 
 /* Monospace technical tabular numbers */
-.num-tabular {
+.num-tabular,
+.font-tabular {
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
 }
 
 /* Subtle industrial grid background effect */
 .bg-grid-pattern {
   background-size: 24px 24px;
-  background-image: linear-gradient(to right, rgba(31, 40, 52, 0.25) 1px, transparent 1px),
-                    linear-gradient(to bottom, rgba(31, 40, 52, 0.25) 1px, transparent 1px);
+  background-image: linear-gradient(to right, rgba(40, 53, 67, 0.3) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(40, 53, 67, 0.3) 1px, transparent 1px);
 }

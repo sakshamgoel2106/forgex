@@ -1,88 +1,57 @@
 .gridline-dashboard,
+.gridline-dashboard.dark,
+.dark .gridline-dashboard,
 body:has(.gridline-dashboard) [data-slot="drawer-content"],
 body:has(.gridline-dashboard) [data-slot="dropdown-menu-content"],
 body:has(.gridline-dashboard) [data-slot="sheet-content"],
-body:has(.gridline-dashboard) [data-slot="tooltip-content"] {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: #0ab1ba;
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: #0ab1ba;
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: #0ab1ba;
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: #0ab1ba;
-  background-color: var(--background);
-  color: var(--foreground);
-}
-
-.gridline-dashboard.dark,
-.dark .gridline-dashboard,
+body:has(.gridline-dashboard) [data-slot="tooltip-content"],
 .dark body:has(.gridline-dashboard) [data-slot="drawer-content"],
 .dark body:has(.gridline-dashboard) [data-slot="dropdown-menu-content"],
 .dark body:has(.gridline-dashboard) [data-slot="sheet-content"],
 .dark body:has(.gridline-dashboard) [data-slot="tooltip-content"] {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: #0ab1ba;
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: #0ab1ba;
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: #0ab1ba;
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: #0ab1ba;
+  --background: #0B0F14;
+  --foreground: #F1F5F9;
+  --card: #151E28;
+  --card-foreground: #F1F5F9;
+  --popover: #151E28;
+  --popover-foreground: #F1F5F9;
+  --primary: #A3E635;
+  --primary-foreground: #0B0F14;
+  --secondary: #101720;
+  --secondary-foreground: #94A3B8;
+  --muted: #151E28;
+  --muted-foreground: #94A3B8;
+  --accent: #A3E635;
+  --accent-foreground: #0B0F14;
+  --destructive: #EF4444;
+  --border: #283543;
+  --input: #283543;
+  --ring: #A3E635;
+  --radius: 0.375rem;
+  --sidebar: #101720;
+  --sidebar-foreground: #F1F5F9;
+  --sidebar-primary: #A3E635;
+  --sidebar-primary-foreground: #0B0F14;
+  --sidebar-accent: #151E28;
+  --sidebar-accent-foreground: #A3E635;
+  --sidebar-border: #283543;
+  --sidebar-ring: #A3E635;
+  background-color: var(--background);
+  color: var(--foreground);
 }
 
 body:has(.gridline-dashboard) [data-slot="tooltip-content"] {
-  background-color: var(--foreground) !important;
-  color: var(--background) !important;
+  background-color: #151E28 !important;
+  color: #F1F5F9 !important;
+  border: 1px solid #283543 !important;
 }
 
 body:has(.gridline-dashboard) [data-slot="tooltip-content"] > svg {
-  background-color: var(--foreground) !important;
-  fill: var(--foreground) !important;
+  background-color: #151E28 !important;
+  fill: #151E28 !important;
 }
 
 .gridline-dashboard * {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.gridline-dashboard *::-webkit-scrollbar {
-  display: none;
+  scrollbar-width: thin;
+  scrollbar-color: #283543 #0B0F14;
 }
