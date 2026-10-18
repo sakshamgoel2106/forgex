@@ -4,7 +4,7 @@ import { HealthService } from '../services/health.service.js';
 export class HealthController {
   public static async getDetailedHealth(_req: Request, res: Response): Promise<void> {
     const health = await HealthService.getDetailedHealth();
-    const httpStatus = health.status === 'HEALTHY' ? 200 : 503;
+    const httpStatus = health.status === 'HEALTHY' ? 200 : health.status === 'DEGRADED' ? 200 : 503;
     res.status(httpStatus).json(health);
   }
 
@@ -22,5 +22,11 @@ export class HealthController {
       status: isReady ? 'READY' : 'NOT_READY',
       timestamp: new Date().toISOString(),
     });
+  }
+
+  public static async getMetrics(_req: Request, res: Response): Promise<void> {
+    const { MetricsService } = await import('../services/metrics.service.js');
+    const metrics = await MetricsService.getMetrics();
+    res.status(200).json(metrics);
   }
 }

@@ -30,6 +30,8 @@ import { createVisionProvider } from './ai/visionProviderFactory.js';
 import { RAGQueryEngine } from './services/ragQueryEngine.js';
 import { VisualIntelligenceEngine } from './services/visualIntelligenceEngine.js';
 import { MaintenanceWorkflowEngine } from './services/maintenanceWorkflowEngine.js';
+import { RateLimiterService } from './middleware/rateLimiter.middleware.js';
+import { MetricsService } from './services/metrics.service.js';
 
 export interface AppDependencies {
   authAdapter?: IAuthAdapter;
@@ -93,16 +95,21 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  // Request tracing & access log
+  // Request tracing, access log & sanitized metric counting
   app.use((req, res, next) => {
     const start = Date.now();
+    MetricsService.incrementRequest();
     res.on('finish', () => {
+      if (res.statusCode >= 400) {
+        MetricsService.incrementError();
+      }
       logger.info(
         {
           method: req.method,
           path: req.originalUrl,
           statusCode: res.statusCode,
           durationMs: Date.now() - start,
+          ip: req.ip,
         },
         'HTTP request handled'
       );
@@ -110,8 +117,13 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     next();
   });
 
-  // Health and readiness endpoints (Public)
+  // Health and readiness endpoints (Public, unthrottled for cluster orchestrators)
   app.use(healthRouter);
+
+  // General API rate limiter
+  app.use(RateLimiterService.generalLimiter());
+
+  const aiLimiter = RateLimiterService.aiInferenceLimiter();
 
   // Protected Domain Routes
   app.use('/api/v1/plants', authenticate, createPlantRouter(dataStore));
@@ -122,17 +134,20 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     authenticate,
     createDocumentRouter(dataStore, storageAdapter, ingestionQueue)
   );
-  app.use('/api/v1/copilot', authenticate, createCopilotRouter(dataStore, ragEngine));
+  app.use('/api/v1/copilot', authenticate, aiLimiter, createCopilotRouter(dataStore, ragEngine));
   app.use(
     '/api/v1/visual',
     authenticate,
+    aiLimiter,
     createVisualRouter(dataStore, storageAdapter, visualEngine)
   );
   app.use(
     '/api/v1/maintenance',
     authenticate,
+    aiLimiter,
     createMaintenanceRouter(dataStore, maintenanceEngine)
   );
+
 
   // Global not found handler
   app.use((_req, res) => {

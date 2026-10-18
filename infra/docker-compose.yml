@@ -2,8 +2,8 @@ version: '3.8'
 
 services:
   # =========================================================================
-  # Primary Relational Store: PostgreSQL 16
-  # Stores users, RBAC permissions, document metadata, SOP runs & audit logs
+  # 1. Primary Relational Store: PostgreSQL 16
+  # Stores users, RBAC permissions, document metadata, maintenance cases & audit logs
   # =========================================================================
   postgres:
     image: postgres:16-alpine
@@ -22,9 +22,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - forgex_internal
 
   # =========================================================================
-  # Asynchronous Queue Broker & Cache: Redis 7
+  # 2. Asynchronous Queue Broker & Cache: Redis 7
   # Powers BullMQ queues for document ingestion and heavy extraction jobs
   # =========================================================================
   redis:
@@ -40,9 +42,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - forgex_internal
 
   # =========================================================================
-  # Multimodal Vector Store: Qdrant
+  # 3. Multimodal Vector Store: Qdrant
   # Stores dense embeddings with strict tenant/asset payload filters
   # =========================================================================
   qdrant:
@@ -59,9 +63,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - forgex_internal
 
   # =========================================================================
-  # Object Storage: MinIO (S3-compatible)
+  # 4. Object Storage: MinIO (S3-compatible)
   # Stores raw technical PDFs, CAD/TIFF files, and extracted diagram figures
   # =========================================================================
   minio:
@@ -82,19 +88,162 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - forgex_internal
 
   # =========================================================================
-  # Local Enterprise Inference: Ollama
+  # 5. Local Enterprise Inference: Ollama
   # Provides air-gapped LLM reasoning and multimodal vision-language models
   # =========================================================================
   ollama:
     image: ollama/ollama:latest
     container_name: forgex-ollama
     restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - forgex_ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 0"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forgex_internal
+
+  # =========================================================================
+  # 6. Self-Hosted Identity Provider: Keycloak (OIDC / SAML)
+  # Air-gapped on-prem authentication and SSO integration
+  # =========================================================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: forgex-keycloak
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-forgex_keycloak_secret_2026}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - forgex_keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e \"GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && cat <&3 | grep -q \"200 OK\" || exit 0"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - forgex_internal
+
+  # =========================================================================
+  # 7. Document Processing & OCR Worker: Python / FastAPI
+  # Performs layout analysis, OCR, visual extraction, and embedding generation
+  # =========================================================================
+  worker:
+    build:
+      context: ../apps/worker
+      dockerfile: Dockerfile
+    container_name: forgex-worker
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-forgex_minio_admin}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-forgex_minio_secret_2026}
+      OLLAMA_BASE_URL: http://ollama:11434
+    ports:
+      - "${WORKER_PORT:-8000}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthz || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forgex_internal
+
+  # =========================================================================
+  # 8. ForgeX Core Backend API: Node.js / Express
+  # Domain services, RAG copilot, maintenance workflows, RBAC & audit
+  # =========================================================================
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: forgex-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DEPLOYMENT_MODE: enterprise
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-forgex_admin}:${POSTGRES_PASSWORD:-forgex_dev_secret_2026}@postgres:5432/${POSTGRES_DB:-forgex_db}
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-forgex_minio_admin}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-forgex_minio_secret_2026}
+      S3_BUCKET_NAME: forgex-documents
+      INFERENCE_MODE: local_ollama
+      INFERENCE_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      WORKER_URL: http://worker:8000
+      AUTH_PROVIDER: keycloak
+      KEYCLOAK_REALM_URL: http://keycloak:8080/realms/forgex
+      KEYCLOAK_CLIENT_ID: forgex-api
+      AIR_GAPPED_MODE: "true"
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "${API_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/live || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forgex_internal
+
+  # =========================================================================
+  # 9. Industrial Frontend Web Application: React / Vite / Nginx
+  # Graphite industrial design system, maintenance workspace, PDF viewer
+  # =========================================================================
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    container_name: forgex-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/ || exit 0"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forgex_internal
 
 volumes:
   forgex_pg_data:
@@ -107,3 +256,11 @@ volumes:
     driver: local
   forgex_ollama_models:
     driver: local
+  forgex_keycloak_data:
+    driver: local
+
+networks:
+  forgex_internal:
+    driver: bridge
+    # In strict air-gap installations, external internet routing is disabled:
+    # internal: true

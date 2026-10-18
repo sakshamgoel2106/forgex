@@ -8,6 +8,7 @@ dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
+  DEPLOYMENT_MODE: z.enum(['saas', 'enterprise', 'local_dev']).default('local_dev'),
   PORT: z.coerce.number().default(4000),
   HOST: z.string().default('0.0.0.0'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
@@ -38,17 +39,71 @@ const envSchema = z.object({
 
   // Inference Provider
   INFERENCE_MODE: z.enum(['local_ollama', 'saas_cloud']).default('local_ollama'),
-  INFERENCE_PROVIDER: z.enum(['ollama', 'azure', 'openai']).default('ollama'),
+  INFERENCE_PROVIDER: z.enum(['ollama', 'azure', 'openai', 'saas', 'cloud', 'local']).default('ollama'),
   OLLAMA_BASE_URL: z.string().default('http://localhost:11434'),
   OLLAMA_DEFAULT_MODEL: z.string().default('llama3.2'),
   OLLAMA_VISION_MODEL: z.string().default('llava'),
+  CLOUD_AI_API_KEY: z.string().optional().default(''),
+  CLOUD_AI_ENDPOINT: z.string().optional().default(''),
+  CLOUD_AI_MODEL: z.string().default('gpt-4o-industrial'),
 
-  // Plant Context
+  // Plant & Worker Services
   PLANT_SITE_CODE: z.string().default('PLANT-TX-04'),
+  WORKER_URL: z.string().default('http://localhost:8000'),
+
+  // Air-Gapped & Telemetry Controls
   AIR_GAPPED_MODE: z.coerce.boolean().default(false),
+  TELEMETRY_ENABLED: z.coerce.boolean().default(false),
+
+  // Rate Limiting & Usage Quotas
+  RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().default(120),
+  RATE_LIMIT_AI_PER_MINUTE: z.coerce.number().default(30),
+  TENANT_QUOTA_QUERIES_MONTHLY: z.coerce.number().default(50000),
+  TENANT_QUOTA_STORAGE_BYTES: z.coerce.number().default(107374182400), // 100 GB
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
+
+export function maskSecret(secret?: string): string {
+  if (!secret || secret.length === 0) return '[NOT_SET]';
+  if (secret.length <= 6) return '***';
+  return `${secret.substring(0, 3)}***${secret.substring(secret.length - 2)}`;
+}
+
+export function getSanitizedConfig(cfg: EnvConfig): Record<string, unknown> {
+  return {
+    ...cfg,
+    JWT_SECRET: '[REDACTED]',
+    S3_SECRET_ACCESS_KEY: '[REDACTED]',
+    SUPABASE_JWT_SECRET: maskSecret(cfg.SUPABASE_JWT_SECRET),
+    QDRANT_API_KEY: maskSecret(cfg.QDRANT_API_KEY),
+    CLOUD_AI_API_KEY: maskSecret(cfg.CLOUD_AI_API_KEY),
+  };
+}
+
+export function validateModeSpecificRequirements(cfg: EnvConfig): void {
+  if (cfg.DEPLOYMENT_MODE === 'enterprise') {
+    if (cfg.TELEMETRY_ENABLED) {
+      throw new Error(
+        'Enterprise Air-Gap Violation: TELEMETRY_ENABLED must be false in enterprise mode to prevent data egress.'
+      );
+    }
+    if (cfg.INFERENCE_PROVIDER === 'openai' || cfg.INFERENCE_PROVIDER === 'azure' || cfg.INFERENCE_PROVIDER === 'saas') {
+      throw new Error(
+        'Enterprise Air-Gap Violation: External cloud inference provider cannot be active in enterprise mode without explicit air-gapped override.'
+      );
+    }
+  }
+
+  if (cfg.DEPLOYMENT_MODE === 'saas') {
+    if (cfg.INFERENCE_MODE === 'saas_cloud' && !cfg.CLOUD_AI_API_KEY && cfg.INFERENCE_PROVIDER !== 'local') {
+      // In production SaaS, cloud API key is required when cloud inference is enabled
+      if (cfg.NODE_ENV === 'production') {
+        throw new Error('SaaS Configuration Error: CLOUD_AI_API_KEY is required for production SaaS cloud inference.');
+      }
+    }
+  }
+}
 
 function validateEnv(): EnvConfig {
   const result = envSchema.safeParse(process.cwd() ? process.env : {});
@@ -57,7 +112,16 @@ function validateEnv(): EnvConfig {
     console.error(JSON.stringify(result.error.format(), null, 2));
     process.exit(1);
   }
-  return result.data;
+
+  // Set enterprise defaults if in enterprise deployment mode
+  const validated = { ...result.data };
+  if (validated.DEPLOYMENT_MODE === 'enterprise') {
+    validated.AIR_GAPPED_MODE = true;
+    validated.TELEMETRY_ENABLED = false;
+  }
+
+  validateModeSpecificRequirements(validated);
+  return validated;
 }
 
 export const config = validateEnv();

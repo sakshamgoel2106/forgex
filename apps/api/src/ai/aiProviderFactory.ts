@@ -6,6 +6,7 @@ import { LocalDevInferenceAdapter } from './localDevInferenceAdapter.js';
 import { OllamaEnterpriseAdapter } from './ollamaEnterpriseAdapter.js';
 import { CloudSaasAdapter } from './cloudSaasAdapter.js';
 import { ReciprocalRankFusionReranker } from './reranker.js';
+import { config } from '../config/env.js';
 
 let defaultGenerationProvider: IMultimodalGenerationProvider | null = null;
 let defaultRerankingProvider: IRerankingProvider | null = null;
@@ -13,12 +14,39 @@ let defaultRerankingProvider: IRerankingProvider | null = null;
 export function createGenerationProvider(): IMultimodalGenerationProvider {
   if (defaultGenerationProvider) return defaultGenerationProvider;
 
-  const mode = process.env.INFERENCE_PROVIDER || 'local';
+  const mode = process.env.INFERENCE_PROVIDER || config.INFERENCE_PROVIDER || 'local';
 
+  // Strict Enterprise Air-Gap Guarantee
+  if (config.DEPLOYMENT_MODE === 'enterprise') {
+    if (mode === 'saas' || mode === 'cloud' || mode === 'openai' || mode === 'azure') {
+      throw new Error(
+        'Enterprise Air-Gap Policy: Cloud inference is strictly prohibited in Enterprise deployment mode.'
+      );
+    }
+    if (mode === 'ollama') {
+      defaultGenerationProvider = new OllamaEnterpriseAdapter(config.OLLAMA_BASE_URL, config.OLLAMA_DEFAULT_MODEL);
+    } else {
+      defaultGenerationProvider = new LocalDevInferenceAdapter();
+    }
+    return defaultGenerationProvider;
+  }
+
+  // SaaS Cloud Mode: Cloud provider enabled ONLY through explicit configuration
+  if (config.DEPLOYMENT_MODE === 'saas') {
+    if (mode === 'saas' || mode === 'cloud' || mode === 'openai' || mode === 'azure') {
+      defaultGenerationProvider = new CloudSaasAdapter(config.CLOUD_AI_API_KEY, config.CLOUD_AI_MODEL);
+      return defaultGenerationProvider;
+    }
+    // If not explicitly configured, use local dev deterministic provider without leaking data
+    defaultGenerationProvider = new LocalDevInferenceAdapter();
+    return defaultGenerationProvider;
+  }
+
+  // Local Dev / Default
   if (mode === 'ollama') {
-    defaultGenerationProvider = new OllamaEnterpriseAdapter();
+    defaultGenerationProvider = new OllamaEnterpriseAdapter(config.OLLAMA_BASE_URL, config.OLLAMA_DEFAULT_MODEL);
   } else if (mode === 'saas' || mode === 'cloud') {
-    defaultGenerationProvider = new CloudSaasAdapter();
+    defaultGenerationProvider = new CloudSaasAdapter(config.CLOUD_AI_API_KEY, config.CLOUD_AI_MODEL);
   } else {
     defaultGenerationProvider = new LocalDevInferenceAdapter();
   }
@@ -30,6 +58,10 @@ export function setGenerationProvider(provider: IMultimodalGenerationProvider): 
   defaultGenerationProvider = provider;
 }
 
+export function resetGenerationProvider(): void {
+  defaultGenerationProvider = null;
+}
+
 export function createRerankingProvider(): IRerankingProvider {
   if (defaultRerankingProvider) return defaultRerankingProvider;
   defaultRerankingProvider = new ReciprocalRankFusionReranker();
@@ -39,3 +71,8 @@ export function createRerankingProvider(): IRerankingProvider {
 export function setRerankingProvider(provider: IRerankingProvider): void {
   defaultRerankingProvider = provider;
 }
+
+export function resetRerankingProvider(): void {
+  defaultRerankingProvider = null;
+}
+
