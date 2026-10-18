@@ -15,6 +15,7 @@ import { createAuditRouter } from './routes/audit.routes.js';
 import { createDocumentRouter } from './routes/document.routes.js';
 import { createCopilotRouter } from './routes/copilot.routes.js';
 import { createVisualRouter } from './routes/visual.routes.js';
+import { createMaintenanceRouter } from './routes/maintenance.routes.js';
 import type { IStorageAdapter } from './storage/storage.interface.js';
 import { createStorageAdapter } from './storage/storageFactory.js';
 import type { IEmbeddingAdapter } from './embeddings/embeddings.interface.js';
@@ -28,6 +29,7 @@ import type { IVisionProcessingProvider } from './ai/vision.interface.js';
 import { createVisionProvider } from './ai/visionProviderFactory.js';
 import { RAGQueryEngine } from './services/ragQueryEngine.js';
 import { VisualIntelligenceEngine } from './services/visualIntelligenceEngine.js';
+import { MaintenanceWorkflowEngine } from './services/maintenanceWorkflowEngine.js';
 
 export interface AppDependencies {
   authAdapter?: IAuthAdapter;
@@ -41,6 +43,7 @@ export interface AppDependencies {
   ragEngine?: RAGQueryEngine;
   visionProvider?: IVisionProcessingProvider;
   visualEngine?: VisualIntelligenceEngine;
+  maintenanceEngine?: MaintenanceWorkflowEngine;
 }
 
 export function createApp(deps: AppDependencies = {}): express.Application {
@@ -71,6 +74,10 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   const visualEngine =
     deps.visualEngine ??
     new VisualIntelligenceEngine(dataStore, storageAdapter, visionProvider, ragEngine);
+
+  const maintenanceEngine =
+    deps.maintenanceEngine ??
+    new MaintenanceWorkflowEngine(dataStore, ragEngine, visualEngine);
 
   const authenticate = createAuthMiddleware(authAdapter, dataStore);
 
@@ -120,6 +127,11 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     '/api/v1/visual',
     authenticate,
     createVisualRouter(dataStore, storageAdapter, visualEngine)
+  );
+  app.use(
+    '/api/v1/maintenance',
+    authenticate,
+    createMaintenanceRouter(dataStore, maintenanceEngine)
   );
 
   // Global not found handler

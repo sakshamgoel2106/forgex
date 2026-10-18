@@ -20,6 +20,8 @@ import type {
   Citation,
   MessageFeedback,
   VisualAsset,
+  MaintenanceCase,
+  CaseHistoryEntry,
 } from '@forgex/shared-types';
 import type {
   IDataStore,
@@ -41,6 +43,9 @@ import type {
   CreateFeedbackDTO,
   CreateVisualAssetDTO,
   VisualAssetFilterOptions,
+  CreateMaintenanceCaseDTO,
+  MaintenanceCaseFilterOptions,
+  CreateCaseHistoryDTO,
 } from './dataStore.interface.js';
 
 export class PgDataStore implements IDataStore {
@@ -1634,6 +1639,260 @@ export class PgDataStore implements IDataStore {
       modelUsed: row.model_used,
       confidenceScore: Number(row.confidence_score),
       isAmbiguous: row.is_ambiguous,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Maintenance Cases & Troubleshooting Workflows (Phase 6)
+  // --------------------------------------------------------------------------
+  public async createMaintenanceCase(dto: CreateMaintenanceCaseDTO): Promise<MaintenanceCase> {
+    const caseNumber = dto.caseNumber || `CASE-${Date.now().toString().slice(-6)}`;
+    const res = await this.pool.query(
+      `INSERT INTO maintenance_cases (
+         organization_id, plant_id, asset_id, case_number, title,
+         severity, status, reported_by_user_id, symptom_description,
+         operating_conditions, visual_asset_ids, diagnostic_hypothesis,
+         checklist, findings, approval, is_escalated, escalation_reason,
+         candidate_for_expert_knowledge
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       RETURNING *`,
+      [
+        dto.organizationId,
+        dto.plantId,
+        dto.assetId,
+        caseNumber,
+        dto.title,
+        dto.severity || 'MEDIUM',
+        dto.status || 'REPORTED',
+        dto.reportedByUserId,
+        dto.symptomDescription,
+        JSON.stringify(dto.operatingConditions || {}),
+        JSON.stringify(dto.visualAssetIds || []),
+        dto.diagnosticHypothesis ? JSON.stringify(dto.diagnosticHypothesis) : null,
+        JSON.stringify(dto.checklist || []),
+        dto.findings ? JSON.stringify(dto.findings) : null,
+        dto.approval ? JSON.stringify(dto.approval) : null,
+        dto.isEscalated ?? false,
+        dto.escalationReason || null,
+        dto.candidateForExpertKnowledge ?? false,
+      ]
+    );
+    return this.mapMaintenanceCaseRow(res.rows[0]);
+  }
+
+  public async getMaintenanceCaseById(
+    organizationId: string,
+    id: string
+  ): Promise<MaintenanceCase | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM maintenance_cases WHERE id = $1 AND organization_id = $2`,
+      [id, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapMaintenanceCaseRow(res.rows[0]);
+  }
+
+  public async updateMaintenanceCase(
+    organizationId: string,
+    id: string,
+    updates: Partial<MaintenanceCase>
+  ): Promise<MaintenanceCase | null> {
+    const existing = await this.getMaintenanceCaseById(organizationId, id);
+    if (!existing) return null;
+
+    const setClauses: string[] = ['updated_at = NOW()'];
+    const params: any[] = [id, organizationId];
+
+    if (updates.title !== undefined) {
+      params.push(updates.title);
+      setClauses.push(`title = $${params.length}`);
+    }
+    if (updates.severity !== undefined) {
+      params.push(updates.severity);
+      setClauses.push(`severity = $${params.length}`);
+    }
+    if (updates.status !== undefined) {
+      params.push(updates.status);
+      setClauses.push(`status = $${params.length}`);
+    }
+    if (updates.symptomDescription !== undefined) {
+      params.push(updates.symptomDescription);
+      setClauses.push(`symptom_description = $${params.length}`);
+    }
+    if (updates.operatingConditions !== undefined) {
+      params.push(JSON.stringify(updates.operatingConditions));
+      setClauses.push(`operating_conditions = $${params.length}`);
+    }
+    if (updates.visualAssetIds !== undefined) {
+      params.push(JSON.stringify(updates.visualAssetIds));
+      setClauses.push(`visual_asset_ids = $${params.length}`);
+    }
+    if (updates.diagnosticHypothesis !== undefined) {
+      params.push(updates.diagnosticHypothesis ? JSON.stringify(updates.diagnosticHypothesis) : null);
+      setClauses.push(`diagnostic_hypothesis = $${params.length}`);
+    }
+    if (updates.checklist !== undefined) {
+      params.push(JSON.stringify(updates.checklist));
+      setClauses.push(`checklist = $${params.length}`);
+    }
+    if (updates.findings !== undefined) {
+      params.push(updates.findings ? JSON.stringify(updates.findings) : null);
+      setClauses.push(`findings = $${params.length}`);
+    }
+    if (updates.approval !== undefined) {
+      params.push(updates.approval ? JSON.stringify(updates.approval) : null);
+      setClauses.push(`approval = $${params.length}`);
+    }
+    if (updates.isEscalated !== undefined) {
+      params.push(updates.isEscalated);
+      setClauses.push(`is_escalated = $${params.length}`);
+    }
+    if (updates.escalationReason !== undefined) {
+      params.push(updates.escalationReason);
+      setClauses.push(`escalation_reason = $${params.length}`);
+    }
+    if (updates.candidateForExpertKnowledge !== undefined) {
+      params.push(updates.candidateForExpertKnowledge);
+      setClauses.push(`candidate_for_expert_knowledge = $${params.length}`);
+    }
+    if (updates.feedbackRating !== undefined) {
+      params.push(updates.feedbackRating);
+      setClauses.push(`feedback_rating = $${params.length}`);
+    }
+    if (updates.feedbackComment !== undefined) {
+      params.push(updates.feedbackComment);
+      setClauses.push(`feedback_comment = $${params.length}`);
+    }
+
+    const res = await this.pool.query(
+      `UPDATE maintenance_cases
+       SET ${setClauses.join(', ')}
+       WHERE id = $1 AND organization_id = $2
+       RETURNING *`,
+      params
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapMaintenanceCaseRow(res.rows[0]);
+  }
+
+  public async listMaintenanceCases(
+    organizationId: string,
+    filter?: MaintenanceCaseFilterOptions
+  ): Promise<MaintenanceCase[]> {
+    const conditions: string[] = ['organization_id = $1'];
+    const params: any[] = [organizationId];
+
+    if (filter?.plantId) {
+      params.push(filter.plantId);
+      conditions.push(`plant_id = $${params.length}`);
+    }
+    if (filter?.assetId) {
+      params.push(filter.assetId);
+      conditions.push(`asset_id = $${params.length}`);
+    }
+    if (filter?.status) {
+      params.push(filter.status);
+      conditions.push(`status = $${params.length}`);
+    }
+    if (filter?.severity) {
+      params.push(filter.severity);
+      conditions.push(`severity = $${params.length}`);
+    }
+    if (filter?.candidateForExpertKnowledge !== undefined) {
+      params.push(filter.candidateForExpertKnowledge);
+      conditions.push(`candidate_for_expert_knowledge = $${params.length}`);
+    }
+
+    const res = await this.pool.query(
+      `SELECT * FROM maintenance_cases WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`,
+      params
+    );
+    return res.rows.map((row) => this.mapMaintenanceCaseRow(row));
+  }
+
+  public async deleteMaintenanceCase(organizationId: string, id: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM maintenance_cases WHERE id = $1 AND organization_id = $2 RETURNING id`,
+      [id, organizationId]
+    );
+    return res.rows.length > 0;
+  }
+
+  public async recordCaseHistory(dto: CreateCaseHistoryDTO): Promise<CaseHistoryEntry> {
+    const res = await this.pool.query(
+      `INSERT INTO case_history (case_id, user_id, previous_status, new_status, action, notes)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [dto.caseId, dto.userId, dto.previousStatus || null, dto.newStatus, dto.action, dto.notes || null]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      caseId: row.case_id,
+      userId: row.user_id,
+      previousStatus: row.previous_status,
+      newStatus: row.new_status,
+      action: row.action,
+      notes: row.notes,
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  public async listCaseHistory(caseId: string): Promise<CaseHistoryEntry[]> {
+    const res = await this.pool.query(
+      `SELECT * FROM case_history WHERE case_id = $1 ORDER BY created_at ASC`,
+      [caseId]
+    );
+    return res.rows.map((row) => ({
+      id: row.id,
+      caseId: row.case_id,
+      userId: row.user_id,
+      previousStatus: row.previous_status,
+      newStatus: row.new_status,
+      action: row.action,
+      notes: row.notes,
+      createdAt: row.created_at.toISOString(),
+    }));
+  }
+
+  private mapMaintenanceCaseRow(row: any): MaintenanceCase {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      assetId: row.asset_id,
+      caseNumber: row.case_number,
+      title: row.title,
+      severity: row.severity,
+      status: row.status,
+      reportedByUserId: row.reported_by_user_id,
+      symptomDescription: row.symptom_description,
+      operatingConditions: typeof row.operating_conditions === 'string'
+        ? JSON.parse(row.operating_conditions)
+        : (row.operating_conditions || {}),
+      visualAssetIds: typeof row.visual_asset_ids === 'string'
+        ? JSON.parse(row.visual_asset_ids)
+        : (row.visual_asset_ids || []),
+      diagnosticHypothesis: typeof row.diagnostic_hypothesis === 'string'
+        ? JSON.parse(row.diagnostic_hypothesis)
+        : row.diagnostic_hypothesis,
+      checklist: typeof row.checklist === 'string'
+        ? JSON.parse(row.checklist)
+        : (row.checklist || []),
+      findings: typeof row.findings === 'string'
+        ? JSON.parse(row.findings)
+        : row.findings,
+      approval: typeof row.approval === 'string'
+        ? JSON.parse(row.approval)
+        : row.approval,
+      isEscalated: Boolean(row.is_escalated),
+      escalationReason: row.escalation_reason,
+      candidateForExpertKnowledge: Boolean(row.candidate_for_expert_knowledge),
+      feedbackRating: row.feedback_rating,
+      feedbackComment: row.feedback_comment,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };

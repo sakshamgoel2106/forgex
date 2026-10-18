@@ -23,6 +23,14 @@ import type {
   VisualAsset,
   VisualAssetType,
   ComponentLabel,
+  MaintenanceCase,
+  MaintenanceCaseStatus,
+  MaintenanceCaseSeverity,
+  ChecklistStep,
+  DiagnosticHypothesis,
+  TechnicianFindings,
+  CaseApproval,
+  CaseHistoryEntry,
 } from '@forgex/shared-types';
 
 export interface CreateOrganizationDTO {
@@ -222,6 +230,53 @@ export interface IDataStore {
   getVisualAssetById(organizationId: string, id: string): Promise<VisualAsset | null>;
   listVisualAssets(organizationId: string, filter?: VisualAssetFilterOptions): Promise<VisualAsset[]>;
   deleteVisualAsset(organizationId: string, id: string): Promise<boolean>;
+
+  // Maintenance Cases & Troubleshooting Workflows (Phase 6)
+  createMaintenanceCase(dto: CreateMaintenanceCaseDTO): Promise<MaintenanceCase>;
+  getMaintenanceCaseById(organizationId: string, id: string): Promise<MaintenanceCase | null>;
+  updateMaintenanceCase(organizationId: string, id: string, updates: Partial<MaintenanceCase>): Promise<MaintenanceCase | null>;
+  listMaintenanceCases(organizationId: string, filter?: MaintenanceCaseFilterOptions): Promise<MaintenanceCase[]>;
+  deleteMaintenanceCase(organizationId: string, id: string): Promise<boolean>;
+  recordCaseHistory(dto: CreateCaseHistoryDTO): Promise<CaseHistoryEntry>;
+  listCaseHistory(caseId: string): Promise<CaseHistoryEntry[]>;
+}
+
+export interface CreateMaintenanceCaseDTO {
+  organizationId: string;
+  plantId: string;
+  assetId: string;
+  caseNumber?: string;
+  title: string;
+  severity?: MaintenanceCaseSeverity;
+  status?: MaintenanceCaseStatus;
+  reportedByUserId: string;
+  symptomDescription: string;
+  operatingConditions?: Record<string, any>;
+  visualAssetIds?: string[];
+  diagnosticHypothesis?: DiagnosticHypothesis | null;
+  checklist?: ChecklistStep[];
+  findings?: TechnicianFindings | null;
+  approval?: CaseApproval | null;
+  isEscalated?: boolean;
+  escalationReason?: string | null;
+  candidateForExpertKnowledge?: boolean;
+}
+
+export interface MaintenanceCaseFilterOptions {
+  plantId?: string;
+  assetId?: string;
+  status?: MaintenanceCaseStatus;
+  severity?: MaintenanceCaseSeverity;
+  candidateForExpertKnowledge?: boolean;
+}
+
+export interface CreateCaseHistoryDTO {
+  caseId: string;
+  userId: string;
+  previousStatus?: MaintenanceCaseStatus | null;
+  newStatus: MaintenanceCaseStatus;
+  action: string;
+  notes?: string | null;
 }
 
 export interface CreateVisualAssetDTO {

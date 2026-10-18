@@ -17,6 +17,8 @@ import type {
   Citation,
   MessageFeedback,
   VisualAsset,
+  MaintenanceCase,
+  CaseHistoryEntry,
 } from '@forgex/shared-types';
 import type {
   IDataStore,
@@ -38,6 +40,9 @@ import type {
   CreateFeedbackDTO,
   CreateVisualAssetDTO,
   VisualAssetFilterOptions,
+  CreateMaintenanceCaseDTO,
+  MaintenanceCaseFilterOptions,
+  CreateCaseHistoryDTO,
 } from './dataStore.interface.js';
 
 export class InMemoryDataStore implements IDataStore {
@@ -63,6 +68,10 @@ export class InMemoryDataStore implements IDataStore {
 
   // Phase 5 Visual Industrial Intelligence
   private visualAssets = new Map<string, VisualAsset>();
+
+  // Phase 6 Maintenance Cases & Troubleshooting Workflows
+  private maintenanceCases = new Map<string, MaintenanceCase>();
+  private caseHistory: CaseHistoryEntry[] = [];
 
   // --------------------------------------------------------------------------
   // Organizations
@@ -938,6 +947,117 @@ export class InMemoryDataStore implements IDataStore {
     return true;
   }
 
+  // --------------------------------------------------------------------------
+  // Maintenance Cases & Troubleshooting Workflows (Phase 6)
+  // --------------------------------------------------------------------------
+  public async createMaintenanceCase(dto: CreateMaintenanceCaseDTO): Promise<MaintenanceCase> {
+    const now = new Date().toISOString();
+    const caseNumber = dto.caseNumber || `CASE-${Date.now().toString().slice(-6)}`;
+    const maintenanceCase: MaintenanceCase = {
+      id: crypto.randomUUID(),
+      organizationId: dto.organizationId,
+      plantId: dto.plantId,
+      assetId: dto.assetId,
+      caseNumber,
+      title: dto.title,
+      severity: dto.severity || 'MEDIUM',
+      status: dto.status || 'REPORTED',
+      reportedByUserId: dto.reportedByUserId,
+      symptomDescription: dto.symptomDescription,
+      operatingConditions: dto.operatingConditions || {},
+      visualAssetIds: dto.visualAssetIds || [],
+      diagnosticHypothesis: dto.diagnosticHypothesis || null,
+      checklist: dto.checklist || [],
+      findings: dto.findings || null,
+      approval: dto.approval || null,
+      isEscalated: dto.isEscalated ?? false,
+      escalationReason: dto.escalationReason || null,
+      candidateForExpertKnowledge: dto.candidateForExpertKnowledge ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.maintenanceCases.set(maintenanceCase.id, maintenanceCase);
+    return maintenanceCase;
+  }
+
+  public async getMaintenanceCaseById(
+    organizationId: string,
+    id: string
+  ): Promise<MaintenanceCase | null> {
+    const c = this.maintenanceCases.get(id);
+    if (!c || c.organizationId !== organizationId) return null;
+    return c;
+  }
+
+  public async updateMaintenanceCase(
+    organizationId: string,
+    id: string,
+    updates: Partial<MaintenanceCase>
+  ): Promise<MaintenanceCase | null> {
+    const existing = this.maintenanceCases.get(id);
+    if (!existing || existing.organizationId !== organizationId) return null;
+
+    const updated: MaintenanceCase = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.maintenanceCases.set(id, updated);
+    return updated;
+  }
+
+  public async listMaintenanceCases(
+    organizationId: string,
+    filter?: MaintenanceCaseFilterOptions
+  ): Promise<MaintenanceCase[]> {
+    const results: MaintenanceCase[] = [];
+    for (const c of this.maintenanceCases.values()) {
+      if (c.organizationId !== organizationId) continue;
+      if (filter?.plantId && c.plantId !== filter.plantId) continue;
+      if (filter?.assetId && c.assetId !== filter.assetId) continue;
+      if (filter?.status && c.status !== filter.status) continue;
+      if (filter?.severity && c.severity !== filter.severity) continue;
+      if (
+        filter?.candidateForExpertKnowledge !== undefined &&
+        c.candidateForExpertKnowledge !== filter.candidateForExpertKnowledge
+      )
+        continue;
+      results.push(c);
+    }
+    return results.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  public async deleteMaintenanceCase(organizationId: string, id: string): Promise<boolean> {
+    const c = this.maintenanceCases.get(id);
+    if (!c || c.organizationId !== organizationId) return false;
+    this.maintenanceCases.delete(id);
+    return true;
+  }
+
+  public async recordCaseHistory(dto: CreateCaseHistoryDTO): Promise<CaseHistoryEntry> {
+    const entry: CaseHistoryEntry = {
+      id: crypto.randomUUID(),
+      caseId: dto.caseId,
+      userId: dto.userId,
+      previousStatus: dto.previousStatus || null,
+      newStatus: dto.newStatus,
+      action: dto.action,
+      notes: dto.notes || null,
+      createdAt: new Date().toISOString(),
+    };
+    this.caseHistory.push(entry);
+    return entry;
+  }
+
+  public async listCaseHistory(caseId: string): Promise<CaseHistoryEntry[]> {
+    return this.caseHistory
+      .filter((h) => h.caseId === caseId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }
+
   public clear(): void {
     this.organizations.clear();
     this.users.clear();
@@ -955,5 +1075,7 @@ export class InMemoryDataStore implements IDataStore {
     this.citations.clear();
     this.messageFeedbacks.clear();
     this.visualAssets.clear();
+    this.maintenanceCases.clear();
+    this.caseHistory = [];
   }
 }
