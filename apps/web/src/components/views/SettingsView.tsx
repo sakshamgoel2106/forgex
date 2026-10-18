@@ -7,8 +7,8 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
-import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '../ui/Card';
-import { Button } from '../ui/Button';
+import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '../ui/card';
+import { Button } from '../ui/button';
 
 export const SettingsView: React.FC = () => {
   const [inferenceMode, setInferenceMode] = useState<'local_ollama' | 'saas_cloud'>(

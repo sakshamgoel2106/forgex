@@ -9,7 +9,7 @@ import {
   ArrowUpRight,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
+import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 
 export const OverviewView: React.FC<{ onNavigate: (module: string) => void }> = ({
   onNavigate,

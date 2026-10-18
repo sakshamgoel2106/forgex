@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Modal } from '../ui/Modal';
-import { Button } from '../ui/Button';
+import { Button } from '../ui/button';
 import type { Citation, CopilotMessage, Conversation, AnswerConfidence } from '@forgex/shared-types';
 
 interface PresetPrompt {

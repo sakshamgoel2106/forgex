@@ -13,9 +13,9 @@ import {
   Lock,
 } from 'lucide-react';
 import { StatusBadge, type StatusTone } from '../ui/StatusBadge';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
+import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { AlertBanner } from '../ui/AlertBanner';
-import { Button } from '../ui/Button';
+import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
 import type {
   MaintenanceCase,

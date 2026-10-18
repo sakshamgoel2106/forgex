@@ -6,8 +6,8 @@ import {
   FileCheck2,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
-import { Button } from '../ui/Button';
+import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
+import { Button } from '../ui/button';
 
 interface FaultRecord {
   code: string;

@@ -6,8 +6,8 @@ import {
   User,
   ThumbsUp,
 } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/Card';
-import { Button } from '../ui/Button';
+import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
+import { Button } from '../ui/button';
 
 interface ExpertNote {
   id: string;
