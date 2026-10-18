@@ -2,12 +2,13 @@ import React from 'react';
 import {
   Search,
   Bell,
-  Sliders,
   ChevronDown,
-  ShieldCheck,
+  Clock,
+  Building2,
   Menu,
   Cpu,
   Activity,
+  ShieldCheck,
   LogOut,
 } from 'lucide-react';
 import {
@@ -31,20 +32,7 @@ interface TopBarProps {
   onNavigate: (module: NavModule) => void;
 }
 
-const MODULE_LABELS: Record<NavModule, { title: string; subtitle: string }> = {
-  overview: { title: 'Operational Overview', subtitle: 'Plant telemetry, equipment metrics & active work orders' },
-  assets: { title: 'Plants & Equipment Directory', subtitle: 'Searchable industrial machinery inventory & live status' },
-  'knowledge-hub': { title: 'Industrial Knowledge Hub', subtitle: 'Validated engineering manuals, P&IDs, SOPs & vector index' },
-  copilot: { title: 'Industrial AI Copilot', subtitle: 'Grounded diagnostic reasoning with strict citation gating' },
-  visual: { title: 'Visual Industrial Intelligence', subtitle: 'Component detection, bounding box inspection & P&ID mapping' },
-  maintenance: { title: 'Maintenance & Troubleshooting Workflows', subtitle: 'Root cause hypotheses, guided checklists & LOTO approvals' },
-  expert: { title: 'Tribal & Expert Knowledge Repository', subtitle: 'Field-verified millwright insights & operational heuristics' },
-  audit: { title: 'Security & Cryptographic Audit Ledger', subtitle: 'Tamper-evident logs, ISO-9001 compliance & SHA-256 signatures' },
-  settings: { title: 'System Configuration & Deployment Policy', subtitle: 'Inference runtime selection, air-gap policies & data sovereignty' },
-};
-
 export const TopBar: React.FC<TopBarProps> = ({
-  activeModule,
   plantSite,
   onPlantChange,
   onOpenSearch,
@@ -53,160 +41,178 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenHealthModal,
   onNavigate,
 }) => {
-  const meta = MODULE_LABELS[activeModule] || MODULE_LABELS.overview;
-
   return (
-    <header className="h-14 border-b border-industrial-border bg-industrial-sidebar px-3 sm:px-4 flex items-center justify-between gap-3 shrink-0 z-20">
-      {/* Left: Mobile Toggle & Page Breadcrumb */}
-      <div className="flex items-center gap-3 min-w-0">
+    <header className="h-16 border-b border-[#1A2332] bg-[#0B0F15] px-4 md:px-6 flex items-center justify-between gap-4 shrink-0 z-30 select-none">
+      {/* Left: Brand & Tagline */}
+      <div className="flex items-center gap-6 min-w-0">
         <button
           onClick={onOpenMobileNav}
-          className="md:hidden p-1.5 rounded text-industrial-secondary hover:text-industrial-text hover:bg-industrial-surface"
-          aria-label="Open navigation menu"
+          className="md:hidden p-1.5 rounded text-slate-400 hover:text-white hover:bg-[#151E28]"
+          aria-label="Open mobile navigation"
         >
           <Menu className="w-5 h-5" />
         </button>
 
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-sm font-semibold font-sans text-industrial-text tracking-tight truncate">
-              {meta.title}
-            </h1>
-            <span className="hidden sm:inline-block text-[10px] font-mono px-1.5 py-0.2 rounded bg-industrial-surface text-industrial-secondary border border-industrial-border uppercase">
-              {activeModule}
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => onNavigate('overview')}>
+          {/* Stylized ForgeX Logo from Screenshot */}
+          <div className="relative flex items-center justify-center">
+            <svg
+              className="w-8 h-8 text-[#A3E635]"
+              viewBox="0 0 32 32"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M8 6C14 6 22 9 24 16C26 23 20 27 15 27C10 27 7 23 9 18C11 13 18 11 23 13"
+                stroke="currentColor"
+                strokeWidth="3.5"
+                strokeLinecap="round"
+              />
+              <circle cx="11" cy="9" r="2.5" fill="currentColor" />
+            </svg>
+          </div>
+
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-xl font-bold tracking-tight text-white font-sans">
+              ForgeX <span className="text-[#A3E635]">AI</span>
             </span>
           </div>
-          <p className="hidden lg:block text-[11px] text-industrial-secondary truncate -mt-0.5">
-            {meta.subtitle}
-          </p>
+
+          <div className="hidden xl:block h-4 w-px bg-[#1E293B] mx-1" />
+
+          <span className="hidden xl:block text-xs text-slate-400 font-sans tracking-wide">
+            Industrial Intelligence. Real Answers.
+          </span>
         </div>
       </div>
 
       {/* Center: Global Search Bar */}
-      <div className="flex-1 max-w-md mx-2 hidden sm:block">
+      <div className="flex-1 max-w-xl mx-2">
         <button
           onClick={onOpenSearch}
-          className="w-full flex items-center justify-between px-3 py-1.5 rounded-md bg-industrial-bg border border-industrial-border hover:border-industrial-borderLight text-industrial-secondary hover:text-industrial-text transition text-xs font-sans group"
+          className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg bg-[#111722] border border-[#1E293B] hover:border-[#334155] text-slate-400 hover:text-slate-200 transition text-xs font-sans group shadow-inner"
         >
-          <div className="flex items-center gap-2">
-            <Search className="w-3.5 h-3.5 text-industrial-secondary group-hover:text-industrial-accent" />
-            <span className="truncate">Search equipment, manuals, cases, P&IDs...</span>
+          <div className="flex items-center gap-2.5 truncate">
+            <Search className="w-4 h-4 text-slate-400 group-hover:text-[#A3E635] transition" />
+            <span className="truncate">Search documents, assets, questions... (Ctrl + K)</span>
           </div>
-          <kbd className="hidden md:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono font-medium rounded bg-industrial-surface border border-industrial-border text-industrial-secondary">
-            Ctrl K
-          </kbd>
+          <Clock className="w-4 h-4 text-slate-500 group-hover:text-slate-400 shrink-0" />
         </button>
       </div>
 
-      {/* Right Controls: Plant Context, Sovereignty, Notifications & Profile */}
-      <div className="flex items-center gap-2.5 shrink-0">
-        {/* Mobile Search Icon */}
-        <button
-          onClick={onOpenSearch}
-          className="sm:hidden p-1.5 rounded text-industrial-secondary hover:text-industrial-text hover:bg-industrial-surface"
-          aria-label="Search"
-        >
-          <Search className="w-4 h-4" />
-        </button>
-
+      {/* Right Controls: Plant Selector, Notifications & User Info */}
+      <div className="flex items-center gap-3 shrink-0">
         {/* Plant Selector Dropdown */}
-        <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-industrial-surface border border-industrial-border text-xs font-mono">
-          <Sliders className="w-3.5 h-3.5 text-industrial-accent shrink-0" />
-          <span className="text-industrial-secondary text-[11px]">PLANT:</span>
-          <select
-            value={plantSite}
-            onChange={(e) => onPlantChange(e.target.value)}
-            className="bg-transparent text-xs font-mono font-medium text-industrial-text outline-none cursor-pointer"
-          >
-            <option value="PLANT-TX-04" className="bg-industrial-surface text-industrial-text">
-              PLANT-TX-04 (Refinery)
-            </option>
-            <option value="PLANT-OH-02" className="bg-industrial-surface text-industrial-text">
-              PLANT-OH-02 (Rolling Mill)
-            </option>
-            <option value="PLANT-LA-01" className="bg-industrial-surface text-industrial-text">
-              PLANT-LA-01 (Ethylene)
-            </option>
-          </select>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="hidden sm:flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-[#111722] border border-[#1E293B] hover:border-[#334155] transition text-left outline-none">
+              <Building2 className="w-4 h-4 text-[#A3E635] shrink-0" />
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-white leading-tight truncate">
+                  {plantSite === 'RIVERSIDE' ? 'Riverside Plant' : 'Riverside Plant'}
+                </div>
+                <div className="text-[10px] text-slate-400 leading-tight truncate font-sans">
+                  Plant 1 • North Area
+                </div>
+              </div>
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400 ml-1" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56 bg-[#151E28] border-[#283543] text-white">
+            <DropdownMenuLabel className="text-xs text-slate-400 font-mono">
+              Industrial Complexes
+            </DropdownMenuLabel>
+            <DropdownMenuItem
+              onClick={() => onPlantChange('RIVERSIDE')}
+              className="text-xs cursor-pointer focus:bg-[#1E293B] font-medium"
+            >
+              Riverside Plant (Plant 1 • North Area)
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onPlantChange('GULF')}
+              className="text-xs cursor-pointer focus:bg-[#1E293B]"
+            >
+              Gulf Coast Refinery (Unit 4B)
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => onPlantChange('MIDWEST')}
+              className="text-xs cursor-pointer focus:bg-[#1E293B]"
+            >
+              Midwest Cracker (Train 2)
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-        {/* Air-Gapped Sovereign Badge */}
-        <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-industrial-bg border border-industrial-border text-xs font-mono">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="text-[10px] font-bold text-emerald-400">AIR-GAPPED OT</span>
-        </div>
-
-        {/* Notifications Trigger */}
+        {/* Notification Bell with Badge 3 */}
         <button
           onClick={onOpenNotifications}
-          className="relative p-1.5 rounded-md text-industrial-secondary hover:text-industrial-text hover:bg-industrial-surface border border-transparent hover:border-industrial-border transition"
+          className="relative p-2 rounded-lg bg-[#111722] border border-[#1E293B] text-slate-300 hover:text-white hover:border-[#334155] transition"
           aria-label="View notifications"
         >
           <Bell className="w-4 h-4" />
-          <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-industrial-accent ring-2 ring-industrial-sidebar" />
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#EF4444] text-white text-[10px] font-bold flex items-center justify-center font-mono">
+            3
+          </span>
         </button>
 
-        {/* User Profile Menu */}
+        {/* User Profile */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 pl-2 border-l border-industrial-border hover:opacity-90 outline-none">
-              <div className="w-7 h-7 rounded-full bg-industrial-surface border border-industrial-border flex items-center justify-center text-industrial-accent font-mono text-xs font-bold">
-                TV
+            <button className="flex items-center gap-2.5 pl-1 outline-none group">
+              <div className="w-8 h-8 rounded-full bg-[#1E3A8A] border border-blue-500/40 text-blue-200 flex items-center justify-center text-xs font-bold font-sans">
+                JD
               </div>
-              <div className="text-left hidden lg:block">
-                <div className="text-xs font-medium text-industrial-text leading-tight">
-                  T. Vance
+              <div className="text-left hidden md:block">
+                <div className="text-xs font-bold text-white group-hover:text-[#A3E635] transition leading-tight">
+                  John Doe
                 </div>
-                <div className="text-[10px] font-mono text-industrial-secondary leading-tight">
-                  PE-7089 • L4
+                <div className="text-[10px] text-slate-400 leading-tight">
+                  Administrator
                 </div>
               </div>
-              <ChevronDown className="w-3 h-3 text-industrial-secondary hidden lg:block" />
             </button>
           </DropdownMenuTrigger>
 
           <DropdownMenuContent
             align="end"
-            className="w-56 bg-industrial-surface border-industrial-border text-industrial-text shadow-2xl"
+            className="w-56 bg-[#151E28] border-[#283543] text-white shadow-2xl"
           >
-            <DropdownMenuLabel className="font-mono text-xs text-industrial-secondary">
-              Plant Engineering Auth
+            <DropdownMenuLabel className="font-mono text-xs text-slate-400">
+              User Profile
             </DropdownMenuLabel>
             <div className="px-2 py-1.5 text-xs">
-              <div className="font-semibold text-industrial-text">Thomas Vance, PE</div>
-              <div className="text-[11px] text-industrial-secondary font-mono">
-                PE-7089 | Plant Level 4 Authority
-              </div>
+              <div className="font-semibold text-white">John Doe</div>
+              <div className="text-[11px] text-slate-400">Administrator • Full Access</div>
             </div>
-            <DropdownMenuSeparator className="bg-industrial-border" />
+            <DropdownMenuSeparator className="bg-[#283543]" />
             <DropdownMenuItem
               onClick={() => onNavigate('settings')}
-              className="text-xs cursor-pointer focus:bg-industrial-sidebar"
+              className="text-xs cursor-pointer focus:bg-[#1E293B]"
             >
-              <Cpu className="w-3.5 h-3.5 mr-2 text-industrial-accent" />
-              Inference Settings
+              <Cpu className="w-3.5 h-3.5 mr-2 text-[#A3E635]" />
+              Inference & Settings
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={onOpenHealthModal}
-              className="text-xs cursor-pointer focus:bg-industrial-sidebar"
+              className="text-xs cursor-pointer focus:bg-[#1E293B]"
             >
               <Activity className="w-3.5 h-3.5 mr-2 text-emerald-400" />
-              Stack Telemetry Health
+              System Health Details
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => onNavigate('audit')}
-              className="text-xs cursor-pointer focus:bg-industrial-sidebar"
+              className="text-xs cursor-pointer focus:bg-[#1E293B]"
             >
               <ShieldCheck className="w-3.5 h-3.5 mr-2 text-cyan-400" />
-              Compliance & Audit Logs
+              Security & Audit
             </DropdownMenuItem>
-            <DropdownMenuSeparator className="bg-industrial-border" />
+            <DropdownMenuSeparator className="bg-[#283543]" />
             <DropdownMenuItem
               onClick={() => onNavigate('settings')}
-              className="text-xs cursor-pointer text-rose-400 focus:bg-industrial-sidebar"
+              className="text-xs cursor-pointer text-rose-400 focus:bg-[#1E293B]"
             >
               <LogOut className="w-3.5 h-3.5 mr-2" />
-              Disconnect Session
+              Sign Out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

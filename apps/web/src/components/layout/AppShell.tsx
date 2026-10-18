@@ -26,7 +26,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     return false;
   });
 
-  const [plantSite, setPlantSite] = useState<string>('PLANT-TX-04');
+  const [plantSite, setPlantSite] = useState<string>('RIVERSIDE');
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -47,54 +47,54 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   return (
     <TooltipProvider>
-      <div className="flex h-screen w-screen overflow-hidden bg-industrial-bg text-industrial-text font-sans antialiased">
-        {/* Desktop Sidebar */}
-        <div className="hidden md:flex h-full shrink-0">
-          <Sidebar
-            activeModule={activeModule}
-            onSelectModule={handleModuleSelect}
-            collapsed={collapsed}
-            onToggleCollapse={toggleCollapse}
-            onOpenTelemetryModal={() => setHealthModalOpen(true)}
-          />
-        </div>
+      <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#070B10] text-slate-100 font-sans antialiased">
+        {/* Full-width Top Navigation Rail */}
+        <TopBar
+          activeModule={activeModule}
+          plantSite={plantSite}
+          onPlantChange={setPlantSite}
+          onOpenSearch={() => setSearchOpen(true)}
+          onOpenNotifications={() => setNotificationsOpen(true)}
+          onOpenMobileNav={() => setMobileNavOpen(true)}
+          onOpenHealthModal={() => setHealthModalOpen(true)}
+          onNavigate={handleModuleSelect}
+        />
 
-        {/* Mobile Navigation Sheet */}
-        <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-          <SheetContent
-            side="left"
-            showCloseButton={false}
-            className="p-0 w-64 bg-industrial-sidebar border-r border-industrial-border"
-          >
+        {/* Workspace Body: Left Sidebar + Main Content */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Desktop Left Sidebar */}
+          <div className="hidden md:flex h-full shrink-0">
             <Sidebar
               activeModule={activeModule}
               onSelectModule={handleModuleSelect}
-              collapsed={false}
-              onToggleCollapse={() => setMobileNavOpen(false)}
-              onOpenTelemetryModal={() => {
-                setMobileNavOpen(false);
-                setHealthModalOpen(true);
-              }}
+              collapsed={collapsed}
+              onToggleCollapse={toggleCollapse}
+              onOpenTelemetryModal={() => setHealthModalOpen(true)}
             />
-          </SheetContent>
-        </Sheet>
+          </div>
 
-        {/* Main Application Column */}
-        <div className="flex flex-1 flex-col h-full min-w-0 overflow-hidden">
-          {/* Top Navigation Bar */}
-          <TopBar
-            activeModule={activeModule}
-            plantSite={plantSite}
-            onPlantChange={setPlantSite}
-            onOpenSearch={() => setSearchOpen(true)}
-            onOpenNotifications={() => setNotificationsOpen(true)}
-            onOpenMobileNav={() => setMobileNavOpen(true)}
-            onOpenHealthModal={() => setHealthModalOpen(true)}
-            onNavigate={handleModuleSelect}
-          />
+          {/* Mobile Navigation Sheet */}
+          <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+            <SheetContent
+              side="left"
+              showCloseButton={false}
+              className="p-0 w-64 bg-[#0B0F15] border-r border-[#1A2332]"
+            >
+              <Sidebar
+                activeModule={activeModule}
+                onSelectModule={handleModuleSelect}
+                collapsed={false}
+                onToggleCollapse={() => setMobileNavOpen(false)}
+                onOpenTelemetryModal={() => {
+                  setMobileNavOpen(false);
+                  setHealthModalOpen(true);
+                }}
+              />
+            </SheetContent>
+          </Sheet>
 
-          {/* Primary View Workspace */}
-          <main className="flex-1 overflow-hidden relative flex flex-col bg-industrial-bg">
+          {/* Main Center & Right Workspaces */}
+          <main className="flex-1 overflow-hidden relative flex flex-col bg-[#070B10]">
             {children}
           </main>
         </div>
@@ -116,8 +116,8 @@ export const AppShell: React.FC<AppShellProps> = ({
         <Modal
           isOpen={healthModalOpen}
           onClose={() => setHealthModalOpen(false)}
-          title="Stack Telemetry & Subsystem Probes"
-          subtitle="Real-time health verification across PostgreSQL, Qdrant, MinIO, Redis & Ollama"
+          title="System Health Details"
+          subtitle="Real-time operational status across all subsystem watchdogs"
           maxWidth="xl"
         >
           <SystemHealthView />
