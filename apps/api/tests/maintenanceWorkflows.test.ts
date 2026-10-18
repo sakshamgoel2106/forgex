@@ -145,26 +145,30 @@ describe('Phase 6: Evidence-to-Action Workflows', () => {
     plantA = await dataStore.createPlant(orgA.id, {
       code: 'PLANT-TX-04',
       name: 'Texas Refining Unit 4',
+      location: 'Texas, USA',
     });
 
     assetPumpA = await dataStore.createAsset(orgA.id, {
       plantId: plantA.id,
       assetTag: 'P-101-A',
       name: 'Atmospheric Crude Booster Pump A',
-      assetType: 'Centrifugal Pump',
-      criticality: 'CRITICAL',
+      area: 'Process Area 1',
+      manufacturer: 'Flowserve',
+      modelNumber: 'Durco Mark 3',
+      serialNumber: 'SN-P101-01',
+      operationalState: 'OPTIMAL',
     });
 
     tokenAdminA = LocalDevAuthAdapter.generateDevToken(
-      { id: userAdminA.externalAuthId, email: userAdminA.email },
+      { id: userAdminA.externalAuthId, email: userAdminA.email, emailVerified: true },
       jwtSecret
     );
     tokenEngineerA = LocalDevAuthAdapter.generateDevToken(
-      { id: userEngineerA.externalAuthId, email: userEngineerA.email },
+      { id: userEngineerA.externalAuthId, email: userEngineerA.email, emailVerified: true },
       jwtSecret
     );
     tokenViewerA = LocalDevAuthAdapter.generateDevToken(
-      { id: userViewerA.externalAuthId, email: userViewerA.email },
+      { id: userViewerA.externalAuthId, email: userViewerA.email, emailVerified: true },
       jwtSecret
     );
 
@@ -188,10 +192,12 @@ describe('Phase 6: Evidence-to-Action Workflows', () => {
     plantB = await dataStore.createPlant(orgB.id, {
       code: 'PLANT-NO-01',
       name: 'Stavanger Terminal',
+      location: 'Stavanger, Norway',
     });
+    void plantB;
 
     tokenAdminB = LocalDevAuthAdapter.generateDevToken(
-      { id: userAdminB.externalAuthId, email: userAdminB.email },
+      { id: userAdminB.externalAuthId, email: userAdminB.email, emailVerified: true },
       jwtSecret
     );
 
@@ -211,6 +217,7 @@ describe('Phase 6: Evidence-to-Action Workflows', () => {
       versionNumber: 1,
       revision: 'REV-D',
       filename: 'SOP-MECH-P101_RevD.pdf',
+      mimeType: 'application/pdf',
       fileSizeBytes: 520000,
       storageKey: `sop/${orgA.id}/p101_revd.pdf`,
       checksumSha256: 'sha256_mock_p101',
@@ -232,7 +239,7 @@ describe('Phase 6: Evidence-to-Action Workflows', () => {
         chunkIndex: 0,
         pageNumber: 14,
         qdrantPointId: crypto.randomUUID(),
-        extractionMethod: 'TEXT_EXTRACTION',
+        extractionMethod: 'NATIVE_TEXT',
         sectionHeading: '4.3 Mechanical Seal Gland Assembly & Torque Matrix',
         content: sopContent,
         tokenCount: 80,
@@ -252,11 +259,15 @@ describe('Phase 6: Evidence-to-Action Workflows', () => {
           plantId: plantA.id,
           assetId: assetPumpA.id,
           pageNumber: 14,
+          chunkIndex: 0,
           sectionHeading: chunkSopA.sectionHeading,
           content: chunkSopA.content,
           documentNumber: docA.documentNumber,
           documentTitle: docA.title,
           revisionTag: versionA.revision,
+          isTable: false,
+          isFigure: false,
+          extractionMethod: 'NATIVE_TEXT',
         },
       },
     ]);

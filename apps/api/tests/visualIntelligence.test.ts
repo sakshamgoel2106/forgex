@@ -115,18 +115,22 @@ describe('Phase 5: Visual Industrial Intelligence', () => {
     plantA = await dataStore.createPlant(orgA.id, {
       name: 'Crude Distillation Unit 1',
       code: 'CDU-01',
+      location: 'Baytown, TX',
     });
 
     assetPumpA = await dataStore.createAsset(orgA.id, {
       plantId: plantA.id,
       assetTag: 'P-101-A',
       name: 'Atmospheric Crude Booster Pump A',
-      assetType: 'Centrifugal Pump',
-      criticality: 'CRITICAL',
+      area: 'Pump Bay 1',
+      manufacturer: 'Sulzer',
+      modelNumber: 'ZE-80',
+      serialNumber: 'SN-SULZ-101',
+      operationalState: 'OPTIMAL',
     });
 
     tokenEngineerA = LocalDevAuthAdapter.generateDevToken(
-      { id: userEngineerA.externalAuthId, email: userEngineerA.email },
+      { id: userEngineerA.externalAuthId, email: userEngineerA.email, emailVerified: true },
       jwtSecret
     );
 
@@ -151,12 +155,14 @@ describe('Phase 5: Visual Industrial Intelligence', () => {
     plantB = await dataStore.createPlant(orgB.id, {
       name: 'Polymerization Line 2',
       code: 'POLY-02',
+      location: 'Deer Park, TX',
     });
 
     tokenAdminB = LocalDevAuthAdapter.generateDevToken(
-      { id: userAdminB.externalAuthId, email: userAdminB.email },
+      { id: userAdminB.externalAuthId, email: userAdminB.email, emailVerified: true },
       jwtSecret
     );
+    void plantB;
 
     // Seed Engineering Manual Passages in Org A (SOP with Seal Torque Matrix)
     docA = await dataStore.createDocument({
@@ -175,6 +181,7 @@ describe('Phase 5: Visual Industrial Intelligence', () => {
       revision: 'REV-C',
       filename: 'SOP-MECH-P101_RevC.pdf',
       fileSizeBytes: 450000,
+      mimeType: 'application/pdf',
       storageKey: `sop/${orgA.id}/p101_revc.pdf`,
       checksumSha256: 'a1b2c3d4e5f6',
       status: 'INDEXED',
@@ -195,7 +202,7 @@ Casing drain valve V-101-D must remain closed during flush commissioning.`;
         chunkIndex: 0,
         pageNumber: 12,
         qdrantPointId: crypto.randomUUID(),
-        extractionMethod: 'TEXT_EXTRACTION',
+        extractionMethod: 'NATIVE_TEXT',
         sectionHeading: '4.3 Mechanical Seal Gland Assembly & Torque Matrix',
         content: chunkContent,
         tokenCount: 65,
@@ -215,11 +222,15 @@ Casing drain valve V-101-D must remain closed during flush commissioning.`;
           plantId: plantA.id,
           assetId: assetPumpA.id,
           pageNumber: 12,
+          chunkIndex: 0,
           sectionHeading: chunk.sectionHeading,
           content: chunk.content,
           documentNumber: docA.documentNumber,
           documentTitle: docA.title,
           revisionTag: versionA.revision,
+          isTable: false,
+          isFigure: false,
+          extractionMethod: 'NATIVE_TEXT',
         },
       },
     ]);

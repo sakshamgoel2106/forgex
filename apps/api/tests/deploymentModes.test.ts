@@ -144,17 +144,20 @@ describe('Phase 7: SaaS and Private Enterprise Release Suite', () => {
       plantId: plantA.id,
       assetTag: 'CMP-C-10',
       name: 'High-Pressure Centrifugal Compressor C-10',
-      assetType: 'COMPRESSOR',
-      criticality: 'CRITICAL',
+      area: 'Compressor Bay',
+      manufacturer: 'GE Nuovo Pignone',
+      modelNumber: 'BCL-405',
+      serialNumber: 'SN-99420',
+      operationalState: 'OPTIMAL',
     });
 
     // 5. Auth Tokens
     tokenEngineerA = LocalDevAuthAdapter.generateDevToken(
-      { id: userEngineerA.externalAuthId, email: userEngineerA.email },
+      { id: userEngineerA.externalAuthId, email: userEngineerA.email, emailVerified: true },
       jwtSecret
     );
     tokenEngineerB = LocalDevAuthAdapter.generateDevToken(
-      { id: userEngineerB.externalAuthId, email: userEngineerB.email },
+      { id: userEngineerB.externalAuthId, email: userEngineerB.email, emailVerified: true },
       jwtSecret
     );
 
@@ -177,7 +180,7 @@ describe('Phase 7: SaaS and Private Enterprise Release Suite', () => {
       fileSizeBytes: 1048576,
       mimeType: 'application/pdf',
       checksumSha256: 'sha256_mock_c10',
-      status: 'READY',
+      status: 'INDEXED',
     });
 
     [chunkA] = await dataStore.saveKnowledgeChunks([
@@ -186,7 +189,7 @@ describe('Phase 7: SaaS and Private Enterprise Release Suite', () => {
         chunkIndex: 0,
         pageNumber: 3,
         qdrantPointId: crypto.randomUUID(),
-        extractionMethod: 'TEXT_EXTRACTION',
+        extractionMethod: 'NATIVE_TEXT',
         sectionHeading: '3.1 Emergency Zero-Energy Lockout Protocol',
         content:
           'MANDATORY: Before opening high-pressure bypass valve XV-104 on Compressor C-10, lock out power feed breaker 8A and bleed off suction header to zero psig. Never bypass safety interlocks.',
@@ -207,11 +210,15 @@ describe('Phase 7: SaaS and Private Enterprise Release Suite', () => {
           plantId: plantA.id,
           assetId: assetCompressorA.id,
           pageNumber: 3,
+          chunkIndex: 0,
           sectionHeading: chunkA.sectionHeading,
           content: chunkA.content,
           documentNumber: docA.documentNumber,
           documentTitle: docA.title,
           revisionTag: versionA.revision,
+          isTable: false,
+          isFigure: false,
+          extractionMethod: 'NATIVE_TEXT',
           confidenceScore: 0.95,
         },
       },
@@ -420,7 +427,7 @@ describe('Phase 7: SaaS and Private Enterprise Release Suite', () => {
               documentTitle: 'Title',
               pageNumber: 1,
               content: 'Procedure content',
-              confidenceScore: 0.9,
+              score: 0.9,
             },
           ],
         })

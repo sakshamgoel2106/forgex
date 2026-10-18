@@ -119,24 +119,26 @@ describe('Phase 3: Industrial Document Ingestion & Vector Indexing', () => {
       name: 'Alberta Wind & Gas Turbine Unit',
       location: 'Calgary, AB',
     });
+    void plantB;
 
     // 5. Generate Test JWTs
     tokenAdminA = LocalDevAuthAdapter.generateDevToken(
-      { id: userAdminA.externalAuthId, email: userAdminA.email },
+      { id: userAdminA.externalAuthId, email: userAdminA.email, emailVerified: true },
       jwtSecret
     );
     tokenEngineerA = LocalDevAuthAdapter.generateDevToken(
-      { id: userEngineerA.externalAuthId, email: userEngineerA.email },
+      { id: userEngineerA.externalAuthId, email: userEngineerA.email, emailVerified: true },
       jwtSecret
     );
     tokenViewerA = LocalDevAuthAdapter.generateDevToken(
-      { id: userViewerA.externalAuthId, email: userViewerA.email },
+      { id: userViewerA.externalAuthId, email: userViewerA.email, emailVerified: true },
       jwtSecret
     );
     tokenAdminB = LocalDevAuthAdapter.generateDevToken(
-      { id: userAdminB.externalAuthId, email: userAdminB.email },
+      { id: userAdminB.externalAuthId, email: userAdminB.email, emailVerified: true },
       jwtSecret
     );
+    void tokenAdminA;
   });
 
   describe('1. Document Upload & Magic Bytes Validation', () => {
