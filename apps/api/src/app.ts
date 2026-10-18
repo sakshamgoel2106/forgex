@@ -13,6 +13,7 @@ import { createPlantRouter } from './routes/plant.routes.js';
 import { createAssetRouter } from './routes/asset.routes.js';
 import { createAuditRouter } from './routes/audit.routes.js';
 import { createDocumentRouter } from './routes/document.routes.js';
+import { createCopilotRouter } from './routes/copilot.routes.js';
 import type { IStorageAdapter } from './storage/storage.interface.js';
 import { createStorageAdapter } from './storage/storageFactory.js';
 import type { IEmbeddingAdapter } from './embeddings/embeddings.interface.js';
@@ -20,6 +21,9 @@ import { createEmbeddingAdapter } from './embeddings/embeddingFactory.js';
 import type { IVectorStoreAdapter } from './vector/vectorStore.interface.js';
 import { createVectorStoreAdapter } from './vector/vectorStoreFactory.js';
 import { IngestionQueue } from './jobs/ingestionQueue.js';
+import type { IMultimodalGenerationProvider, IRerankingProvider } from './ai/ai.interface.js';
+import { createGenerationProvider, createRerankingProvider } from './ai/aiProviderFactory.js';
+import { RAGQueryEngine } from './services/ragQueryEngine.js';
 
 export interface AppDependencies {
   authAdapter?: IAuthAdapter;
@@ -28,6 +32,9 @@ export interface AppDependencies {
   embeddingAdapter?: IEmbeddingAdapter;
   vectorStore?: IVectorStoreAdapter;
   ingestionQueue?: IngestionQueue;
+  generationProvider?: IMultimodalGenerationProvider;
+  rerankingProvider?: IRerankingProvider;
+  ragEngine?: RAGQueryEngine;
 }
 
 export function createApp(deps: AppDependencies = {}): express.Application {
@@ -41,6 +48,18 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   const ingestionQueue =
     deps.ingestionQueue ??
     new IngestionQueue(dataStore, storageAdapter, embeddingAdapter, vectorStore);
+
+  const generationProvider = deps.generationProvider ?? createGenerationProvider();
+  const rerankingProvider = deps.rerankingProvider ?? createRerankingProvider();
+  const ragEngine =
+    deps.ragEngine ??
+    new RAGQueryEngine(
+      dataStore,
+      embeddingAdapter,
+      vectorStore,
+      generationProvider,
+      rerankingProvider
+    );
 
   const authenticate = createAuthMiddleware(authAdapter, dataStore);
 
@@ -85,6 +104,7 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     authenticate,
     createDocumentRouter(dataStore, storageAdapter, ingestionQueue)
   );
+  app.use('/api/v1/copilot', authenticate, createCopilotRouter(dataStore, ragEngine));
 
   // Global not found handler
   app.use((_req, res) => {

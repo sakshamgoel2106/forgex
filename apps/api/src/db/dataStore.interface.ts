@@ -16,6 +16,10 @@ import type {
   DocumentType,
   DocumentStatus,
   ExtractionMethod,
+  Conversation,
+  CopilotMessage,
+  Citation,
+  MessageFeedback,
 } from '@forgex/shared-types';
 
 export interface CreateOrganizationDTO {
@@ -196,4 +200,54 @@ export interface IDataStore {
     errorMessage?: string | null
   ): Promise<ProcessingJob>;
   incrementJobRetryCount(jobId: string): Promise<ProcessingJob>;
+
+  // Phase 4: Conversations & AI Copilot
+  createConversation(dto: CreateConversationDTO): Promise<Conversation>;
+  getConversationById(organizationId: string, conversationId: string): Promise<Conversation | null>;
+  listConversations(organizationId: string, userId: string, plantId?: string): Promise<Conversation[]>;
+  deleteConversation(organizationId: string, conversationId: string): Promise<boolean>;
+
+  // Messages & Citations
+  createMessage(dto: CreateMessageDTO): Promise<CopilotMessage>;
+  createCitations(citations: CreateCitationDTO[]): Promise<Citation[]>;
+  getMessageWithCitations(messageId: string): Promise<CopilotMessage | null>;
+  listMessages(conversationId: string): Promise<CopilotMessage[]>;
+  recordMessageFeedback(dto: CreateFeedbackDTO): Promise<MessageFeedback>;
 }
+
+export interface CreateConversationDTO {
+  organizationId: string;
+  plantId: string;
+  assetId?: string | null;
+  userId: string;
+  title: string;
+}
+
+export interface CreateMessageDTO {
+  conversationId: string;
+  senderType: 'USER' | 'ASSISTANT' | 'SYSTEM';
+  content: string;
+  confidence?: 'HIGH' | 'MEDIUM' | 'UNCERTAIN' | 'INSUFFICIENT_EVIDENCE';
+  isInsufficientEvidence?: boolean;
+  conflictDetected?: boolean;
+  conflictDetails?: string | null;
+}
+
+export interface CreateCitationDTO {
+  messageId: string;
+  documentId: string;
+  documentVersionId: string;
+  pageNumber: number;
+  knowledgeChunkId?: string | null;
+  snippet: string;
+  confidenceScore?: number;
+  sectionHeading?: string | null;
+}
+
+export interface CreateFeedbackDTO {
+  messageId: string;
+  userId: string;
+  rating: 'HELPFUL' | 'UNHELPFUL';
+  comment?: string | null;
+}
+

@@ -15,6 +15,10 @@ import type {
   KnowledgeChunk,
   ProcessingJob,
   DocumentStatus,
+  Conversation,
+  CopilotMessage,
+  Citation,
+  MessageFeedback,
 } from '@forgex/shared-types';
 import type {
   IDataStore,
@@ -30,6 +34,10 @@ import type {
   CreateKnowledgeChunkDTO,
   CreateProcessingJobDTO,
   DocumentFilterOptions,
+  CreateConversationDTO,
+  CreateMessageDTO,
+  CreateCitationDTO,
+  CreateFeedbackDTO,
 } from './dataStore.interface.js';
 
 export class PgDataStore implements IDataStore {
@@ -1203,6 +1211,309 @@ export class PgDataStore implements IDataStore {
       totalPages: latestVersion?.totalPages ?? 0,
       totalChunks: latestVersion?.totalChunks ?? 0,
       revision: latestVersion?.revision ?? 'REV-1',
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 4: Conversations & AI Copilot
+  // --------------------------------------------------------------------------
+  public async createConversation(dto: CreateConversationDTO): Promise<Conversation> {
+    const res = await this.pool.query(
+      `INSERT INTO conversations (organization_id, plant_id, asset_id, user_id, title)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, organization_id, plant_id, asset_id, user_id, title, created_at, updated_at`,
+      [dto.organizationId, dto.plantId, dto.assetId ?? null, dto.userId, dto.title]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      assetId: row.asset_id,
+      userId: row.user_id,
+      title: row.title,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      messages: [],
+    };
+  }
+
+  public async getConversationById(
+    organizationId: string,
+    conversationId: string
+  ): Promise<Conversation | null> {
+    const res = await this.pool.query(
+      `SELECT id, organization_id, plant_id, asset_id, user_id, title, created_at, updated_at
+       FROM conversations
+       WHERE id = $1 AND organization_id = $2`,
+      [conversationId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    const messages = await this.listMessages(row.id);
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      assetId: row.asset_id,
+      userId: row.user_id,
+      title: row.title,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      messages,
+    };
+  }
+
+  public async listConversations(
+    organizationId: string,
+    userId: string,
+    plantId?: string
+  ): Promise<Conversation[]> {
+    const conditions = ['organization_id = $1', 'user_id = $2'];
+    const params: unknown[] = [organizationId, userId];
+
+    if (plantId) {
+      params.push(plantId);
+      conditions.push(`plant_id = $${params.length}`);
+    }
+
+    const res = await this.pool.query(
+      `SELECT id, organization_id, plant_id, asset_id, user_id, title, created_at, updated_at
+       FROM conversations
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY updated_at DESC`,
+      params
+    );
+
+    const conversations: Conversation[] = [];
+    for (const row of res.rows) {
+      const messages = await this.listMessages(row.id);
+      conversations.push({
+        id: row.id,
+        organizationId: row.organization_id,
+        plantId: row.plant_id,
+        assetId: row.asset_id,
+        userId: row.user_id,
+        title: row.title,
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString(),
+        messages,
+      });
+    }
+    return conversations;
+  }
+
+  public async deleteConversation(
+    organizationId: string,
+    conversationId: string
+  ): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM conversations WHERE id = $1 AND organization_id = $2 RETURNING id`,
+      [conversationId, organizationId]
+    );
+    return res.rows.length > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Messages & Citations
+  // --------------------------------------------------------------------------
+  public async createMessage(dto: CreateMessageDTO): Promise<CopilotMessage> {
+    const res = await this.pool.query(
+      `INSERT INTO messages (
+         conversation_id, sender_type, content, confidence,
+         is_insufficient_evidence, conflict_detected, conflict_details
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, conversation_id, sender_type, content, confidence,
+                 is_insufficient_evidence, conflict_detected, conflict_details, created_at`,
+      [
+        dto.conversationId,
+        dto.senderType,
+        dto.content,
+        dto.confidence ?? 'HIGH',
+        dto.isInsufficientEvidence ?? false,
+        dto.conflictDetected ?? false,
+        dto.conflictDetails ?? null,
+      ]
+    );
+
+    // Update conversation updated_at
+    await this.pool.query(
+      `UPDATE conversations SET updated_at = NOW() WHERE id = $1`,
+      [dto.conversationId]
+    );
+
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      conversationId: row.conversation_id,
+      senderType: row.sender_type,
+      content: row.content,
+      confidence: row.confidence,
+      isInsufficientEvidence: row.is_insufficient_evidence,
+      conflictDetected: row.conflict_detected,
+      conflictDetails: row.conflict_details,
+      citations: [],
+      createdAt: row.created_at.toISOString(),
+      feedback: null,
+    };
+  }
+
+  public async createCitations(citations: CreateCitationDTO[]): Promise<Citation[]> {
+    if (citations.length === 0) return [];
+    const saved: Citation[] = [];
+
+    for (const c of citations) {
+      const res = await this.pool.query(
+        `INSERT INTO citations (
+           message_id, document_id, document_version_id, page_number,
+           knowledge_chunk_id, snippet, confidence_score, section_heading
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, message_id, document_id, document_version_id, page_number,
+                   knowledge_chunk_id, snippet, confidence_score, section_heading, created_at`,
+        [
+          c.messageId,
+          c.documentId,
+          c.documentVersionId,
+          c.pageNumber,
+          c.knowledgeChunkId ?? null,
+          c.snippet,
+          c.confidenceScore ?? 1.0,
+          c.sectionHeading ?? null,
+        ]
+      );
+      const row = res.rows[0];
+
+      // Fetch document title, doc number and version revision
+      const docRes = await this.pool.query(
+        `SELECT d.document_number, d.title, v.revision
+         FROM documents d
+         LEFT JOIN document_versions v ON v.id = $2
+         WHERE d.id = $1`,
+        [c.documentId, c.documentVersionId]
+      );
+      const doc = docRes.rows[0];
+
+      saved.push({
+        id: row.id,
+        messageId: row.message_id,
+        documentId: row.document_id,
+        documentNumber: doc?.document_number || 'DOC-UNKNOWN',
+        documentTitle: doc?.title || 'Unknown Document',
+        documentVersionId: row.document_version_id,
+        revisionTag: doc?.revision || 'REV-A',
+        pageNumber: row.page_number,
+        chunkId: row.knowledge_chunk_id || row.id,
+        snippet: row.snippet,
+        confidenceScore: Number(row.confidence_score),
+        sectionHeading: row.section_heading,
+      });
+    }
+    return saved;
+  }
+
+  public async getMessageWithCitations(messageId: string): Promise<CopilotMessage | null> {
+    const msgRes = await this.pool.query(
+      `SELECT id, conversation_id, sender_type, content, confidence,
+              is_insufficient_evidence, conflict_detected, conflict_details, created_at
+       FROM messages
+       WHERE id = $1`,
+      [messageId]
+    );
+    if (msgRes.rows.length === 0) return null;
+    const msgRow = msgRes.rows[0];
+
+    const citRes = await this.pool.query(
+      `SELECT c.id, c.message_id, c.document_id, c.document_version_id, c.page_number,
+              c.knowledge_chunk_id, c.snippet, c.confidence_score, c.section_heading,
+              d.document_number, d.title AS document_title
+       FROM citations c
+       JOIN documents d ON d.id = c.document_id
+       WHERE c.message_id = $1`,
+      [messageId]
+    );
+
+    const citations: Citation[] = citRes.rows.map((r) => ({
+      id: r.id,
+      messageId: r.message_id,
+      documentId: r.document_id,
+      documentNumber: r.document_number,
+      documentTitle: r.document_title,
+      documentVersionId: r.document_version_id,
+      pageNumber: r.page_number,
+      chunkId: r.knowledge_chunk_id || r.id,
+      snippet: r.snippet,
+      confidenceScore: Number(r.confidence_score),
+      sectionHeading: r.section_heading,
+    }));
+
+    const fbRes = await this.pool.query(
+      `SELECT id, message_id, user_id, rating, comment, created_at
+       FROM message_feedback
+       WHERE message_id = $1`,
+      [messageId]
+    );
+
+    const feedback = fbRes.rows[0]
+      ? {
+          id: fbRes.rows[0].id,
+          messageId: fbRes.rows[0].message_id,
+          userId: fbRes.rows[0].user_id,
+          rating: fbRes.rows[0].rating,
+          comment: fbRes.rows[0].comment,
+          createdAt: fbRes.rows[0].created_at.toISOString(),
+        }
+      : null;
+
+    return {
+      id: msgRow.id,
+      conversationId: msgRow.conversation_id,
+      senderType: msgRow.sender_type,
+      content: msgRow.content,
+      confidence: msgRow.confidence,
+      isInsufficientEvidence: msgRow.is_insufficient_evidence,
+      conflictDetected: msgRow.conflict_detected,
+      conflictDetails: msgRow.conflict_details,
+      citations,
+      createdAt: msgRow.created_at.toISOString(),
+      feedback,
+    };
+  }
+
+  public async listMessages(conversationId: string): Promise<CopilotMessage[]> {
+    const res = await this.pool.query(
+      `SELECT id FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
+      [conversationId]
+    );
+
+    const messages: CopilotMessage[] = [];
+    for (const row of res.rows) {
+      const msg = await this.getMessageWithCitations(row.id);
+      if (msg) messages.push(msg);
+    }
+    return messages;
+  }
+
+  public async recordMessageFeedback(dto: CreateFeedbackDTO): Promise<MessageFeedback> {
+    const res = await this.pool.query(
+      `INSERT INTO message_feedback (message_id, user_id, rating, comment)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (message_id, user_id) DO UPDATE
+         SET rating = EXCLUDED.rating,
+             comment = EXCLUDED.comment,
+             created_at = NOW()
+       RETURNING id, message_id, user_id, rating, comment, created_at`,
+      [dto.messageId, dto.userId, dto.rating, dto.comment ?? null]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      messageId: row.message_id,
+      userId: row.user_id,
+      rating: row.rating,
+      comment: row.comment,
+      createdAt: row.created_at.toISOString(),
     };
   }
 }

@@ -12,6 +12,10 @@ import type {
   KnowledgeChunk,
   ProcessingJob,
   DocumentStatus,
+  Conversation,
+  CopilotMessage,
+  Citation,
+  MessageFeedback,
 } from '@forgex/shared-types';
 import type {
   IDataStore,
@@ -27,6 +31,10 @@ import type {
   CreateKnowledgeChunkDTO,
   CreateProcessingJobDTO,
   DocumentFilterOptions,
+  CreateConversationDTO,
+  CreateMessageDTO,
+  CreateCitationDTO,
+  CreateFeedbackDTO,
 } from './dataStore.interface.js';
 
 export class InMemoryDataStore implements IDataStore {
@@ -43,6 +51,12 @@ export class InMemoryDataStore implements IDataStore {
   private documentPages = new Map<string, DocumentPage>();
   private knowledgeChunks = new Map<string, KnowledgeChunk>();
   private processingJobs = new Map<string, ProcessingJob>();
+
+  // Phase 4 RAG & Copilot Data Sets
+  private conversations = new Map<string, Conversation>();
+  private messages = new Map<string, CopilotMessage>();
+  private citations = new Map<string, Citation>();
+  private messageFeedbacks = new Map<string, MessageFeedback>();
 
   // --------------------------------------------------------------------------
   // Organizations
@@ -655,6 +669,205 @@ export class InMemoryDataStore implements IDataStore {
     };
   }
 
+  // --------------------------------------------------------------------------
+  // Phase 4: Conversations & AI Copilot
+  // --------------------------------------------------------------------------
+  public async createConversation(dto: CreateConversationDTO): Promise<Conversation> {
+    const now = new Date().toISOString();
+    const conv: Conversation = {
+      id: crypto.randomUUID(),
+      organizationId: dto.organizationId,
+      plantId: dto.plantId,
+      assetId: dto.assetId ?? null,
+      userId: dto.userId,
+      title: dto.title,
+      createdAt: now,
+      updatedAt: now,
+      messages: [],
+    };
+    this.conversations.set(conv.id, conv);
+    return conv;
+  }
+
+  public async getConversationById(
+    organizationId: string,
+    conversationId: string
+  ): Promise<Conversation | null> {
+    const conv = this.conversations.get(conversationId);
+    if (!conv || conv.organizationId !== organizationId) return null;
+
+    const messages = await this.listMessages(conv.id);
+    return {
+      ...conv,
+      messages,
+    };
+  }
+
+  public async listConversations(
+    organizationId: string,
+    userId: string,
+    plantId?: string
+  ): Promise<Conversation[]> {
+    const results: Conversation[] = [];
+    for (const conv of this.conversations.values()) {
+      if (conv.organizationId === organizationId && conv.userId === userId) {
+        if (!plantId || conv.plantId === plantId) {
+          const messages = await this.listMessages(conv.id);
+          results.push({
+            ...conv,
+            messages,
+          });
+        }
+      }
+    }
+    return results.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }
+
+  public async deleteConversation(
+    organizationId: string,
+    conversationId: string
+  ): Promise<boolean> {
+    const conv = this.conversations.get(conversationId);
+    if (!conv || conv.organizationId !== organizationId) return false;
+
+    // Cascade delete messages, citations, feedback
+    for (const msg of this.messages.values()) {
+      if (msg.conversationId === conversationId) {
+        for (const cit of this.citations.values()) {
+          if (cit.messageId === msg.id) {
+            this.citations.delete(cit.id);
+          }
+        }
+        this.messageFeedbacks.delete(msg.id);
+        this.messages.delete(msg.id);
+      }
+    }
+
+    this.conversations.delete(conversationId);
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Messages & Citations
+  // --------------------------------------------------------------------------
+  public async createMessage(dto: CreateMessageDTO): Promise<CopilotMessage> {
+    const now = new Date().toISOString();
+    const message: CopilotMessage = {
+      id: crypto.randomUUID(),
+      conversationId: dto.conversationId,
+      senderType: dto.senderType,
+      content: dto.content,
+      confidence: dto.confidence ?? 'HIGH',
+      isInsufficientEvidence: dto.isInsufficientEvidence ?? false,
+      conflictDetected: dto.conflictDetected ?? false,
+      conflictDetails: dto.conflictDetails ?? null,
+      citations: [],
+      createdAt: now,
+      feedback: null,
+    };
+    this.messages.set(message.id, message);
+
+    // Update conversation updatedAt
+    const conv = this.conversations.get(dto.conversationId);
+    if (conv) {
+      conv.updatedAt = now;
+      this.conversations.set(conv.id, conv);
+    }
+
+    return message;
+  }
+
+  public async createCitations(citations: CreateCitationDTO[]): Promise<Citation[]> {
+    const saved: Citation[] = [];
+    for (const c of citations) {
+      // Look up document details for display
+      let docNumber = 'DOC-UNKNOWN';
+      let docTitle = 'Unknown Document';
+      for (const d of this.documents.values()) {
+        if (d.id === c.documentId) {
+          docNumber = d.documentNumber;
+          docTitle = d.title;
+          break;
+        }
+      }
+
+      let revisionTag = 'REV-A';
+      const version = this.documentVersions.get(c.documentVersionId);
+      if (version) {
+        revisionTag = version.revision;
+      }
+
+      const id = crypto.randomUUID();
+      const citation: Citation = {
+        id,
+        messageId: c.messageId,
+        documentId: c.documentId,
+        documentNumber: docNumber,
+        documentTitle: docTitle,
+        documentVersionId: c.documentVersionId,
+        revisionTag,
+        pageNumber: c.pageNumber,
+        chunkId: c.knowledgeChunkId ?? id,
+        snippet: c.snippet,
+        confidenceScore: c.confidenceScore ?? 1.0,
+        sectionHeading: c.sectionHeading ?? null,
+      };
+      this.citations.set(id, citation);
+      saved.push(citation);
+    }
+    return saved;
+  }
+
+  public async getMessageWithCitations(messageId: string): Promise<CopilotMessage | null> {
+    const msg = this.messages.get(messageId);
+    if (!msg) return null;
+
+    const citations: Citation[] = [];
+    for (const c of this.citations.values()) {
+      if (c.messageId === messageId) citations.push(c);
+    }
+
+    const feedback = this.messageFeedbacks.get(messageId) ?? null;
+
+    return {
+      ...msg,
+      citations,
+      feedback,
+    };
+  }
+
+  public async listMessages(conversationId: string): Promise<CopilotMessage[]> {
+    const list: CopilotMessage[] = [];
+    for (const m of this.messages.values()) {
+      if (m.conversationId === conversationId) {
+        const enriched = await this.getMessageWithCitations(m.id);
+        if (enriched) list.push(enriched);
+      }
+    }
+    return list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }
+
+  public async recordMessageFeedback(dto: CreateFeedbackDTO): Promise<MessageFeedback> {
+    const existing = this.messageFeedbacks.get(dto.messageId);
+    if (existing) {
+      existing.rating = dto.rating;
+      existing.comment = dto.comment ?? null;
+      this.messageFeedbacks.set(dto.messageId, existing);
+      return existing;
+    }
+
+    const feedback: MessageFeedback = {
+      id: crypto.randomUUID(),
+      messageId: dto.messageId,
+      userId: dto.userId,
+      rating: dto.rating,
+      comment: dto.comment ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    this.messageFeedbacks.set(dto.messageId, feedback);
+    return feedback;
+  }
+
   public clear(): void {
     this.organizations.clear();
     this.users.clear();
@@ -667,5 +880,9 @@ export class InMemoryDataStore implements IDataStore {
     this.documentPages.clear();
     this.knowledgeChunks.clear();
     this.processingJobs.clear();
+    this.conversations.clear();
+    this.messages.clear();
+    this.citations.clear();
+    this.messageFeedbacks.clear();
   }
 }
