@@ -289,19 +289,19 @@ export const VisualIntelligenceView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-graphite-950">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10]">
       {/* Top Telemetry Header */}
-      <div className="p-3 border-b border-graphite-800 bg-graphite-900/60 flex items-center justify-between text-xs font-mono">
+      <div className="p-3 border-b border-[#1E293B] bg-[#0B0F15] flex items-center justify-between text-xs font-mono">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-cyan-400 font-semibold">
+          <div className="flex items-center gap-1.5 text-[#A3E635] font-semibold">
             <ImageIcon className="w-4 h-4" />
             <span>VISUAL INDUSTRIAL INTELLIGENCE</span>
           </div>
-          <span className="text-graphite-600">|</span>
-          <span className="text-graphite-300">ASSET: {activeScenario.assetTag}</span>
-          <span className="text-graphite-500">[{activeScenario.plantCode}]</span>
-          <span className="text-graphite-600">|</span>
-          <span className="text-graphite-400 truncate max-w-xs">{activeScenario.filename}</span>
+          <span className="text-slate-600">|</span>
+          <span className="text-slate-300">ASSET: {activeScenario.assetTag}</span>
+          <span className="text-slate-500">[{activeScenario.plantCode}]</span>
+          <span className="text-slate-600">|</span>
+          <span className="text-slate-400 truncate max-w-xs">{activeScenario.filename}</span>
         </div>
 
         <div className="flex items-center gap-3">
@@ -309,7 +309,7 @@ export const VisualIntelligenceView: React.FC = () => {
             <Shield className="w-3.5 h-3.5" />
             <span>AIR-GAPPED / ZERO CLOUD LEAKAGE</span>
           </div>
-          <span className="text-graphite-700">|</span>
+          <span className="text-slate-700">|</span>
           <StatusBadge
             label={
               activeScenario.isInsufficientEvidence
@@ -330,19 +330,19 @@ export const VisualIntelligenceView: React.FC = () => {
       </div>
 
       {/* Scenario / Quick Loader Bar */}
-      <div className="px-4 py-2 bg-graphite-900/40 border-b border-graphite-800 flex items-center justify-between gap-4 overflow-x-auto">
+      <div className="px-4 py-2 bg-[#0B0F15] border-b border-[#1E293B] flex items-center justify-between gap-4 overflow-x-auto">
         <div className="flex items-center gap-2 text-xs font-mono shrink-0">
-          <span className="text-graphite-400 text-[11px] uppercase tracking-wider">
+          <span className="text-slate-400 text-[11px] uppercase tracking-wider">
             PRELOADED SCENARIO:
           </span>
           {PRELOADED_SCENARIOS.map((s) => (
             <button
               key={s.id}
               onClick={() => handleSelectScenario(s)}
-              className={`px-2.5 py-1 rounded text-xs transition border ${
+              className={`px-3 py-1 rounded-lg text-xs transition border ${
                 activeScenario.id === s.id
-                  ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/40 font-semibold'
-                  : 'bg-graphite-900/80 text-graphite-400 border-graphite-800 hover:text-graphite-200 hover:bg-graphite-800'
+                  ? 'bg-[#12241A] text-[#A3E635] border-[#1E4028] font-semibold'
+                  : 'bg-[#101722] text-slate-400 border-[#1E293B] hover:text-white hover:bg-[#15202E]'
               }`}
             >
               {s.category === 'PHOTOGRAPH' && '📷 Photo Walkdown'}
@@ -354,8 +354,8 @@ export const VisualIntelligenceView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 rounded bg-graphite-800 hover:bg-graphite-700 text-graphite-200 text-xs font-mono transition border border-graphite-700">
-            <Upload className="w-3.5 h-3.5 text-cyan-400" />
+          <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#101722] hover:bg-[#15202E] text-slate-200 text-xs font-mono transition border border-[#1E293B]">
+            <Upload className="w-3.5 h-3.5 text-[#A3E635]" />
             <span>Upload Visual Asset</span>
             <input
               type="file"
@@ -382,83 +382,83 @@ export const VisualIntelligenceView: React.FC = () => {
       {/* Main Split: Visual Canvas (Left) + Evidence / SOP Cross-Retrieval (Right) */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Interactive Visual Canvas */}
-        <div className="flex-1 p-4 flex flex-col justify-between overflow-hidden bg-graphite-950 border-r border-graphite-800">
+        <div className="flex-1 p-4 flex flex-col justify-between overflow-hidden bg-[#070B10] border-r border-[#1E293B]">
           {/* Canvas Controls */}
           <div className="flex items-center justify-between pb-3">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setZoomLevel((z) => Math.max(50, z - 25))}
-                className="p-1.5 rounded bg-graphite-900 hover:bg-graphite-800 border border-graphite-800 text-graphite-300 transition"
+                className="p-1.5 rounded-lg bg-[#101722] hover:bg-[#15202E] border border-[#1E293B] text-slate-300 transition"
                 title="Zoom Out"
               >
                 <ZoomOut className="w-4 h-4" />
               </button>
-              <span className="text-xs font-mono text-graphite-400 w-14 text-center">
+              <span className="text-xs font-mono text-slate-400 w-14 text-center">
                 {zoomLevel}%
               </span>
               <button
                 onClick={() => setZoomLevel((z) => Math.min(200, z + 25))}
-                className="p-1.5 rounded bg-graphite-900 hover:bg-graphite-800 border border-graphite-800 text-graphite-300 transition"
+                className="p-1.5 rounded-lg bg-[#101722] hover:bg-[#15202E] border border-[#1E293B] text-slate-300 transition"
                 title="Zoom In"
               >
                 <ZoomIn className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setZoomLevel(100)}
-                className="px-2 py-1 rounded bg-graphite-900 hover:bg-graphite-800 border border-graphite-800 text-xs font-mono text-graphite-400 transition"
+                className="px-2.5 py-1 rounded-lg bg-[#101722] hover:bg-[#15202E] border border-[#1E293B] text-xs font-mono text-slate-400 transition"
               >
                 Reset
               </button>
             </div>
 
             <div className="flex items-center gap-4 text-xs font-mono">
-              <label className="flex items-center gap-2 cursor-pointer text-graphite-300">
+              <label className="flex items-center gap-2 cursor-pointer text-slate-300">
                 <input
                   type="checkbox"
                   checked={showBoundingBoxes}
                   onChange={(e) => setShowBoundingBoxes(e.target.checked)}
-                  className="rounded border-graphite-700 text-cyan-500 focus:ring-0 cursor-pointer"
+                  className="rounded border-[#1E293B] text-[#A3E635] focus:ring-0 cursor-pointer"
                 />
                 <span>Render AI Bounding Boxes</span>
               </label>
-              <span className="text-graphite-600">|</span>
-              <span className="text-graphite-400 text-[11px]">
+              <span className="text-slate-600">|</span>
+              <span className="text-slate-400 text-[11px]">
                 Detected Components: {activeScenario.components.length}
               </span>
             </div>
           </div>
 
           {/* Canvas Viewport */}
-          <div className="relative flex-1 rounded-lg border border-graphite-800 bg-graphite-900/40 overflow-hidden flex items-center justify-center p-6 select-none">
+          <div className="relative flex-1 rounded-xl border border-[#1E293B] bg-[#0B0F15] overflow-hidden flex items-center justify-center p-6 select-none">
             {/* Background Engineering Blueprint Grid */}
             <div className="absolute inset-0 bg-grid-pattern opacity-25" />
 
             {/* Simulated Industrial Asset Canvas Container */}
             <div
               style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'center' }}
-              className="relative transition-transform duration-200 w-full max-w-xl aspect-[4/3] rounded bg-graphite-900 border border-graphite-700 shadow-2xl p-6 flex flex-col justify-between"
+              className="relative transition-transform duration-200 w-full max-w-xl aspect-[4/3] rounded-xl bg-[#101722] border border-[#1E293B] shadow-2xl p-6 flex flex-col justify-between"
             >
               {/* Header inside schematic */}
-              <div className="flex justify-between items-center text-[10px] font-mono text-graphite-400 border-b border-graphite-800 pb-2">
-                <span className="font-semibold text-graphite-200">
+              <div className="flex justify-between items-center text-[10px] font-mono text-slate-400 border-b border-[#1E293B] pb-2">
+                <span className="font-semibold text-slate-200">
                   {activeScenario.category === 'PID_RENDER'
                     ? 'P&ID SCHEMATIC: CRUDE BOOSTER SYSTEM'
                     : activeScenario.category === 'PHOTOGRAPH'
                     ? 'INSPECTION WALKDOWN CAPTURE — PUMP P-101-A'
                     : 'DIAGRAM VIEWPORT'}
                 </span>
-                <span className="text-cyan-400">TAG: {activeScenario.assetTag}</span>
+                <span className="text-[#A3E635]">TAG: {activeScenario.assetTag}</span>
               </div>
 
               {/* Graphic Asset Render */}
-              <div className="relative flex-1 flex items-center justify-center my-4 border border-dashed border-graphite-800 rounded bg-graphite-950/70 overflow-hidden">
+              <div className="relative flex-1 flex items-center justify-center my-4 border border-dashed border-[#1E293B] rounded-lg bg-[#070B10]/80 overflow-hidden">
                 {activeScenario.isInsufficientEvidence ? (
                   <div className="text-center p-6 space-y-2">
                     <AlertOctagon className="w-10 h-10 text-rose-500 mx-auto opacity-70" />
                     <p className="text-xs font-mono text-rose-400 font-semibold">
                       INSUFFICIENT VISUAL EVIDENCE
                     </p>
-                    <p className="text-[11px] text-graphite-400 max-w-sm">
+                    <p className="text-[11px] text-slate-400 max-w-sm">
                       Low-contrast or uninformative frame. No identifiable plant equipment tags or
                       symbols detected.
                     </p>
@@ -466,23 +466,23 @@ export const VisualIntelligenceView: React.FC = () => {
                 ) : (
                   <div className="relative w-full h-full flex items-center justify-center">
                     {/* Industrial Pump / P&ID Linework Simulation */}
-                    <div className="w-64 h-40 rounded border-2 border-graphite-700 bg-graphite-900/60 flex items-center justify-center relative">
-                      <div className="w-32 h-32 rounded-full border border-dashed border-cyan-500/50 flex items-center justify-center">
-                        <div className="w-16 h-16 rounded-full border-2 border-amber-500/70 flex items-center justify-center">
-                          <span className="text-[9px] font-mono text-amber-300">P-101-A</span>
+                    <div className="w-64 h-40 rounded-lg border-2 border-[#1E293B] bg-[#0E1520] flex items-center justify-center relative">
+                      <div className="w-32 h-32 rounded-full border border-dashed border-[#A3E635]/40 flex items-center justify-center">
+                        <div className="w-16 h-16 rounded-full border-2 border-[#A3E635] flex items-center justify-center bg-[#12241A]">
+                          <span className="text-[9px] font-mono text-[#A3E635] font-bold">P-101-A</span>
                         </div>
                       </div>
 
                       {/* Suction Line & Valve MOV-101 */}
-                      <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-12 w-12 h-1 bg-graphite-600 flex items-center justify-center">
-                        <div className="w-4 h-4 rounded bg-cyan-900 border border-cyan-400 text-[8px] font-mono text-cyan-200 flex items-center justify-center -translate-y-4">
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-12 w-12 h-1 bg-slate-600 flex items-center justify-center">
+                        <div className="w-4 h-4 rounded bg-[#101722] border border-[#A3E635] text-[8px] font-mono text-[#A3E635] flex items-center justify-center -translate-y-4">
                           MOV
                         </div>
                       </div>
 
                       {/* Discharge Line & Transmitter FT-101-B */}
-                      <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-12 w-12 h-1 bg-graphite-600 flex items-center justify-center">
-                        <div className="w-4 h-4 rounded bg-amber-900 border border-amber-400 text-[8px] font-mono text-amber-200 flex items-center justify-center translate-y-4">
+                      <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-12 w-12 h-1 bg-slate-600 flex items-center justify-center">
+                        <div className="w-4 h-4 rounded bg-[#101722] border border-amber-400 text-[8px] font-mono text-amber-300 flex items-center justify-center translate-y-4">
                           FT
                         </div>
                       </div>
@@ -504,26 +504,26 @@ export const VisualIntelligenceView: React.FC = () => {
                             }}
                             className={`absolute border-2 rounded transition-all cursor-pointer flex flex-col justify-between p-1 ${
                               isSelected
-                                ? 'border-cyan-400 bg-cyan-400/20 z-20 shadow-lg shadow-cyan-500/20'
+                                ? 'border-[#A3E635] bg-[#A3E635]/20 z-20 shadow-lg shadow-[#A3E635]/20'
                                 : comp.confidence >= 0.70
-                                ? 'border-amber-400 bg-amber-400/10 hover:border-amber-300 z-10'
-                                : 'border-graphite-600 bg-graphite-600/10 border-dashed'
+                                ? 'border-[#A3E635]/80 bg-[#A3E635]/10 hover:border-[#A3E635] z-10'
+                                : 'border-slate-500 bg-slate-500/10 border-dashed'
                             }`}
                           >
                             <div className="flex justify-between items-center">
                               <span
                                 className={`text-[8px] font-mono font-bold px-1 rounded ${
                                   comp.confidence >= 0.70
-                                    ? 'bg-amber-500 text-graphite-950'
-                                    : 'bg-graphite-700 text-graphite-300'
+                                    ? 'bg-[#A3E635] text-[#070B10]'
+                                    : 'bg-slate-700 text-slate-300'
                                 }`}
                               >
                                 {comp.equipmentTag || 'UNLINKED'} (
                                 {(comp.confidence * 100).toFixed(0)}%)
                               </span>
-                              <Crosshair className="w-3 h-3 text-cyan-400" />
+                              <Crosshair className="w-3 h-3 text-[#A3E635]" />
                             </div>
-                            <div className="text-[8px] font-mono text-graphite-200 bg-graphite-950/90 px-1 py-0.5 rounded truncate">
+                            <div className="text-[8px] font-mono text-slate-200 bg-[#070B10]/90 px-1 py-0.5 rounded truncate">
                               {comp.label}
                             </div>
                           </div>
@@ -534,7 +534,7 @@ export const VisualIntelligenceView: React.FC = () => {
               </div>
 
               {/* Footer info in schematic */}
-              <div className="flex justify-between text-[10px] font-mono text-graphite-500 border-t border-graphite-800 pt-2">
+              <div className="flex justify-between text-[10px] font-mono text-slate-400 border-t border-[#1E293B] pt-2">
                 <span>MODEL: {activeScenario.modelUsed}</span>
                 <span>EXTRACTION: {activeScenario.processingMethod}</span>
               </div>
@@ -555,8 +555,8 @@ export const VisualIntelligenceView: React.FC = () => {
             )}
 
             {activeScenario.category === 'PID_RENDER' && (
-              <div className="p-2.5 rounded bg-cyan-950/30 border border-cyan-800/60 text-cyan-300 text-xs font-mono flex items-start gap-2">
-                <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+              <div className="p-2.5 rounded-lg bg-[#12241A] border border-[#1E4028] text-[#A3E635] text-xs font-mono flex items-start gap-2">
+                <Info className="w-4 h-4 text-[#A3E635] shrink-0 mt-0.5" />
                 <span>
                   <strong>P&ID Disclaimer Notice:</strong> Visual pipeline extracts equipment tags
                   and component labels. Complete symbol topology and pipe connectivity require
@@ -568,7 +568,7 @@ export const VisualIntelligenceView: React.FC = () => {
         </div>
 
         {/* Right: Technical Metadata & SOP Cross-Retrieval Panel */}
-        <div className="w-[460px] border-l border-graphite-800 bg-graphite-900/60 p-4 space-y-4 overflow-y-auto">
+        <div className="w-[460px] border-l border-[#1E293B] bg-[#0B0F15] p-4 space-y-4 overflow-y-auto">
           {/* Inquiry Query Box */}
           <Card>
             <CardHeader>
@@ -586,7 +586,7 @@ export const VisualIntelligenceView: React.FC = () => {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-graphite-400 uppercase">
+                <label className="text-[10px] font-mono text-slate-400 uppercase">
                   Technical Question / Investigation Context
                 </label>
                 <div className="flex gap-2">
@@ -594,7 +594,7 @@ export const VisualIntelligenceView: React.FC = () => {
                     type="text"
                     value={customQuery}
                     onChange={(e) => setCustomQuery(e.target.value)}
-                    className="flex-1 px-3 py-1.5 rounded bg-graphite-950 border border-graphite-700 text-xs text-graphite-100 font-mono focus:outline-none focus:border-cyan-500"
+                    className="flex-1 px-3 py-1.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-xs text-white font-mono focus:outline-none focus:border-[#A3E635]"
                     placeholder="Ask about visible parts or torque specifications..."
                   />
                   <Button
@@ -616,7 +616,7 @@ export const VisualIntelligenceView: React.FC = () => {
 
               {/* Detected Tags Bar */}
               <div>
-                <span className="text-[10px] font-mono text-graphite-500 uppercase">
+                <span className="text-[10px] font-mono text-slate-500 uppercase">
                   DETECTED EQUIPMENT TAGS
                 </span>
                 <div className="flex flex-wrap gap-1.5 mt-1">
@@ -624,13 +624,13 @@ export const VisualIntelligenceView: React.FC = () => {
                     activeScenario.detectedTags.map((tag) => (
                       <span
                         key={tag}
-                        className="px-2 py-0.5 rounded bg-cyan-950/70 border border-cyan-800 text-cyan-300 font-mono text-[11px] font-bold"
+                        className="px-2.5 py-0.5 rounded-full bg-[#12241A] border border-[#1E4028] text-[#A3E635] font-mono text-[11px] font-bold"
                       >
                         {tag}
                       </span>
                     ))
                   ) : (
-                    <span className="text-xs font-mono text-graphite-500 italic">None detected</span>
+                    <span className="text-xs font-mono text-slate-500 italic">None detected</span>
                   )}
                 </div>
               </div>
@@ -641,11 +641,11 @@ export const VisualIntelligenceView: React.FC = () => {
           <Card>
             <CardHeader>
               <CardTitle>Identified Components & Bounding Boxes</CardTitle>
-              <span className="text-[10px] font-mono text-graphite-400">Threshold: ≥ 70%</span>
+              <span className="text-[10px] font-mono text-slate-400">Threshold: ≥ 70%</span>
             </CardHeader>
             <CardContent>
               {activeScenario.components.length === 0 ? (
-                <div className="text-xs font-mono text-graphite-500 italic py-2">
+                <div className="text-xs font-mono text-slate-500 italic py-2">
                   No components detected in current visual frame.
                 </div>
               ) : (
@@ -657,31 +657,31 @@ export const VisualIntelligenceView: React.FC = () => {
                       <div
                         key={comp.id}
                         onClick={() => setSelectedComponentId(comp.id)}
-                        className={`p-2 rounded border text-xs font-mono cursor-pointer transition ${
+                        className={`p-2.5 rounded-lg border text-xs font-mono cursor-pointer transition ${
                           isSelected
-                            ? 'bg-cyan-950/50 border-cyan-500/80 text-cyan-100'
-                            : 'bg-graphite-950/70 border-graphite-800 hover:border-graphite-700 text-graphite-300'
+                            ? 'bg-[#12241A] border-[#1E4028] text-white'
+                            : 'bg-[#070B10] border-[#1E293B] hover:border-slate-700 text-slate-300'
                         }`}
                       >
                         <div className="flex justify-between items-center">
-                          <span className="font-semibold text-graphite-100">{comp.label}</span>
+                          <span className="font-semibold text-white">{comp.label}</span>
                           <span
                             className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
                               isLinked
-                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                                : 'bg-graphite-800 text-graphite-400'
+                                ? 'bg-[#12241A] text-[#A3E635] border border-[#1E4028]'
+                                : 'bg-slate-800 text-slate-400'
                             }`}
                           >
                             {(comp.confidence * 100).toFixed(1)}%
                           </span>
                         </div>
 
-                        <div className="flex justify-between items-center text-[10px] text-graphite-500 mt-1">
+                        <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1">
                           <span>
                             LINK: {comp.equipmentTag ? `Tag [${comp.equipmentTag}]` : 'Unlinked (< 70%)'}
                           </span>
                           {comp.bbox && (
-                            <span className="text-cyan-400/90 font-mono">
+                            <span className="text-[#A3E635] font-mono">
                               [{comp.bbox.x1}, {comp.bbox.y1}, {comp.bbox.x2}, {comp.bbox.y2}]
                             </span>
                           )}
@@ -701,7 +701,7 @@ export const VisualIntelligenceView: React.FC = () => {
               <StatusBadge label="VERIFIED" tone="healthy" />
             </CardHeader>
             <CardContent className="space-y-2 text-xs">
-              <div className="whitespace-pre-line font-mono text-graphite-300 bg-graphite-950 p-3 rounded border border-graphite-800 leading-relaxed text-[11px]">
+              <div className="whitespace-pre-line font-mono text-slate-300 bg-[#070B10] p-3 rounded-lg border border-[#1E293B] leading-relaxed text-[11px]">
                 {activeScenario.answer}
               </div>
             </CardContent>
@@ -715,7 +715,7 @@ export const VisualIntelligenceView: React.FC = () => {
             </CardHeader>
             <CardContent>
               {activeScenario.crossRetrievedCitations.length === 0 ? (
-                <div className="text-xs font-mono text-graphite-500 italic py-2">
+                <div className="text-xs font-mono text-slate-500 italic py-2">
                   No manual citations linked (ambiguous or insufficient evidence).
                 </div>
               ) : (
@@ -723,16 +723,16 @@ export const VisualIntelligenceView: React.FC = () => {
                   {activeScenario.crossRetrievedCitations.map((cit, idx) => (
                     <div
                       key={idx}
-                      className="p-3 rounded bg-graphite-950 border border-graphite-800 space-y-1.5 text-xs font-mono"
+                      className="p-3 rounded-lg bg-[#070B10] border border-[#1E293B] space-y-1.5 text-xs font-mono"
                     >
                       <div className="flex justify-between items-start">
                         <span className="font-bold text-amber-400">{cit.documentNumber}</span>
-                        <span className="text-[10px] text-graphite-400">Page {cit.pageNumber}</span>
+                        <span className="text-[10px] text-slate-400">Page {cit.pageNumber}</span>
                       </div>
-                      <div className="text-[11px] text-graphite-200 font-semibold">
+                      <div className="text-[11px] text-white font-semibold">
                         {cit.sectionHeading}
                       </div>
-                      <p className="text-[11px] text-graphite-400 font-sans leading-relaxed">
+                      <p className="text-[11px] text-slate-300 font-sans leading-relaxed">
                         "{cit.snippet}"
                       </p>
                     </div>

@@ -476,50 +476,50 @@ export const TechnicalManualsView: React.FC = () => {
       : null;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-graphite-950">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10] text-slate-100 font-sans">
       {/* Top Action Bar */}
-      <div className="p-4 border-b border-graphite-800 bg-graphite-900/60 flex flex-wrap items-center justify-between gap-4">
+      <div className="p-4 border-b border-[#1E293B] bg-[#0E1520] flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3 flex-1 min-w-[320px]">
           <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-graphite-500 absolute left-3 top-2.5" />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
               placeholder="Search by Document #, Title, or Asset Tag..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-1.5 bg-graphite-950 border border-graphite-800 rounded text-xs font-mono text-graphite-200 placeholder-graphite-500 focus:outline-none focus:border-amber-500 transition"
+              className="w-full pl-9 pr-4 py-2 bg-[#111722] border border-[#1E293B] rounded-lg text-xs font-sans text-white placeholder-slate-400 focus:outline-none focus:border-[#A3E635] transition"
             />
           </div>
 
           {/* Classification Filter */}
-          <div className="flex items-center gap-1.5 bg-graphite-950 border border-graphite-800 rounded px-2.5 py-1">
-            <Filter className="w-3.5 h-3.5 text-graphite-400" />
+          <div className="flex items-center gap-1.5 bg-[#111722] border border-[#1E293B] rounded-lg px-3 py-1.5">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="bg-transparent text-xs font-mono text-graphite-300 outline-none cursor-pointer"
+              className="bg-transparent text-xs font-sans text-slate-200 outline-none cursor-pointer"
             >
-              <option value="ALL">All Categories</option>
-              <option value="SOP">SOPs</option>
-              <option value="OEM_MANUAL">OEM Manuals</option>
-              <option value="SCHEMATIC_PID">P&IDs</option>
-              <option value="WIRING_DIAGRAM">Wiring Diagrams</option>
+              <option value="ALL" className="bg-[#151E28]">All Categories</option>
+              <option value="SOP" className="bg-[#151E28]">SOPs</option>
+              <option value="OEM_MANUAL" className="bg-[#151E28]">OEM Manuals</option>
+              <option value="SCHEMATIC_PID" className="bg-[#151E28]">P&IDs</option>
+              <option value="WIRING_DIAGRAM" className="bg-[#151E28]">Wiring Diagrams</option>
             </select>
           </div>
 
           {/* Status Filter */}
-          <div className="flex items-center gap-1.5 bg-graphite-950 border border-graphite-800 rounded px-2.5 py-1">
-            <Clock className="w-3.5 h-3.5 text-graphite-400" />
+          <div className="flex items-center gap-1.5 bg-[#111722] border border-[#1E293B] rounded-lg px-3 py-1.5">
+            <Clock className="w-3.5 h-3.5 text-slate-400" />
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="bg-transparent text-xs font-mono text-graphite-300 outline-none cursor-pointer"
+              className="bg-transparent text-xs font-sans text-slate-200 outline-none cursor-pointer"
             >
-              <option value="ALL">All Statuses</option>
-              <option value="INDEXED">Indexed</option>
-              <option value="PROCESSING">Processing</option>
-              <option value="FAILED">Failed</option>
-              <option value="QUEUED">Queued</option>
+              <option value="ALL" className="bg-[#151E28]">All Statuses</option>
+              <option value="INDEXED" className="bg-[#151E28]">Indexed</option>
+              <option value="PROCESSING" className="bg-[#151E28]">Processing</option>
+              <option value="FAILED" className="bg-[#151E28]">Failed</option>
+              <option value="QUEUED" className="bg-[#151E28]">Queued</option>
             </select>
           </div>
         </div>
@@ -527,7 +527,7 @@ export const TechnicalManualsView: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsUploadModalOpen(true)}
-            className="px-3.5 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-graphite-950 text-xs font-mono font-bold flex items-center gap-2 shadow-sm transition"
+            className="px-4 py-2 rounded-lg bg-[#A3E635] hover:bg-[#bef264] text-[#070B10] text-xs font-bold flex items-center gap-2 shadow-lg transition"
           >
             <UploadCloud className="w-4 h-4" />
             Ingest Document
@@ -538,11 +538,11 @@ export const TechnicalManualsView: React.FC = () => {
       {/* Main Split Layout: Document List + Detail Inspector */}
       <div className="flex-1 flex overflow-hidden">
         {/* Document Table */}
-        <div className="flex-1 flex flex-col overflow-hidden border-r border-graphite-800">
+        <div className="flex-1 flex flex-col overflow-hidden border-r border-[#1E293B]">
           <div className="flex-1 overflow-y-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-graphite-800 bg-graphite-900/80 sticky top-0 z-10 text-graphite-400 font-mono text-[11px]">
+                <tr className="border-b border-[#1E293B] bg-[#0E1520] sticky top-0 z-10 text-slate-400 font-sans text-[11px]">
                   <th className="py-2.5 px-4 font-semibold">DOCUMENT #</th>
                   <th className="py-2.5 px-4 font-semibold">TITLE</th>
                   <th className="py-2.5 px-4 font-semibold">CLASS</th>
@@ -553,7 +553,7 @@ export const TechnicalManualsView: React.FC = () => {
                   <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-graphite-850">
+              <tbody className="divide-y divide-[#182333]">
                 {filteredDocs.map((doc) => {
                   const isSelected = selectedDoc?.id === doc.id;
                   const isFailed = doc.status === 'FAILED';
@@ -568,38 +568,43 @@ export const TechnicalManualsView: React.FC = () => {
                       }}
                       className={`cursor-pointer transition ${
                         isSelected
-                          ? 'bg-graphite-800/80 text-graphite-100'
-                          : 'hover:bg-graphite-900/50 text-graphite-300'
+                          ? 'bg-[#141E2B] text-white font-medium'
+                          : 'hover:bg-[#141E2B]/50 text-slate-300'
                       }`}
                     >
-                      <td className="py-3 px-4 font-mono font-semibold text-amber-400 flex items-center gap-2">
-                        <FileText className="w-3.5 h-3.5 text-graphite-400" />
+                      <td className="py-3 px-4 font-mono font-semibold text-[#A3E635] flex items-center gap-2">
+                        <FileText className="w-3.5 h-3.5 text-slate-400" />
                         {doc.documentNumber}
                       </td>
-                      <td className="py-3 px-4 font-medium max-w-xs truncate text-graphite-200">
+                      <td className="py-3 px-4 font-medium max-w-xs truncate text-white">
                         {doc.title}
                       </td>
-                      <td className="py-3 px-4 font-mono text-[11px] text-graphite-400">
+                      <td className="py-3 px-4 font-mono text-[11px] text-slate-400">
                         {doc.category}
                       </td>
-                      <td className="py-3 px-4 font-mono text-graphite-300">{doc.revision}</td>
+                      <td className="py-3 px-4 font-mono text-slate-300">{doc.revision}</td>
                       <td className="py-3 px-4 font-mono text-cyan-400">
                         {doc.assetTags[0] || '—'}
                       </td>
-                      <td className="py-3 px-4 font-mono text-graphite-400">
+                      <td className="py-3 px-4 font-mono text-slate-400">
                         {doc.totalChunks > 0 ? `${doc.totalChunks} chunks` : '—'}
                       </td>
                       <td className="py-3 px-4">
                         {isFailed ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-mono px-2 py-0.5 rounded bg-crimson-500/20 text-crimson-400 border border-crimson-500/30">
-                            <AlertTriangle className="w-3 h-3" /> FAILED
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-950/70 text-rose-400 border border-rose-800/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                            Failed
                           </span>
                         ) : isProcessing ? (
-                          <span className="inline-flex items-center gap-1.5 text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse">
-                            <RotateCw className="w-3 h-3 animate-spin" /> {doc.progressPercent}%
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-950/70 text-blue-400 border border-blue-800/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                            Processing ({doc.progressPercent}%)
                           </span>
                         ) : (
-                          <StatusBadge label={doc.status} tone="healthy" />
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-950/70 text-[#A3E635] border border-emerald-800/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#A3E635]" />
+                            Indexed
+                          </span>
                         )}
                       </td>
                       <td className="py-3 px-4 text-right">
@@ -608,7 +613,7 @@ export const TechnicalManualsView: React.FC = () => {
                             <button
                               onClick={() => handleRetry(doc.id)}
                               title="Retry processing"
-                              className="p-1 rounded bg-graphite-800 hover:bg-graphite-700 text-amber-400 transition"
+                              className="p-1 rounded bg-[#1A2534] hover:bg-[#253448] text-amber-400 transition"
                             >
                               <RotateCw className="w-3.5 h-3.5" />
                             </button>
@@ -616,7 +621,7 @@ export const TechnicalManualsView: React.FC = () => {
                           <button
                             onClick={() => handleDeleteDoc(doc.id)}
                             title="Delete document"
-                            className="p-1 rounded bg-graphite-800 hover:bg-graphite-700 text-graphite-400 hover:text-crimson-400 transition"
+                            className="p-1 rounded bg-[#1A2534] hover:bg-[#253448] text-slate-400 hover:text-rose-400 transition"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -630,10 +635,10 @@ export const TechnicalManualsView: React.FC = () => {
           </div>
 
           {/* Bottom Summary Bar */}
-          <div className="p-3 border-t border-graphite-800 bg-graphite-900/60 flex items-center justify-between text-xs font-mono text-graphite-400">
+          <div className="p-3 border-t border-[#1E293B] bg-[#0E1520] flex items-center justify-between text-xs font-mono text-slate-400">
             <span>{filteredDocs.length} Total Documents Cataloged</span>
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1 text-emerald-400">
+              <span className="flex items-center gap-1 text-[#A3E635]">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Tenant Isolated
               </span>
               <span className="flex items-center gap-1 text-cyan-400">
@@ -645,7 +650,7 @@ export const TechnicalManualsView: React.FC = () => {
 
         {/* Right Detail Inspector & Page Navigator */}
         {selectedDoc ? (
-          <div className="w-[480px] bg-graphite-900/70 flex flex-col justify-between overflow-y-auto">
+          <div className="w-[480px] bg-[#0E1520] flex flex-col justify-between overflow-y-auto border-l border-[#1E293B]">
             {/* Failure Alert Banner */}
             {selectedDoc.status === 'FAILED' && (
               <div className="p-3 bg-crimson-950/60 border-b border-crimson-800/80 text-crimson-300 text-xs flex items-start gap-2.5">

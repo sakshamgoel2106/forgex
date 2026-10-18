@@ -76,40 +76,40 @@ export const AuditLedgerView: React.FC = () => {
   );
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-industrial-bg">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10]">
       {/* Sub-header Toolbar */}
-      <div className="p-3.5 border-b border-industrial-border bg-industrial-sidebar flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+      <div className="p-3.5 border-b border-[#1E293B] bg-[#0B0F15] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <Lock className="w-4 h-4 text-industrial-accent" />
-            <span className="font-bold text-industrial-text uppercase tracking-wider">
+            <Lock className="w-4 h-4 text-[#A3E635]" />
+            <span className="font-bold text-white uppercase tracking-wider">
               Cryptographic Audit Ledger
             </span>
           </div>
-          <span className="text-industrial-border">|</span>
-          <span className="text-emerald-400 flex items-center gap-1 text-[11px]">
+          <span className="text-slate-600">|</span>
+          <span className="text-[#A3E635] flex items-center gap-1 text-[11px]">
             <ShieldCheck className="w-3.5 h-3.5" /> OSHA 1910 / ISO-9001 COMPLIANT
           </span>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 bg-industrial-bg border border-industrial-border rounded px-2.5 py-1">
-            <Filter className="w-3 h-3 text-industrial-secondary" />
+          <div className="flex items-center gap-1.5 bg-[#101722] border border-[#1E293B] rounded-lg px-2.5 py-1">
+            <Filter className="w-3 h-3 text-slate-400" />
             <select
               value={filterAction}
               onChange={(e) => setFilterAction(e.target.value)}
-              className="bg-transparent text-xs font-mono text-industrial-text outline-none cursor-pointer"
+              className="bg-transparent text-xs font-mono text-white outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-industrial-surface">All Actions</option>
-              <option value="LOTO_SIGNOFF" className="bg-industrial-surface">LOTO Signoff</option>
-              <option value="DIAGNOSTIC_QUERY" className="bg-industrial-surface">Diagnostic Query</option>
-              <option value="DEVIATION_RECORDED" className="bg-industrial-surface">Deviation Recorded</option>
-              <option value="DOCUMENT_INGEST" className="bg-industrial-surface">Document Ingest</option>
+              <option value="ALL" className="bg-[#101722]">All Actions</option>
+              <option value="LOTO_SIGNOFF" className="bg-[#101722]">LOTO Signoff</option>
+              <option value="DIAGNOSTIC_QUERY" className="bg-[#101722]">Diagnostic Query</option>
+              <option value="DEVIATION_RECORDED" className="bg-[#101722]">Deviation Recorded</option>
+              <option value="DOCUMENT_INGEST" className="bg-[#101722]">Document Ingest</option>
             </select>
           </div>
 
           {exported ? (
-            <span className="text-emerald-400 font-mono text-xs flex items-center gap-1.5 animate-in fade-in">
+            <span className="text-[#A3E635] font-mono text-xs flex items-center gap-1.5 animate-in fade-in">
               <CheckCircle2 className="w-4 h-4" /> Signed Bundle Exported (.json.sig)
             </span>
           ) : (
@@ -117,7 +117,8 @@ export const AuditLedgerView: React.FC = () => {
               variant="outline"
               size="sm"
               onClick={handleExport}
-              leftIcon={<Download className="w-3.5 h-3.5 text-industrial-accent" />}
+              leftIcon={<Download className="w-3.5 h-3.5 text-[#A3E635]" />}
+              className="bg-[#12241A] text-[#A3E635] border border-[#1E4028] hover:bg-[#1a3324] font-semibold rounded-lg"
             >
               Export Signed Audit Bundle
             </Button>
@@ -126,56 +127,58 @@ export const AuditLedgerView: React.FC = () => {
       </div>
 
       {/* Ledger Table */}
-      <div className="flex-1 overflow-y-auto">
-        <table className="w-full text-left border-collapse text-xs">
-          <thead>
-            <tr className="border-b border-industrial-border bg-industrial-sidebar/60 sticky top-0 z-10 text-industrial-secondary font-mono text-[11px]">
-              <th className="py-2.5 px-4 font-semibold">TIMESTAMP (UTC)</th>
-              <th className="py-2.5 px-4 font-semibold">ACTOR</th>
-              <th className="py-2.5 px-4 font-semibold">ACTION</th>
-              <th className="py-2.5 px-4 font-semibold">ASSET TARGET</th>
-              <th className="py-2.5 px-4 font-semibold">EVIDENCE CITATIONS</th>
-              <th className="py-2.5 px-4 font-semibold">SHA-256 HASH</th>
-              <th className="py-2.5 px-4 font-semibold">STATUS</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-industrial-border/60">
-            {filtered.map((entry) => (
-              <tr key={entry.id} className="hover:bg-industrial-surface/50 text-industrial-secondary transition">
-                <td className="py-3 px-4 font-mono text-[11px] text-industrial-secondary tabular-nums">
-                  {entry.timestamp}
-                </td>
-                <td className="py-3 px-4 font-mono font-medium text-industrial-text">
-                  {entry.actor}
-                </td>
-                <td className="py-3 px-4 font-mono text-[11px] text-amber-400">
-                  {entry.action}
-                </td>
-                <td className="py-3 px-4 font-mono text-industrial-accent font-bold">
-                  {entry.assetTag}
-                </td>
-                <td className="py-3 px-4 font-mono text-[11px] text-industrial-text">
-                  {entry.citations}
-                </td>
-                <td className="py-3 px-4 font-mono text-[10px] text-industrial-secondary tabular-nums">
-                  {entry.hash}
-                </td>
-                <td className="py-3 px-4">
-                  <StatusBadge
-                    label={entry.complianceState}
-                    tone={entry.complianceState === 'VERIFIED_COMPLIANT' ? 'healthy' : 'warning'}
-                  />
-                </td>
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="rounded-xl border border-[#1E293B] bg-[#101722] overflow-hidden">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-[#1E293B] bg-[#0D141F] text-slate-400 font-mono text-[11px]">
+                <th className="py-3 px-4 font-semibold uppercase tracking-wider">TIMESTAMP (UTC)</th>
+                <th className="py-3 px-4 font-semibold uppercase tracking-wider">ACTOR</th>
+                <th className="py-3 px-4 font-semibold uppercase tracking-wider">ACTION</th>
+                <th className="py-3 px-4 font-semibold uppercase tracking-wider">ASSET TARGET</th>
+                <th className="py-3 px-4 font-semibold uppercase tracking-wider">EVIDENCE CITATIONS</th>
+                <th className="py-3 px-4 font-semibold uppercase tracking-wider">SHA-256 HASH</th>
+                <th className="py-3 px-4 font-semibold uppercase tracking-wider">STATUS</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-[#1E293B]/60 font-mono">
+              {filtered.map((entry) => (
+                <tr key={entry.id} className="hover:bg-[#15202E] text-slate-300 transition">
+                  <td className="py-3 px-4 text-[11px] text-slate-400 tabular-nums">
+                    {entry.timestamp}
+                  </td>
+                  <td className="py-3 px-4 font-medium text-white">
+                    {entry.actor}
+                  </td>
+                  <td className="py-3 px-4 text-[11px] text-amber-400">
+                    {entry.action}
+                  </td>
+                  <td className="py-3 px-4 text-[#A3E635] font-bold">
+                    {entry.assetTag}
+                  </td>
+                  <td className="py-3 px-4 text-[11px] text-slate-300">
+                    {entry.citations}
+                  </td>
+                  <td className="py-3 px-4 text-[10px] text-slate-500 tabular-nums">
+                    {entry.hash}
+                  </td>
+                  <td className="py-3 px-4">
+                    <StatusBadge
+                      label={entry.complianceState}
+                      tone={entry.complianceState === 'VERIFIED_COMPLIANT' ? 'healthy' : 'warning'}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Footer Info */}
-      <div className="p-3 border-t border-industrial-border bg-industrial-sidebar flex items-center justify-between text-xs font-mono text-industrial-secondary">
+      <div className="p-3 border-t border-[#1E293B] bg-[#0B0F15] flex items-center justify-between text-xs font-mono text-slate-400">
         <span>Showing {filtered.length} Immutable Ledger Events</span>
-        <span className="text-industrial-secondary text-[11px]">Key Id: 0x4B9E...7F01 (Hardware HSM)</span>
+        <span className="text-slate-500 text-[11px]">Key Id: 0x4B9E...7F01 (Hardware HSM)</span>
       </div>
     </div>
   );

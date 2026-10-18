@@ -6,31 +6,31 @@ export default {
     extend: {
       colors: {
         industrial: {
-          bg: '#0B0F14',       // Main background
-          sidebar: '#101720',  // Sidebar background
-          surface: '#151E28',  // Surface / Card background
-          border: '#283543',   // Primary borders
-          borderLight: '#37475A', // Hover/elevated borders
+          bg: '#070B10',       // Main background
+          sidebar: '#070B10',  // Sidebar background
+          surface: '#101722',  // Surface / Card background
+          border: '#1E293B',   // Primary borders
+          borderLight: '#334155', // Hover/elevated borders
           accent: '#A3E635',   // Primary accent (Lime)
           accentHover: '#BEF264',
           accentMuted: '#4D7C0F',
-          text: '#F1F5F9',     // Primary text
+          text: '#F8FAFC',     // Primary text
           secondary: '#94A3B8',// Secondary text
           muted: '#64748B',    // Muted text / tertiary
         },
         graphite: {
-          950: '#0B0F14', // Main chassis background
-          900: '#101720', // Sidebar background
-          850: '#151E28', // Surface / Card
-          800: '#283543', // Borders / Dividers
-          750: '#2F3E50', // Subtle elevated borders
-          700: '#37475A', // Active hover state
+          950: '#070B10', // Main chassis background
+          900: '#101722', // Card / surface background
+          850: '#101722', // Surface / Card
+          800: '#1E293B', // Borders / Dividers
+          750: '#263345', // Subtle elevated borders
+          700: '#334155', // Active hover state
           600: '#475569', // Subtle borders / disabled
           500: '#64748B', // Muted labels
           400: '#94A3B8', // Secondary text
           300: '#CBD5E1', // Primary labels
           200: '#E2E8F0', // Primary text
-          100: '#F1F5F9', // Bright white highlights
+          100: '#F8FAFC', // Bright white highlights
         },
         accent: {
           DEFAULT: '#A3E635',

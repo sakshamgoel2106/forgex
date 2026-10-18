@@ -535,22 +535,22 @@ export const SopExecutionView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-graphite-950 font-sans">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10] font-sans">
       {/* Top Telemetry Header */}
-      <div className="p-3 border-b border-graphite-800 bg-graphite-900/60 flex items-center justify-between text-xs font-mono">
+      <div className="p-3 border-b border-[#1E293B] bg-[#0B0F15] flex items-center justify-between text-xs font-mono">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-amber-400 font-semibold">
+          <div className="flex items-center gap-1.5 text-[#A3E635] font-semibold">
             <Wrench className="w-4 h-4" />
             <span>MAINTENANCE & TROUBLESHOOTING WORKSPACE</span>
           </div>
-          <span className="text-graphite-600">|</span>
-          <span className="text-graphite-300 font-bold">{activeCase.caseNumber}</span>
-          <span className="text-cyan-400">[{activeCase.plantId}]</span>
+          <span className="text-slate-600">|</span>
+          <span className="text-white font-bold">{activeCase.caseNumber}</span>
+          <span className="text-[#A3E635]">[{activeCase.plantId}]</span>
         </div>
 
         <div className="flex items-center gap-3">
           <StatusBadge label={activeCase.status} tone={getStatusTone(activeCase.status)} />
-          <Button size="sm" onClick={() => setIsNewCaseModalOpen(true)}>
+          <Button size="sm" onClick={() => setIsNewCaseModalOpen(true)} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
             <Plus className="w-3.5 h-3.5 mr-1" />
             Report Case
           </Button>
@@ -560,10 +560,10 @@ export const SopExecutionView: React.FC = () => {
       {/* Main Split: Case Explorer (Left) + Evidence-to-Action Workspace (Right) */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Case Explorer & Filters */}
-        <div className="w-80 border-r border-graphite-800 bg-graphite-900/40 flex flex-col justify-between overflow-hidden">
+        <div className="w-80 border-r border-[#1E293B] bg-[#0B0F15] flex flex-col justify-between overflow-hidden">
           {/* Filter Pills */}
-          <div className="p-3 border-b border-graphite-800 space-y-2">
-            <div className="text-[10px] font-mono uppercase text-graphite-500 font-semibold">
+          <div className="p-3 border-b border-[#1E293B] space-y-2">
+            <div className="text-[10px] font-mono uppercase text-slate-400 font-semibold">
               Filter by Operational State
             </div>
             <div className="flex flex-wrap gap-1">
@@ -574,8 +574,8 @@ export const SopExecutionView: React.FC = () => {
                     onClick={() => setStatusFilter(filter)}
                     className={`px-2 py-0.5 rounded text-[10px] font-mono transition border ${
                       statusFilter === filter
-                        ? 'bg-amber-500/10 text-amber-300 border-amber-500/40 font-semibold'
-                        : 'bg-graphite-950 text-graphite-400 border-graphite-800 hover:text-graphite-200'
+                        ? 'bg-[#12241A] text-[#A3E635] border-[#1E4028] font-semibold'
+                        : 'bg-[#101722] text-slate-400 border-[#1E293B] hover:text-white'
                     }`}
                   >
                     {filter === 'EXPERT_CANDIDATE' ? '⭐ Expert Candidates' : filter}
@@ -593,22 +593,22 @@ export const SopExecutionView: React.FC = () => {
                 <div
                   key={c.id}
                   onClick={() => setActiveCaseId(c.id)}
-                  className={`p-2.5 rounded-lg border text-xs font-mono cursor-pointer transition ${
+                  className={`p-2.5 rounded-xl border text-xs font-mono cursor-pointer transition ${
                     isSelected
-                      ? 'bg-amber-500/10 border-amber-500/50 text-graphite-100 shadow-lg shadow-amber-500/5'
-                      : 'bg-graphite-950/70 border-graphite-800/80 hover:border-graphite-700 text-graphite-300'
+                      ? 'bg-[#12241A] border-[#1E4028] text-white shadow-lg shadow-[#A3E635]/5'
+                      : 'bg-[#101722] border-[#1E293B] hover:border-slate-700 text-slate-300'
                   }`}
                 >
-                  <div className="flex justify-between items-center text-[10px] text-graphite-500 mb-1">
-                    <span className="font-bold text-amber-400">{c.caseNumber}</span>
+                  <div className="flex justify-between items-center text-[10px] text-slate-400 mb-1">
+                    <span className="font-bold text-[#A3E635]">{c.caseNumber}</span>
                     <StatusBadge label={c.status} tone={getStatusTone(c.status)} />
                   </div>
-                  <div className="font-semibold text-graphite-100 line-clamp-1">{c.title}</div>
-                  <div className="text-[10px] text-graphite-400 mt-1 line-clamp-1 font-sans">
+                  <div className="font-semibold text-white line-clamp-1">{c.title}</div>
+                  <div className="text-[10px] text-slate-400 mt-1 line-clamp-1 font-sans">
                     {c.symptomDescription}
                   </div>
                   {c.candidateForExpertKnowledge && (
-                    <div className="mt-1.5 flex items-center gap-1 text-[9px] text-emerald-400 font-bold">
+                    <div className="mt-1.5 flex items-center gap-1 text-[9px] text-[#A3E635] font-bold">
                       <span>⭐ Nominated Expert Knowledge</span>
                     </div>
                   )}
@@ -619,12 +619,12 @@ export const SopExecutionView: React.FC = () => {
         </div>
 
         {/* Right: Detailed Case Workspace Stage */}
-        <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6 bg-graphite-950">
+        <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6 bg-[#070B10]">
           {/* Header Banner */}
-          <div className="flex justify-between items-start pb-4 border-b border-graphite-800">
+          <div className="flex justify-between items-start pb-4 border-b border-[#1E293B]">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-base font-bold font-mono text-graphite-100 uppercase tracking-wide">
+                <h1 className="text-base font-bold font-mono text-white uppercase tracking-wide">
                   {activeCase.title}
                 </h1>
                 <StatusBadge label={activeCase.status} tone={getStatusTone(activeCase.status)} />
@@ -638,7 +638,7 @@ export const SopExecutionView: React.FC = () => {
                   SEVERITY: {activeCase.severity}
                 </span>
               </div>
-              <p className="text-xs text-graphite-400 mt-1 font-mono">
+              <p className="text-xs text-slate-400 mt-1 font-mono">
                 Case: {activeCase.caseNumber} • Plant: {activeCase.plantId} • Reported by:{' '}
                 {activeCase.reportedByUserId}
               </p>
@@ -675,7 +675,7 @@ export const SopExecutionView: React.FC = () => {
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-cyan-400" />
+                  <BookOpen className="w-4 h-4 text-[#A3E635]" />
                   <CardTitle>Grounded Diagnostic Hypothesis & Safety Directives</CardTitle>
                 </div>
                 <StatusBadge
@@ -686,14 +686,14 @@ export const SopExecutionView: React.FC = () => {
                 />
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="p-3 rounded bg-graphite-950 border border-graphite-800 space-y-2">
-                  <div className="text-[10px] font-mono text-cyan-400 uppercase font-semibold">
+                <div className="p-3.5 rounded-xl bg-[#070B10] border border-[#1E293B] space-y-2">
+                  <div className="text-[10px] font-mono text-[#A3E635] uppercase font-semibold">
                     Primary Root Cause Assessment
                   </div>
-                  <p className="text-xs text-graphite-200 font-mono leading-relaxed">
+                  <p className="text-xs text-slate-200 font-mono leading-relaxed">
                     {activeCase.diagnosticHypothesis.primaryHypothesis}
                   </p>
-                  <ul className="list-disc list-inside text-xs text-graphite-400 space-y-1 pt-1 font-sans">
+                  <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 pt-1 font-sans">
                     {activeCase.diagnosticHypothesis.rootCauses.map((r, i) => (
                       <li key={i}>{r}</li>
                     ))}
@@ -701,7 +701,7 @@ export const SopExecutionView: React.FC = () => {
                 </div>
 
                 {/* Safety Critical Directives */}
-                <div className="p-3 rounded bg-rose-950/20 border border-rose-900/60 space-y-1.5">
+                <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-900/60 space-y-1.5">
                   <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-rose-400 uppercase">
                     <ShieldAlert className="w-4 h-4 text-rose-400" />
                     <span>Safety-Critical Controls (Non-Negotiable)</span>
@@ -715,20 +715,20 @@ export const SopExecutionView: React.FC = () => {
 
                 {/* Grounded Citation Cards */}
                 <div>
-                  <div className="text-[10px] font-mono text-graphite-500 uppercase font-semibold mb-2">
+                  <div className="text-[10px] font-mono text-slate-400 uppercase font-semibold mb-2">
                     Verified Technical Manual Evidence Citations
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {activeCase.diagnosticHypothesis.evidenceCitations.map((cit, i) => (
                       <div
                         key={i}
-                        className="p-3 rounded bg-graphite-950 border border-graphite-800 space-y-1 text-xs font-mono"
+                        className="p-3.5 rounded-xl bg-[#070B10] border border-[#1E293B] space-y-1 text-xs font-mono"
                       >
                         <div className="flex justify-between items-start text-[10px]">
                           <span className="font-bold text-amber-400">{cit.documentNumber}</span>
-                          <span className="text-graphite-500">Page {cit.pageNumber}</span>
+                          <span className="text-slate-400">Page {cit.pageNumber}</span>
                         </div>
-                        <p className="text-[11px] text-graphite-300 font-sans leading-relaxed">
+                        <p className="text-[11px] text-slate-300 font-sans leading-relaxed">
                           "{cit.snippet}"
                         </p>
                       </div>
@@ -743,10 +743,10 @@ export const SopExecutionView: React.FC = () => {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                <CheckCircle2 className="w-4 h-4 text-[#A3E635]" />
                 <CardTitle>Approved Procedural Checklist (Evidence-Backed Steps)</CardTitle>
               </div>
-              <span className="text-xs font-mono text-graphite-400">
+              <span className="text-xs font-mono text-slate-400">
                 Completed:{' '}
                 {activeCase.checklist.filter((s) => s.status === 'COMPLETED').length} /{' '}
                 {activeCase.checklist.length}
@@ -754,7 +754,7 @@ export const SopExecutionView: React.FC = () => {
             </CardHeader>
             <CardContent>
               {activeCase.checklist.length === 0 ? (
-                <div className="text-xs font-mono text-graphite-500 italic py-4 text-center">
+                <div className="text-xs font-mono text-slate-500 italic py-4 text-center">
                   No automated checklist generated for this case status.
                 </div>
               ) : (
@@ -764,10 +764,10 @@ export const SopExecutionView: React.FC = () => {
                     return (
                       <div
                         key={step.id}
-                        className={`p-3.5 rounded-lg border transition space-y-2.5 ${
+                        className={`p-3.5 rounded-xl border transition space-y-2.5 ${
                           isDone
-                            ? 'bg-emerald-950/10 border-emerald-800/40 text-graphite-300'
-                            : 'bg-graphite-950/80 border-graphite-800 text-graphite-100'
+                            ? 'bg-emerald-950/10 border-emerald-800/40 text-slate-300'
+                            : 'bg-[#070B10] border-[#1E293B] text-white'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -776,11 +776,11 @@ export const SopExecutionView: React.FC = () => {
                               type="checkbox"
                               checked={isDone}
                               onChange={() => handleToggleStep(step.id)}
-                              className="mt-1 w-4 h-4 rounded border-graphite-700 text-emerald-500 focus:ring-0 cursor-pointer"
+                              className="mt-1 w-4 h-4 rounded border-[#1E293B] text-[#A3E635] focus:ring-0 cursor-pointer"
                             />
                             <div>
                               <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold font-mono text-graphite-100">
+                                <span className="text-xs font-bold font-mono text-white">
                                   Step {step.stepNumber}: {step.title}
                                 </span>
                                 {step.requiresLoto && (
@@ -789,7 +789,7 @@ export const SopExecutionView: React.FC = () => {
                                   </span>
                                 )}
                               </div>
-                              <p className="text-xs text-graphite-300 font-sans mt-1 leading-relaxed">
+                              <p className="text-xs text-slate-300 font-sans mt-1 leading-relaxed">
                                 {step.instruction}
                               </p>
                             </div>
@@ -803,8 +803,8 @@ export const SopExecutionView: React.FC = () => {
 
                         {/* Citation Reference Link */}
                         {step.citation && (
-                          <div className="text-[10px] font-mono text-cyan-400/90 pl-7 flex items-center gap-1.5">
-                            <FileText className="w-3 h-3 text-cyan-400" />
+                          <div className="text-[10px] font-mono text-[#A3E635] pl-7 flex items-center gap-1.5">
+                            <FileText className="w-3 h-3 text-[#A3E635]" />
                             <span>
                               CITED: {step.citation.documentNumber} (Page {step.citation.pageNumber})
                             </span>
@@ -813,7 +813,7 @@ export const SopExecutionView: React.FC = () => {
 
                         {/* Technician Notes on Step */}
                         {step.technicianNotes && (
-                          <div className="text-[11px] font-mono text-graphite-400 pl-7 italic">
+                          <div className="text-[11px] font-mono text-slate-400 pl-7 italic">
                             Notes: {step.technicianNotes}
                           </div>
                         )}
@@ -835,18 +835,18 @@ export const SopExecutionView: React.FC = () => {
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-mono text-graphite-300">
+                    <label className="text-xs font-mono text-slate-300">
                       Measured Final Torque (ft-lbs / Nm)
                     </label>
                     <input
                       type="text"
                       value={measuredTorque}
                       onChange={(e) => setMeasuredTorque(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-graphite-950 border border-graphite-800 rounded text-xs font-mono text-graphite-100"
+                      className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#A3E635]"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-xs font-mono text-graphite-300">
+                    <label className="text-xs font-mono text-slate-300">
                       Technician Observations & Corrective Actions
                     </label>
                     <input
@@ -854,13 +854,13 @@ export const SopExecutionView: React.FC = () => {
                       placeholder="e.g. Cleaned gland follower plate and completed 3-pass torque..."
                       value={findingsText}
                       onChange={(e) => setFindingsText(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-graphite-950 border border-graphite-800 rounded text-xs font-mono text-graphite-100"
+                      className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#A3E635]"
                     />
                   </div>
                 </div>
 
                 <div className="flex justify-end pt-2">
-                  <Button onClick={handleSubmitFindings}>
+                  <Button onClick={handleSubmitFindings} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
                     <Send className="w-3.5 h-3.5 mr-1.5" />
                     Submit Work Order for Supervisor Approval
                   </Button>
@@ -880,17 +880,17 @@ export const SopExecutionView: React.FC = () => {
                 <StatusBadge label="AWAITING APPROVAL" tone="warning" pulse />
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="p-3 rounded bg-graphite-950 border border-graphite-800 space-y-1 text-xs font-mono">
-                  <div className="text-[10px] text-graphite-500 uppercase">
+                <div className="p-3.5 rounded-xl bg-[#070B10] border border-[#1E293B] space-y-1 text-xs font-mono">
+                  <div className="text-[10px] text-slate-400 uppercase">
                     SUBMITTED RESOLUTION
                   </div>
-                  <p className="text-graphite-200">
+                  <p className="text-slate-200">
                     {activeCase.findings?.resolutionSummary || 'Work completed per approved SOP.'}
                   </p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-mono text-graphite-300">
+                  <label className="text-xs font-mono text-slate-300">
                     Supervisor Reviewer Notes / Sign-Off Comments
                   </label>
                   <input
@@ -898,7 +898,7 @@ export const SopExecutionView: React.FC = () => {
                     placeholder="Enter review notes before sign-off..."
                     value={approvalNotes}
                     onChange={(e) => setApprovalNotes(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-graphite-950 border border-graphite-800 rounded text-xs font-mono text-graphite-100"
+                    className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#A3E635]"
                   />
                 </div>
 
@@ -906,7 +906,7 @@ export const SopExecutionView: React.FC = () => {
                   <Button variant="danger" size="sm" onClick={() => handleReviewApproval(false)}>
                     Reject Work Order (Request Rework)
                   </Button>
-                  <Button variant="primary" size="sm" onClick={() => handleReviewApproval(true)}>
+                  <Button variant="primary" size="sm" onClick={() => handleReviewApproval(true)} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
                     Approve Work Order (Mark Resolved)
                   </Button>
                 </div>
@@ -918,26 +918,26 @@ export const SopExecutionView: React.FC = () => {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
-                <History className="w-4 h-4 text-graphite-400" />
+                <History className="w-4 h-4 text-slate-400" />
                 <CardTitle>Case History & Audit Trail</CardTitle>
               </div>
-              <span className="text-[10px] font-mono text-graphite-500">TAMPER-EVIDENT</span>
+              <span className="text-[10px] font-mono text-slate-400">TAMPER-EVIDENT</span>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
                 {activeCase.history.map((h) => (
                   <div
                     key={h.id}
-                    className="p-2.5 rounded bg-graphite-950/70 border border-graphite-800/80 flex items-start justify-between text-xs font-mono"
+                    className="p-3 rounded-lg bg-[#070B10] border border-[#1E293B] flex items-start justify-between text-xs font-mono"
                   >
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2 font-bold text-graphite-200">
+                      <div className="flex items-center gap-2 font-bold text-slate-200">
                         <span>{h.action}</span>
-                        <span className="text-graphite-500 text-[10px]">by {h.user}</span>
+                        <span className="text-slate-400 text-[10px]">by {h.user}</span>
                       </div>
-                      {h.notes && <p className="text-[11px] text-graphite-400 font-sans">{h.notes}</p>}
+                      {h.notes && <p className="text-[11px] text-slate-400 font-sans">{h.notes}</p>}
                     </div>
-                    <span className="text-[10px] text-graphite-500 shrink-0">
+                    <span className="text-[10px] text-slate-400 shrink-0">
                       {new Date(h.timestamp).toLocaleTimeString()}
                     </span>
                   </div>
@@ -966,7 +966,7 @@ export const SopExecutionView: React.FC = () => {
         }
       >
         <div className="space-y-3 font-mono text-xs">
-          <p className="text-graphite-300">
+          <p className="text-slate-300">
             Provide the specific risk or reason why automated procedures cannot safely proceed:
           </p>
           <textarea
@@ -974,7 +974,7 @@ export const SopExecutionView: React.FC = () => {
             value={escalateReason}
             onChange={(e) => setEscalateReason(e.target.value)}
             placeholder="e.g. Suspected structural fissure or high-pressure gas leak requiring metallurgist..."
-            className="w-full p-2.5 rounded bg-graphite-950 border border-graphite-800 text-xs text-graphite-100 font-mono focus:outline-none focus:border-rose-500"
+            className="w-full p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-xs text-white font-mono focus:outline-none focus:border-rose-500"
           />
         </div>
       </Modal>
@@ -990,7 +990,7 @@ export const SopExecutionView: React.FC = () => {
             <Button variant="secondary" size="sm" onClick={() => setIsNewCaseModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" size="sm" onClick={handleCreateNewCase}>
+            <Button variant="primary" size="sm" onClick={handleCreateNewCase} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
               Create Maintenance Case
             </Button>
           </div>
@@ -998,23 +998,23 @@ export const SopExecutionView: React.FC = () => {
       >
         <div className="space-y-3 font-mono text-xs">
           <div className="space-y-1">
-            <label className="text-graphite-400">Case Title</label>
+            <label className="text-slate-400">Case Title</label>
             <input
               type="text"
               placeholder="e.g. Seal Weepage on Crude Booster Pump"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
-              className="w-full px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-100"
+              className="w-full px-3 py-1.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-graphite-400">Asset Tag</label>
+              <label className="text-slate-400">Asset Tag</label>
               <select
                 value={newAssetTag}
                 onChange={(e) => setNewAssetTag(e.target.value)}
-                className="w-full px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-100"
+                className="w-full px-3 py-1.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white"
               >
                 <option value="P-101-A">P-101-A (Booster Pump)</option>
                 <option value="COMP-201">COMP-201 (Gas Compressor)</option>
@@ -1023,11 +1023,11 @@ export const SopExecutionView: React.FC = () => {
             </div>
 
             <div className="space-y-1">
-              <label className="text-graphite-400">Severity</label>
+              <label className="text-slate-400">Severity</label>
               <select
                 value={newSeverity}
                 onChange={(e) => setNewSeverity(e.target.value as MaintenanceCaseSeverity)}
-                className="w-full px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-100"
+                className="w-full px-3 py-1.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white"
               >
                 <option value="LOW">LOW</option>
                 <option value="MEDIUM">MEDIUM</option>
@@ -1038,13 +1038,13 @@ export const SopExecutionView: React.FC = () => {
           </div>
 
           <div className="space-y-1">
-            <label className="text-graphite-400">Reported Symptoms & Operating Anomalies</label>
+            <label className="text-slate-400">Reported Symptoms & Operating Anomalies</label>
             <textarea
               rows={3}
               placeholder="Describe audible noise, weepage, vibration, or temperature readings..."
               value={newSymptoms}
               onChange={(e) => setNewSymptoms(e.target.value)}
-              className="w-full p-2.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-100 font-mono"
+              className="w-full p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white font-mono"
             />
           </div>
         </div>

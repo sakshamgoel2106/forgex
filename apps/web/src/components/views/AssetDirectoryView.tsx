@@ -97,198 +97,200 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
   });
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-industrial-bg">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10]">
       {/* Search & Filter Toolbar */}
-      <div className="p-3.5 border-b border-industrial-border bg-industrial-sidebar flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+      <div className="p-3.5 border-b border-[#1E293B] bg-[#0B0F15] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
         <div className="flex items-center gap-3 flex-1 min-w-[280px]">
           <div className="relative flex-1 max-w-md">
-            <Search className="w-3.5 h-3.5 text-industrial-secondary absolute left-3 top-2.5" />
+            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
             <input
               type="text"
               placeholder="Filter by Tag, Machine Name, Area..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-industrial-bg border border-industrial-border rounded text-xs font-mono text-industrial-text placeholder-industrial-secondary focus:outline-none focus:border-industrial-accent transition"
+              className="w-full pl-9 pr-3 py-1.5 bg-[#101722] border border-[#1E293B] rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] transition"
             />
           </div>
 
-          <div className="flex items-center gap-1.5 bg-industrial-bg border border-industrial-border rounded px-2.5 py-1">
-            <Filter className="w-3 h-3 text-industrial-secondary" />
+          <div className="flex items-center gap-1.5 bg-[#101722] border border-[#1E293B] rounded-lg px-2.5 py-1">
+            <Filter className="w-3 h-3 text-slate-400" />
             <select
               value={filterState}
               onChange={(e) => setFilterState(e.target.value)}
-              className="bg-transparent text-xs font-mono text-industrial-text outline-none cursor-pointer"
+              className="bg-transparent text-xs font-mono text-white outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-industrial-surface">All States</option>
-              <option value="OPTIMAL" className="bg-industrial-surface">Optimal</option>
-              <option value="ADVISORY" className="bg-industrial-surface">Advisory</option>
-              <option value="TRIPPED" className="bg-industrial-surface">Tripped</option>
+              <option value="ALL" className="bg-[#101722]">All States</option>
+              <option value="OPTIMAL" className="bg-[#101722]">Optimal</option>
+              <option value="ADVISORY" className="bg-[#101722]">Advisory</option>
+              <option value="TRIPPED" className="bg-[#101722]">Tripped</option>
             </select>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-industrial-secondary text-[11px]">
-          <span>Showing <strong className="text-industrial-text font-mono tabular-nums">{filtered.length}</strong> of {ASSET_DATA.length} Assets</span>
+        <div className="flex items-center gap-2 text-slate-400 text-[11px]">
+          <span>Showing <strong className="text-white font-mono tabular-nums">{filtered.length}</strong> of {ASSET_DATA.length} Assets</span>
         </div>
       </div>
 
       {/* Main Split Layout: Asset Table + Inspector Drawer */}
       <div className="flex-1 flex overflow-hidden">
         {/* Table of Assets */}
-        <div className="flex-1 overflow-y-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-industrial-border bg-industrial-sidebar/60 sticky top-0 z-10 text-industrial-secondary font-mono text-[11px]">
-                <th className="py-2.5 px-4 font-semibold">ASSET TAG</th>
-                <th className="py-2.5 px-4 font-semibold">EQUIPMENT DESCRIPTION</th>
-                <th className="py-2.5 px-4 font-semibold">PLANT AREA</th>
-                <th className="py-2.5 px-4 font-semibold">MANUFACTURER / MODEL</th>
-                <th className="py-2.5 px-4 font-semibold">VIBRATION RMS</th>
-                <th className="py-2.5 px-4 font-semibold">TEMP</th>
-                <th className="py-2.5 px-4 font-semibold">STATUS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-industrial-border/60">
-              {filtered.map((asset) => {
-                const isSelected = selectedAsset.id === asset.id;
-                return (
-                  <tr
-                    key={asset.id}
-                    onClick={() => setSelectedAsset(asset)}
-                    className={`cursor-pointer transition ${
-                      isSelected
-                        ? 'bg-industrial-surface text-industrial-text font-medium'
-                        : 'hover:bg-industrial-surface/50 text-industrial-secondary'
-                    }`}
-                  >
-                    <td className="py-3 px-4 font-mono font-bold text-industrial-accent">
-                      {asset.tag}
-                    </td>
-                    <td className="py-3 px-4 font-medium text-industrial-text">
-                      {asset.name}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-industrial-secondary">
-                      {asset.area}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-[11px] text-industrial-secondary">
-                      {asset.manufacturer} {asset.model}
-                    </td>
-                    <td className="py-3 px-4 font-mono tabular-nums">
-                      <span
-                        className={
-                          asset.vibrationMmS > 3.5
-                            ? 'text-amber-400 font-bold'
-                            : 'text-emerald-400'
-                        }
-                      >
-                        {asset.vibrationMmS.toFixed(1)} mm/s
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-mono tabular-nums text-industrial-text">
-                      {asset.tempCelsius.toFixed(1)} °C
-                    </td>
-                    <td className="py-3 px-4">
-                      <StatusBadge
-                        label={asset.state}
-                        tone={asset.state === 'OPTIMAL' ? 'healthy' : 'warning'}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="rounded-xl border border-[#1E293B] bg-[#101722] overflow-hidden">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-[#1E293B] bg-[#0D141F] text-slate-400 font-mono text-[11px]">
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">ASSET TAG</th>
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">EQUIPMENT DESCRIPTION</th>
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">PLANT AREA</th>
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">MANUFACTURER / MODEL</th>
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">VIBRATION RMS</th>
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">TEMP</th>
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">STATUS</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#1E293B]/60 font-mono">
+                {filtered.map((asset) => {
+                  const isSelected = selectedAsset.id === asset.id;
+                  return (
+                    <tr
+                      key={asset.id}
+                      onClick={() => setSelectedAsset(asset)}
+                      className={`cursor-pointer transition ${
+                        isSelected
+                          ? 'bg-[#12241A] border-l-2 border-l-[#A3E635] text-white'
+                          : 'hover:bg-[#15202E] text-slate-300'
+                      }`}
+                    >
+                      <td className="py-3 px-4 font-mono font-bold text-[#A3E635]">
+                        {asset.tag}
+                      </td>
+                      <td className="py-3 px-4 font-medium text-white font-sans">
+                        {asset.name}
+                      </td>
+                      <td className="py-3 px-4 text-slate-400">
+                        {asset.area}
+                      </td>
+                      <td className="py-3 px-4 text-[11px] text-slate-400">
+                        {asset.manufacturer} {asset.model}
+                      </td>
+                      <td className="py-3 px-4 tabular-nums">
+                        <span
+                          className={
+                            asset.vibrationMmS > 3.5
+                              ? 'text-amber-400 font-bold'
+                              : 'text-[#A3E635]'
+                          }
+                        >
+                          {asset.vibrationMmS.toFixed(1)} mm/s
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 tabular-nums text-white">
+                        {asset.tempCelsius.toFixed(1)} °C
+                      </td>
+                      <td className="py-3 px-4">
+                        <StatusBadge
+                          label={asset.state}
+                          tone={asset.state === 'OPTIMAL' ? 'healthy' : 'warning'}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Right Asset Telemetry Inspector Panel */}
-        <div className="w-80 md:w-96 border-l border-industrial-border bg-industrial-sidebar p-4 space-y-4 overflow-y-auto shrink-0">
-          <div className="pb-3 border-b border-industrial-border">
-            <span className="text-[10px] font-mono text-industrial-accent uppercase tracking-wider font-semibold">
+        <div className="w-80 md:w-96 border-l border-[#1E293B] bg-[#0B0F15] p-5 space-y-4 overflow-y-auto shrink-0">
+          <div className="pb-3 border-b border-[#1E293B]">
+            <span className="text-[10px] font-mono text-[#A3E635] uppercase tracking-wider font-semibold">
               Live Telemetry Inspector
             </span>
-            <h3 className="text-sm font-bold font-mono text-industrial-text mt-0.5">
+            <h3 className="text-base font-bold font-mono text-white mt-0.5">
               {selectedAsset.tag}
             </h3>
-            <p className="text-xs text-industrial-secondary mt-0.5">{selectedAsset.name}</p>
+            <p className="text-xs text-slate-400 mt-0.5">{selectedAsset.name}</p>
           </div>
 
           {/* Metric Badges */}
           <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-            <div className="p-3 rounded bg-industrial-surface border border-industrial-border space-y-1">
-              <div className="text-[10px] text-industrial-secondary flex items-center gap-1 font-semibold">
-                <Activity className="w-3.5 h-3.5 text-industrial-accent" />
+            <div className="p-3.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+              <div className="text-[10px] text-slate-400 flex items-center gap-1 font-semibold uppercase tracking-wider">
+                <Activity className="w-3.5 h-3.5 text-[#A3E635]" />
                 VIBRATION RMS
               </div>
               <div
-                className={`text-lg font-bold tabular-nums ${
-                  selectedAsset.vibrationMmS > 3.5 ? 'text-amber-400' : 'text-emerald-400'
+                className={`text-xl font-bold tabular-nums ${
+                  selectedAsset.vibrationMmS > 3.5 ? 'text-amber-400' : 'text-[#A3E635]'
                 }`}
               >
                 {selectedAsset.vibrationMmS.toFixed(1)}{' '}
-                <span className="text-xs font-normal text-industrial-secondary">mm/s</span>
+                <span className="text-xs font-normal text-slate-400">mm/s</span>
               </div>
             </div>
 
-            <div className="p-3 rounded bg-industrial-surface border border-industrial-border space-y-1">
-              <div className="text-[10px] text-industrial-secondary flex items-center gap-1 font-semibold">
+            <div className="p-3.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-1">
+              <div className="text-[10px] text-slate-400 flex items-center gap-1 font-semibold uppercase tracking-wider">
                 <Thermometer className="w-3.5 h-3.5 text-rose-400" />
                 BEARING TEMP
               </div>
-              <div className="text-lg font-bold tabular-nums text-industrial-text">
+              <div className="text-xl font-bold tabular-nums text-white">
                 {selectedAsset.tempCelsius.toFixed(1)}{' '}
-                <span className="text-xs font-normal text-industrial-secondary">°C</span>
+                <span className="text-xs font-normal text-slate-400">°C</span>
               </div>
             </div>
           </div>
 
           {/* Machine Metadata Details */}
-          <div className="p-3 rounded bg-industrial-surface border border-industrial-border space-y-2 text-xs font-mono">
-            <div className="text-industrial-secondary text-[10px] uppercase font-bold tracking-wider">
+          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2 text-xs font-mono">
+            <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">
               Equipment Specification
             </div>
-            <div className="space-y-1.5 text-[11px]">
+            <div className="space-y-2 text-[11px]">
               <div className="flex justify-between">
-                <span className="text-industrial-secondary">Manufacturer:</span>
-                <span className="text-industrial-text font-medium">{selectedAsset.manufacturer}</span>
+                <span className="text-slate-400">Manufacturer:</span>
+                <span className="text-white font-medium">{selectedAsset.manufacturer}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-industrial-secondary">Model:</span>
-                <span className="text-industrial-text font-medium">{selectedAsset.model}</span>
+                <span className="text-slate-400">Model:</span>
+                <span className="text-white font-medium">{selectedAsset.model}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-industrial-secondary">Plant Area:</span>
-                <span className="text-industrial-text font-medium">{selectedAsset.area}</span>
+                <span className="text-slate-400">Plant Area:</span>
+                <span className="text-white font-medium">{selectedAsset.area}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-industrial-secondary">Last Overhaul:</span>
-                <span className="text-industrial-text font-medium">{selectedAsset.lastOverhaul}</span>
+                <span className="text-slate-400">Last Overhaul:</span>
+                <span className="text-white font-medium">{selectedAsset.lastOverhaul}</span>
               </div>
             </div>
           </div>
 
           {/* Associated Manuals & SOPs */}
-          <div className="p-3 rounded bg-industrial-surface border border-industrial-border space-y-2 text-xs font-mono">
+          <div className="p-4 rounded-xl bg-[#101722] border border-[#1E293B] space-y-3 text-xs font-mono">
             <div className="flex items-center justify-between">
-              <div className="text-industrial-secondary text-[10px] uppercase font-bold tracking-wider">
+              <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">
                 Indexed Procedures ({selectedAsset.linkedManualsCount})
               </div>
-              <FileText className="w-3.5 h-3.5 text-industrial-accent" />
+              <FileText className="w-3.5 h-3.5 text-[#A3E635]" />
             </div>
-            <div className="space-y-1.5">
-              <div className="p-2 rounded bg-industrial-bg border border-industrial-border text-[11px] space-y-0.5">
-                <div className="flex justify-between text-industrial-accent font-semibold">
+            <div className="space-y-2">
+              <div className="p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-[11px] space-y-1">
+                <div className="flex justify-between text-[#A3E635] font-semibold">
                   <span>SOP-MTR-042</span>
-                  <span className="text-emerald-400 text-[10px]">VERIFIED</span>
+                  <span className="text-[#A3E635] text-[10px] bg-[#12241A] px-1.5 py-0.5 rounded border border-[#1E4028]">VERIFIED</span>
                 </div>
-                <div className="text-industrial-text text-[11px]">Mechanical Seal Overhaul & Star Torque</div>
+                <div className="text-slate-200 text-[11px]">Mechanical Seal Overhaul & Star Torque</div>
               </div>
 
-              <div className="p-2 rounded bg-industrial-bg border border-industrial-border text-[11px] space-y-0.5">
-                <div className="flex justify-between text-industrial-accent font-semibold">
+              <div className="p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-[11px] space-y-1">
+                <div className="flex justify-between text-[#A3E635] font-semibold">
                   <span>OEM-MAN-883</span>
-                  <span className="text-industrial-secondary text-[10px]">OEM REV C</span>
+                  <span className="text-slate-400 text-[10px] bg-slate-800/80 px-1.5 py-0.5 rounded border border-slate-700">OEM REV C</span>
                 </div>
-                <div className="text-industrial-text text-[11px]">Flowserve Mark 3 ANSI Centrifugal Manual</div>
+                <div className="text-slate-200 text-[11px]">Flowserve Mark 3 ANSI Centrifugal Manual</div>
               </div>
             </div>
           </div>

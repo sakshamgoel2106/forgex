@@ -17,24 +17,24 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
 }) => {
   const toneClasses: Record<StatusTone, { badge: string; dot: string }> = {
     healthy: {
-      badge: 'bg-emerald-950/60 border-emerald-800 text-emerald-400',
-      dot: 'bg-emerald-500',
+      badge: 'bg-lime-500/10 border-lime-500/30 text-lime-400',
+      dot: 'bg-lime-400',
     },
     warning: {
-      badge: 'bg-amber-950/60 border-amber-800 text-amber-300',
-      dot: 'bg-amber-500',
+      badge: 'bg-amber-500/10 border-amber-500/30 text-amber-300',
+      dot: 'bg-amber-400',
     },
     critical: {
-      badge: 'bg-rose-950/60 border-rose-800 text-rose-400',
-      dot: 'bg-rose-500',
+      badge: 'bg-rose-500/10 border-rose-500/30 text-rose-400',
+      dot: 'bg-rose-400',
     },
     neutral: {
-      badge: 'bg-graphite-800 border-graphite-700 text-graphite-300',
-      dot: 'bg-graphite-500',
+      badge: 'bg-slate-800/70 border-slate-700 text-slate-300',
+      dot: 'bg-slate-400',
     },
     info: {
-      badge: 'bg-cyan-950/60 border-cyan-800 text-cyan-300',
-      dot: 'bg-cyan-400',
+      badge: 'bg-sky-500/10 border-sky-500/30 text-sky-400',
+      dot: 'bg-sky-400',
     },
   };
 
@@ -42,7 +42,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded border text-xs font-mono font-medium uppercase tracking-wider ${current.badge} ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[11px] font-mono font-medium tracking-wide ${current.badge} ${className}`}
     >
       <span className="relative flex h-1.5 w-1.5">
         {pulse && (

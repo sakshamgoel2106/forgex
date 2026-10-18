@@ -398,88 +398,92 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
   return (
     <div className="flex-1 flex h-full overflow-hidden bg-graphite-950 font-sans">
       {/* Left Column: Asset Context & Conversation History */}
-      <div className="w-80 border-r border-graphite-800 bg-graphite-900/60 flex flex-col justify-between overflow-hidden">
+      <div className="w-80 border-r border-[#1E293B] bg-[#0B0F15] flex flex-col justify-between overflow-hidden">
         {/* Top Scope Selector */}
-        <div className="p-4 border-b border-graphite-800 space-y-3">
+        <div className="p-4 border-b border-[#1E293B] space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-mono font-bold tracking-wider text-graphite-300 uppercase flex items-center gap-1.5">
-              <Filter className="w-3.5 h-3.5 text-amber-500" />
+            <span className="text-xs font-mono font-bold tracking-wider text-slate-200 uppercase flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5 text-[#A3E635]" />
               AUTHORIZATION SCOPE
             </span>
-            <StatusBadge label="RBAC ENFORCED" tone="info" />
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-950/70 text-blue-400 border border-blue-800">
+              RBAC ENFORCED
+            </span>
           </div>
 
           <div className="space-y-2">
             <div>
-              <label className="text-[10px] font-mono text-graphite-400 uppercase">Operating Plant:</label>
+              <label className="text-[10px] font-mono text-slate-400 uppercase">Operating Plant:</label>
               <select
                 value={plantId}
                 onChange={(e) => setPlantId(e.target.value)}
-                className="w-full mt-1 bg-graphite-950 border border-graphite-700 rounded px-2.5 py-1.5 text-xs font-mono text-graphite-200 focus:outline-none focus:border-amber-500 transition"
+                className="w-full mt-1 bg-[#111722] border border-[#1E293B] rounded-lg px-2.5 py-1.5 text-xs font-sans text-white focus:outline-none focus:border-[#A3E635] transition"
               >
-                <option value="PLANT-TX-04">PLANT-TX-04 (Houston Refinery)</option>
-                <option value="PLANT-LA-02">PLANT-LA-02 (Baton Rouge Chemical)</option>
+                <option value="RIVERSIDE" className="bg-[#151E28]">Riverside Plant (Plant 1 • North Area)</option>
+                <option value="PLANT-TX-04" className="bg-[#151E28]">PLANT-TX-04 (Houston Refinery)</option>
+                <option value="PLANT-LA-02" className="bg-[#151E28]">PLANT-LA-02 (Baton Rouge Chemical)</option>
               </select>
             </div>
 
             <div>
-              <label className="text-[10px] font-mono text-graphite-400 uppercase">Target Asset Context:</label>
+              <label className="text-[10px] font-mono text-slate-400 uppercase">Target Asset Context:</label>
               <select
                 value={selectedAssetId}
                 onChange={(e) => setSelectedAssetId(e.target.value)}
-                className="w-full mt-1 bg-graphite-950 border border-graphite-700 rounded px-2.5 py-1.5 text-xs font-mono text-cyan-400 focus:outline-none focus:border-cyan-500 transition"
+                className="w-full mt-1 bg-[#111722] border border-[#1E293B] rounded-lg px-2.5 py-1.5 text-xs font-sans text-[#A3E635] focus:outline-none focus:border-[#A3E635] transition"
               >
-                <option value="">All Authorized Plant Equipment</option>
-                <option value="P-101-A">P-101-A (Crude Feed Booster Pump)</option>
-                <option value="P-204-B">P-204-B (Slurry Process Pump)</option>
-                <option value="COMP-101-A">COMP-101-A (Centrifugal Gas Compressor)</option>
+                <option value="" className="bg-[#151E28]">All Authorized Plant Equipment</option>
+                <option value="P-101-A" className="bg-[#151E28]">P-101-A (Centrifugal Pump)</option>
+                <option value="C-201" className="bg-[#151E28]">C-201 (Gas Compressor)</option>
+                <option value="B-101" className="bg-[#151E28]">B-101 (Boiler Section)</option>
+                <option value="T-301" className="bg-[#151E28]">T-301 (Turbine Unit)</option>
               </select>
             </div>
           </div>
 
           <button
             onClick={handleStartNewConversation}
-            className="w-full py-2 bg-graphite-800 hover:bg-graphite-700 border border-graphite-700 hover:border-amber-500/50 rounded text-xs font-mono font-semibold text-graphite-200 flex items-center justify-center gap-2 transition"
+            className="w-full py-2 bg-[#17212F] hover:bg-[#202C3E] border border-[#1E293B] hover:border-[#A3E635]/60 rounded-lg text-xs font-semibold text-white flex items-center justify-center gap-2 transition"
           >
-            <PlusCircle className="w-3.5 h-3.5 text-amber-400" />
+            <PlusCircle className="w-3.5 h-3.5 text-[#A3E635]" />
             New Consultation Thread
           </button>
         </div>
 
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-          <div className="px-2 py-1 text-[10px] font-mono font-semibold text-graphite-500 uppercase flex items-center gap-1.5">
-            <Clock className="w-3 h-3 text-graphite-400" />
+          <div className="px-2 py-1 text-[10px] font-mono font-semibold text-slate-400 uppercase flex items-center gap-1.5">
+            <Clock className="w-3 h-3 text-slate-400" />
             Active Consultations
           </div>
           {conversations.map((c) => (
             <button
               key={c.id}
               onClick={() => setActiveConversationId(c.id)}
-              className={`w-full text-left p-2.5 rounded text-xs transition border flex flex-col gap-1 ${
+              className={`w-full text-left p-3 rounded-lg text-xs transition border flex flex-col gap-1 ${
                 activeConversationId === c.id
-                  ? 'bg-amber-500/10 border-amber-500/50 text-graphite-100 shadow-sm'
-                  : 'bg-graphite-950/60 border-graphite-800/80 hover:border-graphite-700 text-graphite-400'
+                  ? 'bg-[#12241A] border-[#1E4028] text-white shadow-sm'
+                  : 'bg-[#101722] border-[#1E293B] hover:border-[#2C3B4E] text-slate-400'
               }`}
             >
               <div className="flex items-center justify-between w-full">
-                <span className="font-mono text-[10px] text-amber-400/80 truncate font-semibold">
+                <span className="font-mono text-[10px] text-[#A3E635] truncate font-semibold">
                   {c.assetId || 'PLANT-WIDE'}
                 </span>
-                <span className="text-[10px] font-mono text-graphite-500">
+                <span className="text-[10px] font-mono text-slate-500">
                   {new Date(c.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
               </div>
-              <span className="font-medium truncate text-xs">{c.title}</span>
+              <span className="font-medium truncate text-xs text-white">{c.title}</span>
             </button>
           ))}
         </div>
 
         {/* Security & Deployment Footer */}
-        <div className="p-3 border-t border-graphite-800 bg-graphite-950/80 text-[11px] font-mono space-y-1 text-graphite-400">
+        <div className="p-3 border-t border-[#1E293B] bg-[#0B0F15] text-[11px] font-mono space-y-1 text-slate-400">
           <div className="flex justify-between">
             <span>INFERENCE:</span>
-            <span className="text-cyan-400 font-bold">Ollama (Air-Gapped)</span>
+            <span className="text-[#A3E635] font-bold">Local Sovereign Engine</span>
           </div>
           <div className="flex justify-between">
             <span>FALLBACK POLICY:</span>
@@ -493,24 +497,24 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
       </div>
 
       {/* Center Column: Chat Stream Workspace */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-graphite-950 relative">
+      <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#070B10] relative text-slate-100 font-sans">
         {/* Workspace Top Bar */}
-        <div className="p-3 border-b border-graphite-800 bg-graphite-900/50 flex items-center justify-between text-xs font-mono">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <span className="font-bold text-graphite-200">INDUSTRIAL AI COPILOT WORKSPACE</span>
-            <span className="text-graphite-600">|</span>
-            <span className="text-graphite-400">Plant: <span className="text-graphite-200">{plantId}</span></span>
+        <div className="p-3.5 border-b border-[#1E293B] bg-[#0E1520] flex items-center justify-between text-xs font-sans">
+          <div className="flex items-center gap-2.5">
+            <Sparkles className="w-4 h-4 text-[#A3E635]" />
+            <span className="font-bold text-white tracking-wide">INDUSTRIAL AI COPILOT WORKSPACE</span>
+            <span className="text-slate-600">|</span>
+            <span className="text-slate-400">Plant: <span className="text-white font-medium">{plantId}</span></span>
             {selectedAssetId && (
               <>
-                <span className="text-graphite-600">|</span>
-                <span className="text-cyan-400 font-bold">Asset: {selectedAssetId}</span>
+                <span className="text-slate-600">|</span>
+                <span className="text-[#A3E635] font-mono font-bold">Asset: {selectedAssetId}</span>
               </>
             )}
           </div>
 
-          <div className="flex items-center gap-2 text-[11px] text-graphite-400">
-            <span>AUDIT TRAIL: <span className="text-emerald-400">LIVE</span></span>
+          <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
+            <span>AUDIT TRAIL: <span className="text-emerald-400 font-bold">LIVE</span></span>
           </div>
         </div>
 
@@ -533,7 +537,7 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
 
               {/* Preset Query Chips */}
               <div className="w-full pt-4 space-y-2 text-left">
-                <div className="text-[11px] font-mono text-graphite-500 uppercase font-semibold">
+                <div className="text-[11px] font-sans text-slate-400 uppercase font-semibold">
                   Sample Industrial Queries:
                 </div>
                 <div className="grid grid-cols-1 gap-2">
@@ -541,10 +545,10 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                     <button
                       key={idx}
                       onClick={() => handleSendQuery(preset.query)}
-                      className="p-2.5 rounded bg-graphite-900 hover:bg-graphite-850 border border-graphite-800 hover:border-amber-500/50 text-left text-xs font-mono text-graphite-300 flex items-center justify-between group transition"
+                      className="p-3 rounded-xl bg-[#101722] hover:bg-[#151E28] border border-[#1E293B] hover:border-[#A3E635]/50 text-left text-xs font-sans text-slate-200 flex items-center justify-between group transition"
                     >
-                      <span className="text-graphite-200 font-medium">{preset.label}</span>
-                      <ChevronRight className="w-3.5 h-3.5 text-graphite-600 group-hover:text-amber-400 transition" />
+                      <span className="text-white font-medium">{preset.label}</span>
+                      <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-[#A3E635] transition" />
                     </button>
                   ))}
                 </div>
@@ -561,29 +565,29 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
             >
               {/* User Message Bubble */}
               {msg.senderType === 'USER' ? (
-                <div className="max-w-2xl bg-graphite-900 border border-graphite-700 rounded-lg p-4 shadow-sm space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-mono text-graphite-400 pb-1 border-b border-graphite-800">
-                    <span className="text-amber-400 font-bold">OPERATING ENGINEER INQUIRY</span>
+                <div className="max-w-2xl bg-[#111722] border border-[#1E293B] rounded-xl p-4 shadow-sm space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pb-1 border-b border-[#1E293B]">
+                    <span className="text-[#A3E635] font-bold">OPERATING ENGINEER INQUIRY</span>
                     <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
                   </div>
-                  <p className="text-xs font-mono text-graphite-100 whitespace-pre-wrap leading-relaxed">
+                  <p className="text-xs font-sans text-white whitespace-pre-wrap leading-relaxed mt-1">
                     {msg.content}
                   </p>
                 </div>
               ) : (
                 /* Assistant Grounded Response Card */
-                <div className="w-full max-w-4xl bg-graphite-900/90 border border-graphite-700/80 rounded-lg p-5 shadow-lg space-y-4">
+                <div className="w-full max-w-4xl bg-[#0E1520] border border-[#1E293B] rounded-xl p-5 shadow-xl space-y-4">
                   {/* Status & Grounding Header */}
-                  <div className="flex items-center justify-between pb-3 border-b border-graphite-800">
+                  <div className="flex items-center justify-between pb-3 border-b border-[#1E293B]">
                     <div className="flex items-center gap-2">
-                      <FileCheck2 className="w-4 h-4 text-emerald-400" />
-                      <span className="text-xs font-mono font-bold text-graphite-100">
+                      <FileCheck2 className="w-4 h-4 text-[#A3E635]" />
+                      <span className="text-xs font-sans font-bold text-white tracking-wide">
                         VERIFIED INDUSTRIAL RESPONSE
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
                       {renderConfidenceBadge(msg.confidence)}
-                      <span className="text-[10px] font-mono text-graphite-500">
+                      <span className="text-[10px] font-mono text-slate-500">
                         {new Date(msg.createdAt).toLocaleTimeString()}
                       </span>
                     </div>
@@ -591,12 +595,12 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
 
                   {/* Conflict Alert Banner */}
                   {msg.conflictDetected && (
-                    <div className="p-3.5 rounded bg-amber-950/40 border-l-4 border-amber-500 text-xs font-mono space-y-1">
+                    <div className="p-3.5 rounded-lg bg-amber-950/40 border-l-4 border-amber-500 text-xs space-y-1">
                       <div className="flex items-center gap-1.5 text-amber-400 font-bold uppercase">
                         <AlertTriangle className="w-4 h-4" />
                         <span>DOCUMENTATION DISCREPANCY / CONFLICT IDENTIFIED</span>
                       </div>
-                      <p className="text-graphite-300 text-[11px] leading-relaxed">
+                      <p className="text-slate-300 text-[11px] leading-relaxed">
                         Contradictory specifications or outdated service bulletins detected between indexed sources.
                         Do not execute field adjustments without active engineering revision sign-off.
                       </p>
@@ -605,12 +609,12 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
 
                   {/* Insufficient Evidence State Banner */}
                   {msg.isInsufficientEvidence && (
-                    <div className="p-4 rounded bg-rose-950/30 border border-rose-800/80 text-xs font-mono space-y-2">
+                    <div className="p-4 rounded-lg bg-rose-950/30 border border-rose-800/80 text-xs space-y-2">
                       <div className="flex items-center gap-2 text-rose-400 font-bold">
                         <AlertTriangle className="w-4 h-4" />
                         <span>INSUFFICIENT PLANT DOCUMENTATION EVIDENCE</span>
                       </div>
-                      <p className="text-graphite-300 text-xs leading-relaxed">
+                      <p className="text-slate-300 text-xs leading-relaxed">
                         ForgeX safety policy strictly forbids hallucinating operational limits or assuming equipment telemetry.
                         The active plant index does not contain certified engineering evidence supporting this inquiry.
                       </p>
@@ -618,50 +622,50 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                   )}
 
                   {/* Structured Body Content */}
-                  <div className="text-xs leading-relaxed text-graphite-200 font-mono space-y-3 whitespace-pre-wrap">
+                  <div className="text-xs leading-relaxed text-slate-200 font-sans space-y-3 whitespace-pre-wrap">
                     {msg.content}
                   </div>
 
                   {/* Verified Citations Rail */}
                   {msg.citations && msg.citations.length > 0 && (
-                    <div className="pt-4 border-t border-graphite-800 space-y-2.5">
+                    <div className="pt-4 border-t border-[#1E293B] space-y-2.5">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-mono font-bold text-graphite-400 uppercase flex items-center gap-1.5">
-                          <Layers className="w-3.5 h-3.5 text-amber-400" />
+                        <span className="text-[10px] font-mono font-bold text-slate-400 uppercase flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-[#A3E635]" />
                           Auditable Source Evidence ({msg.citations.length} Verified References)
                         </span>
-                        <span className="text-[10px] font-mono text-emerald-400">100% Traceable</span>
+                        <span className="text-[10px] font-mono text-[#A3E635] font-bold">100% Traceable</span>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                         {msg.citations.map((cit, idx) => (
                           <div
                             key={cit.id || idx}
-                            className="p-3 rounded bg-graphite-950 border border-graphite-800 hover:border-amber-500/60 transition flex flex-col justify-between space-y-2 group"
+                            className="p-3.5 rounded-lg bg-[#111722] border border-[#1E293B] hover:border-[#A3E635]/60 transition flex flex-col justify-between space-y-2 group"
                           >
                             <div className="space-y-1">
                               <div className="flex items-center justify-between text-xs font-mono">
-                                <span className="font-bold text-amber-400 flex items-center gap-1">
-                                  <FileText className="w-3.5 h-3.5 text-amber-400" />
+                                <span className="font-bold text-[#A3E635] flex items-center gap-1">
+                                  <FileText className="w-3.5 h-3.5 text-slate-400" />
                                   {cit.documentNumber}
                                 </span>
-                                <span className="text-[10px] bg-graphite-900 border border-graphite-700 px-1.5 py-0.5 rounded text-graphite-300 font-semibold">
+                                <span className="text-[10px] bg-[#17212F] border border-[#233144] px-1.5 py-0.5 rounded text-slate-300 font-semibold">
                                   {cit.revisionTag || 'REV-A'} | Page {cit.pageNumber}
                                 </span>
                               </div>
 
-                              <div className="text-[11px] font-semibold text-graphite-300 line-clamp-1">
+                              <div className="text-[11px] font-semibold text-slate-200 line-clamp-1 font-sans">
                                 {cit.sectionHeading || cit.documentTitle}
                               </div>
 
-                              <p className="text-[11px] text-graphite-400 italic line-clamp-3 bg-graphite-900/60 p-2 rounded border border-graphite-850">
-                                "{cit.snippet}"
+                              <p className="text-[11px] text-slate-400 italic line-clamp-3 bg-[#0B0F15] p-2 rounded border border-[#1E293B]">
+                                &ldquo;{cit.snippet}&rdquo;
                               </p>
                             </div>
 
                             <button
                               onClick={() => setInspectedCitation(cit)}
-                              className="w-full py-1.5 bg-graphite-900 hover:bg-graphite-850 border border-graphite-700 hover:border-amber-400/50 rounded text-[11px] font-mono font-medium text-amber-400 flex items-center justify-center gap-1.5 transition"
+                              className="w-full py-1.5 bg-[#17212F] hover:bg-[#202C3E] border border-[#233144] hover:border-[#A3E635]/50 rounded text-[11px] font-mono font-medium text-[#A3E635] flex items-center justify-center gap-1.5 transition"
                             >
                               <ExternalLink className="w-3 h-3" />
                               Open Source Page {cit.pageNumber}
@@ -673,9 +677,9 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                   )}
 
                   {/* Operational Feedback Controls */}
-                  <div className="pt-3 border-t border-graphite-800/80 flex items-center justify-between text-xs font-mono">
+                  <div className="pt-3 border-t border-[#1E293B] flex items-center justify-between text-xs font-mono">
                     <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-graphite-500">Engineer Evaluation:</span>
+                      <span className="text-[11px] text-slate-400">Engineer Evaluation:</span>
                       {msg.feedback ? (
                         <div className="flex items-center gap-1.5 text-emerald-400 bg-emerald-950/50 border border-emerald-800 px-2 py-0.5 rounded text-[10px]">
                           <CheckCircle2 className="w-3 h-3" />
@@ -688,7 +692,7 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                               setFeedbackMessageId(msg.id);
                               setFeedbackRating('HELPFUL');
                             }}
-                            className="p-1.5 rounded hover:bg-graphite-800 text-graphite-400 hover:text-emerald-400 transition"
+                            className="p-1.5 rounded hover:bg-[#1E293B] text-slate-400 hover:text-emerald-400 transition"
                             title="Mark as Helpful & Verified"
                           >
                             <ThumbsUp className="w-3.5 h-3.5" />
@@ -698,7 +702,7 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                               setFeedbackMessageId(msg.id);
                               setFeedbackRating('UNHELPFUL');
                             }}
-                            className="p-1.5 rounded hover:bg-graphite-800 text-graphite-400 hover:text-rose-400 transition"
+                            className="p-1.5 rounded hover:bg-[#1E293B] text-slate-400 hover:text-rose-400 transition"
                             title="Report Inaccuracy or Hazard"
                           >
                             <ThumbsDown className="w-3.5 h-3.5" />
@@ -707,7 +711,7 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
                       )}
                     </div>
 
-                    <span className="text-[10px] text-graphite-500">
+                    <span className="text-[10px] text-slate-500 font-mono">
                       ID: {msg.id.slice(0, 16)}...
                     </span>
                   </div>
@@ -718,25 +722,25 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
 
           {/* Real-time Query Progress Indicator */}
           {isQuerying && (
-            <div className="p-4 rounded-lg bg-graphite-900 border border-amber-500/30 flex items-center gap-3 text-xs font-mono text-amber-400 animate-pulse max-w-md">
+            <div className="p-4 rounded-xl bg-[#111722] border border-[#A3E635]/30 flex items-center gap-3 text-xs font-sans text-[#A3E635] animate-pulse max-w-md">
               <RotateCw className="w-4 h-4 animate-spin" />
               <div className="space-y-0.5">
                 <span className="font-bold">GROUNDED INFERENCE IN PROGRESS</span>
-                <p className="text-[11px] text-graphite-300">{queryStep}</p>
+                <p className="text-[11px] text-slate-300 font-mono">{queryStep}</p>
               </div>
             </div>
           )}
 
           {/* Query Error Notification */}
           {queryError && (
-            <div className="p-3.5 rounded bg-rose-950/40 border border-rose-800 text-xs font-mono text-rose-300 flex items-center justify-between">
+            <div className="p-3.5 rounded-lg bg-rose-950/40 border border-rose-800 text-xs font-sans text-rose-300 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-rose-400" />
                 <span>{queryError}</span>
               </div>
               <button
                 onClick={() => setQueryError(null)}
-                className="text-graphite-400 hover:text-graphite-200"
+                className="text-slate-400 hover:text-white"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -747,20 +751,20 @@ Adhere strictly to active revision REV-B. Follow plant Lockout/Tagout protocol p
         </div>
 
         {/* Bottom Query Input Box */}
-        <div className="p-4 border-t border-graphite-800 bg-graphite-900/80">
-          <div className="flex items-center gap-2 max-w-5xl mx-auto">
+        <div className="p-4 border-t border-[#1E293B] bg-[#0E1520]">
+          <div className="flex items-center gap-3 max-w-5xl mx-auto">
             <input
               type="text"
               value={queryInput}
               onChange={(e) => setQueryInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSendQuery()}
               placeholder="Ask an operational question (e.g., 'What is the required seal oil delta pressure for Pump P-101?')..."
-              className="flex-1 px-4 py-2.5 bg-graphite-950 border border-graphite-700 rounded text-xs font-mono text-graphite-100 placeholder-graphite-500 focus:outline-none focus:border-amber-500 transition shadow-inner"
+              className="flex-1 px-4 py-2.5 bg-[#111722] border border-[#1E293B] rounded-lg text-xs font-sans text-white placeholder-slate-400 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
             />
             <button
               onClick={() => handleSendQuery()}
               disabled={isQuerying || !queryInput.trim()}
-              className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-graphite-950 font-mono font-bold text-xs rounded flex items-center gap-2 transition shadow-md shadow-amber-950/40"
+              className="px-5 py-2.5 bg-[#A3E635] hover:bg-[#bef264] disabled:opacity-50 disabled:cursor-not-allowed text-[#070B10] font-bold text-xs rounded-lg flex items-center gap-2 transition shadow-lg shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
               Query Copilot
