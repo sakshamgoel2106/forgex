@@ -71,7 +71,13 @@ export class AssetController {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error creating asset.';
-      const statusCode = msg.includes('belongs to another organization') || msg.includes('not found') ? 404 : 409;
+      const statusCode =
+        msg.includes('belongs to another organization') ||
+        msg.includes('does not belong to organization') ||
+        msg.includes('not found') ||
+        msg.includes('does not exist')
+          ? 404
+          : 409;
 
       res.status(statusCode).json({
         success: false,

@@ -8,6 +8,14 @@ import type {
   OrgRole,
   MembershipStatus,
   AssetOperationalState,
+  TechnicalDocument,
+  DocumentVersion,
+  DocumentPage,
+  KnowledgeChunk,
+  ProcessingJob,
+  DocumentType,
+  DocumentStatus,
+  ExtractionMethod,
 } from '@forgex/shared-types';
 
 export interface CreateOrganizationDTO {
@@ -58,6 +66,65 @@ export interface CreateAuditEventDTO {
   userAgent?: string;
 }
 
+export interface CreateDocumentDTO {
+  organizationId: string;
+  plantId: string;
+  documentNumber: string;
+  title: string;
+  category: DocumentType;
+  assetTags?: string[];
+  createdByUserId?: string | null;
+}
+
+export interface CreateDocumentVersionDTO {
+  documentId: string;
+  versionNumber: number;
+  revision: string;
+  filename: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  checksumSha256: string;
+  storageKey: string;
+  status?: DocumentStatus;
+}
+
+export interface CreateDocumentPageDTO {
+  documentVersionId: string;
+  pageNumber: number;
+  rawText: string;
+  sectionHeadings?: string[];
+  extractionMethod: ExtractionMethod;
+  hasTables?: boolean;
+  storageKey?: string | null;
+}
+
+export interface CreateKnowledgeChunkDTO {
+  documentVersionId: string;
+  pageNumber: number;
+  chunkIndex: number;
+  qdrantPointId: string;
+  content: string;
+  sectionHeading?: string | null;
+  isTable?: boolean;
+  isFigure?: boolean;
+  extractionMethod: ExtractionMethod;
+  tokenCount?: number;
+}
+
+export interface CreateProcessingJobDTO {
+  organizationId: string;
+  documentVersionId: string;
+  status?: DocumentStatus;
+  progressPercent?: number;
+  currentStep?: string;
+}
+
+export interface DocumentFilterOptions {
+  plantId?: string;
+  category?: DocumentType;
+  search?: string;
+}
+
 export interface IDataStore {
   // Organizations
   createOrganization(dto: CreateOrganizationDTO): Promise<Organization>;
@@ -87,4 +154,46 @@ export interface IDataStore {
   // Audit Events
   recordAuditEvent(dto: CreateAuditEventDTO): Promise<AuditEvent>;
   listAuditEvents(organizationId: string, limit?: number): Promise<AuditEvent[]>;
+
+  // Documents
+  createDocument(dto: CreateDocumentDTO): Promise<TechnicalDocument>;
+  getDocumentById(organizationId: string, documentId: string): Promise<TechnicalDocument | null>;
+  getDocumentByNumber(organizationId: string, documentNumber: string): Promise<TechnicalDocument | null>;
+  listDocuments(organizationId: string, filter?: DocumentFilterOptions): Promise<TechnicalDocument[]>;
+  deleteDocument(organizationId: string, documentId: string): Promise<boolean>;
+
+  // Document Versions
+  createDocumentVersion(dto: CreateDocumentVersionDTO): Promise<DocumentVersion>;
+  getDocumentVersionById(versionId: string): Promise<DocumentVersion | null>;
+  listDocumentVersions(documentId: string): Promise<DocumentVersion[]>;
+  updateDocumentVersionStatus(
+    versionId: string,
+    status: DocumentStatus,
+    totalPages?: number,
+    totalChunks?: number,
+    errorMessage?: string | null
+  ): Promise<DocumentVersion>;
+
+  // Document Pages
+  saveDocumentPages(pages: CreateDocumentPageDTO[]): Promise<DocumentPage[]>;
+  listDocumentPages(documentVersionId: string): Promise<DocumentPage[]>;
+  deleteDocumentPages(documentVersionId: string): Promise<void>;
+
+  // Knowledge Chunks
+  saveKnowledgeChunks(chunks: CreateKnowledgeChunkDTO[]): Promise<KnowledgeChunk[]>;
+  listKnowledgeChunks(documentVersionId: string): Promise<KnowledgeChunk[]>;
+  deleteKnowledgeChunks(documentVersionId: string): Promise<void>;
+
+  // Processing Jobs
+  createProcessingJob(dto: CreateProcessingJobDTO): Promise<ProcessingJob>;
+  getProcessingJobById(jobId: string): Promise<ProcessingJob | null>;
+  getLatestProcessingJobByVersion(documentVersionId: string): Promise<ProcessingJob | null>;
+  updateProcessingJobProgress(
+    jobId: string,
+    progressPercent: number,
+    currentStep?: string,
+    status?: DocumentStatus,
+    errorMessage?: string | null
+  ): Promise<ProcessingJob>;
+  incrementJobRetryCount(jobId: string): Promise<ProcessingJob>;
 }

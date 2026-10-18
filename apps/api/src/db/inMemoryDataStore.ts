@@ -6,6 +6,12 @@ import type {
   Plant,
   Asset,
   AuditEvent,
+  TechnicalDocument,
+  DocumentVersion,
+  DocumentPage,
+  KnowledgeChunk,
+  ProcessingJob,
+  DocumentStatus,
 } from '@forgex/shared-types';
 import type {
   IDataStore,
@@ -15,6 +21,12 @@ import type {
   CreatePlantDTO,
   CreateAssetDTO,
   CreateAuditEventDTO,
+  CreateDocumentDTO,
+  CreateDocumentVersionDTO,
+  CreateDocumentPageDTO,
+  CreateKnowledgeChunkDTO,
+  CreateProcessingJobDTO,
+  DocumentFilterOptions,
 } from './dataStore.interface.js';
 
 export class InMemoryDataStore implements IDataStore {
@@ -24,6 +36,13 @@ export class InMemoryDataStore implements IDataStore {
   private plants = new Map<string, Plant>();
   private assets = new Map<string, Asset>();
   private auditEvents: AuditEvent[] = [];
+
+  // Phase 3 Ingestion Data Sets
+  private documents = new Map<string, TechnicalDocument>();
+  private documentVersions = new Map<string, DocumentVersion>();
+  private documentPages = new Map<string, DocumentPage>();
+  private knowledgeChunks = new Map<string, KnowledgeChunk>();
+  private processingJobs = new Map<string, ProcessingJob>();
 
   // --------------------------------------------------------------------------
   // Organizations
@@ -62,12 +81,12 @@ export class InMemoryDataStore implements IDataStore {
   // Users
   // --------------------------------------------------------------------------
   public async createUser(dto: CreateUserDTO): Promise<User> {
-    for (const user of this.users.values()) {
-      if (user.externalAuthId === dto.externalAuthId) {
-        throw new Error(`User with external auth ID '${dto.externalAuthId}' already exists.`);
-      }
-      if (user.email === dto.email) {
+    for (const u of this.users.values()) {
+      if (u.email.toLowerCase() === dto.email.toLowerCase()) {
         throw new Error(`User with email '${dto.email}' already exists.`);
+      }
+      if (u.externalAuthId === dto.externalAuthId) {
+        throw new Error(`User with externalAuthId '${dto.externalAuthId}' already exists.`);
       }
     }
 
@@ -96,20 +115,12 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   // --------------------------------------------------------------------------
-  // Memberships
+  // Organization Memberships
   // --------------------------------------------------------------------------
   public async createMembership(dto: CreateMembershipDTO): Promise<OrganizationMembership> {
-    if (!this.organizations.has(dto.organizationId)) {
-      throw new Error(`Organization '${dto.organizationId}' not found.`);
-    }
-    if (!this.users.has(dto.userId)) {
-      throw new Error(`User '${dto.userId}' not found.`);
-    }
-
-    const key = `${dto.organizationId}:${dto.userId}`;
     for (const m of this.memberships.values()) {
-      if (`${m.organizationId}:${m.userId}` === key) {
-        throw new Error(`Membership already exists for user in organization.`);
+      if (m.organizationId === dto.organizationId && m.userId === dto.userId) {
+        throw new Error(`Membership already exists for user '${dto.userId}' in org '${dto.organizationId}'.`);
       }
     }
 
@@ -137,20 +148,20 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   public async listUserMemberships(userId: string): Promise<OrganizationMembership[]> {
-    return Array.from(this.memberships.values()).filter((m) => m.userId === userId);
+    const results: OrganizationMembership[] = [];
+    for (const m of this.memberships.values()) {
+      if (m.userId === userId) results.push(m);
+    }
+    return results;
   }
 
   // --------------------------------------------------------------------------
-  // Plants (Strict Organization Scoping)
+  // Plants
   // --------------------------------------------------------------------------
   public async createPlant(organizationId: string, dto: CreatePlantDTO): Promise<Plant> {
-    if (!this.organizations.has(organizationId)) {
-      throw new Error(`Organization '${organizationId}' not found.`);
-    }
-
     for (const p of this.plants.values()) {
-      if (p.organizationId === organizationId && p.code === dto.code) {
-        throw new Error(`Plant code '${dto.code}' already exists in this organization.`);
+      if (p.organizationId === organizationId && p.code.toLowerCase() === dto.code.toLowerCase()) {
+        throw new Error(`Plant with code '${dto.code}' already exists in this organization.`);
       }
     }
 
@@ -171,35 +182,37 @@ export class InMemoryDataStore implements IDataStore {
 
   public async getPlantById(organizationId: string, plantId: string): Promise<Plant | null> {
     const plant = this.plants.get(plantId);
-    if (!plant || plant.organizationId !== organizationId) {
-      return null;
-    }
+    if (!plant || plant.organizationId !== organizationId) return null;
     return plant;
   }
 
   public async listPlants(organizationId: string): Promise<Plant[]> {
-    return Array.from(this.plants.values()).filter((p) => p.organizationId === organizationId);
+    const list: Plant[] = [];
+    for (const p of this.plants.values()) {
+      if (p.organizationId === organizationId) list.push(p);
+    }
+    return list;
   }
 
   // --------------------------------------------------------------------------
-  // Assets (Strict Organization Scoping & Hierarchical Parent)
+  // Assets
   // --------------------------------------------------------------------------
   public async createAsset(organizationId: string, dto: CreateAssetDTO): Promise<Asset> {
     const plant = await this.getPlantById(organizationId, dto.plantId);
     if (!plant) {
-      throw new Error(`Plant '${dto.plantId}' not found or belongs to another organization.`);
+      throw new Error(`Plant '${dto.plantId}' does not exist or does not belong to organization.`);
+    }
+
+    for (const a of this.assets.values()) {
+      if (a.organizationId === organizationId && a.assetTag.toLowerCase() === dto.assetTag.toLowerCase()) {
+        throw new Error(`Asset with tag '${dto.assetTag}' already exists in this organization.`);
+      }
     }
 
     if (dto.parentAssetId) {
       const parent = await this.getAssetById(organizationId, dto.parentAssetId);
       if (!parent) {
-        throw new Error(`Parent asset '${dto.parentAssetId}' not found or belongs to another organization.`);
-      }
-    }
-
-    for (const a of this.assets.values()) {
-      if (a.organizationId === organizationId && a.assetTag === dto.assetTag) {
-        throw new Error(`Asset tag '${dto.assetTag}' already exists in this organization.`);
+        throw new Error(`Parent asset '${dto.parentAssetId}' does not belong to organization.`);
       }
     }
 
@@ -225,16 +238,20 @@ export class InMemoryDataStore implements IDataStore {
 
   public async getAssetById(organizationId: string, assetId: string): Promise<Asset | null> {
     const asset = this.assets.get(assetId);
-    if (!asset || asset.organizationId !== organizationId) {
-      return null;
-    }
+    if (!asset || asset.organizationId !== organizationId) return null;
     return asset;
   }
 
   public async listAssets(organizationId: string, plantId?: string): Promise<Asset[]> {
-    return Array.from(this.assets.values()).filter(
-      (a) => a.organizationId === organizationId && (!plantId || a.plantId === plantId)
-    );
+    const list: Asset[] = [];
+    for (const a of this.assets.values()) {
+      if (a.organizationId === organizationId) {
+        if (!plantId || a.plantId === plantId) {
+          list.push(a);
+        }
+      }
+    }
+    return list;
   }
 
   // --------------------------------------------------------------------------
@@ -264,6 +281,380 @@ export class InMemoryDataStore implements IDataStore {
       .reverse();
   }
 
+  // --------------------------------------------------------------------------
+  // Phase 3: Documents
+  // --------------------------------------------------------------------------
+  public async createDocument(dto: CreateDocumentDTO): Promise<TechnicalDocument> {
+    for (const doc of this.documents.values()) {
+      if (
+        doc.organizationId === dto.organizationId &&
+        doc.documentNumber.toLowerCase() === dto.documentNumber.toLowerCase()
+      ) {
+        throw new Error(
+          `Document with number '${dto.documentNumber}' already exists in this organization.`
+        );
+      }
+    }
+
+    const now = new Date().toISOString();
+    const doc: TechnicalDocument = {
+      id: crypto.randomUUID(),
+      organizationId: dto.organizationId,
+      plantId: dto.plantId,
+      documentNumber: dto.documentNumber,
+      title: dto.title,
+      category: dto.category,
+      assetTags: dto.assetTags ?? [],
+      createdByUserId: dto.createdByUserId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.documents.set(doc.id, doc);
+    return doc;
+  }
+
+  public async getDocumentById(organizationId: string, documentId: string): Promise<TechnicalDocument | null> {
+    const doc = this.documents.get(documentId);
+    if (!doc || doc.organizationId !== organizationId) return null;
+    return this.enrichDocument(doc);
+  }
+
+  public async getDocumentByNumber(organizationId: string, documentNumber: string): Promise<TechnicalDocument | null> {
+    for (const doc of this.documents.values()) {
+      if (
+        doc.organizationId === organizationId &&
+        doc.documentNumber.toLowerCase() === documentNumber.toLowerCase()
+      ) {
+        return this.enrichDocument(doc);
+      }
+    }
+    return null;
+  }
+
+  public async listDocuments(organizationId: string, filter?: DocumentFilterOptions): Promise<TechnicalDocument[]> {
+    const results: TechnicalDocument[] = [];
+    for (const doc of this.documents.values()) {
+      if (doc.organizationId !== organizationId) continue;
+      if (filter?.plantId && doc.plantId !== filter.plantId) continue;
+      if (filter?.category && doc.category !== filter.category) continue;
+      if (filter?.search) {
+        const query = filter.search.toLowerCase();
+        const matchesTitle = doc.title.toLowerCase().includes(query);
+        const matchesNum = doc.documentNumber.toLowerCase().includes(query);
+        if (!matchesTitle && !matchesNum) continue;
+      }
+      results.push(this.enrichDocument(doc));
+    }
+    // Return sorted newest first
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async deleteDocument(organizationId: string, documentId: string): Promise<boolean> {
+    const doc = this.documents.get(documentId);
+    if (!doc || doc.organizationId !== organizationId) return false;
+
+    // Cascade delete versions, pages, chunks, and jobs
+    for (const version of this.documentVersions.values()) {
+      if (version.documentId === documentId) {
+        await this.deleteDocumentPages(version.id);
+        await this.deleteKnowledgeChunks(version.id);
+        for (const job of this.processingJobs.values()) {
+          if (job.documentVersionId === version.id) {
+            this.processingJobs.delete(job.id);
+          }
+        }
+        this.documentVersions.delete(version.id);
+      }
+    }
+
+    this.documents.delete(documentId);
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Document Versions
+  // --------------------------------------------------------------------------
+  public async createDocumentVersion(dto: CreateDocumentVersionDTO): Promise<DocumentVersion> {
+    for (const v of this.documentVersions.values()) {
+      if (v.documentId === dto.documentId && v.versionNumber === dto.versionNumber) {
+        throw new Error(`Version number ${dto.versionNumber} already exists for document '${dto.documentId}'.`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const version: DocumentVersion = {
+      id: crypto.randomUUID(),
+      documentId: dto.documentId,
+      versionNumber: dto.versionNumber,
+      revision: dto.revision,
+      filename: dto.filename,
+      mimeType: dto.mimeType,
+      fileSizeBytes: dto.fileSizeBytes,
+      checksumSha256: dto.checksumSha256,
+      storageKey: dto.storageKey,
+      status: dto.status ?? 'QUEUED',
+      totalPages: 0,
+      totalChunks: 0,
+      errorMessage: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.documentVersions.set(version.id, version);
+    return version;
+  }
+
+  public async getDocumentVersionById(versionId: string): Promise<DocumentVersion | null> {
+    return this.documentVersions.get(versionId) ?? null;
+  }
+
+  public async listDocumentVersions(documentId: string): Promise<DocumentVersion[]> {
+    const list: DocumentVersion[] = [];
+    for (const v of this.documentVersions.values()) {
+      if (v.documentId === documentId) list.push(v);
+    }
+    return list.sort((a, b) => a.versionNumber - b.versionNumber);
+  }
+
+  public async updateDocumentVersionStatus(
+    versionId: string,
+    status: DocumentStatus,
+    totalPages?: number,
+    totalChunks?: number,
+    errorMessage?: string | null
+  ): Promise<DocumentVersion> {
+    const version = this.documentVersions.get(versionId);
+    if (!version) {
+      throw new Error(`Document version '${versionId}' not found.`);
+    }
+
+    version.status = status;
+    if (typeof totalPages === 'number') version.totalPages = totalPages;
+    if (typeof totalChunks === 'number') version.totalChunks = totalChunks;
+    if (errorMessage !== undefined) version.errorMessage = errorMessage;
+    version.updatedAt = new Date().toISOString();
+
+    this.documentVersions.set(versionId, version);
+    return version;
+  }
+
+  // --------------------------------------------------------------------------
+  // Document Pages
+  // --------------------------------------------------------------------------
+  public async saveDocumentPages(pages: CreateDocumentPageDTO[]): Promise<DocumentPage[]> {
+    const saved: DocumentPage[] = [];
+    const now = new Date().toISOString();
+
+    for (const p of pages) {
+      const id = crypto.randomUUID();
+      const page: DocumentPage = {
+        id,
+        documentVersionId: p.documentVersionId,
+        pageNumber: p.pageNumber,
+        rawText: p.rawText,
+        sectionHeadings: p.sectionHeadings ?? [],
+        extractionMethod: p.extractionMethod,
+        hasTables: p.hasTables ?? false,
+        storageKey: p.storageKey ?? null,
+        createdAt: now,
+      };
+      this.documentPages.set(id, page);
+      saved.push(page);
+    }
+    return saved;
+  }
+
+  public async listDocumentPages(documentVersionId: string): Promise<DocumentPage[]> {
+    const pages: DocumentPage[] = [];
+    for (const p of this.documentPages.values()) {
+      if (p.documentVersionId === documentVersionId) pages.push(p);
+    }
+    return pages.sort((a, b) => a.pageNumber - b.pageNumber);
+  }
+
+  public async deleteDocumentPages(documentVersionId: string): Promise<void> {
+    for (const [id, p] of this.documentPages.entries()) {
+      if (p.documentVersionId === documentVersionId) {
+        this.documentPages.delete(id);
+      }
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Knowledge Chunks
+  // --------------------------------------------------------------------------
+  public async saveKnowledgeChunks(chunks: CreateKnowledgeChunkDTO[]): Promise<KnowledgeChunk[]> {
+    const saved: KnowledgeChunk[] = [];
+    const now = new Date().toISOString();
+
+    for (const c of chunks) {
+      const id = crypto.randomUUID();
+      const chunk: KnowledgeChunk = {
+        id,
+        documentVersionId: c.documentVersionId,
+        pageNumber: c.pageNumber,
+        chunkIndex: c.chunkIndex,
+        qdrantPointId: c.qdrantPointId,
+        content: c.content,
+        sectionHeading: c.sectionHeading ?? null,
+        isTable: c.isTable ?? false,
+        isFigure: c.isFigure ?? false,
+        extractionMethod: c.extractionMethod,
+        tokenCount: c.tokenCount ?? 0,
+        createdAt: now,
+      };
+      this.knowledgeChunks.set(id, chunk);
+      saved.push(chunk);
+    }
+    return saved;
+  }
+
+  public async listKnowledgeChunks(documentVersionId: string): Promise<KnowledgeChunk[]> {
+    const chunks: KnowledgeChunk[] = [];
+    for (const c of this.knowledgeChunks.values()) {
+      if (c.documentVersionId === documentVersionId) chunks.push(c);
+    }
+    return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+  }
+
+  public async deleteKnowledgeChunks(documentVersionId: string): Promise<void> {
+    for (const [id, c] of this.knowledgeChunks.entries()) {
+      if (c.documentVersionId === documentVersionId) {
+        this.knowledgeChunks.delete(id);
+      }
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Processing Jobs
+  // --------------------------------------------------------------------------
+  public async createProcessingJob(dto: CreateProcessingJobDTO): Promise<ProcessingJob> {
+    const now = new Date().toISOString();
+    const job: ProcessingJob = {
+      id: crypto.randomUUID(),
+      organizationId: dto.organizationId,
+      documentVersionId: dto.documentVersionId,
+      status: dto.status ?? 'QUEUED',
+      progressPercent: dto.progressPercent ?? 0,
+      currentStep: dto.currentStep ?? 'Queued for processing',
+      retryCount: 0,
+      errorMessage: null,
+      startedAt: null,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.processingJobs.set(job.id, job);
+    return job;
+  }
+
+  public async getProcessingJobById(jobId: string): Promise<ProcessingJob | null> {
+    return this.processingJobs.get(jobId) ?? null;
+  }
+
+  public async getLatestProcessingJobByVersion(documentVersionId: string): Promise<ProcessingJob | null> {
+    let latest: ProcessingJob | null = null;
+    for (const j of this.processingJobs.values()) {
+      if (j.documentVersionId === documentVersionId) {
+        if (!latest || new Date(j.createdAt).getTime() > new Date(latest.createdAt).getTime()) {
+          latest = j;
+        }
+      }
+    }
+    return latest;
+  }
+
+  public async updateProcessingJobProgress(
+    jobId: string,
+    progressPercent: number,
+    currentStep?: string,
+    status?: DocumentStatus,
+    errorMessage?: string | null
+  ): Promise<ProcessingJob> {
+    const job = this.processingJobs.get(jobId);
+    if (!job) {
+      throw new Error(`Processing job '${jobId}' not found.`);
+    }
+
+    job.progressPercent = progressPercent;
+    if (currentStep) job.currentStep = currentStep;
+    if (status) {
+      job.status = status;
+      if (status === 'PROCESSING' && !job.startedAt) {
+        job.startedAt = new Date().toISOString();
+      }
+      if (status === 'INDEXED' || status === 'FAILED') {
+        job.completedAt = new Date().toISOString();
+      }
+    }
+    if (errorMessage !== undefined) {
+      job.errorMessage = errorMessage;
+    }
+    job.updatedAt = new Date().toISOString();
+
+    this.processingJobs.set(jobId, job);
+    return job;
+  }
+
+  public async incrementJobRetryCount(jobId: string): Promise<ProcessingJob> {
+    const job = this.processingJobs.get(jobId);
+    if (!job) throw new Error(`Processing job '${jobId}' not found.`);
+
+    job.retryCount += 1;
+    job.status = 'QUEUED';
+    job.progressPercent = 0;
+    job.currentStep = `Retry attempt #${job.retryCount}`;
+    job.errorMessage = null;
+    job.startedAt = null;
+    job.completedAt = null;
+    job.updatedAt = new Date().toISOString();
+
+    this.processingJobs.set(jobId, job);
+    return job;
+  }
+
+  // --------------------------------------------------------------------------
+  // Helpers
+  // --------------------------------------------------------------------------
+  private enrichDocument(doc: TechnicalDocument): TechnicalDocument {
+    // Find latest version
+    let latestVersion: DocumentVersion | undefined;
+    for (const v of this.documentVersions.values()) {
+      if (v.documentId === doc.id) {
+        if (!latestVersion || v.versionNumber > latestVersion.versionNumber) {
+          latestVersion = v;
+        }
+      }
+    }
+
+    let latestJob: ProcessingJob | undefined;
+    if (latestVersion) {
+      for (const j of this.processingJobs.values()) {
+        if (j.documentVersionId === latestVersion.id) {
+          if (!latestJob || new Date(j.createdAt).getTime() > new Date(latestJob.createdAt).getTime()) {
+            latestJob = j;
+          }
+        }
+      }
+    }
+
+    return {
+      ...doc,
+      latestVersion,
+      latestJob,
+      // Legacy compatibility fields
+      tenantId: doc.organizationId,
+      type: doc.category,
+      status: latestVersion?.status ?? 'QUEUED',
+      fileSizeBytes: latestVersion?.fileSizeBytes ?? 0,
+      mimeType: latestVersion?.mimeType ?? '',
+      storageKey: latestVersion?.storageKey ?? '',
+      checksumSha256: latestVersion?.checksumSha256 ?? '',
+      totalPages: latestVersion?.totalPages ?? 0,
+      totalChunks: latestVersion?.totalChunks ?? 0,
+      revision: latestVersion?.revision ?? 'REV-1',
+    };
+  }
+
   public clear(): void {
     this.organizations.clear();
     this.users.clear();
@@ -271,5 +662,10 @@ export class InMemoryDataStore implements IDataStore {
     this.plants.clear();
     this.assets.clear();
     this.auditEvents = [];
+    this.documents.clear();
+    this.documentVersions.clear();
+    this.documentPages.clear();
+    this.knowledgeChunks.clear();
+    this.processingJobs.clear();
   }
 }

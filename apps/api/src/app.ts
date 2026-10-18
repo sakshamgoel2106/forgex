@@ -12,10 +12,22 @@ import { createAuthMiddleware } from './middleware/auth.middleware.js';
 import { createPlantRouter } from './routes/plant.routes.js';
 import { createAssetRouter } from './routes/asset.routes.js';
 import { createAuditRouter } from './routes/audit.routes.js';
+import { createDocumentRouter } from './routes/document.routes.js';
+import type { IStorageAdapter } from './storage/storage.interface.js';
+import { createStorageAdapter } from './storage/storageFactory.js';
+import type { IEmbeddingAdapter } from './embeddings/embeddings.interface.js';
+import { createEmbeddingAdapter } from './embeddings/embeddingFactory.js';
+import type { IVectorStoreAdapter } from './vector/vectorStore.interface.js';
+import { createVectorStoreAdapter } from './vector/vectorStoreFactory.js';
+import { IngestionQueue } from './jobs/ingestionQueue.js';
 
 export interface AppDependencies {
   authAdapter?: IAuthAdapter;
   dataStore?: IDataStore;
+  storageAdapter?: IStorageAdapter;
+  embeddingAdapter?: IEmbeddingAdapter;
+  vectorStore?: IVectorStoreAdapter;
+  ingestionQueue?: IngestionQueue;
 }
 
 export function createApp(deps: AppDependencies = {}): express.Application {
@@ -23,6 +35,13 @@ export function createApp(deps: AppDependencies = {}): express.Application {
 
   const authAdapter = deps.authAdapter ?? createAuthAdapter(config);
   const dataStore = deps.dataStore ?? new InMemoryDataStore();
+  const storageAdapter = deps.storageAdapter ?? createStorageAdapter();
+  const embeddingAdapter = deps.embeddingAdapter ?? createEmbeddingAdapter();
+  const vectorStore = deps.vectorStore ?? createVectorStoreAdapter();
+  const ingestionQueue =
+    deps.ingestionQueue ??
+    new IngestionQueue(dataStore, storageAdapter, embeddingAdapter, vectorStore);
+
   const authenticate = createAuthMiddleware(authAdapter, dataStore);
 
   // Security hardening
@@ -61,6 +80,11 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   app.use('/api/v1/plants', authenticate, createPlantRouter(dataStore));
   app.use('/api/v1/assets', authenticate, createAssetRouter(dataStore));
   app.use('/api/v1/audit', authenticate, createAuditRouter(dataStore));
+  app.use(
+    '/api/v1/documents',
+    authenticate,
+    createDocumentRouter(dataStore, storageAdapter, ingestionQueue)
+  );
 
   // Global not found handler
   app.use((_req, res) => {
