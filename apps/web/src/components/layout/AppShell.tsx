@@ -47,7 +47,10 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   return (
     <TooltipProvider>
-      <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#06090E] text-slate-100 font-sans antialiased">
+      <div
+        className="flex flex-col h-screen w-screen overflow-hidden font-sans antialiased"
+        style={{ background: '#F0F2F5', color: '#0E1621' }}
+      >
         {/* Full-width Top Navigation Rail */}
         <TopBar
           activeModule={activeModule}
@@ -58,6 +61,8 @@ export const AppShell: React.FC<AppShellProps> = ({
           onOpenMobileNav={() => setMobileNavOpen(true)}
           onOpenHealthModal={() => setHealthModalOpen(true)}
           onNavigate={handleModuleSelect}
+          onToggleSidebar={toggleCollapse}
+          sidebarCollapsed={collapsed}
         />
 
         {/* Workspace Body: Left Sidebar + Main Content */}
@@ -78,7 +83,8 @@ export const AppShell: React.FC<AppShellProps> = ({
             <SheetContent
               side="left"
               showCloseButton={false}
-              className="p-0 w-64 bg-[#080D14] border-r border-[#182333]"
+              className="p-0 w-60 border-r border-[#243145]"
+              style={{ background: '#1B2537' }}
             >
               <Sidebar
                 activeModule={activeModule}
@@ -93,8 +99,11 @@ export const AppShell: React.FC<AppShellProps> = ({
             </SheetContent>
           </Sheet>
 
-          {/* Main Center & Right Workspaces */}
-          <main className="flex-1 overflow-hidden relative flex flex-col bg-[#06090E]">
+          {/* Main workspace content area */}
+          <main
+            className="flex-1 overflow-hidden relative flex flex-col"
+            style={{ background: '#F0F2F5' }}
+          >
             {children}
           </main>
         </div>

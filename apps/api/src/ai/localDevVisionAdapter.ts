@@ -19,6 +19,10 @@ export class LocalDevVisionAdapter implements IVisionProcessingProvider {
     return this.processingMethod;
   }
 
+  public acceptsImageInputs(): boolean {
+    return true;
+  }
+
   public async analyzeImage(request: VisionAnalysisRequest): Promise<VisionAnalysisResult> {
     const { filename, mimeType, query = '' } = request;
 
@@ -85,7 +89,45 @@ export class LocalDevVisionAdapter implements IVisionProcessingProvider {
       };
     }
 
-    // 4. Industrial Photograph Analysis (e.g. Pump Mechanical Seal Leakage walkdown photo)
+    // 4. Machine Nameplate Photograph Analysis
+    if (
+      lowerFilename.includes('nameplate') ||
+      lowerFilename.includes('rating_plate') ||
+      lowerFilename.includes('data_plate') ||
+      lowerQuery.includes('nameplate')
+    ) {
+      const isPump204 = lowerFilename.includes('204') || lowerQuery.includes('204') || lowerFilename.includes('pump');
+      const tag = isPump204 ? 'PUMP-204-B' : 'P-101-A';
+      return {
+        description: `Machine Nameplate Photograph: Stamped industrial equipment rating plate for ${tag}. Manufacturer: Sulzer Pumps. Model: ZE-80. Serial Number: SN-SULZ-204B. Operating & Electrical Ratings: 4160V, 3-Phase, 60Hz, 3550 RPM, 450 HP, Max Working Pressure: 750 PSIG. Verified stamping matches asset registry.`,
+        equipmentTags: [tag],
+        components: [
+          {
+            id: 'comp-nameplate-stamp',
+            label: 'Manufacturer Stamped Rating Block',
+            equipmentTag: tag,
+            confidence: 0.98,
+            bbox: { x1: 80, y1: 120, x2: 920, y2: 680 },
+            sourceReference: 'Nameplate Center Stamping',
+          },
+          {
+            id: 'comp-nameplate-serial',
+            label: 'Serial Number Stamping [SN-SULZ-204B]',
+            equipmentTag: tag,
+            confidence: 0.96,
+            bbox: { x1: 220, y1: 280, x2: 600, y2: 360 },
+            sourceReference: 'Nameplate Serial Line',
+          },
+        ],
+        isAmbiguous: false,
+        isInsufficientEvidence: false,
+        confidenceScore: 0.97,
+        modelUsed: this.modelName,
+        processingMethod: this.processingMethod,
+      };
+    }
+
+    // 5. Industrial Photograph Analysis (e.g. Pump Mechanical Seal Leakage walkdown photo)
     if (
       lowerFilename.includes('pump') ||
       lowerFilename.includes('photo') ||

@@ -1,35 +1,96 @@
 import { createApp } from './app.js';
-import { config } from './config/env.js';
+import { config, validateModeSpecificRequirements, getSanitizedConfig } from './config/env.js';
 import { logger } from './utils/logger.js';
 
-const app = createApp();
+import { createDataStore } from './db/dataStoreFactory.js';
+import { createStorageAdapter } from './storage/storageFactory.js';
+import { createEmbeddingAdapter } from './embeddings/embeddingFactory.js';
+import { createVectorStoreAdapter } from './vector/vectorStoreFactory.js';
+import { bootstrapInitialData } from './db/bootstrapData.js';
 
-const server = app.listen(config.PORT, config.HOST, () => {
-  logger.info(
-    {
-      port: config.PORT,
-      host: config.HOST,
-      env: config.NODE_ENV,
-      plantSite: config.PLANT_SITE_CODE,
-    },
-    '⚡ ForgeX AI Core API server online'
-  );
-});
+async function startServer() {
+  // 1. Validate environment requirements for configured deployment mode
+  try {
+    validateModeSpecificRequirements(config);
+    logger.info(
+      { config: getSanitizedConfig(config) },
+      'Deployment environment configuration validated successfully'
+    );
+  } catch (err: any) {
+    logger.fatal({ err: err?.message }, 'Fatal environment configuration validation failure');
+    process.exit(1);
+  }
 
-// Graceful shutdown handling
-function handleShutdown(signal: string) {
-  logger.info({ signal }, 'Termination signal received. Closing HTTP server cleanly...');
-  server.close(() => {
-    logger.info('HTTP server closed. Exiting process.');
-    process.exit(0);
+  // 2. Initialize DataStore with automated PostgreSQL migrations or dev fallback
+  const { dataStore, pool } = await createDataStore(config);
+  const storageAdapter = createStorageAdapter();
+  const embeddingAdapter = createEmbeddingAdapter();
+  const vectorStore = createVectorStoreAdapter();
+
+  // 3. Bootstrap initial data only if explicitly requested (disabled by default for clean registration)
+  if (process.env.BOOTSTRAP_DEMO_DATA === 'true') {
+    bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore).catch((err) => {
+      logger.error({ err }, 'Bootstrap seeding encountered an error');
+    });
+  } else {
+    logger.info('Clean start enabled: Demo data bootstrap skipped');
+  }
+
+  // 4. Construct Express Application
+  const app = createApp({
+    dataStore,
+    storageAdapter,
+    embeddingAdapter,
+    vectorStore,
   });
 
-  // Force close after 10s if sockets remain open
-  setTimeout(() => {
-    logger.error('Forced shutdown timeout exceeded. Terminating immediately.');
-    process.exit(1);
-  }, 10000).unref();
+  const server = app.listen(config.PORT, config.HOST, () => {
+    logger.info(
+      {
+        port: config.PORT,
+        host: config.HOST,
+        mode: config.DEPLOYMENT_MODE,
+        env: config.NODE_ENV,
+        authProvider: config.AUTH_PROVIDER,
+        inferenceProvider: config.INFERENCE_PROVIDER,
+        plantSite: config.PLANT_SITE_CODE,
+      },
+      '⚡ ForgeX AI Core API server online'
+    );
+  });
+
+  // 5. Graceful shutdown handling
+  let isShuttingDown = false;
+  async function handleShutdown(signal: string) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    logger.info({ signal }, 'Termination signal received. Closing HTTP server cleanly...');
+    server.close(async () => {
+      logger.info('HTTP server closed.');
+      if (pool) {
+        try {
+          await pool.end();
+          logger.info('PostgreSQL connection pool closed.');
+        } catch (poolErr) {
+          logger.error({ err: poolErr }, 'Error closing PostgreSQL pool');
+        }
+      }
+      process.exit(0);
+    });
+
+    // Force close after 10s if connections remain open
+    setTimeout(() => {
+      logger.error('Forced shutdown timeout exceeded. Terminating process.');
+      process.exit(1);
+    }, 10000).unref();
+  }
+
+  process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+  process.on('SIGINT', () => handleShutdown('SIGINT'));
 }
 
-process.on('SIGTERM', () => handleShutdown('SIGTERM'));
-process.on('SIGINT', () => handleShutdown('SIGINT'));
+startServer().catch((err) => {
+  logger.fatal({ err }, 'Unhandled error during server bootstrap');
+  process.exit(1);
+});

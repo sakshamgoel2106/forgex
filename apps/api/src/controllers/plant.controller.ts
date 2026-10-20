@@ -68,9 +68,17 @@ export class PlantController {
     const orgId = req.auth!.organization.id;
     const plants = await this.dataStore.listPlants(orgId);
 
+    const role = req.auth?.membership.role;
+    const assigned = req.auth?.membership.assignedPlantIds ?? [];
+    const isSupervisory = role === 'ORGANIZATION_OWNER' || role === 'ORGANIZATION_ADMIN';
+
+    const visiblePlants = (!isSupervisory && assigned.length > 0)
+      ? plants.filter((p) => assigned.includes(p.id) || assigned.includes(p.code))
+      : plants;
+
     res.status(200).json({
       success: true,
-      data: plants,
+      data: visiblePlants,
       timestamp: new Date().toISOString(),
       requestId: (req.headers['x-request-id'] as string) || 'req_plant',
     });
@@ -87,6 +95,23 @@ export class PlantController {
         error: {
           code: 'FORGEX_NOT_FOUND',
           message: 'Plant not found or does not belong to authorized organization.',
+        },
+        timestamp: new Date().toISOString(),
+        requestId: (req.headers['x-request-id'] as string) || 'req_plant',
+      });
+      return;
+    }
+
+    const role = req.auth?.membership.role;
+    const assigned = req.auth?.membership.assignedPlantIds ?? [];
+    const isSupervisory = role === 'ORGANIZATION_OWNER' || role === 'ORGANIZATION_ADMIN';
+
+    if (!isSupervisory && assigned.length > 0 && !assigned.includes(plant.id) && !assigned.includes(plant.code)) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORGEX_PLANT_ACCESS_DENIED',
+          message: `Access denied: You are not assigned to plant '${plant.code}'.`,
         },
         timestamp: new Date().toISOString(),
         requestId: (req.headers['x-request-id'] as string) || 'req_plant',

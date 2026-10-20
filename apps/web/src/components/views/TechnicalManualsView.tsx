@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   Filter,
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type { DocumentType, DocumentStatus, ExtractionMethod } from '@forgex/shared-types';
 import { StatusBadge } from '../ui/StatusBadge';
+import { apiFetch } from '../../lib/api';
 
 export interface DocumentPagePreview {
   pageNumber: number;
@@ -59,6 +60,7 @@ export interface HubDocument {
   updatedAt: string;
   pages: DocumentPagePreview[];
   chunks: ChunkInspection[];
+  versionId?: string;
 }
 
 const INITIAL_DOCUMENTS: HubDocument[] = [
@@ -268,6 +270,87 @@ export const TechnicalManualsView: React.FC = () => {
   const [uploadStepMessage, setUploadStepMessage] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  // Fetch real document list from backend
+  const fetchDocuments = async (selectDocId?: string) => {
+    try {
+      const res = await apiFetch('/api/v1/documents');
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data) && json.data.length > 0) {
+        const mapped: HubDocument[] = json.data.map((d: any) => {
+          const v = d.latestVersion || {};
+          const j = d.latestJob || {};
+          return {
+            id: d.id,
+            documentNumber: d.documentNumber,
+            title: d.title,
+            category: d.category || d.type || 'SOP',
+            revision: v.revision || d.revision || 'REV-A',
+            status: v.status || d.status || 'INDEXED',
+            plantCode: d.plantCode || d.plantId || 'PLANT-TX-04',
+            fileSizeBytes: v.fileSizeBytes || d.fileSizeBytes || 0,
+            mimeType: v.mimeType || d.mimeType || 'application/pdf',
+            checksum: v.checksumSha256 || d.checksumSha256 || 'sha256:verified',
+            totalPages: v.totalPages ?? d.totalPages ?? 0,
+            totalChunks: v.totalChunks ?? d.totalChunks ?? 0,
+            assetTags: d.assetTags || [],
+            errorMessage: v.errorMessage || j.errorMessage || null,
+            retryCount: j.retryCount || 0,
+            progressPercent: (v.status === 'INDEXED' || d.status === 'INDEXED') ? 100 : (j.progressPercent || 0),
+            currentStep: j.currentStep || (v.status === 'INDEXED' ? 'Vector indexing completed successfully' : 'Processing document'),
+            updatedAt: d.updatedAt ? new Date(d.updatedAt).toLocaleString() : 'Recent',
+            pages: [],
+            chunks: [],
+            versionId: v.id,
+          };
+        });
+
+        setDocuments(mapped);
+
+        const target = selectDocId
+          ? mapped.find((m) => m.id === selectDocId) || mapped[0]
+          : selectedDoc
+          ? mapped.find((m) => m.id === selectedDoc.id) || mapped[0]
+          : mapped[0];
+
+        setSelectedDoc(target);
+        if (target) {
+          loadPagesForDoc(target.id);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load documents from backend', err);
+    }
+  };
+
+  // Load real extracted pages for selected document
+  const loadPagesForDoc = async (docId: string) => {
+    try {
+      const res = await apiFetch(`/api/v1/documents/${docId}/pages`);
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        const pages: DocumentPagePreview[] = json.data.map((p: any) => ({
+          pageNumber: p.pageNumber,
+          rawText: p.rawText,
+          sectionHeadings: p.sectionHeadings || [],
+          extractionMethod: p.extractionMethod || 'NATIVE_TEXT',
+          hasTables: Boolean(p.hasTables),
+        }));
+
+        setDocuments((prev) =>
+          prev.map((d) => (d.id === docId ? { ...d, pages } : d))
+        );
+        setSelectedDoc((prev) => (prev?.id === docId ? { ...prev, pages } : prev));
+      }
+    } catch (err) {
+      console.error('Failed to load pages for document ' + docId, err);
+    }
+  };
+
+  // Initial load
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
   // Filtered documents
   const filteredDocs = documents.filter((doc) => {
     const matchesSearch =
@@ -284,8 +367,11 @@ export const TechnicalManualsView: React.FC = () => {
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
-  // Handle retry
-  const handleRetry = (docId: string) => {
+  // Handle retry with real backend API
+  const handleRetry = async (docId: string) => {
+    const targetDoc = documents.find((d) => d.id === docId);
+    if (!targetDoc) return;
+
     setDocuments((prev) =>
       prev.map((d) => {
         if (d.id !== docId) return d;
@@ -293,63 +379,71 @@ export const TechnicalManualsView: React.FC = () => {
           ...d,
           status: 'PROCESSING',
           progressPercent: 20,
-          currentStep: 'Retrying layout parsing and OCR...',
+          currentStep: 'Re-dispatching ingestion job to worker queue...',
           retryCount: d.retryCount + 1,
           errorMessage: null,
         };
       })
     );
 
-    // Simulate asynchronous pipeline retry
-    setTimeout(() => {
-      setDocuments((prev) =>
-        prev.map((d) => {
-          if (d.id !== docId) return d;
-          return {
-            ...d,
-            status: 'INDEXED',
-            progressPercent: 100,
-            currentStep: 'Successfully re-indexed and synchronized into Qdrant',
-            totalPages: 2,
-            totalChunks: 4,
-            errorMessage: null,
-            pages: [
-              {
-                pageNumber: 1,
-                rawText: `VFD-4160V HIGH VOLTAGE SCHEMATIC (RETRY SUCCESSFUL)\nTerminal blocks TB-1, TB-2, TB-3 verified.\nBreaker trip coil rated 125VDC.`,
-                sectionHeadings: ['HIGH VOLTAGE POWER CONNECTIONS'],
-                extractionMethod: 'NATIVE_TEXT',
-                hasTables: true,
-              },
-            ],
-            chunks: [
-              {
-                chunkIndex: 0,
-                qdrantPointId: '7ef7b833-4da9-40e3-b801-7e45f2b95ca0',
-                pageNumber: 1,
-                sectionHeading: 'HIGH VOLTAGE POWER CONNECTIONS',
-                content: 'Terminal blocks TB-1, TB-2, TB-3 verified. Breaker trip coil rated 125VDC.',
-                isTable: true,
-              },
-            ],
-          };
-        })
-      );
-    }, 1500);
+    try {
+      const versionId = targetDoc.versionId || 'v1';
+      const res = await apiFetch(`/api/v1/documents/${docId}/versions/${versionId}/retry`, {
+        method: 'POST',
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || 'Retry failed');
+      }
+
+      // Poll until finished
+      const poll = setInterval(async () => {
+        const checkRes = await apiFetch(`/api/v1/documents/${docId}`);
+        const checkJson = await checkRes.json();
+        if (checkRes.ok && checkJson.success) {
+          const current = checkJson.data;
+          const status = current.latestVersion?.status || current.status;
+          if (status === 'INDEXED' || status === 'FAILED') {
+            clearInterval(poll);
+            await fetchDocuments(docId);
+          }
+        }
+      }, 1000);
+    } catch (err: any) {
+      alert(`Retry request failed: ${err?.message}`);
+      await fetchDocuments(docId);
+    }
   };
 
-  // Handle delete document
-  const handleDeleteDoc = (docId: string) => {
+  // Handle delete document with real backend API
+  const handleDeleteDoc = async (docId: string) => {
     if (!confirm('Are you sure you want to delete this document and all associated Qdrant vector chunks?')) {
       return;
     }
-    setDocuments((prev) => prev.filter((d) => d.id !== docId));
-    if (selectedDoc?.id === docId) {
-      setSelectedDoc(documents.find((d) => d.id !== docId) || null);
+
+    try {
+      const res = await apiFetch(`/api/v1/documents/${docId}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || 'Delete failed');
+      }
+
+      setDocuments((prev) => prev.filter((d) => d.id !== docId));
+      if (selectedDoc?.id === docId) {
+        const remaining = documents.filter((d) => d.id !== docId);
+        setSelectedDoc(remaining[0] || null);
+        if (remaining[0]) {
+          loadPagesForDoc(remaining[0].id);
+        }
+      }
+    } catch (err: any) {
+      alert(`Delete failed: ${err?.message}`);
     }
   };
 
-  // Handle simulated upload
+  // Handle real upload submission
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadFile) {
@@ -364,162 +458,150 @@ export const TechnicalManualsView: React.FC = () => {
 
     setIsUploading(true);
     setUploadError(null);
-    setUploadProgress(10);
-    setUploadStepMessage('Verifying magic bytes and file integrity...');
+    setUploadProgress(15);
+    setUploadStepMessage('Uploading file and verifying magic-byte integrity...');
 
-    setTimeout(() => {
-      setUploadProgress(35);
-      setUploadStepMessage('Parsing page boundaries and headings...');
-    }, 400);
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadFile);
+      formData.append('documentNumber', uploadForm.documentNumber.toUpperCase());
+      formData.append('title', uploadForm.title);
+      formData.append('category', uploadForm.category);
+      formData.append('revision', uploadForm.revision || 'REV-A');
+      formData.append('plantId', uploadForm.plantCode || 'PLANT-TX-04');
+      formData.append('assetTags', uploadForm.assetTags || '');
 
-    setTimeout(() => {
-      setUploadProgress(65);
-      setUploadStepMessage('Preserving provenance and chunking content...');
-    }, 800);
-
-    setTimeout(() => {
-      setUploadProgress(85);
-      setUploadStepMessage('Generating BGE-M3 vector embeddings...');
-    }, 1200);
-
-    setTimeout(() => {
-      const isScanned = uploadFile.name.toLowerCase().includes('scan');
-      const isDocx = uploadFile.name.toLowerCase().endsWith('.docx');
-      const isImage = uploadFile.type.startsWith('image/');
-
-      const extractionMethod: ExtractionMethod = isScanned
-        ? 'OCR'
-        : isDocx
-        ? 'DOCX_XML'
-        : isImage
-        ? 'IMAGE_METADATA'
-        : uploadFile.name.endsWith('.md')
-        ? 'MARKDOWN_AST'
-        : 'NATIVE_TEXT';
-
-      const newDoc: HubDocument = {
-        id: `doc-${Date.now()}`,
-        documentNumber: uploadForm.documentNumber.toUpperCase(),
-        title: uploadForm.title,
-        category: uploadForm.category,
-        revision: uploadForm.revision,
-        status: 'INDEXED',
-        plantCode: uploadForm.plantCode,
-        fileSizeBytes: uploadFile.size,
-        mimeType: uploadFile.type || 'application/octet-stream',
-        checksum: `sha256:${Math.random().toString(16).substring(2, 14)}...verified`,
-        totalPages: 2,
-        totalChunks: 4,
-        assetTags: uploadForm.assetTags
-          ? uploadForm.assetTags.split(',').map((t) => t.trim())
-          : ['PLANT-GENERAL'],
-        retryCount: 0,
-        progressPercent: 100,
-        currentStep: 'Vector indexing completed successfully',
-        updatedAt: 'Just now',
-        pages: [
-          {
-            pageNumber: 1,
-            rawText: `[INGESTED DOCUMENT: ${uploadForm.documentNumber}]\nTitle: ${uploadForm.title}\nExtraction: ${extractionMethod}\nPage 1 Content: Verified industrial equipment operating procedure.\nAll Lockout/Tagout isolation steps confirmed before maintenance.`,
-            sectionHeadings: [`PROCEDURE: ${uploadForm.title}`],
-            extractionMethod,
-            hasTables: false,
-          },
-          {
-            pageNumber: 2,
-            rawText: `## SECTION 2: VERIFICATION CHECKPOINTS\n- Pressure differential limit: 15.0 PSID\n- Lubrication oil viscosity: ISO VG 46\n- Maximum vibration amplitude: 0.15 in/sec RMS`,
-            sectionHeadings: ['SECTION 2: VERIFICATION CHECKPOINTS'],
-            extractionMethod,
-            hasTables: true,
-          },
-        ],
-        chunks: [
-          {
-            chunkIndex: 0,
-            qdrantPointId: '46b5f78d-2c2f-4964-9052-b5160b532cbd',
-            pageNumber: 1,
-            sectionHeading: `PROCEDURE: ${uploadForm.title}`,
-            content: `Verified industrial equipment operating procedure for ${uploadForm.documentNumber}.`,
-            isTable: false,
-          },
-          {
-            chunkIndex: 1,
-            qdrantPointId: 'b982d3e7-7e21-47c3-9843-5e5435bec860',
-            pageNumber: 2,
-            sectionHeading: 'SECTION 2: VERIFICATION CHECKPOINTS',
-            content: 'Pressure differential limit: 15.0 PSID. Lubrication oil viscosity: ISO VG 46.',
-            isTable: true,
-          },
-        ],
-      };
-
-      setDocuments((prev) => [newDoc, ...prev]);
-      setSelectedDoc(newDoc);
-      setCurrentPageIndex(0);
-      setIsUploading(false);
-      setIsUploadModalOpen(false);
-      setUploadFile(null);
-      setUploadForm({
-        documentNumber: '',
-        title: '',
-        category: 'SOP',
-        revision: 'REV-A',
-        plantCode: 'PLANT-TX-04',
-        assetTags: '',
+      const res = await apiFetch('/api/v1/documents/upload', {
+        method: 'POST',
+        body: formData,
       });
-    }, 1600);
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || `Upload failed with HTTP ${res.status}`);
+      }
+
+      setUploadProgress(40);
+      setUploadStepMessage('Document stored. Dispatched to background ingestion queue...');
+
+      const uploadedDoc = json.data.document;
+
+      // Poll until indexing completes or fails
+      let attempts = 0;
+      const maxAttempts = 35;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        try {
+          const checkRes = await apiFetch(`/api/v1/documents/${uploadedDoc.id}`);
+          const checkJson = await checkRes.json();
+          if (checkRes.ok && checkJson.success) {
+            const current = checkJson.data;
+            const status = current.latestVersion?.status || current.status;
+            const progress = current.latestJob?.progressPercent ?? (status === 'INDEXED' ? 100 : 60);
+            const step = current.latestJob?.currentStep || (status === 'INDEXED' ? 'Vector indexing completed successfully' : 'Processing document...');
+
+            setUploadProgress(progress);
+            setUploadStepMessage(step);
+
+            if (status === 'INDEXED' || status === 'FAILED' || attempts >= maxAttempts) {
+              clearInterval(pollInterval);
+              setIsUploading(false);
+
+              if (status === 'FAILED') {
+                setUploadError(current.latestVersion?.errorMessage || current.latestJob?.errorMessage || 'Document processing failed.');
+              } else {
+                setIsUploadModalOpen(false);
+                setUploadFile(null);
+                setUploadForm({
+                  documentNumber: '',
+                  title: '',
+                  category: 'SOP',
+                  revision: 'REV-A',
+                  plantCode: uploadForm.plantCode,
+                  assetTags: '',
+                });
+                await fetchDocuments(uploadedDoc.id);
+              }
+            }
+          }
+        } catch (pollErr) {
+          console.error('Polling error', pollErr);
+        }
+      }, 800);
+    } catch (err: any) {
+      setIsUploading(false);
+      setUploadError(err?.message || 'Network error occurred during upload.');
+    }
   };
 
-  const currentPage =
-    selectedDoc?.pages && selectedDoc.pages.length > 0
-      ? selectedDoc.pages[currentPageIndex]
-      : null;
+  // Download original file payload
+  const handleDownloadOriginal = async (doc: HubDocument) => {
+    try {
+      const res = await apiFetch(`/api/v1/documents/${doc.id}/download`);
+      if (!res.ok) {
+        throw new Error(`Download failed with status ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${doc.documentNumber}_${doc.revision}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      alert(`Could not download document: ${err?.message || 'Unauthorized or file missing'}`);
+    }
+  };
+
+  const currentPage = selectedDoc?.pages?.[currentPageIndex] || null;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E] text-slate-100 font-sans">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7] text-[#1A202C] font-sans">
       {/* Top Action Bar */}
-      <div className="p-4 border-b border-[#182333] bg-[#070B10] flex flex-wrap items-center justify-between gap-4">
+      <div className="p-4 border-b border-[#E2E8F0] bg-white flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3 flex-1 min-w-[320px]">
           <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            <Search className="w-4 h-4 text-[#64748B] absolute left-3 top-2.5" />
             <input
               type="text"
               placeholder="Search by Document #, Title, or Asset Tag..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-[#0D141F] border border-[#182333] rounded-lg text-xs font-sans text-white placeholder-slate-400 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
+              className="w-full pl-9 pr-4 py-2 bg-white border border-[#CBD5E1] rounded-lg text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
             />
           </div>
 
           {/* Classification Filter */}
-          <div className="flex items-center gap-1.5 bg-[#0D141F] border border-[#182333] rounded-lg px-3 py-1.5">
-            <Filter className="w-3.5 h-3.5 text-slate-400" />
+          <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] rounded-lg px-3 py-1.5 shadow-sm">
+            <Filter className="w-3.5 h-3.5 text-[#64748B]" />
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="bg-transparent text-xs font-sans text-slate-200 outline-none cursor-pointer"
+              className="bg-transparent text-xs font-sans text-[#1A202C] outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-[#0D141F]">All Categories</option>
-              <option value="SOP" className="bg-[#0D141F]">SOPs</option>
-              <option value="OEM_MANUAL" className="bg-[#0D141F]">OEM Manuals</option>
-              <option value="SCHEMATIC_PID" className="bg-[#0D141F]">P&IDs</option>
-              <option value="WIRING_DIAGRAM" className="bg-[#0D141F]">Wiring Diagrams</option>
+              <option value="ALL">All Categories</option>
+              <option value="SOP">SOPs</option>
+              <option value="OEM_MANUAL">OEM Manuals</option>
+              <option value="SCHEMATIC_PID">P&IDs</option>
+              <option value="WIRING_DIAGRAM">Wiring Diagrams</option>
             </select>
           </div>
 
           {/* Status Filter */}
-          <div className="flex items-center gap-1.5 bg-[#0D141F] border border-[#182333] rounded-lg px-3 py-1.5">
-            <Clock className="w-3.5 h-3.5 text-slate-400" />
+          <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] rounded-lg px-3 py-1.5 shadow-sm">
+            <Clock className="w-3.5 h-3.5 text-[#64748B]" />
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="bg-transparent text-xs font-sans text-slate-200 outline-none cursor-pointer"
+              className="bg-transparent text-xs font-sans text-[#1A202C] outline-none cursor-pointer"
             >
-              <option value="ALL" className="bg-[#0D141F]">All Statuses</option>
-              <option value="INDEXED" className="bg-[#0D141F]">Indexed</option>
-              <option value="PROCESSING" className="bg-[#0D141F]">Processing</option>
-              <option value="FAILED" className="bg-[#0D141F]">Failed</option>
-              <option value="QUEUED" className="bg-[#0D141F]">Queued</option>
+              <option value="ALL">All Statuses</option>
+              <option value="INDEXED">Indexed</option>
+              <option value="PROCESSING">Processing</option>
+              <option value="FAILED">Failed</option>
+              <option value="QUEUED">Queued</option>
             </select>
           </div>
         </div>
@@ -527,7 +609,7 @@ export const TechnicalManualsView: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsUploadModalOpen(true)}
-            className="px-4 py-2 rounded-lg bg-[#A3E635] hover:bg-[#b2f043] text-[#06090E] text-xs font-bold flex items-center gap-2 shadow-[0_4px_16px_rgba(163,230,53,0.3)] transition"
+            className="px-4 py-2 rounded-lg bg-[#151C24] hover:bg-black text-white text-xs font-semibold flex items-center gap-2 shadow-sm transition"
           >
             <UploadCloud className="w-4 h-4" />
             Ingest Document
@@ -538,11 +620,11 @@ export const TechnicalManualsView: React.FC = () => {
       {/* Main Split Layout: Document List + Detail Inspector */}
       <div className="flex-1 flex overflow-hidden">
         {/* Document Table */}
-        <div className="flex-1 flex flex-col overflow-hidden border-r border-[#182333]">
+        <div className="flex-1 flex flex-col overflow-hidden border-r border-[#E2E8F0] bg-white">
           <div className="flex-1 overflow-y-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs font-sans">
               <thead>
-                <tr className="border-b border-[#182333] bg-[#0A0F17] sticky top-0 z-10 text-slate-400 font-sans text-[11px] uppercase tracking-wider">
+                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] sticky top-0 z-10 text-[#64748B] text-[11px] uppercase tracking-wider">
                   <th className="py-2.5 px-4 font-semibold">DOCUMENT #</th>
                   <th className="py-2.5 px-4 font-semibold">TITLE</th>
                   <th className="py-2.5 px-4 font-semibold">CLASS</th>
@@ -553,7 +635,7 @@ export const TechnicalManualsView: React.FC = () => {
                   <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#131E2C]">
+              <tbody className="divide-y divide-[#E2E8F0]">
                 {filteredDocs.map((doc) => {
                   const isSelected = selectedDoc?.id === doc.id;
                   const isFailed = doc.status === 'FAILED';
@@ -565,44 +647,47 @@ export const TechnicalManualsView: React.FC = () => {
                       onClick={() => {
                         setSelectedDoc(doc);
                         setCurrentPageIndex(0);
+                        if (!doc.pages || doc.pages.length === 0) {
+                          loadPagesForDoc(doc.id);
+                        }
                       }}
                       className={`cursor-pointer transition ${
                         isSelected
-                          ? 'bg-[#10241A] border-l-2 border-l-[#A3E635] text-white font-medium'
-                          : 'hover:bg-[#111B28]/70 text-slate-300'
+                          ? 'bg-blue-50/70 border-l-2 border-l-[#2563EB] text-[#1A202C] font-medium'
+                          : 'hover:bg-[#F8FAFC] text-[#1A202C]'
                       }`}
                     >
-                      <td className="py-3 px-4 font-mono font-semibold text-[#A3E635] flex items-center gap-2">
-                        <FileText className="w-3.5 h-3.5 text-slate-400" />
+                      <td className="py-3 px-4 font-mono font-semibold text-[#2563EB] flex items-center gap-2">
+                        <FileText className="w-3.5 h-3.5 text-[#64748B]" />
                         {doc.documentNumber}
                       </td>
-                      <td className="py-3 px-4 font-medium max-w-xs truncate text-white">
+                      <td className="py-3 px-4 font-medium max-w-xs truncate text-[#1A202C]">
                         {doc.title}
                       </td>
-                      <td className="py-3 px-4 font-mono text-[11px] text-slate-400">
+                      <td className="py-3 px-4 font-mono text-[11px] text-[#64748B]">
                         {doc.category}
                       </td>
-                      <td className="py-3 px-4 font-mono text-slate-300">{doc.revision}</td>
-                      <td className="py-3 px-4 font-mono text-cyan-400">
+                      <td className="py-3 px-4 font-mono text-[#64748B]">{doc.revision}</td>
+                      <td className="py-3 px-4 font-mono text-[#2563EB]">
                         {doc.assetTags[0] || '—'}
                       </td>
-                      <td className="py-3 px-4 font-mono text-slate-400">
+                      <td className="py-3 px-4 font-mono text-[#64748B]">
                         {doc.totalChunks > 0 ? `${doc.totalChunks} chunks` : '—'}
                       </td>
                       <td className="py-3 px-4">
                         {isFailed ? (
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-950/70 text-rose-400 border border-rose-800/80">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                             Failed
                           </span>
                         ) : isProcessing ? (
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-950/70 text-blue-400 border border-blue-800/80">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
                             Processing ({doc.progressPercent}%)
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-950/70 text-[#A3E635] border border-emerald-800/80">
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#A3E635]" />
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                             Indexed
                           </span>
                         )}
@@ -613,7 +698,7 @@ export const TechnicalManualsView: React.FC = () => {
                             <button
                               onClick={() => handleRetry(doc.id)}
                               title="Retry processing"
-                              className="p-1 rounded bg-[#1A2534] hover:bg-[#253448] text-amber-400 transition"
+                              className="p-1 rounded bg-[#F1F5F9] hover:bg-[#E2E8F0] text-amber-700 transition"
                             >
                               <RotateCw className="w-3.5 h-3.5" />
                             </button>
@@ -621,7 +706,7 @@ export const TechnicalManualsView: React.FC = () => {
                           <button
                             onClick={() => handleDeleteDoc(doc.id)}
                             title="Delete document"
-                            className="p-1 rounded bg-[#1A2534] hover:bg-[#253448] text-slate-400 hover:text-rose-400 transition"
+                            className="p-1 rounded bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#64748B] hover:text-rose-600 transition"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -635,13 +720,13 @@ export const TechnicalManualsView: React.FC = () => {
           </div>
 
           {/* Bottom Summary Bar */}
-          <div className="p-3 border-t border-[#1E293B] bg-[#0E1520] flex items-center justify-between text-xs font-mono text-slate-400">
+          <div className="p-3 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between text-xs font-sans text-[#64748B]">
             <span>{filteredDocs.length} Total Documents Cataloged</span>
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1 text-[#A3E635]">
+              <span className="flex items-center gap-1 text-[#0F766E] font-medium">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Tenant Isolated
               </span>
-              <span className="flex items-center gap-1 text-cyan-400">
+              <span className="flex items-center gap-1 text-[#2563EB] font-medium">
                 <Database className="w-3.5 h-3.5" /> Qdrant Index Live
               </span>
             </div>
@@ -650,19 +735,19 @@ export const TechnicalManualsView: React.FC = () => {
 
         {/* Right Detail Inspector & Page Navigator */}
         {selectedDoc ? (
-          <div className="w-[480px] bg-[#0E1520] flex flex-col justify-between overflow-y-auto border-l border-[#1E293B]">
+          <div className="w-[480px] bg-white flex flex-col justify-between overflow-y-auto border-l border-[#E2E8F0]">
             {/* Failure Alert Banner */}
             {selectedDoc.status === 'FAILED' && (
-              <div className="p-3 bg-crimson-950/60 border-b border-crimson-800/80 text-crimson-300 text-xs flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-crimson-400 flex-shrink-0 mt-0.5" />
+              <div className="p-3 bg-rose-50 border-b border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
                 <div className="flex-1">
-                  <div className="font-bold text-crimson-200">Processing Failure Detected</div>
-                  <div className="text-[11px] text-crimson-400/90 mt-0.5">
+                  <div className="font-bold text-rose-900">Processing Failure Detected</div>
+                  <div className="text-[11px] text-rose-700 mt-0.5">
                     {selectedDoc.errorMessage || 'An error occurred during vector generation.'}
                   </div>
                   <button
                     onClick={() => handleRetry(selectedDoc.id)}
-                    className="mt-2 px-2.5 py-1 rounded bg-crimson-600 hover:bg-crimson-500 text-white font-mono text-[11px] font-bold flex items-center gap-1.5 transition"
+                    className="mt-2 px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-sans text-[11px] font-bold flex items-center gap-1.5 transition shadow-sm"
                   >
                     <RotateCw className="w-3 h-3" /> Retry Ingestion
                   </button>
@@ -672,15 +757,15 @@ export const TechnicalManualsView: React.FC = () => {
 
             <div className="p-4 space-y-4">
               {/* Header */}
-              <div className="flex items-start justify-between pb-3 border-b border-graphite-800">
+              <div className="flex items-start justify-between pb-3 border-b border-[#E2E8F0]">
                 <div>
-                  <span className="text-[10px] font-mono text-amber-500 uppercase tracking-wider">
+                  <span className="text-[10px] font-sans text-amber-700 font-semibold uppercase tracking-wider">
                     Industrial Knowledge Record
                   </span>
-                  <h3 className="text-base font-bold text-graphite-100 font-mono mt-0.5">
+                  <h3 className="text-base font-bold text-[#1A202C] font-mono mt-0.5">
                     {selectedDoc.documentNumber}
                   </h3>
-                  <p className="text-xs text-graphite-300 mt-0.5">{selectedDoc.title}</p>
+                  <p className="text-xs text-[#64748B] mt-0.5">{selectedDoc.title}</p>
                 </div>
                 <StatusBadge
                   label={selectedDoc.status}
@@ -689,47 +774,47 @@ export const TechnicalManualsView: React.FC = () => {
               </div>
 
               {/* Version & Storage Integrity Metadata */}
-              <div className="grid grid-cols-3 gap-2 text-xs font-mono">
-                <div className="p-2 rounded bg-graphite-950 border border-graphite-800">
-                  <div className="text-[10px] text-graphite-500">REVISION</div>
-                  <div className="text-graphite-100 font-bold mt-0.5">{selectedDoc.revision}</div>
+              <div className="grid grid-cols-3 gap-2 text-xs font-sans">
+                <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                  <div className="text-[10px] text-[#64748B] font-semibold">REVISION</div>
+                  <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.revision}</div>
                 </div>
-                <div className="p-2 rounded bg-graphite-950 border border-graphite-800">
-                  <div className="text-[10px] text-graphite-500">PAGES</div>
-                  <div className="text-graphite-100 font-bold mt-0.5">{selectedDoc.totalPages}</div>
+                <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                  <div className="text-[10px] text-[#64748B] font-semibold">PAGES</div>
+                  <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.totalPages}</div>
                 </div>
-                <div className="p-2 rounded bg-graphite-950 border border-graphite-800">
-                  <div className="text-[10px] text-graphite-500">VECTORS</div>
-                  <div className="text-cyan-400 font-bold mt-0.5">{selectedDoc.totalChunks}</div>
+                <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                  <div className="text-[10px] text-[#64748B] font-semibold">VECTORS</div>
+                  <div className="text-[#2563EB] font-bold mt-0.5 font-mono">{selectedDoc.totalChunks}</div>
                 </div>
               </div>
 
               {/* Integrity SHA-256 Proof */}
-              <div className="p-2.5 rounded bg-graphite-950 border border-graphite-800 space-y-1 font-mono text-xs">
-                <div className="flex items-center justify-between text-[10px] text-graphite-500">
+              <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] space-y-1 font-sans text-xs">
+                <div className="flex items-center justify-between text-[10px] text-[#64748B] font-semibold">
                   <span>SHA-256 PROVENANCE CHECKSUM</span>
-                  <span className="text-emerald-400 flex items-center gap-1">
+                  <span className="text-[#0F766E] flex items-center gap-1 font-bold">
                     <ShieldCheck className="w-3 h-3" /> VERIFIED
                   </span>
                 </div>
-                <div className="text-[11px] text-graphite-300 break-all bg-graphite-900 p-1.5 rounded border border-graphite-850">
+                <div className="text-[11px] text-[#1A202C] font-mono break-all bg-white p-2 rounded border border-[#CBD5E1]">
                   {selectedDoc.checksum}
                 </div>
               </div>
 
               {/* Page Inspector with Navigation */}
               {selectedDoc.pages && selectedDoc.pages.length > 0 ? (
-                <div className="p-3 rounded bg-graphite-950 border border-graphite-800 space-y-3">
-                  <div className="flex items-center justify-between border-b border-graphite-850 pb-2">
+                <div className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] space-y-3">
+                  <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono font-bold text-amber-400">
+                      <span className="text-xs font-sans font-bold text-[#1A202C]">
                         Page {currentPage?.pageNumber} of {selectedDoc.totalPages}
                       </span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-graphite-800 text-graphite-300">
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#F1F5F9] text-[#64748B] border border-[#CBD5E1]">
                         {currentPage?.extractionMethod}
                       </span>
                       {currentPage?.hasTables && (
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-900/40 text-cyan-300 border border-cyan-800">
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
                           Table Detected
                         </span>
                       )}
@@ -739,7 +824,7 @@ export const TechnicalManualsView: React.FC = () => {
                       <button
                         onClick={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
                         disabled={currentPageIndex === 0}
-                        className="p-1 rounded bg-graphite-850 hover:bg-graphite-800 disabled:opacity-30 text-graphite-200 transition"
+                        className="p-1 rounded bg-white hover:bg-slate-100 disabled:opacity-30 text-[#1A202C] border border-[#CBD5E1] transition shadow-sm"
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
@@ -750,7 +835,7 @@ export const TechnicalManualsView: React.FC = () => {
                           )
                         }
                         disabled={currentPageIndex >= selectedDoc.pages.length - 1}
-                        className="p-1 rounded bg-graphite-850 hover:bg-graphite-800 disabled:opacity-30 text-graphite-200 transition"
+                        className="p-1 rounded bg-white hover:bg-slate-100 disabled:opacity-30 text-[#1A202C] border border-[#CBD5E1] transition shadow-sm"
                       >
                         <ChevronRight className="w-4 h-4" />
                       </button>
@@ -760,14 +845,14 @@ export const TechnicalManualsView: React.FC = () => {
                   {/* Section Headings on this page */}
                   {currentPage?.sectionHeadings && currentPage.sectionHeadings.length > 0 && (
                     <div>
-                      <span className="text-[10px] font-mono text-graphite-500 uppercase">
+                      <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
                         Preserved Headings:
                       </span>
                       <div className="flex flex-wrap gap-1 mt-1">
-                        {currentPage.sectionHeadings.map((h, i) => (
+                        {currentPage.sectionHeadings.map((h: string, i: number) => (
                           <span
                             key={i}
-                            className="text-[11px] font-mono px-2 py-0.5 rounded bg-graphite-900 text-graphite-300 border border-graphite-800"
+                            className="text-[11px] font-sans px-2 py-0.5 rounded bg-white text-[#1A202C] border border-[#CBD5E1]"
                           >
                             {h}
                           </span>
@@ -778,44 +863,47 @@ export const TechnicalManualsView: React.FC = () => {
 
                   {/* Raw Text Terminal Viewer */}
                   <div>
-                    <span className="text-[10px] font-mono text-graphite-500 uppercase">
+                    <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
                       Extracted Text Content:
                     </span>
-                    <pre className="mt-1 p-2.5 rounded bg-graphite-900 border border-graphite-850 text-[11px] font-mono text-graphite-200 whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed">
+                    <pre className="mt-1 p-2.5 rounded bg-white border border-[#CBD5E1] text-[11px] font-mono text-[#1A202C] whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed shadow-sm">
                       {currentPage?.rawText}
                     </pre>
                   </div>
                 </div>
               ) : (
-                <div className="p-4 rounded bg-graphite-950 border border-graphite-800 text-center text-xs font-mono text-graphite-500">
+                <div className="p-4 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-center text-xs font-sans text-[#64748B]">
                   No extracted pages available. Document status: {selectedDoc.status}.
                 </div>
               )}
 
               {/* Associated Plant Asset */}
-              <div className="p-2.5 rounded bg-graphite-950 border border-graphite-800 flex items-center justify-between text-xs">
+              <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between text-xs">
                 <div>
-                  <span className="text-[10px] font-mono text-graphite-500 uppercase">
+                  <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
                     Linked Plant & Asset
                   </span>
-                  <div className="font-mono text-xs font-bold text-cyan-400 mt-0.5">
+                  <div className="font-mono text-xs font-bold text-[#2563EB] mt-0.5">
                     {selectedDoc.plantCode} / {selectedDoc.assetTags.join(', ') || 'General Asset'}
                   </div>
                 </div>
-                <Cpu className="w-4 h-4 text-graphite-500" />
+                <Cpu className="w-4 h-4 text-[#64748B]" />
               </div>
             </div>
 
             {/* Footer Action */}
-            <div className="p-4 border-t border-graphite-800 bg-graphite-900/90">
-              <button className="w-full py-2 px-3 rounded bg-graphite-800 hover:bg-graphite-700 text-graphite-200 border border-graphite-700 text-xs font-mono font-medium flex items-center justify-center gap-2 transition">
-                <Download className="w-3.5 h-3.5 text-amber-400" />
+            <div className="p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]">
+              <button
+                onClick={() => handleDownloadOriginal(selectedDoc)}
+                className="w-full py-2 px-3 rounded-lg bg-white hover:bg-slate-50 text-[#1A202C] border border-[#CBD5E1] text-xs font-sans font-semibold flex items-center justify-center gap-2 transition shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5 text-[#2563EB]" />
                 Download Original File Payload
               </button>
             </div>
           </div>
         ) : (
-          <div className="w-[480px] bg-graphite-900/40 flex items-center justify-center text-xs font-mono text-graphite-500">
+          <div className="w-[480px] bg-[#F8FAFC] flex items-center justify-center text-xs font-sans text-[#64748B]">
             Select a document to inspect dossier and page provenance.
           </div>
         )}
@@ -823,19 +911,19 @@ export const TechnicalManualsView: React.FC = () => {
 
       {/* Upload & Ingestion Modal */}
       {isUploadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg bg-graphite-900 border border-graphite-700 rounded-lg shadow-2xl overflow-hidden flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg bg-white border border-[#E2E8F0] rounded-xl shadow-2xl overflow-hidden flex flex-col">
             {/* Modal Header */}
-            <div className="px-5 py-4 border-b border-graphite-800 flex items-center justify-between bg-graphite-950">
+            <div className="px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between bg-[#F8FAFC]">
               <div className="flex items-center gap-2">
-                <UploadCloud className="w-5 h-5 text-amber-400" />
-                <h3 className="text-sm font-bold font-mono text-graphite-100">
+                <UploadCloud className="w-5 h-5 text-[#2563EB]" />
+                <h3 className="text-sm font-bold font-sans text-[#1A202C]">
                   Ingest Industrial Technical Document
                 </h3>
               </div>
               <button
                 onClick={() => !isUploading && setIsUploadModalOpen(false)}
-                className="text-graphite-400 hover:text-graphite-200 transition"
+                className="text-[#64748B] hover:text-[#1A202C] transition p-1 rounded"
                 disabled={isUploading}
               >
                 <X className="w-4 h-4" />
@@ -843,20 +931,20 @@ export const TechnicalManualsView: React.FC = () => {
             </div>
 
             {/* Modal Body */}
-            <form onSubmit={handleUploadSubmit} className="p-5 space-y-4">
+            <form onSubmit={handleUploadSubmit} className="p-5 space-y-4 font-sans text-xs">
               {uploadError && (
-                <div className="p-2.5 rounded bg-crimson-950/80 border border-crimson-800 text-crimson-300 text-xs flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 text-rose-600" />
                   {uploadError}
                 </div>
               )}
 
               {/* Drag & Drop File Zone */}
               <div>
-                <label className="text-[11px] font-mono text-graphite-400 uppercase">
+                <label className="text-[11px] font-sans text-[#64748B] font-semibold uppercase">
                   Document File (PDF, DOCX, TXT, MD, PNG, JPG, WebP)
                 </label>
-                <div className="mt-1 border-2 border-dashed border-graphite-700 hover:border-amber-500/60 rounded-lg p-5 text-center bg-graphite-950 transition cursor-pointer relative">
+                <div className="mt-1 border-2 border-dashed border-[#CBD5E1] hover:border-[#2563EB] rounded-lg p-5 text-center bg-[#F8FAFC] transition cursor-pointer relative">
                   <input
                     type="file"
                     onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
@@ -864,17 +952,17 @@ export const TechnicalManualsView: React.FC = () => {
                     disabled={isUploading}
                   />
                   <div className="flex flex-col items-center">
-                    <FileCode className="w-8 h-8 text-amber-400/80 mb-2" />
+                    <FileCode className="w-8 h-8 text-[#2563EB] mb-2" />
                     {uploadFile ? (
-                      <div className="text-xs font-mono text-emerald-400 font-semibold">
+                      <div className="text-xs font-mono text-emerald-700 font-semibold">
                         Selected: {uploadFile.name} ({(uploadFile.size / 1024).toFixed(1)} KB)
                       </div>
                     ) : (
                       <>
-                        <div className="text-xs font-mono text-graphite-300">
+                        <div className="text-xs font-sans text-[#1A202C] font-medium">
                           Click to select or drag & drop industrial manual
                         </div>
-                        <div className="text-[10px] font-mono text-graphite-500 mt-1">
+                        <div className="text-[10px] font-sans text-[#64748B] mt-1">
                           Magic bytes verified. Max file size: 50MB
                         </div>
                       </>
@@ -884,9 +972,9 @@ export const TechnicalManualsView: React.FC = () => {
               </div>
 
               {/* Form Grid */}
-              <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+              <div className="grid grid-cols-2 gap-3 text-xs font-sans">
                 <div>
-                  <label className="text-graphite-400">DOCUMENT NUMBER *</label>
+                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">DOCUMENT NUMBER *</label>
                   <input
                     type="text"
                     required
@@ -895,19 +983,19 @@ export const TechnicalManualsView: React.FC = () => {
                     onChange={(e) =>
                       setUploadForm({ ...uploadForm, documentNumber: e.target.value })
                     }
-                    className="w-full mt-1 px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-200 focus:outline-none focus:border-amber-500"
+                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                     disabled={isUploading}
                   />
                 </div>
 
                 <div>
-                  <label className="text-graphite-400">CLASSIFICATION</label>
+                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">CLASSIFICATION</label>
                   <select
                     value={uploadForm.category}
                     onChange={(e) =>
                       setUploadForm({ ...uploadForm, category: e.target.value as DocumentType })
                     }
-                    className="w-full mt-1 px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-200 focus:outline-none focus:border-amber-500 cursor-pointer"
+                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] cursor-pointer"
                     disabled={isUploading}
                   >
                     <option value="SOP">SOP (Standard Operating Procedure)</option>
@@ -920,46 +1008,46 @@ export const TechnicalManualsView: React.FC = () => {
                 </div>
 
                 <div className="col-span-2">
-                  <label className="text-graphite-400">TECHNICAL TITLE *</label>
+                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">TECHNICAL TITLE *</label>
                   <input
                     type="text"
                     required
                     placeholder="e.g. Emergency Lubrication Oil Pump Replacement"
                     value={uploadForm.title}
                     onChange={(e) => setUploadForm({ ...uploadForm, title: e.target.value })}
-                    className="w-full mt-1 px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-200 focus:outline-none focus:border-amber-500"
+                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                     disabled={isUploading}
                   />
                 </div>
 
                 <div>
-                  <label className="text-graphite-400">TARGET PLANT</label>
+                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">TARGET PLANT</label>
                   <input
                     type="text"
                     value={uploadForm.plantCode}
                     onChange={(e) =>
                       setUploadForm({ ...uploadForm, plantCode: e.target.value })
                     }
-                    className="w-full mt-1 px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-200 focus:outline-none focus:border-amber-500"
+                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                     disabled={isUploading}
                   />
                 </div>
 
                 <div>
-                  <label className="text-graphite-400">REVISION</label>
+                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">REVISION</label>
                   <input
                     type="text"
                     value={uploadForm.revision}
                     onChange={(e) =>
                       setUploadForm({ ...uploadForm, revision: e.target.value })
                     }
-                    className="w-full mt-1 px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-200 focus:outline-none focus:border-amber-500"
+                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                     disabled={isUploading}
                   />
                 </div>
 
                 <div className="col-span-2">
-                  <label className="text-graphite-400">ASSOCIATED ASSET TAGS</label>
+                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">ASSOCIATED ASSET TAGS</label>
                   <input
                     type="text"
                     placeholder="e.g. PUMP-204-B, VALVE-101 (comma-separated)"
@@ -967,7 +1055,7 @@ export const TechnicalManualsView: React.FC = () => {
                     onChange={(e) =>
                       setUploadForm({ ...uploadForm, assetTags: e.target.value })
                     }
-                    className="w-full mt-1 px-3 py-1.5 rounded bg-graphite-950 border border-graphite-800 text-graphite-200 focus:outline-none focus:border-amber-500"
+                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                     disabled={isUploading}
                   />
                 </div>
@@ -975,16 +1063,16 @@ export const TechnicalManualsView: React.FC = () => {
 
               {/* Progress Indicator when uploading */}
               {isUploading && (
-                <div className="space-y-2 pt-2 border-t border-graphite-800">
-                  <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="text-amber-400 flex items-center gap-2">
+                <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
+                  <div className="flex items-center justify-between text-xs font-sans">
+                    <span className="text-[#2563EB] flex items-center gap-2 font-medium">
                       <RotateCw className="w-3.5 h-3.5 animate-spin" /> {uploadStepMessage}
                     </span>
-                    <span className="text-graphite-300 font-bold">{uploadProgress}%</span>
+                    <span className="text-[#1A202C] font-bold">{uploadProgress}%</span>
                   </div>
-                  <div className="w-full h-1.5 bg-graphite-800 rounded-full overflow-hidden">
+                  <div className="w-full h-1.5 bg-[#E2E8F0] rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-amber-500 transition-all duration-300 rounded-full"
+                      className="h-full bg-[#2563EB] transition-all duration-300 rounded-full"
                       style={{ width: `${uploadProgress}%` }}
                     />
                   </div>
@@ -992,11 +1080,11 @@ export const TechnicalManualsView: React.FC = () => {
               )}
 
               {/* Submit Buttons */}
-              <div className="pt-3 border-t border-graphite-800 flex items-center justify-end gap-2">
+              <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsUploadModalOpen(false)}
-                  className="px-4 py-1.5 rounded bg-graphite-800 hover:bg-graphite-700 text-graphite-300 text-xs font-mono transition"
+                  className="px-4 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#1A202C] text-xs font-semibold transition"
                   disabled={isUploading}
                 >
                   Cancel
@@ -1004,7 +1092,7 @@ export const TechnicalManualsView: React.FC = () => {
                 <button
                   type="submit"
                   disabled={isUploading}
-                  className="px-4 py-1.5 rounded bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-graphite-950 text-xs font-mono font-bold flex items-center gap-2 transition"
+                  className="px-4 py-1.5 rounded-lg bg-[#151C24] hover:bg-black disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-2 transition shadow-sm"
                 >
                   <UploadCloud className="w-4 h-4" />
                   {isUploading ? 'Ingesting...' : 'Start Ingestion Job'}

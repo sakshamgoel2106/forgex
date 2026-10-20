@@ -16,7 +16,7 @@ export interface S3Config {
 export class S3StorageAdapter implements IStorageAdapter {
   private fallbackAdapter: LocalStorageAdapter;
 
-  constructor(private config: S3Config) {
+  constructor(public readonly config: S3Config) {
     this.fallbackAdapter = new LocalStorageAdapter();
   }
 
@@ -35,10 +35,6 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   public async getSignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {
-    if (this.config.endpoint) {
-      const proto = this.config.useSsl ? 'https' : 'http';
-      return `${proto}://${this.config.endpoint}/${this.config.bucket}/${key}`;
-    }
     return this.fallbackAdapter.getSignedUrl(key, expiresInSeconds);
   }
 }

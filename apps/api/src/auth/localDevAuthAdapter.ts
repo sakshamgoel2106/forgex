@@ -9,6 +9,16 @@ export class LocalDevAuthAdapter implements IAuthAdapter {
   }
 
   public async verifyToken(token: string): Promise<AuthUser> {
+    if (token === 'local_dev_token') {
+      return {
+        id: 'user-dev-eng-1',
+        email: 'engineer@forgex.industrial',
+        emailVerified: true,
+        fullName: 'Lead Plant Engineer',
+        metadata: { role: 'ORGANIZATION_ADMIN' },
+      };
+    }
+
     try {
       const decoded = jwt.verify(token, this.jwtSecret) as jwt.JwtPayload;
 

@@ -69,17 +69,17 @@ export const SystemHealthView: React.FC = () => {
   }, []);
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-[#06090E] space-y-6">
+    <div className="flex-1 p-6 overflow-y-auto bg-[#F5F6F7] space-y-6">
       {/* Top Banner */}
-      <div className="flex items-center justify-between pb-4 border-b border-[#182333]">
+      <div className="flex items-center justify-between pb-4 border-b border-[#E2E8F0]">
         <div>
           <div className="flex items-center gap-2">
-            <Activity className="w-5 h-5 text-[#A3E635]" />
-            <h2 className="text-base font-bold font-mono text-white uppercase tracking-wide">
+            <Activity className="w-5 h-5 text-[#2563EB]" />
+            <h2 className="text-base font-bold font-mono text-[#1A202C] uppercase tracking-wide">
               Subsystem Diagnostic & Health Monitor
             </h2>
           </div>
-          <p className="text-xs text-slate-400 mt-1 font-mono">
+          <p className="text-xs text-[#64748B] mt-1 font-mono">
             Direct telemetry polling from ForgeX AI Core API (/api/v1/health)
           </p>
         </div>
@@ -87,16 +87,16 @@ export const SystemHealthView: React.FC = () => {
         <button
           onClick={fetchHealth}
           disabled={loading}
-          className="px-3.5 py-1.5 rounded-lg bg-[#0D141F] hover:bg-[#121B27] border border-[#182333] text-xs font-mono font-medium text-slate-200 flex items-center gap-2 transition"
+          className="px-3.5 py-1.5 rounded-lg bg-white hover:bg-slate-50 border border-[#E2E8F0] text-xs font-mono font-medium text-[#1A202C] flex items-center gap-2 transition shadow-sm"
         >
-          <RefreshCw className={`w-3.5 h-3.5 text-[#A3E635] ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 text-[#2563EB] ${loading ? 'animate-spin' : ''}`} />
           Probe Health
         </button>
       </div>
 
       {error && (
-        <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-800 text-amber-300 font-mono text-xs flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 font-mono text-xs flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <span>API Notice: {error} (Displaying local baseline telemetry)</span>
         </div>
       )}
@@ -104,10 +104,10 @@ export const SystemHealthView: React.FC = () => {
       {/* Primary KPI Cards */}
       {healthData && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-            <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">OVERALL SYSTEM</div>
+          <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] space-y-1 shadow-sm">
+            <div className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">OVERALL SYSTEM</div>
             <div className="flex items-center justify-between">
-              <span className="text-sm font-bold font-mono text-white">
+              <span className="text-sm font-bold font-mono text-[#1A202C]">
                 {healthData.status}
               </span>
               <StatusBadge
@@ -118,23 +118,23 @@ export const SystemHealthView: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-            <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">VERSION</div>
-            <div className="text-sm font-bold font-mono text-[#A3E635]">
+          <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] space-y-1 shadow-sm">
+            <div className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">VERSION</div>
+            <div className="text-sm font-bold font-mono text-[#2563EB]">
               v{healthData.version}
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-            <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">ENVIRONMENT</div>
-            <div className="text-sm font-bold font-mono text-[#A3E635] uppercase">
+          <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] space-y-1 shadow-sm">
+            <div className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">ENVIRONMENT</div>
+            <div className="text-sm font-bold font-mono text-[#2563EB] uppercase">
               {healthData.environment}
             </div>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-            <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">UPTIME</div>
-            <div className="text-sm font-bold font-mono text-white">
+          <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] space-y-1 shadow-sm">
+            <div className="text-[10px] font-mono text-[#64748B] uppercase tracking-wider">UPTIME</div>
+            <div className="text-sm font-bold font-mono text-[#1A202C]">
               {healthData.uptimeSeconds}s
             </div>
           </div>
@@ -144,77 +144,77 @@ export const SystemHealthView: React.FC = () => {
       {/* Subsystem Grid */}
       {healthData && (
         <div className="space-y-3">
-          <div className="text-xs font-mono font-semibold uppercase tracking-wider text-slate-400">
+          <div className="text-xs font-mono font-semibold uppercase tracking-wider text-[#64748B]">
             Registered Subsystems & Interfaces
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* PostgreSQL */}
-            <div className="p-4.5 rounded-xl bg-[#0D141F] border border-[#182333] space-y-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+            <div className="p-4.5 rounded-xl bg-white border border-[#E2E8F0] space-y-2 shadow-sm">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-mono font-bold text-white">
-                  <Database className="w-4 h-4 text-[#A3E635]" />
+                <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#1A202C]">
+                  <Database className="w-4 h-4 text-[#2563EB]" />
                   <span>PostgreSQL Relational Store</span>
                 </div>
                 <StatusBadge label={healthData.checks.database.status} tone="healthy" />
               </div>
-              <p className="text-xs text-slate-400 font-mono">
+              <p className="text-xs text-[#64748B] font-mono">
                 {healthData.checks.database.message}
               </p>
             </div>
 
             {/* Qdrant */}
-            <div className="p-4.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2">
+            <div className="p-4.5 rounded-xl bg-white border border-[#E2E8F0] space-y-2 shadow-sm">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-mono font-bold text-white">
-                  <Layers className="w-4 h-4 text-[#A3E635]" />
+                <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#1A202C]">
+                  <Layers className="w-4 h-4 text-[#2563EB]" />
                   <span>Qdrant Multimodal Vector Store</span>
                 </div>
                 <StatusBadge label={healthData.checks.vectorStore.status} tone="healthy" />
               </div>
-              <p className="text-xs text-slate-400 font-mono">
+              <p className="text-xs text-[#64748B] font-mono">
                 {healthData.checks.vectorStore.message}
               </p>
             </div>
 
             {/* Object Storage */}
-            <div className="p-4.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2">
+            <div className="p-4.5 rounded-xl bg-white border border-[#E2E8F0] space-y-2 shadow-sm">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-mono font-bold text-white">
-                  <HardDrive className="w-4 h-4 text-[#A3E635]" />
+                <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#1A202C]">
+                  <HardDrive className="w-4 h-4 text-[#2563EB]" />
                   <span>S3-Compatible Object Storage</span>
                 </div>
                 <StatusBadge label={healthData.checks.objectStorage.status} tone="healthy" />
               </div>
-              <p className="text-xs text-slate-400 font-mono">
+              <p className="text-xs text-[#64748B] font-mono">
                 {healthData.checks.objectStorage.message}
               </p>
             </div>
 
             {/* Redis Task Broker */}
-            <div className="p-4.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2">
+            <div className="p-4.5 rounded-xl bg-white border border-[#E2E8F0] space-y-2 shadow-sm">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-mono font-bold text-white">
-                  <Server className="w-4 h-4 text-[#A3E635]" />
+                <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#1A202C]">
+                  <Server className="w-4 h-4 text-[#2563EB]" />
                   <span>Redis 7 Task Broker & Queue</span>
                 </div>
                 <StatusBadge label={healthData.checks.redis?.status || 'UP'} tone="healthy" />
               </div>
-              <p className="text-xs text-slate-400 font-mono">
+              <p className="text-xs text-[#64748B] font-mono">
                 {healthData.checks.redis?.message || 'BullMQ queue broker active on port 6379'}
               </p>
             </div>
 
             {/* Inference Engine */}
-            <div className="p-4.5 rounded-xl bg-[#101722] border border-[#1E293B] space-y-2">
+            <div className="p-4.5 rounded-xl bg-white border border-[#E2E8F0] space-y-2 shadow-sm">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-mono font-bold text-white">
-                  <Cpu className="w-4 h-4 text-[#A3E635]" />
+                <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#1A202C]">
+                  <Cpu className="w-4 h-4 text-[#2563EB]" />
                   <span>Enterprise Inference Engine</span>
                 </div>
                 <StatusBadge label={healthData.checks.inferenceProvider.status} tone="healthy" />
               </div>
-              <p className="text-xs text-slate-400 font-mono">
+              <p className="text-xs text-[#64748B] font-mono">
                 {healthData.checks.inferenceProvider.message}
               </p>
             </div>

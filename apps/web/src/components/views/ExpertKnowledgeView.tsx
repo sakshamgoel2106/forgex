@@ -93,17 +93,17 @@ export const ExpertKnowledgeView: React.FC = () => {
   );
 
   return (
-    <div className="flex-1 p-5 md:p-6 overflow-y-auto bg-[#06090E] space-y-6">
+    <div className="flex-1 p-5 md:p-6 overflow-y-auto bg-[#F5F6F7] space-y-6">
       {/* Top Banner Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-[#182333] gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-[#E2E8F0] gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <GraduationCap className="w-5 h-5 text-[#A3E635]" />
-            <h2 className="text-base font-bold font-mono text-white uppercase tracking-wide">
+            <GraduationCap className="w-5 h-5 text-[#2563EB]" />
+            <h2 className="text-base font-bold font-mono text-[#1A202C] uppercase tracking-wide">
               Tribal & Expert Knowledge Repository
             </h2>
           </div>
-          <p className="text-xs text-slate-400 mt-0.5 font-mono">
+          <p className="text-xs text-[#64748B] mt-0.5 font-mono">
             Frontline field insights, lessons learned & undocumented machine behaviors
           </p>
         </div>
@@ -113,7 +113,7 @@ export const ExpertKnowledgeView: React.FC = () => {
           size="sm"
           onClick={() => setIsSubmitOpen(true)}
           leftIcon={<Plus className="w-3.5 h-3.5" />}
-          className="bg-[#A3E635] text-[#06090E] hover:bg-[#b2f043] font-bold rounded-lg shadow-[0_4px_16px_rgba(163,230,53,0.3)]"
+          className="bg-[#151C24] text-white hover:bg-black font-bold rounded-lg shadow-sm"
         >
           Submit Field Note
         </Button>
@@ -121,48 +121,48 @@ export const ExpertKnowledgeView: React.FC = () => {
 
       {/* Search Bar */}
       <div className="max-w-md relative">
-        <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
+        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
         <input
           type="text"
           placeholder="Search expert notes by equipment or topic..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-3 py-1.5 bg-[#0D141F] border border-[#182333] rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
+          className="w-full pl-9 pr-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
         />
       </div>
 
       {/* Grid of Expert Knowledge Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {filtered.map((note) => (
-          <div key={note.id} className="rounded-xl border border-[#182333] bg-[#0D141F] p-5 space-y-3 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+          <div key={note.id} className="rounded-xl border border-[#E2E8F0] bg-white p-5 space-y-3 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <span className="text-[10px] font-mono text-[#A3E635] uppercase font-bold tracking-wider">
+                <span className="text-[10px] font-mono text-[#2563EB] uppercase font-bold tracking-wider">
                   {note.category}
                 </span>
-                <h4 className="text-sm font-semibold text-white mt-0.5 leading-snug">
+                <h4 className="text-sm font-semibold text-[#1A202C] mt-0.5 leading-snug">
                   {note.title}
                 </h4>
               </div>
-              <span className="text-[10px] font-mono text-[#A3E635] bg-[#10241A] px-2 py-0.5 rounded border border-[#1E4D2B] shrink-0 font-bold">
+              <span className="text-[10px] font-mono text-[#1E293B] bg-slate-100 px-2 py-0.5 rounded border border-[#E2E8F0] shrink-0 font-bold">
                 {note.assetTag}
               </span>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+            <p className="text-xs text-[#475569] leading-relaxed font-sans">
               {note.content}
             </p>
 
-            <div className="pt-3 border-t border-[#182333] flex items-center justify-between text-[11px] font-mono text-slate-400">
+            <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between text-[11px] font-mono text-[#64748B]">
               <div className="flex items-center gap-1.5">
-                <User className="w-3.5 h-3.5 text-slate-400" />
+                <User className="w-3.5 h-3.5 text-[#64748B]" />
                 <span>{note.author}</span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="tabular-nums">{note.date}</span>
                 <button
                   onClick={() => handleUpvote(note.id)}
-                  className="flex items-center gap-1 text-[#A3E635] hover:underline font-bold"
+                  className="flex items-center gap-1 text-[#2563EB] hover:underline font-bold"
                 >
                   <ThumbsUp className="w-3 h-3" /> {note.upvotes}
                 </button>
@@ -181,7 +181,7 @@ export const ExpertKnowledgeView: React.FC = () => {
       >
         <form onSubmit={handleSubmitNote} className="space-y-4">
           <div>
-            <label className="block text-xs font-mono text-slate-400 uppercase mb-1">
+            <label className="block text-xs font-mono text-[#64748B] uppercase mb-1">
               Title / Subject
             </label>
             <input
@@ -190,13 +190,13 @@ export const ExpertKnowledgeView: React.FC = () => {
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               placeholder="e.g. Always purge bypass loop before closing suction valve"
-              className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635]"
+              className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-mono text-slate-400 uppercase mb-1">
+              <label className="block text-xs font-mono text-[#64748B] uppercase mb-1">
                 Equipment Tag
               </label>
               <input
@@ -204,27 +204,27 @@ export const ExpertKnowledgeView: React.FC = () => {
                 value={newTag}
                 onChange={(e) => setNewTag(e.target.value)}
                 placeholder="PUMP-204-B"
-                className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] font-mono"
+                className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] font-mono"
               />
             </div>
             <div>
-              <label className="block text-xs font-mono text-slate-400 uppercase mb-1">
+              <label className="block text-xs font-mono text-[#64748B] uppercase mb-1">
                 Category
               </label>
               <select
                 value={newCategory}
                 onChange={(e) => setNewCategory(e.target.value as any)}
-                className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs text-white focus:outline-none focus:border-[#A3E635] font-mono cursor-pointer"
+                className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
               >
-                <option value="RELIABILITY" className="bg-[#101722]">Reliability</option>
-                <option value="SAFETY_TIP" className="bg-[#101722]">Safety Tip</option>
-                <option value="TOOLING_HACK" className="bg-[#101722]">Tooling Hack</option>
+                <option value="RELIABILITY">Reliability</option>
+                <option value="SAFETY_TIP">Safety Tip</option>
+                <option value="TOOLING_HACK">Tooling Hack</option>
               </select>
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-mono text-slate-400 uppercase mb-1">
+            <label className="block text-xs font-mono text-[#64748B] uppercase mb-1">
               Observation & Field Guidance
             </label>
             <textarea
@@ -233,15 +233,15 @@ export const ExpertKnowledgeView: React.FC = () => {
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
               placeholder="Describe the operational symptom, root cause mechanism, and recommended field practice..."
-              className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] font-sans"
+              className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] font-sans"
             />
           </div>
 
-          <div className="flex justify-end gap-2 pt-2 border-t border-[#1E293B]">
-            <Button variant="ghost" size="sm" type="button" onClick={() => setIsSubmitOpen(false)} className="text-slate-400 hover:text-white">
+          <div className="flex justify-end gap-2 pt-2 border-t border-[#E2E8F0]">
+            <Button variant="ghost" size="sm" type="button" onClick={() => setIsSubmitOpen(false)} className="text-[#64748B] hover:text-[#1A202C]">
               Cancel
             </Button>
-            <Button variant="primary" size="sm" type="submit" className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold rounded-lg">
+            <Button variant="primary" size="sm" type="submit" className="bg-[#151C24] text-white hover:bg-black font-semibold rounded-lg shadow-sm">
               Publish Field Note
             </Button>
           </div>

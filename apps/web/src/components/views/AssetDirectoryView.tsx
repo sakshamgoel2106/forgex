@@ -1,81 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Search,
-  Activity,
-  Thermometer,
-  FileText,
   Filter,
+  Box,
+  FileCode,
+  QrCode,
+  Globe,
+  Plus,
+  ClipboardList,
+  ShieldAlert,
+  ShieldCheck,
+  Cpu,
 } from 'lucide-react';
+import { useAuth } from '../../lib/AuthContext';
 import { StatusBadge } from '../ui/StatusBadge';
-
-interface PlantAsset {
-  id: string;
-  tag: string;
-  name: string;
-  area: string;
-  manufacturer: string;
-  model: string;
-  state: 'OPTIMAL' | 'ADVISORY' | 'TRIPPED';
-  vibrationMmS: number;
-  tempCelsius: number;
-  linkedManualsCount: number;
-  lastOverhaul: string;
-}
-
-const ASSET_DATA: PlantAsset[] = [
-  {
-    id: 'ast-01',
-    tag: 'PUMP-204-B',
-    name: 'Centrifugal Slurry Bottoms Pump',
-    area: 'Primary Distillation Unit',
-    manufacturer: 'Flowserve Corp',
-    model: 'Mark 3 ANSI 3x2-10',
-    state: 'ADVISORY',
-    vibrationMmS: 4.8,
-    tempCelsius: 78.4,
-    linkedManualsCount: 4,
-    lastOverhaul: '2025-11-14',
-  },
-  {
-    id: 'ast-02',
-    tag: 'COMP-101-A',
-    name: 'Main Wet Gas Centrifugal Compressor',
-    area: 'Gas Recovery Plant',
-    manufacturer: 'Elliott Group',
-    model: '29M Multi-Stage Barrel',
-    state: 'OPTIMAL',
-    vibrationMmS: 1.2,
-    tempCelsius: 64.1,
-    linkedManualsCount: 9,
-    lastOverhaul: '2026-03-01',
-  },
-  {
-    id: 'ast-03',
-    tag: 'HEX-302-C',
-    name: 'High Pressure Reboiler Heat Exchanger',
-    area: 'Fractionation Train B',
-    manufacturer: 'Alfa Laval',
-    model: 'Compabloc CP75',
-    state: 'OPTIMAL',
-    vibrationMmS: 0.2,
-    tempCelsius: 142.0,
-    linkedManualsCount: 3,
-    lastOverhaul: '2026-05-18',
-  },
-  {
-    id: 'ast-04',
-    tag: 'VALV-551-ESD',
-    name: 'Emergency Shutdown Isolation Valve (SIL-3)',
-    area: 'Fuel Gas Header',
-    manufacturer: 'Fisher Emerson',
-    model: 'ET Cavitrol III Trim',
-    state: 'OPTIMAL',
-    vibrationMmS: 0.1,
-    tempCelsius: 32.5,
-    linkedManualsCount: 2,
-    lastOverhaul: '2026-01-10',
-  },
-];
+import { RealThreeDViewerModal } from './RealThreeDViewerModal';
+import { PidEngineeringViewerModal } from './PidEngineeringViewerModal';
+import { MachinePosterModal } from './MachinePosterModal';
+import { RegisterMachineModal } from './RegisterMachineModal';
+import { PublicLookupModal } from './PublicLookupModal';
+import { TaskManagementModal } from './TaskManagementModal';
+import type { Machine, MachineLedgerSummary, DataClassification, ComponentMapping } from '@forgex/shared-types';
 
 interface AssetDirectoryViewProps {
   onNavigateToCopilot?: (assetTag: string) => void;
@@ -83,116 +28,366 @@ interface AssetDirectoryViewProps {
 }
 
 export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedAsset, setSelectedAsset] = useState<PlantAsset>(ASSET_DATA[0]);
-  const [filterState, setFilterState] = useState<string>('ALL');
+  const { token, organization, isOwnerOrAdmin } = useAuth();
 
-  const filtered = ASSET_DATA.filter((a) => {
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [summary, setSummary] = useState<MachineLedgerSummary | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterClassification, setFilterClassification] = useState<string>('ALL');
+  const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
+  const [mappings, setMappings] = useState<ComponentMapping[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // Modals state
+  const [isRegisterOpen, setIsRegisterOpen] = useState(false);
+  const [isPublicLookupOpen, setIsPublicLookupOpen] = useState(false);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [isThreeDOpen, setIsThreeDOpen] = useState(false);
+  const [isPidOpen, setIsPidOpen] = useState(false);
+  const [pidInitialTag, setPidInitialTag] = useState<string | undefined>(undefined);
+  const [isPosterOpen, setIsPosterOpen] = useState(false);
+
+  useEffect(() => {
+    if (selectedMachine && token) {
+      fetch(`/api/v1/machines/${selectedMachine.id}/mappings`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(organization?.id ? { 'x-organization-id': organization.id } : {}),
+        },
+      })
+        .then((r) => r.json())
+        .then((json) => {
+          if (json.success && Array.isArray(json.data)) {
+            setMappings(json.data);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [selectedMachine?.id, token, organization?.id]);
+
+  const fetchLedger = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    try {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        ...(organization?.id ? { 'x-organization-id': organization.id } : {}),
+      };
+
+      const [machinesRes, summaryRes] = await Promise.all([
+        fetch('/api/v1/machines', { headers }),
+        fetch('/api/v1/machines/ledger/summary', { headers }),
+      ]);
+
+      if (machinesRes.ok) {
+        const mJson = await machinesRes.json();
+        if (mJson.success && Array.isArray(mJson.data)) {
+          setMachines(mJson.data);
+          if (mJson.data.length > 0 && !selectedMachine) {
+            setSelectedMachine(mJson.data[0]);
+          }
+        }
+      }
+
+      if (summaryRes.ok) {
+        const sJson = await summaryRes.json();
+        if (sJson.success && sJson.data) {
+          setSummary(sJson.data);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load machine ledger:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [token, organization?.id, selectedMachine]);
+
+  useEffect(() => {
+    fetchLedger();
+  }, [fetchLedger]);
+
+  const handleOpenPoster = (machine: Machine) => {
+    setSelectedMachine(machine);
+    setIsPosterOpen(true);
+  };
+
+  const handleOpen3D = (machine: Machine) => {
+    setSelectedMachine(machine);
+    setIsThreeDOpen(true);
+  };
+
+  const handleOpenPid = (machine: Machine, tag?: string) => {
+    setSelectedMachine(machine);
+    setPidInitialTag(tag);
+    setIsPidOpen(true);
+  };
+
+  const filteredMachines = machines.filter((m) => {
     const matchesSearch =
-      a.tag.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      a.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      a.area.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filterState === 'ALL' || a.state === filterState;
-    return matchesSearch && matchesFilter;
+      m.assetTag.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (m.manufacturer && m.manufacturer.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (m.building && m.building.toLowerCase().includes(searchTerm.toLowerCase()));
+
+    const matchesClassification =
+      filterClassification === 'ALL' || m.dataClassification === filterClassification;
+
+    return matchesSearch && matchesClassification;
   });
 
-  return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E]">
-      {/* Search & Filter Toolbar */}
-      <div className="p-3.5 border-b border-[#182333] bg-[#070B10] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
-        <div className="flex items-center gap-3 flex-1 min-w-[280px]">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5" />
-            <input
-              type="text"
-              placeholder="Filter by Tag, Machine Name, Area..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-[#0D141F] border border-[#182333] rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#A3E635] transition shadow-inner"
-            />
-          </div>
+  const getClassificationBadge = (classification: DataClassification) => {
+    switch (classification) {
+      case 'RESTRICTED':
+        return (
+          <span className="px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-bold">
+            RESTRICTED
+          </span>
+        );
+      case 'CONFIDENTIAL':
+        return (
+          <span className="px-2 py-0.5 rounded bg-purple-50 border border-purple-200 text-purple-700 text-[10px] font-bold">
+            CONFIDENTIAL
+          </span>
+        );
+      case 'INTERNAL':
+        return (
+          <span className="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">
+            INTERNAL
+          </span>
+        );
+      default:
+        return (
+          <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold">
+            PUBLIC
+          </span>
+        );
+    }
+  };
 
-          <div className="flex items-center gap-1.5 bg-[#0D141F] border border-[#182333] rounded-lg px-2.5 py-1">
-            <Filter className="w-3 h-3 text-slate-400" />
-            <select
-              value={filterState}
-              onChange={(e) => setFilterState(e.target.value)}
-              className="bg-transparent text-xs font-mono text-white outline-none cursor-pointer"
-            >
-              <option value="ALL" className="bg-[#0D141F]">All States</option>
-              <option value="OPTIMAL" className="bg-[#0D141F]">Optimal</option>
-              <option value="ADVISORY" className="bg-[#0D141F]">Advisory</option>
-              <option value="TRIPPED" className="bg-[#0D141F]">Tripped</option>
-            </select>
+  return (
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7]">
+      {/* Top Authoritative Machine Ledger Summary Cards */}
+      <div className="p-3.5 bg-white border-b border-[#E2E8F0] grid grid-cols-2 sm:grid-cols-5 gap-3 font-sans text-xs">
+        <div className="p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between shadow-sm">
+          <div>
+            <div className="text-[10px] text-[#64748B] uppercase font-semibold">Total Machines</div>
+            <div className="text-lg font-bold text-[#1A202C] tabular-nums">
+              {summary ? summary.totalMachines : machines.length}
+            </div>
           </div>
+          <Cpu className="w-5 h-5 text-[#2563EB]" />
         </div>
 
-        <div className="flex items-center gap-2 text-slate-400 text-[11px]">
-          <span>Showing <strong className="text-white font-mono tabular-nums">{filtered.length}</strong> of {ASSET_DATA.length} Assets</span>
+        <div className="p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between shadow-sm">
+          <div>
+            <div className="text-[10px] text-[#64748B] uppercase font-semibold">Docs Incomplete</div>
+            <div className="text-lg font-bold text-amber-600 tabular-nums">
+              {summary ? summary.incompleteDocumentationCount : machines.filter((m) => m.documentationReadiness !== 'READY').length}
+            </div>
+          </div>
+          <ShieldAlert className="w-5 h-5 text-amber-600" />
+        </div>
+
+        <div className="p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between shadow-sm">
+          <div>
+            <div className="text-[10px] text-[#64748B] uppercase font-semibold">Verified Specs</div>
+            <div className="text-lg font-bold text-emerald-600 tabular-nums">
+              {machines.filter((m) => m.verificationState === 'VERIFIED').length}
+            </div>
+          </div>
+          <ShieldCheck className="w-5 h-5 text-emerald-600" />
+        </div>
+
+        <div className="p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between shadow-sm">
+          <div>
+            <div className="text-[10px] text-[#64748B] uppercase font-semibold">3D Twins</div>
+            <div className="text-lg font-bold text-cyan-600 tabular-nums">
+              {summary ? summary.with3dModelCount : machines.filter((m) => m.hasModel3d).length}
+            </div>
+          </div>
+          <Box className="w-5 h-5 text-cyan-600" />
+        </div>
+
+        <div className="p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between shadow-sm">
+          <div>
+            <div className="text-[10px] text-[#64748B] uppercase font-semibold">Tasks Pending</div>
+            <div className="text-lg font-bold text-sky-600 tabular-nums">
+              {summary ? summary.pendingReviewTasksCount : 0}
+            </div>
+          </div>
+          <ClipboardList className="w-5 h-5 text-sky-600" />
         </div>
       </div>
 
-      {/* Main Split Layout: Asset Table + Inspector Drawer */}
+      {/* Action & Filter Toolbar */}
+      <div className="p-3 border-b border-[#E2E8F0] bg-white flex flex-wrap items-center justify-between gap-3 text-xs font-sans">
+        <div className="flex items-center gap-3 flex-1 min-w-[280px]">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="w-3.5 h-3.5 text-[#64748B] absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Filter by Tag, OEM, Building..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] rounded-lg px-2.5 py-1">
+            <Filter className="w-3 h-3 text-[#64748B]" />
+            <select
+              value={filterClassification}
+              onChange={(e) => setFilterClassification(e.target.value)}
+              className="bg-transparent text-xs font-sans text-[#1A202C] outline-none cursor-pointer"
+            >
+              <option value="ALL">All Classifications</option>
+              <option value="PUBLIC">Public</option>
+              <option value="INTERNAL">Internal</option>
+              <option value="CONFIDENTIAL">Confidential</option>
+              <option value="RESTRICTED">Restricted</option>
+            </select>
+          </div>
+          {loading && (
+            <span className="text-[10px] text-[#2563EB] font-mono animate-pulse">Syncing...</span>
+          )}
+        </div>
+
+        {/* Action Triggers */}
+        <div className="flex items-center gap-2">
+          {isOwnerOrAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => setIsPublicLookupOpen(true)}
+                className="px-3 py-1.5 bg-white hover:bg-slate-50 text-sky-700 border border-sky-300 rounded-lg flex items-center gap-1.5 transition text-xs font-semibold shadow-sm"
+              >
+                <Globe className="w-3.5 h-3.5 text-sky-600" />
+                <span>Public OEM Lookup</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsRegisterOpen(true)}
+                className="px-3.5 py-1.5 bg-[#151C24] hover:bg-black text-white rounded-lg flex items-center gap-1.5 transition text-xs font-semibold shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Register Machine</span>
+              </button>
+            </>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setIsTaskModalOpen(true)}
+            className="px-3 py-1.5 bg-white hover:bg-slate-50 text-[#1A202C] border border-[#CBD5E1] rounded-lg flex items-center gap-1.5 transition text-xs font-semibold shadow-sm"
+          >
+            <ClipboardList className="w-3.5 h-3.5 text-[#2563EB]" />
+            <span>Technician Tasks</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Table + Detail Panel */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Table of Assets */}
+        {/* Table of Machines */}
         <div className="flex-1 overflow-y-auto p-4">
-          <div className="rounded-xl border border-[#182333] bg-[#0D141F] overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-            <table className="w-full text-left border-collapse text-xs">
+          <div className="rounded-xl border border-[#E2E8F0] bg-white overflow-hidden shadow-sm">
+            <table className="w-full text-left border-collapse text-xs font-sans">
               <thead>
-                <tr className="border-b border-[#182333] bg-[#0A0F17] text-slate-400 font-mono text-[11px]">
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">ASSET TAG</th>
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">EQUIPMENT DESCRIPTION</th>
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">PLANT AREA</th>
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">MANUFACTURER / MODEL</th>
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">VIBRATION RMS</th>
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">TEMP</th>
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider">STATUS</th>
+                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B] text-[11px]">
+                  <th className="py-3 px-4 font-semibold uppercase">ASSET TAG</th>
+                  <th className="py-3 px-4 font-semibold uppercase">MACHINE NAME & TYPE</th>
+                  <th className="py-3 px-4 font-semibold uppercase">LOCATION</th>
+                  <th className="py-3 px-4 font-semibold uppercase">MANUFACTURER / MODEL</th>
+                  <th className="py-3 px-4 font-semibold uppercase">CLASSIFICATION</th>
+                  <th className="py-3 px-4 font-semibold uppercase">VERIFICATION</th>
+                  <th className="py-3 px-4 font-semibold uppercase text-right">DIGITAL TWINS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#131E2C] font-mono">
-                {filtered.map((asset) => {
-                  const isSelected = selectedAsset.id === asset.id;
+              <tbody className="divide-y divide-[#E2E8F0]">
+                {filteredMachines.map((m) => {
+                  const isSelected = selectedMachine?.id === m.id;
                   return (
                     <tr
-                      key={asset.id}
-                      onClick={() => setSelectedAsset(asset)}
+                      key={m.id}
+                      onClick={() => setSelectedMachine(m)}
                       className={`cursor-pointer transition ${
                         isSelected
-                          ? 'bg-[#10241A] border-l-2 border-l-[#A3E635] text-white'
-                          : 'hover:bg-[#111B28]/70 text-slate-300'
+                          ? 'bg-blue-50/70 border-l-2 border-l-[#2563EB] text-[#1A202C]'
+                          : 'hover:bg-[#F8FAFC] text-[#1A202C]'
                       }`}
                     >
-                      <td className="py-3 px-4 font-mono font-bold text-[#A3E635]">
-                        {asset.tag}
+                      <td className="py-3 px-4 font-mono font-bold text-[#2563EB]">
+                        <div className="flex items-center gap-1.5">
+                          <span>{m.assetTag}</span>
+                          <span className="text-[10px] text-[#64748B] font-normal">r{m.revision}</span>
+                        </div>
                       </td>
-                      <td className="py-3 px-4 font-medium text-white font-sans">
-                        {asset.name}
+                      <td className="py-3 px-4">
+                        <div className="font-sans font-medium text-[#1A202C]">{m.name}</div>
+                        <div className="text-[10px] text-[#64748B]">{m.machineType}</div>
                       </td>
-                      <td className="py-3 px-4 text-slate-400">
-                        {asset.area}
+                      <td className="py-3 px-4 text-[#64748B]">
+                        {m.building} • {m.productionLine}
                       </td>
-                      <td className="py-3 px-4 text-[11px] text-slate-400">
-                        {asset.manufacturer} {asset.model}
+                      <td className="py-3 px-4 text-[#1A202C]">
+                        {m.manufacturer || 'Unknown OEM'} {m.modelNumber ? `(${m.modelNumber})` : ''}
                       </td>
-                      <td className="py-3 px-4 tabular-nums">
-                        <span
-                          className={
-                            asset.vibrationMmS > 3.5
-                              ? 'text-amber-400 font-bold'
-                              : 'text-[#A3E635]'
-                          }
-                        >
-                          {asset.vibrationMmS.toFixed(1)} mm/s
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 tabular-nums text-white">
-                        {asset.tempCelsius.toFixed(1)} °C
+                      <td className="py-3 px-4">
+                        {getClassificationBadge(m.dataClassification)}
                       </td>
                       <td className="py-3 px-4">
                         <StatusBadge
-                          label={asset.state}
-                          tone={asset.state === 'OPTIMAL' ? 'healthy' : 'warning'}
+                          label={m.verificationState}
+                          tone={
+                            m.verificationState === 'VERIFIED'
+                              ? 'healthy'
+                              : m.verificationState === 'PARTIALLY_VERIFIED'
+                              ? 'warning'
+                              : 'critical'
+                          }
                         />
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {m.hasModel3d && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpen3D(m);
+                              }}
+                              className="p-1.5 rounded-lg bg-cyan-50 hover:bg-cyan-100 text-cyan-700 border border-cyan-200 transition"
+                              title="Launch 3D Digital Twin Viewer"
+                            >
+                              <Box className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {m.hasPidDiagram && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenPid(m);
+                              }}
+                              className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition"
+                              title="Launch P&ID Engineering Schematic"
+                            >
+                              <FileCode className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenPoster(m);
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#1A202C] border border-[#CBD5E1] transition"
+                            title="Generate Printable Machine QR Poster"
+                          >
+                            <QrCode className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -202,100 +397,177 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
           </div>
         </div>
 
-        {/* Right Asset Telemetry Inspector Panel */}
-        <div className="w-80 md:w-96 border-l border-[#182333] bg-[#070B10] p-5 space-y-4 overflow-y-auto shrink-0">
-          <div className="pb-3 border-b border-[#182333]">
-            <span className="text-[10px] font-mono text-[#A3E635] uppercase tracking-wider font-semibold">
-              Live Telemetry Inspector
-            </span>
-            <h3 className="text-base font-bold font-mono text-white mt-0.5">
-              {selectedAsset.tag}
-            </h3>
-            <p className="text-xs text-slate-400 mt-0.5">{selectedAsset.name}</p>
-          </div>
-
-          {/* Metric Badges */}
-          <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-            <div className="p-3.5 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-              <div className="text-[10px] text-slate-400 flex items-center gap-1 font-semibold uppercase tracking-wider">
-                <Activity className="w-3.5 h-3.5 text-[#A3E635]" />
-                VIBRATION RMS
+        {/* Right Detail Pane */}
+        {selectedMachine && (
+          <div className="w-80 md:w-96 border-l border-[#E2E8F0] bg-white p-5 space-y-4 overflow-y-auto shrink-0 font-sans text-xs">
+            <div className="pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-[#2563EB] uppercase font-bold tracking-wider">
+                  Machine Registry Record
+                </span>
+                {getClassificationBadge(selectedMachine.dataClassification)}
               </div>
-              <div
-                className={`text-xl font-bold tabular-nums ${
-                  selectedAsset.vibrationMmS > 3.5 ? 'text-amber-400' : 'text-[#A3E635]'
-                }`}
+              <h3 className="text-base font-bold font-mono text-[#1A202C] mt-1">
+                {selectedMachine.assetTag}
+              </h3>
+              <p className="text-xs text-[#64748B] font-sans mt-0.5">{selectedMachine.name}</p>
+            </div>
+
+            {/* Quick Digital Twin Action Buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleOpen3D(selectedMachine)}
+                className="p-2.5 rounded-xl bg-cyan-50 hover:bg-cyan-100 text-cyan-700 border border-cyan-200 font-semibold flex items-center justify-center gap-1.5 transition"
               >
-                {selectedAsset.vibrationMmS.toFixed(1)}{' '}
-                <span className="text-xs font-normal text-slate-400">mm/s</span>
-              </div>
+                <Box className="w-4 h-4 text-cyan-600" />
+                <span>3D Model Twin</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenPid(selectedMachine)}
+                className="p-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 font-semibold flex items-center justify-center gap-1.5 transition"
+              >
+                <FileCode className="w-4 h-4 text-amber-600" />
+                <span>P&ID Schematic</span>
+              </button>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-[#0D141F] border border-[#182333] space-y-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-              <div className="text-[10px] text-slate-400 flex items-center gap-1 font-semibold uppercase tracking-wider">
-                <Thermometer className="w-3.5 h-3.5 text-rose-400" />
-                BEARING TEMP
-              </div>
-              <div className="text-xl font-bold tabular-nums text-white">
-                {selectedAsset.tempCelsius.toFixed(1)}{' '}
-                <span className="text-xs font-normal text-slate-400">°C</span>
-              </div>
+            {/* QR Poster & Task Action */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleOpenPoster(selectedMachine)}
+                className="p-2 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] text-[#1A202C] flex items-center justify-center gap-1.5 transition"
+              >
+                <QrCode className="w-3.5 h-3.5 text-[#2563EB]" />
+                <span>Print QR Poster</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsTaskModalOpen(true)}
+                className="p-2 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] text-[#1A202C] flex items-center justify-center gap-1.5 transition"
+              >
+                <ClipboardList className="w-3.5 h-3.5 text-[#2563EB]" />
+                <span>Manage Tasks</span>
+              </button>
             </div>
-          </div>
 
-          {/* Machine Metadata Details */}
-          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-2 text-xs font-mono shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-            <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">
-              Equipment Specification
-            </div>
-            <div className="space-y-2 text-[11px]">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Manufacturer:</span>
-                <span className="text-white font-medium">{selectedAsset.manufacturer}</span>
+            {/* Machine Specs Box */}
+            <div className="p-4 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
+              <div className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider flex items-center justify-between">
+                <span>Verified Engineering Specs</span>
+                <span className="text-[#2563EB] text-[10px] font-mono">REV {selectedMachine.revision}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Model:</span>
-                <span className="text-white font-medium">{selectedAsset.model}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Plant Area:</span>
-                <span className="text-white font-medium">{selectedAsset.area}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Last Overhaul:</span>
-                <span className="text-white font-medium">{selectedAsset.lastOverhaul}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Associated Manuals & SOPs */}
-          <div className="p-4 rounded-xl bg-[#0D141F] border border-[#182333] space-y-3 text-xs font-mono shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
-            <div className="flex items-center justify-between">
-              <div className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">
-                Indexed Procedures ({selectedAsset.linkedManualsCount})
-              </div>
-              <FileText className="w-3.5 h-3.5 text-[#A3E635]" />
-            </div>
-            <div className="space-y-2">
-              <div className="p-2.5 rounded-lg bg-[#0A0F17] border border-[#182333] text-[11px] space-y-1">
-                <div className="flex justify-between text-[#A3E635] font-semibold">
-                  <span>SOP-MTR-042</span>
-                  <span className="text-[#A3E635] text-[10px] bg-[#10241A] px-1.5 py-0.5 rounded border border-[#1E4D2B]">VERIFIED</span>
+              <div className="space-y-1.5 text-[11px]">
+                <div className="flex justify-between">
+                  <span className="text-[#64748B]">OEM:</span>
+                  <span className="text-[#1A202C] font-medium">{selectedMachine.manufacturer || 'Unknown'}</span>
                 </div>
-                <div className="text-slate-200 text-[11px]">Mechanical Seal Overhaul & Star Torque</div>
-              </div>
-
-              <div className="p-2.5 rounded-lg bg-[#0A0F17] border border-[#182333] text-[11px] space-y-1">
-                <div className="flex justify-between text-[#A3E635] font-semibold">
-                  <span>OEM-MAN-883</span>
-                  <span className="text-slate-400 text-[10px] bg-[#131E2C] px-1.5 py-0.5 rounded border border-[#203044]">OEM REV C</span>
+                <div className="flex justify-between">
+                  <span className="text-[#64748B]">Model:</span>
+                  <span className="text-[#1A202C] font-medium">{selectedMachine.modelNumber || 'Unknown'}</span>
                 </div>
-                <div className="text-slate-200 text-[11px]">Flowserve Mark 3 ANSI Centrifugal Manual</div>
+                <div className="flex justify-between">
+                  <span className="text-[#64748B]">Serial No:</span>
+                  <span className="text-[#1A202C] font-medium">{selectedMachine.serialNumber || 'Unassigned'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#64748B]">Criticality:</span>
+                  <span className="text-[#1A202C] font-medium">{selectedMachine.criticality}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#64748B]">Readiness:</span>
+                  <span className="text-[#1A202C] font-medium">{selectedMachine.documentationReadiness}</span>
+                </div>
               </div>
             </div>
+
+            {/* Technical Specifications JSON envelope */}
+            {selectedMachine.technicalSpecs && Object.keys(selectedMachine.technicalSpecs).length > 0 && (
+              <div className="p-4 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
+                <span className="text-[#64748B] text-[10px] uppercase font-bold tracking-wider block">
+                  Promoted Technical Parameters
+                </span>
+                <div className="space-y-1 text-[11px]">
+                  {Object.entries(selectedMachine.technicalSpecs).map(([k, v]) => (
+                    <div key={k} className="flex justify-between py-0.5 border-b border-[#E2E8F0]">
+                      <span className="text-[#64748B] capitalize">{k.replace(/([A-Z])/g, ' $1')}:</span>
+                      <span className="text-[#2563EB] font-mono font-semibold">{String(v)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </div>
+
+
+      {/* Real 3D Viewer Modal */}
+      <RealThreeDViewerModal
+        isOpen={isThreeDOpen}
+        onClose={() => setIsThreeDOpen(false)}
+        machine={selectedMachine}
+        mappings={mappings}
+        onOpenPid={(tag: string) => {
+          setIsThreeDOpen(false);
+          handleOpenPid(selectedMachine!, tag);
+        }}
+      />
+
+      {/* P&ID Schematic Viewer Modal */}
+      <PidEngineeringViewerModal
+        isOpen={isPidOpen}
+        onClose={() => setIsPidOpen(false)}
+        machine={selectedMachine}
+        mappings={mappings}
+        activeTag={pidInitialTag}
+        onOpen3dComponent={(_comp: string) => {
+          setIsPidOpen(false);
+          handleOpen3D(selectedMachine!);
+        }}
+      />
+
+      {/* Machine QR Poster Modal */}
+      <MachinePosterModal
+        isOpen={isPosterOpen}
+        onClose={() => setIsPosterOpen(false)}
+        machine={selectedMachine}
+      />
+
+      {/* Register Machine Modal */}
+      <RegisterMachineModal
+        isOpen={isRegisterOpen}
+        onClose={() => setIsRegisterOpen(false)}
+        onMachineCreated={fetchLedger}
+        token={token}
+        organizationId={organization?.id}
+      />
+
+      {/* Public OEM Lookup Modal */}
+      <PublicLookupModal
+        isOpen={isPublicLookupOpen}
+        onClose={() => setIsPublicLookupOpen(false)}
+        machineId={selectedMachine?.id}
+        defaultManufacturer={selectedMachine?.manufacturer || 'Flowserve Corp'}
+        defaultModel={selectedMachine?.modelNumber || 'Mark 3 ANSI'}
+        token={token}
+        organizationId={organization?.id}
+        onKnowledgeApproved={fetchLedger}
+      />
+
+      {/* Task Management Modal */}
+      <TaskManagementModal
+        isOpen={isTaskModalOpen}
+        onClose={() => setIsTaskModalOpen(false)}
+        machineId={selectedMachine?.id}
+        machineTag={selectedMachine?.assetTag}
+        token={token}
+        organizationId={organization?.id}
+        isOwnerOrAdmin={isOwnerOrAdmin}
+        onTasksUpdated={fetchLedger}
+      />
     </div>
   );
 };

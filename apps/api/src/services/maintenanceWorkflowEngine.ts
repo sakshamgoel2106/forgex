@@ -10,6 +10,8 @@ import type {
   CaseApproval,
   CaseHistoryEntry,
   CreateMaintenanceCaseRequest,
+  AssignTechnicianRequest,
+  CloseCaseRequest,
   UpdateChecklistStepRequest,
   RecordFindingsRequest,
   ApproveCaseRequest,
@@ -41,7 +43,19 @@ export class MaintenanceWorkflowEngine {
     context: WorkflowContext
   ): Promise<MaintenanceCase> {
     const { organizationId, userId } = context;
-    const { plantId, assetId, title, severity = 'MEDIUM', symptomDescription, operatingConditions, visualAssetIds } = request;
+    const {
+      plantId,
+      assetId,
+      title,
+      description,
+      severity = 'MEDIUM',
+      symptomDescription,
+      operatingConditions,
+      visualAssetIds,
+      supportingDocumentIds,
+      assignedTechnicianUserId,
+      assignedTechnicianName,
+    } = request;
 
     // Validate plant and asset ownership
     const plant = await this.dataStore.getPlantById(organizationId, plantId);
@@ -64,12 +78,16 @@ export class MaintenanceWorkflowEngine {
       assetId,
       caseNumber,
       title,
+      description,
       severity,
       status: 'REPORTED',
       reportedByUserId: userId,
+      assignedTechnicianUserId: assignedTechnicianUserId || null,
+      assignedTechnicianName: assignedTechnicianName || null,
       symptomDescription,
       operatingConditions: operatingConditions || {},
       visualAssetIds: visualAssetIds || [],
+      supportingDocumentIds: supportingDocumentIds || [],
       checklist: [],
       candidateForExpertKnowledge: false,
     });
@@ -184,6 +202,32 @@ export class MaintenanceWorkflowEngine {
       }
     }
 
+    // 2b. High-risk scenario safety check: Flag high-risk hazards for mandatory human engineer review
+    const combinedSymptoms = `${existing.title} ${existing.symptomDescription}`.toLowerCase();
+    const isCriticalHighRisk =
+      combinedSymptoms.includes('high-voltage') ||
+      combinedSymptoms.includes('high voltage') ||
+      combinedSymptoms.includes('arc flash') ||
+      combinedSymptoms.includes('toxic gas') ||
+      combinedSymptoms.includes('hydrogen sulfide') ||
+      combinedSymptoms.includes('h2s') ||
+      combinedSymptoms.includes('hydrofluoric') ||
+      combinedSymptoms.includes('supercritical') ||
+      combinedSymptoms.includes('structural fracture') ||
+      combinedSymptoms.includes('casing rupture') ||
+      combinedSymptoms.includes('cryogenic spill');
+
+    if (isCriticalHighRisk) {
+      return this.escalateCase(
+        caseId,
+        {
+          reason:
+            'Critical High-Risk Hazard Detected: High-voltage, pressure-system, toxic chemical, or structural integrity risk requires approved site permit and qualified human engineer review.',
+        },
+        context
+      );
+    }
+
     const retrievedCitations = [...ragResult.assistantMessage.citations, ...visualCitations];
     const isInsufficientEvidence =
       ragResult.assistantMessage.isInsufficientEvidence || retrievedCitations.length === 0;
@@ -201,12 +245,12 @@ export class MaintenanceWorkflowEngine {
       );
     }
 
-    // 4. Synthesize Diagnostic Hypothesis
+    // 4. Synthesize Diagnostic Hypothesis (explicitly labeled as hypotheses)
     const primaryHypothesis = `Probable mechanical fault on ${assetTag} matching reported symptom '${existing.symptomDescription}'. Grounded in official maintenance standard.`;
     const rootCauses = [
-      'Excessive operational pressure or seal fluid weepage exceeding tolerance',
-      'Fatigue or mechanical vibration on primary drive or casing follower assembly',
-      'Seal flush plan pressure imbalance or valve misalignment',
+      'HYPOTHESIS 1: Excessive operational pressure or seal fluid weepage exceeding tolerance',
+      'HYPOTHESIS 2: Fatigue or mechanical vibration on primary drive or casing follower assembly',
+      'HYPOTHESIS 3: Seal flush plan pressure imbalance or valve misalignment',
     ];
 
     const missingInformation: string[] = [];
@@ -218,7 +262,9 @@ export class MaintenanceWorkflowEngine {
     const safetyCriticalWarnings = [
       'MANDATORY: Verify Zero Energy State and complete Lockout/Tagout (LOTO) before opening any casing or gland assembly.',
       'NEVER bypass safety interlocks, relief valves, or pressure isolation controls.',
-      'AI-generated guidance is an operational aid and does NOT replace authorized plant procedures or qualified personnel.',
+      'AI guidance is an operational aid and does NOT replace authorized plant procedures or qualified personnel.',
+      'AI does not autonomously control equipment or issue machine-control commands.',
+      'All diagnostic root causes are unverified hypotheses until physically inspected by authorized personnel.',
     ];
 
     const diagnosticHypothesis: DiagnosticHypothesis = {
@@ -450,17 +496,19 @@ export class MaintenanceWorkflowEngine {
 
     const isApproved = request.approved;
     const newStatus: MaintenanceCaseStatus = isApproved ? 'RESOLVED' : 'REJECTED';
+    const now = new Date().toISOString();
 
     const approval: CaseApproval = {
       status: isApproved ? 'APPROVED' : 'REJECTED',
       reviewedByUserId: userId,
-      reviewedAt: new Date().toISOString(),
+      reviewedAt: now,
       reviewerNotes: request.reviewerNotes || null,
     };
 
     const updated = await this.dataStore.updateMaintenanceCase(organizationId, caseId, {
       status: newStatus,
       approval,
+      resolvedAt: isApproved ? now : null,
     });
 
     await this.dataStore.recordCaseHistory({
@@ -488,7 +536,109 @@ export class MaintenanceWorkflowEngine {
   }
 
   /**
-   * 6. Human Escalation (Safety fallback / high-risk / missing SOP).
+   * 6. Assign Technician to Maintenance Case.
+   */
+  public async assignTechnician(
+    caseId: string,
+    request: AssignTechnicianRequest,
+    context: WorkflowContext
+  ): Promise<MaintenanceCase> {
+    const { organizationId, userId, userRole } = context;
+
+    if (userRole !== 'ORGANIZATION_ADMIN' && userRole !== 'ENGINEER_TECHNICIAN') {
+      throw new Error('Unauthorized: Only Organization Admins and qualified Engineers can assign technicians.');
+    }
+
+    const existing = await this.dataStore.getMaintenanceCaseById(organizationId, caseId);
+    if (!existing) {
+      throw new Error(`Maintenance case '${caseId}' not found.`);
+    }
+
+    const { technicianUserId, technicianName } = request;
+    if (!technicianUserId) {
+      throw new Error('Validation failed: technicianUserId is required.');
+    }
+
+    const updated = await this.dataStore.updateMaintenanceCase(organizationId, caseId, {
+      assignedTechnicianUserId: technicianUserId,
+      assignedTechnicianName: technicianName || null,
+    });
+
+    await this.dataStore.recordCaseHistory({
+      caseId,
+      userId,
+      previousStatus: existing.status,
+      newStatus: existing.status,
+      action: 'TECHNICIAN_ASSIGNED',
+      notes: `Assigned technician: ${technicianName || technicianUserId}`,
+    });
+
+    await this.dataStore.recordAuditEvent({
+      organizationId,
+      actorUserId: userId,
+      action: 'CASE_ASSIGNED',
+      resourceType: 'MAINTENANCE_CASE',
+      resourceId: caseId,
+      metadata: {
+        technicianUserId,
+        technicianName,
+      },
+    });
+
+    return updated!;
+  }
+
+  /**
+   * 7. Formally Close Case after Verification.
+   */
+  public async closeCase(
+    caseId: string,
+    request: CloseCaseRequest,
+    context: WorkflowContext
+  ): Promise<MaintenanceCase> {
+    const { organizationId, userId, userRole } = context;
+
+    if (userRole !== 'ORGANIZATION_ADMIN' && userRole !== 'ENGINEER_TECHNICIAN') {
+      throw new Error('Unauthorized: Only Organization Admins and qualified Engineers can close cases.');
+    }
+
+    const existing = await this.dataStore.getMaintenanceCaseById(organizationId, caseId);
+    if (!existing) {
+      throw new Error(`Maintenance case '${caseId}' not found.`);
+    }
+
+    const now = new Date().toISOString();
+    const updated = await this.dataStore.updateMaintenanceCase(organizationId, caseId, {
+      status: 'CLOSED',
+      closedAt: now,
+    });
+
+    await this.dataStore.recordCaseHistory({
+      caseId,
+      userId,
+      previousStatus: existing.status,
+      newStatus: 'CLOSED',
+      action: 'CASE_CLOSED',
+      notes: request.notes || 'Maintenance case verified and formally closed.',
+    });
+
+    await this.dataStore.recordAuditEvent({
+      organizationId,
+      actorUserId: userId,
+      action: 'CASE_CLOSED',
+      resourceType: 'MAINTENANCE_CASE',
+      resourceId: caseId,
+      metadata: {
+        closedAt: now,
+        notes: request.notes,
+      },
+    });
+
+    return updated!;
+  }
+
+  /**
+   * 8. Human Escalation (Safety fallback / high-risk / missing SOP).
    */
   public async escalateCase(
     caseId: string,
@@ -532,7 +682,7 @@ export class MaintenanceWorkflowEngine {
   }
 
   /**
-   * 7. Record Feedback and Nominate for Institutional Expert Knowledge.
+   * 9. Record Feedback and Nominate for Institutional Expert Knowledge.
    */
   public async recordFeedback(
     caseId: string,
@@ -569,7 +719,7 @@ export class MaintenanceWorkflowEngine {
   }
 
   /**
-   * 8. Retrieve Complete Case with Audit History and Verified Citations.
+   * 10. Retrieve Complete Case with Audit History and Verified Citations.
    */
   public async getCaseWithHistory(
     caseId: string,

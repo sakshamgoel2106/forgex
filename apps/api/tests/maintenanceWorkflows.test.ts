@@ -702,4 +702,144 @@ describe('Phase 6: Evidence-to-Action Workflows', () => {
       expect(listB.body.data.some((item: any) => item.id === c.id)).toBe(false);
     });
   });
+
+  describe('8. Technician Assignment & Lifecycle Timestamps', () => {
+    it('assigns qualified technician to case and filters cases by assigned technician', async () => {
+      const createRes = await request(app)
+        .post('/api/v1/maintenance/cases')
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .send({
+          plantId: plantA.id,
+          assetId: assetPumpA.id,
+          title: 'Pump P-101-A Overhaul Tech Assignment',
+          symptomDescription: 'Packing weepage detected.',
+        });
+      const caseId = createRes.body.data.id;
+
+      // Assign technician
+      const assignRes = await request(app)
+        .post(`/api/v1/maintenance/cases/${caseId}/assign`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .send({
+          technicianUserId: userEngineerA.id,
+          technicianName: 'Elena Rostova Lead Technician',
+        });
+
+      expect(assignRes.status).toBe(200);
+      expect(assignRes.body.data.assignedTechnicianUserId).toBe(userEngineerA.id);
+      expect(assignRes.body.data.assignedTechnicianName).toBe('Elena Rostova Lead Technician');
+
+      // Filter by technician
+      const filterRes = await request(app)
+        .get(`/api/v1/maintenance/cases?assignedTechnicianUserId=${userEngineerA.id}`)
+        .set('Authorization', `Bearer ${tokenEngineerA}`);
+
+      expect(filterRes.status).toBe(200);
+      expect(filterRes.body.data.some((item: any) => item.id === caseId)).toBe(true);
+
+      // Verify case history audit log
+      const historyRes = await request(app)
+        .get(`/api/v1/maintenance/cases/${caseId}`)
+        .set('Authorization', `Bearer ${tokenEngineerA}`);
+      const actions = historyRes.body.data.history.map((h: any) => h.action);
+      expect(actions).toContain('TECHNICIAN_ASSIGNED');
+    });
+
+    it('records resolvedAt on supervisor approval and closedAt on case formal closure', async () => {
+      const c = await maintenanceEngine.createCase(
+        {
+          plantId: plantA.id,
+          assetId: assetPumpA.id,
+          title: 'Lifecycle Timestamps Verification',
+          symptomDescription: 'Testing timestamp tracking.',
+        },
+        { organizationId: orgA.id, userId: userEngineerA.id, userRole: 'ENGINEER_TECHNICIAN' }
+      );
+      await maintenanceEngine.diagnoseCase(c.id, {
+        organizationId: orgA.id,
+        userId: userEngineerA.id,
+      });
+      await maintenanceEngine.recordFindingsAndSubmit(
+        c.id,
+        { resolutionSummary: 'Testing resolution timestamp.' },
+        { organizationId: orgA.id, userId: userEngineerA.id }
+      );
+
+      // Supervisor approves
+      const approveRes = await request(app)
+        .post(`/api/v1/maintenance/cases/${c.id}/approval`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .send({
+          approved: true,
+          reviewerNotes: 'Approved for final close-out.',
+        });
+
+      expect(approveRes.status).toBe(200);
+      expect(approveRes.body.data.status).toBe('RESOLVED');
+      expect(approveRes.body.data.resolvedAt).toBeDefined();
+
+      // Formally close case
+      const closeRes = await request(app)
+        .post(`/api/v1/maintenance/cases/${c.id}/close`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .send({ notes: 'Verified post-run inspection complete.' });
+
+      expect(closeRes.status).toBe(200);
+      expect(closeRes.body.data.status).toBe('CLOSED');
+      expect(closeRes.body.data.closedAt).toBeDefined();
+
+      const getRes = await request(app)
+        .get(`/api/v1/maintenance/cases/${c.id}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`);
+      expect(getRes.body.data.caseData.resolvedAt).toBeDefined();
+      expect(getRes.body.data.caseData.closedAt).toBeDefined();
+    });
+  });
+
+  describe('9. High-Risk Safety Scenario Flagging and Escalation', () => {
+    it('automatically escalates hazardous high-voltage scenario for qualified human review', async () => {
+      const res = await request(app)
+        .post('/api/v1/maintenance/cases')
+        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .send({
+          plantId: plantA.id,
+          assetId: assetPumpA.id,
+          title: 'High-Voltage 4160V Busbar Flash Incident',
+          symptomDescription: 'Visible arc flash marks and high-voltage ozone smell at primary feed transformer cabinet.',
+        });
+      const caseId = res.body.data.id;
+
+      const diagRes = await request(app)
+        .post(`/api/v1/maintenance/cases/${caseId}/diagnose`)
+        .set('Authorization', `Bearer ${tokenEngineerA}`);
+
+      expect(diagRes.status).toBe(200);
+      expect(diagRes.body.data.status).toBe('ESCALATED_HUMAN');
+      expect(diagRes.body.data.isEscalated).toBe(true);
+      expect(diagRes.body.data.escalationReason).toContain('Critical High-Risk Hazard Detected');
+    });
+
+    it('automatically escalates toxic chemical hazard (H2S) for site permit and human review', async () => {
+      const res = await request(app)
+        .post('/api/v1/maintenance/cases')
+        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .send({
+          plantId: plantA.id,
+          assetId: assetPumpA.id,
+          title: 'Hydrogen Sulfide Toxic Gas Detector Alarm',
+          symptomDescription: 'Fixed gas sensor H2S alarm triggered at seal gland catch basin (>10 ppm).',
+        });
+      const caseId = res.body.data.id;
+
+      const diagRes = await request(app)
+        .post(`/api/v1/maintenance/cases/${caseId}/diagnose`)
+        .set('Authorization', `Bearer ${tokenEngineerA}`);
+
+      expect(diagRes.status).toBe(200);
+      expect(diagRes.body.data.status).toBe('ESCALATED_HUMAN');
+      expect(diagRes.body.data.isEscalated).toBe(true);
+      expect(diagRes.body.data.escalationReason).toContain('Critical High-Risk Hazard Detected');
+    });
+  });
 });
+

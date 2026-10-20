@@ -7,12 +7,20 @@ export function createAssetRouter(dataStore: IDataStore): Router {
   const router = Router();
   const controller = new AssetController(dataStore);
 
-  // Both Admin and Engineer/Technician can create assets
-  router.post('/', requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN']), controller.create);
+  // Owner, Admin, Plant Manager, Engineer can create assets
+  router.post('/', requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'ENGINEER_TECHNICIAN']), controller.create);
 
-  // All roles (including Viewer) can read assets
-  router.get('/', requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']), controller.list);
-  router.get('/:id', requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']), controller.getById);
+  // All roles can read assets
+  router.get(
+    '/',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER', 'ENGINEER_TECHNICIAN']),
+    controller.list
+  );
+  router.get(
+    '/:id',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER', 'ENGINEER_TECHNICIAN']),
+    controller.getById
+  );
 
   return router;
 }

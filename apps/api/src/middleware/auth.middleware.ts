@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { IAuthAdapter } from '../auth/authAdapter.interface.js';
 import type { IDataStore } from '../db/dataStore.interface.js';
-import type { AuthenticatedContext, OrgRole } from '@forgex/shared-types';
+import { type AuthenticatedContext, type OrgRole, type OrgPermission, hasPermission } from '@forgex/shared-types';
 import { logger } from '../utils/logger.js';
 
 declare global {
@@ -19,8 +19,15 @@ export function createAuthMiddleware(authAdapter: IAuthAdapter, dataStore: IData
     next: NextFunction
   ): Promise<void> {
     const authHeader = req.headers.authorization;
+    const isSignedStorageProxy =
+      (req.originalUrl || req.url).includes('/storage-proxy') &&
+      Boolean(req.query.signature && req.query.expires);
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      if (isSignedStorageProxy) {
+        next();
+        return;
+      }
       res.status(401).json({
         success: false,
         error: {
@@ -70,11 +77,33 @@ export function createAuthMiddleware(authAdapter: IAuthAdapter, dataStore: IData
             metadata: {
               attemptedOrgId: requestedOrgId,
               userEmail: user.email,
-              reason: membership ? 'MEMBERSHIP_SUSPENDED' : 'NOT_A_MEMBER',
+              reason: membership ? `MEMBERSHIP_${membership.status}` : 'NOT_A_MEMBER',
             },
             ipAddress: req.ip,
             userAgent: req.headers['user-agent'],
           });
+
+          const securityService = req.app?.locals?.securityService;
+          if (securityService) {
+            await securityService.recordSecurityEvent({
+              organizationId: requestedOrgId,
+              actorUserId: user.id,
+              actorEmail: user.email,
+              actorRole: membership?.role || 'VIEWER',
+              category: 'CROSS_TENANT_ACCESS',
+              action: 'CROSS_TENANT_ACCESS_BLOCKED',
+              resourceCategory: 'ORGANIZATION',
+              resourceId: requestedOrgId,
+              decision: 'DENIED',
+              policyReasonCode: 'NOT_AN_ACTIVE_MEMBER',
+              severity: 'HIGH',
+              isBenignInquiry: false,
+              metadata: {
+                attemptedOrgId: requestedOrgId,
+                reason: membership ? `MEMBERSHIP_${membership.status}` : 'NOT_A_MEMBER',
+              },
+            });
+          }
 
           res.status(403).json({
             success: false,
@@ -94,6 +123,27 @@ export function createAuthMiddleware(authAdapter: IAuthAdapter, dataStore: IData
         const activeOnes = userMemberships.filter((m) => m.status === 'ACTIVE');
 
         if (activeOnes.length === 0) {
+          const securityService = req.app?.locals?.securityService;
+          if (securityService && userMemberships.length > 0) {
+            await securityService.recordSecurityEvent({
+              organizationId: userMemberships[0].organizationId,
+              actorUserId: user.id,
+              actorEmail: user.email,
+              actorRole: userMemberships[0].role,
+              category: 'REVOKED_USER_ACCESS',
+              action: 'BLOCKED_REVOKED_USER_ACCESS',
+              resourceCategory: 'MEMBERSHIP',
+              resourceId: user.id,
+              decision: 'DENIED',
+              policyReasonCode: 'REVOKED_OR_INACTIVE_MEMBERSHIP',
+              severity: 'HIGH',
+              isBenignInquiry: false,
+              metadata: {
+                membershipStatuses: userMemberships.map((m) => m.status),
+              },
+            });
+          }
+
           res.status(403).json({
             success: false,
             error: {
@@ -106,6 +156,45 @@ export function createAuthMiddleware(authAdapter: IAuthAdapter, dataStore: IData
           return;
         }
         activeMembership = activeOnes[0];
+      }
+
+      // 3b. Verify employee profile status if configured (deactivated or suspended employees cannot proceed)
+      if (typeof dataStore.getEmployeeProfileByUserId === 'function') {
+        const empProfile = await dataStore.getEmployeeProfileByUserId(activeMembership.organizationId, user.id);
+        if (empProfile && (empProfile.accountStatus === 'INACTIVE' || empProfile.accountStatus === 'SUSPENDED')) {
+          const securityService = req.app?.locals?.securityService;
+          if (securityService) {
+            await securityService.recordSecurityEvent({
+              organizationId: activeMembership.organizationId,
+              actorUserId: user.id,
+              actorEmail: user.email,
+              actorRole: activeMembership.role,
+              category: 'REVOKED_USER_ACCESS',
+              action: 'BLOCKED_DEACTIVATED_EMPLOYEE_ACCESS',
+              resourceCategory: 'EMPLOYEE_PROFILE',
+              resourceId: empProfile.id,
+              decision: 'DENIED',
+              policyReasonCode: `EMPLOYEE_${empProfile.accountStatus}`,
+              severity: 'HIGH',
+              isBenignInquiry: false,
+              metadata: {
+                employeeNumber: empProfile.employeeNumber,
+                accountStatus: empProfile.accountStatus,
+              },
+            });
+          }
+
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORGEX_RBAC_FORBIDDEN',
+              message: `Access denied: Employee account has been ${empProfile.accountStatus.toLowerCase()}.`,
+            },
+            timestamp: new Date().toISOString(),
+            requestId: (req.headers['x-request-id'] as string) || 'req_auth',
+          });
+          return;
+        }
       }
 
       // 4. Resolve Organization details
@@ -147,7 +236,7 @@ export function createAuthMiddleware(authAdapter: IAuthAdapter, dataStore: IData
 }
 
 export function requireRole(allowedRoles: OrgRole[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (!req.auth) {
       res.status(401).json({
         success: false,
@@ -163,10 +252,56 @@ export function requireRole(allowedRoles: OrgRole[]) {
 
     const userRole = req.auth.membership.role;
 
-    // ORGANIZATION_ADMIN always possesses supervisory override
-    if (userRole === 'ORGANIZATION_ADMIN' || allowedRoles.includes(userRole)) {
+    // ORGANIZATION_OWNER and ORGANIZATION_ADMIN always possess supervisory override
+    if (
+      userRole === 'ORGANIZATION_OWNER' ||
+      userRole === 'ORGANIZATION_ADMIN' ||
+      allowedRoles.includes(userRole) ||
+      (allowedRoles.includes('ENGINEER') && userRole === 'ENGINEER_TECHNICIAN')
+    ) {
       next();
       return;
+    }
+
+    // Record security event if accessing sensitive restricted resources (documents, downloads, audit, exports)
+    const securityService = req.app?.locals?.securityService;
+    if (securityService) {
+      const url = req.originalUrl || req.url;
+      const isDoc = url.includes('/documents');
+      const isExport = url.includes('export');
+      const isAudit = url.includes('/audit');
+
+      if (isDoc || isExport || isAudit) {
+        const category = isExport
+          ? 'UNAUTHORIZED_EXPORT'
+          : isDoc
+          ? 'CONFIDENTIAL_DOCUMENT_ACCESS'
+          : 'RESTRICTED_ACTION';
+
+        const action = url.includes('/download')
+          ? 'BLOCKED_DOCUMENT_DOWNLOAD'
+          : isExport
+          ? 'BLOCKED_DATA_EXPORT'
+          : isDoc
+          ? 'BLOCKED_DOCUMENT_ACCESS'
+          : 'BLOCKED_AUDIT_LEDGER_ACCESS';
+
+        await securityService.recordSecurityEvent({
+          organizationId: req.auth.organization.id,
+          actorUserId: req.auth.user.id,
+          actorEmail: req.auth.user.email,
+          actorRole: userRole,
+          category,
+          action,
+          resourceCategory: isDoc ? 'DOCUMENT' : 'AUDIT',
+          resourceId: (req.params?.id as string) || null,
+          decision: 'DENIED',
+          policyReasonCode: 'ROLE_INSUFFICIENT_PRIVILEGES',
+          severity: isExport ? 'HIGH' : 'MEDIUM',
+          isBenignInquiry: true,
+          metadata: { path: url, requiredRoles: allowedRoles },
+        });
+      }
     }
 
     res.status(403).json({
@@ -180,3 +315,87 @@ export function requireRole(allowedRoles: OrgRole[]) {
     });
   };
 }
+
+export function requirePermission(permission: OrgPermission) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.auth) {
+      res.status(401).json({
+        success: false,
+        error: {
+          code: 'FORGEX_AUTH_UNAUTHORIZED',
+          message: 'Authentication required prior to permission evaluation.',
+        },
+        timestamp: new Date().toISOString(),
+        requestId: (req.headers['x-request-id'] as string) || 'req_rbac',
+      });
+      return;
+    }
+
+    const userRole = req.auth.membership.role;
+    if (hasPermission(userRole, permission)) {
+      next();
+      return;
+    }
+
+    res.status(403).json({
+      success: false,
+      error: {
+        code: 'FORGEX_RBAC_FORBIDDEN',
+        message: `Access denied: Action requires permission '${permission}'.`,
+      },
+      timestamp: new Date().toISOString(),
+      requestId: (req.headers['x-request-id'] as string) || 'req_rbac',
+    });
+  };
+}
+
+export function requirePlantAccess(plantIdExtractor: (req: Request) => string | undefined) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.auth) {
+      res.status(401).json({
+        success: false,
+        error: {
+          code: 'FORGEX_AUTH_UNAUTHORIZED',
+          message: 'Authentication required.',
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const role = req.auth.membership.role;
+    // Owners and Admins have global plant scope
+    if (role === 'ORGANIZATION_OWNER' || role === 'ORGANIZATION_ADMIN') {
+      next();
+      return;
+    }
+
+    const assigned = req.auth.membership.assignedPlantIds ?? [];
+    // If not restricted to specific plants, pass
+    if (assigned.length === 0) {
+      next();
+      return;
+    }
+
+    const requestedPlantId = plantIdExtractor(req);
+    if (!requestedPlantId) {
+      next();
+      return;
+    }
+
+    if (!assigned.includes(requestedPlantId)) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORGEX_PLANT_ACCESS_DENIED',
+          message: `Access denied: You are not assigned to plant '${requestedPlantId}'.`,
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    next();
+  };
+}
+

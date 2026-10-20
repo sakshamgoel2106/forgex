@@ -21,20 +21,11 @@ RUN pnpm --filter @forgex/web run build
 FROM nginx:alpine AS runner
 
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
-
-# Custom Nginx configuration for single page application routing
-RUN echo 'server { \
-    listen 80; \
-    location / { \
-        root /usr/share/nginx/html; \
-        index index.html; \
-        try_files $uri $uri/ /index.html; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
-  CMD curl -f http://localhost:80/ || exit 1
+  CMD wget -q --spider http://localhost:80/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

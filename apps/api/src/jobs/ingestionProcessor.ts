@@ -2,6 +2,7 @@ import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
 import type { IEmbeddingAdapter } from '../embeddings/embeddings.interface.js';
 import type { IVectorStoreAdapter, VectorPoint } from '../vector/vectorStore.interface.js';
+import type { IVisionProcessingProvider } from '../ai/vision.interface.js';
 import { DocumentParser } from '../ingestion/documentParser.js';
 import { ContentChunker } from '../ingestion/contentChunker.js';
 import { logger } from '../utils/logger.js';
@@ -21,9 +22,10 @@ export class IngestionProcessor {
     private storageAdapter: IStorageAdapter,
     private embeddingAdapter: IEmbeddingAdapter,
     private vectorStore: IVectorStoreAdapter,
-    private collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge'
+    private collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge',
+    visionProvider?: IVisionProcessingProvider
   ) {
-    this.parser = new DocumentParser();
+    this.parser = new DocumentParser(visionProvider);
     this.chunker = new ContentChunker();
   }
 
@@ -126,6 +128,7 @@ export class IngestionProcessor {
           plantId: document.plantId,
           documentId: document.id,
           documentVersionId: version.id,
+          revision: version.revision,
           pageNumber: chunk.pageNumber,
           chunkIndex: chunk.chunkIndex,
           content: chunk.content,

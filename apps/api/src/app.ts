@@ -16,6 +16,24 @@ import { createDocumentRouter } from './routes/document.routes.js';
 import { createCopilotRouter } from './routes/copilot.routes.js';
 import { createVisualRouter } from './routes/visual.routes.js';
 import { createMaintenanceRouter } from './routes/maintenance.routes.js';
+import { createAuthRouter } from './routes/auth.routes.js';
+import { createOrgRouter } from './routes/org.routes.js';
+import { createMachineRouter } from './routes/machine.routes.js';
+import { createPublicKnowledgeRouter } from './routes/publicKnowledge.routes.js';
+import { createTaskRouter } from './routes/task.routes.js';
+import { createMappingRouter } from './routes/mapping.routes.js';
+import { createBadgeRouter } from './routes/badge.routes.js';
+import { createEngineeringRouter } from './routes/engineering.routes.js';
+import { createMaintenanceRecordRouter } from './routes/maintenanceHistory.routes.js';
+import { createRecoveryRouter } from './routes/recovery.routes.js';
+import { createGuidanceRouter } from './routes/guidance.routes.js';
+import { MachineRecoveryService } from './services/machineRecovery.service.js';
+import {
+  createEmployeeRouter,
+  createTicketRouter,
+  createSpecialistDirectoryRouter,
+  createMachineSpecialistRouter,
+} from './routes/specialist.routes.js';
 import type { IStorageAdapter } from './storage/storage.interface.js';
 import { createStorageAdapter } from './storage/storageFactory.js';
 import type { IEmbeddingAdapter } from './embeddings/embeddings.interface.js';
@@ -28,10 +46,13 @@ import { createGenerationProvider, createRerankingProvider } from './ai/aiProvid
 import type { IVisionProcessingProvider } from './ai/vision.interface.js';
 import { createVisionProvider } from './ai/visionProviderFactory.js';
 import { RAGQueryEngine } from './services/ragQueryEngine.js';
+import { SecurityEventService } from './services/securityEvent.service.js';
 import { VisualIntelligenceEngine } from './services/visualIntelligenceEngine.js';
 import { MaintenanceWorkflowEngine } from './services/maintenanceWorkflowEngine.js';
 import { RateLimiterService } from './middleware/rateLimiter.middleware.js';
 import { MetricsService } from './services/metrics.service.js';
+import type { ISpeechToTextProvider, ITextToSpeechProvider } from './speech/speech.interface.js';
+import { LocalDevSpeechAdapter } from './speech/localDevSpeechAdapter.js';
 
 export interface AppDependencies {
   authAdapter?: IAuthAdapter;
@@ -43,9 +64,12 @@ export interface AppDependencies {
   generationProvider?: IMultimodalGenerationProvider;
   rerankingProvider?: IRerankingProvider;
   ragEngine?: RAGQueryEngine;
+  securityService?: SecurityEventService;
   visionProvider?: IVisionProcessingProvider;
   visualEngine?: VisualIntelligenceEngine;
   maintenanceEngine?: MaintenanceWorkflowEngine;
+  recoveryService?: MachineRecoveryService;
+  speechProvider?: ISpeechToTextProvider & ITextToSpeechProvider;
 }
 
 export function createApp(deps: AppDependencies = {}): express.Application {
@@ -53,12 +77,17 @@ export function createApp(deps: AppDependencies = {}): express.Application {
 
   const authAdapter = deps.authAdapter ?? createAuthAdapter(config);
   const dataStore = deps.dataStore ?? new InMemoryDataStore();
+  const securityService = deps.securityService ?? new SecurityEventService(dataStore);
+  app.locals.securityService = securityService;
+  app.locals.dataStore = dataStore;
+
   const storageAdapter = deps.storageAdapter ?? createStorageAdapter();
   const embeddingAdapter = deps.embeddingAdapter ?? createEmbeddingAdapter();
   const vectorStore = deps.vectorStore ?? createVectorStoreAdapter();
+  const visionProvider = deps.visionProvider ?? createVisionProvider();
   const ingestionQueue =
     deps.ingestionQueue ??
-    new IngestionQueue(dataStore, storageAdapter, embeddingAdapter, vectorStore);
+    new IngestionQueue(dataStore, storageAdapter, embeddingAdapter, vectorStore, visionProvider);
 
   const generationProvider = deps.generationProvider ?? createGenerationProvider();
   const rerankingProvider = deps.rerankingProvider ?? createRerankingProvider();
@@ -69,10 +98,11 @@ export function createApp(deps: AppDependencies = {}): express.Application {
       embeddingAdapter,
       vectorStore,
       generationProvider,
-      rerankingProvider
+      rerankingProvider,
+      process.env.QDRANT_COLLECTION || 'forgex_knowledge',
+      securityService
     );
 
-  const visionProvider = deps.visionProvider ?? createVisionProvider();
   const visualEngine =
     deps.visualEngine ??
     new VisualIntelligenceEngine(dataStore, storageAdapter, visionProvider, ragEngine);
@@ -80,6 +110,21 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   const maintenanceEngine =
     deps.maintenanceEngine ??
     new MaintenanceWorkflowEngine(dataStore, ragEngine, visualEngine);
+
+  const recoveryService =
+    deps.recoveryService ??
+    new MachineRecoveryService(dataStore, securityService);
+
+  const speechDeploymentMode =
+    config.DEPLOYMENT_MODE === 'enterprise'
+      ? 'ENTERPRISE_OLLAMA'
+      : config.DEPLOYMENT_MODE === 'saas'
+      ? 'SAAS_CLOUD'
+      : 'LOCAL_DEV';
+
+  const speechProvider =
+    deps.speechProvider ??
+    new LocalDevSpeechAdapter(speechDeploymentMode);
 
   const authenticate = createAuthMiddleware(authAdapter, dataStore);
 
@@ -128,16 +173,27 @@ export function createApp(deps: AppDependencies = {}): express.Application {
 
   const aiLimiter = RateLimiterService.aiInferenceLimiter();
 
+  // Auth and Onboarding Routes (Public & Semi-public endpoints)
+  app.use('/api/v1/auth', createAuthRouter(dataStore, authAdapter));
+
+  // Protected Organization & Team Management Routes
+  app.use('/api/v1/org', authenticate, createOrgRouter(dataStore));
+
   // Protected Domain Routes
   app.use('/api/v1/plants', authenticate, createPlantRouter(dataStore));
   app.use('/api/v1/assets', authenticate, createAssetRouter(dataStore));
-  app.use('/api/v1/audit', authenticate, createAuditRouter(dataStore));
+  app.use('/api/v1/audit', authenticate, createAuditRouter(dataStore, securityService));
   app.use(
     '/api/v1/documents',
     authenticate,
-    createDocumentRouter(dataStore, storageAdapter, ingestionQueue)
+    createDocumentRouter(dataStore, storageAdapter, ingestionQueue, vectorStore)
   );
-  app.use('/api/v1/copilot', authenticate, aiLimiter, createCopilotRouter(dataStore, ragEngine));
+  app.use(
+    '/api/v1/copilot',
+    authenticate,
+    aiLimiter,
+    createCopilotRouter(dataStore, ragEngine, speechProvider)
+  );
   app.use(
     '/api/v1/visual',
     authenticate,
@@ -150,6 +206,22 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     aiLimiter,
     createMaintenanceRouter(dataStore, maintenanceEngine)
   );
+
+  // Phase B Industrial Machine Registry, Tasks, Mappings, Knowledge, Specialist Routing & Badges
+  app.use('/api/v1/employees', authenticate, createEmployeeRouter(dataStore));
+  app.use('/api/v1/tickets', authenticate, createTicketRouter(dataStore));
+  app.use('/api/v1/specialists', authenticate, createSpecialistDirectoryRouter(dataStore));
+  app.use('/api/v1/machines', authenticate, createMachineSpecialistRouter(dataStore));
+  app.use('/api/v1/machines', authenticate, createMachineRouter(dataStore));
+  app.use('/api/v1/machines', authenticate, createMappingRouter(dataStore));
+  app.use('/api/v1/knowledge', authenticate, createPublicKnowledgeRouter(dataStore));
+  app.use('/api/v1/tasks', authenticate, createTaskRouter(dataStore));
+  app.use('/api/v1/badges', authenticate, createBadgeRouter(dataStore));
+  app.use('/api/v1/engineering', authenticate, createEngineeringRouter(dataStore, storageAdapter));
+  app.use('/api/v1/maintenance-records', authenticate, createMaintenanceRecordRouter(dataStore));
+  app.use('/api/v1/recovery', authenticate, createRecoveryRouter(dataStore, recoveryService, storageAdapter));
+  app.use('/api/v1/guidance', authenticate, createGuidanceRouter(dataStore));
+
 
 
   // Global not found handler

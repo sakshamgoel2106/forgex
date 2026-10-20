@@ -3,6 +3,7 @@ import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
 import type { IEmbeddingAdapter } from '../embeddings/embeddings.interface.js';
 import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
+import type { IVisionProcessingProvider } from '../ai/vision.interface.js';
 import { IngestionProcessor } from './ingestionProcessor.js';
 import { logger } from '../utils/logger.js';
 
@@ -21,13 +22,16 @@ export class IngestionQueue {
     private dataStore: IDataStore,
     storageAdapter: IStorageAdapter,
     embeddingAdapter: IEmbeddingAdapter,
-    vectorStore: IVectorStoreAdapter
+    vectorStore: IVectorStoreAdapter,
+    visionProvider?: IVisionProcessingProvider
   ) {
     this.processor = new IngestionProcessor(
       dataStore,
       storageAdapter,
       embeddingAdapter,
-      vectorStore
+      vectorStore,
+      process.env.QDRANT_COLLECTION || 'forgex_knowledge',
+      visionProvider
     );
   }
 
@@ -111,5 +115,35 @@ export class IngestionQueue {
     while (this.queue.length > 0 || this.isProcessing) {
       await new Promise((r) => setTimeout(r, 20));
     }
+  }
+
+  /**
+   * Identifies and repairs stalled processing jobs for a document version
+   */
+  public async repairStalledVersion(documentVersionId: string): Promise<boolean> {
+    const job = await this.dataStore.getLatestProcessingJobByVersion(documentVersionId);
+    if (!job) return false;
+    if (job.status === 'PROCESSING' || job.status === 'QUEUED') {
+      logger.warn(
+        { jobId: job.id, documentVersionId },
+        'Repairing stalled ingestion processing job'
+      );
+      await this.dataStore.updateProcessingJobProgress(
+        job.id,
+        0,
+        'Processing job stalled and was automatically recovered by watchdog',
+        'FAILED',
+        'Job execution timed out while in PROCESSING/QUEUED state'
+      );
+      await this.dataStore.updateDocumentVersionStatus(
+        documentVersionId,
+        'FAILED',
+        undefined,
+        undefined,
+        'Processing stalled and was marked failed by queue watchdog'
+      );
+      return true;
+    }
+    return false;
   }
 }

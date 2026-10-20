@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # =========================================================================
   # 1. Primary Relational Store: PostgreSQL 16
@@ -157,7 +155,7 @@ services:
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-forgex_minio_secret_2026}
       OLLAMA_BASE_URL: http://ollama:11434
     ports:
-      - "${WORKER_PORT:-8000}:8000"
+      - "${WORKER_PORT:-8001}:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -170,6 +168,46 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    networks:
+      - forgex_internal
+
+  # =========================================================================
+  # 7b. Air-Gapped Local Speech-to-Text: Faster-Whisper Server
+  # High-throughput CTranslate2 Whisper model inference for noisy factory audio
+  # =========================================================================
+  faster-whisper:
+    image: ghcr.io/faster-whisper/server:latest
+    container_name: forgex-faster-whisper
+    restart: unless-stopped
+    ports:
+      - "${FASTER_WHISPER_PORT:-8000}:8000"
+    volumes:
+      - ./models/whisper:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - forgex_internal
+
+  # =========================================================================
+  # 7c. Air-Gapped Local Text-to-Speech: Piper Neural TTS Server
+  # Ultra-fast offline neural voice synthesis (en-US / hi-IN technical voices)
+  # =========================================================================
+  piper-tts:
+    image: rhasspy/piper-tts:latest
+    container_name: forgex-piper-tts
+    restart: unless-stopped
+    ports:
+      - "${PIPER_PORT:-5000}:5000"
+    volumes:
+      - ./models/piper:/app/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - forgex_internal
 
@@ -198,6 +236,10 @@ services:
       INFERENCE_PROVIDER: ollama
       OLLAMA_BASE_URL: http://ollama:11434
       WORKER_URL: http://worker:8000
+      FASTER_WHISPER_URL: http://faster-whisper:8000
+      PIPER_TTS_URL: http://piper-tts:5000
+      VOICE_STT_PROVIDER: faster-whisper
+      VOICE_TTS_PROVIDER: piper
       AUTH_PROVIDER: keycloak
       KEYCLOAK_REALM_URL: http://keycloak:8080/realms/forgex
       KEYCLOAK_CLIENT_ID: forgex-api
@@ -213,6 +255,10 @@ services:
       qdrant:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      faster-whisper:
+        condition: service_healthy
+      piper-tts:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:4000/health/live || exit 0"]

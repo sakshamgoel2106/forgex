@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type {
   Organization,
   User,
+  UserSession,
   OrganizationMembership,
   Plant,
   Asset,
@@ -19,7 +20,66 @@ import type {
   VisualAsset,
   MaintenanceCase,
   CaseHistoryEntry,
+  OrganizationInvitation,
+  InvitationStatus,
+  OrgRole,
+  MembershipStatus,
+  Machine,
+  MissingInformationTask,
+  ComponentMapping,
+  EmployeeBadge,
+  MachineLedgerSummary,
+  PublicMachineKnowledge,
+  BadgeStatus,
+  IndustryProfile,
+  EngineeringModel3D,
+  EngineeringAssetStatus,
+  ManufacturerResource,
+  EngineeringDrawing,
+  EngineeringAssetCenterSummary,
+  EmployeeProfile,
+  MachineSpecialistMapping,
+  SpecialistAssignmentStatus,
+  SpecialistTicket,
+  TicketSeverity,
+  TicketStatus,
+  TicketHistoryItem,
+  TicketOversightSummary,
+  MaintenanceRecord,
+  MaintenanceAuditEntry,
+  RecurringFaultThresholdConfig,
+  RecurringFaultAnalysis,
+  SecurityEvent,
+  SecurityAlert,
+  CreateSecurityEventDTO,
+  CreateSecurityAlertDTO,
+  ListSecurityEventsQuery,
+  ListSecurityAlertsQuery,
+  MachineEvidenceClaim,
+  MachineRecoveryProfile,
+  MachineRecoverySummary,
+  CreateEvidenceClaimDTO,
+  ReviewEvidenceClaimDTO,
+  ClaimFilterOptions,
+  RecoveryGapField,
+  GapFieldStatus,
+  ClaimAuditEntry,
+  PublishedApprovedGuidance,
+  PublishGuidanceDTO,
+  ListGuidanceFilters,
+  ExpertKnowledgeEntry,
+  CreateExpertKnowledgeDTO,
+  ReviewExpertKnowledgeDTO,
+  ExpertKnowledgeFilterOptions,
+  OperationalAnalyticsDashboard,
+  OperationalAnalyticsFilterOptions,
+  IssueFrequencyMetric,
+  TopAffectedMachineMetric,
+  SpecialistWorkloadMetric,
+  KnowledgeGapMetric,
+  UnansweredQuestionSample,
 } from '@forgex/shared-types';
+import { DEFAULT_INDUSTRY_PROFILES } from '@forgex/shared-types';
 import type {
   IDataStore,
   CreateOrganizationDTO,
@@ -43,15 +103,88 @@ import type {
   CreateMaintenanceCaseDTO,
   MaintenanceCaseFilterOptions,
   CreateCaseHistoryDTO,
+  CreateInvitationDTO,
+  RegisterOrganizationDTO,
+  CreateMachineDTO,
+  MachineFilterOptions,
+  CreateMissingInfoTaskDTO,
+  MissingInfoTaskFilterOptions,
+  CreateComponentMappingDTO,
+  IssueEmployeeBadgeDTO,
+  SavePublicKnowledgeDTO,
+  CreateIndustryProfileDTO,
+  CreateEngineeringModel3DDTO,
+  EngineeringModelFilterOptions,
+  CreateManufacturerResourceDTO,
+  ManufacturerResourceFilterOptions,
+  CreateEngineeringDrawingDTO,
+  EngineeringDrawingFilterOptions,
+  CreateEmployeeProfileDTO,
+  EmployeeProfileFilterOptions,
+  SetMachineSpecialistMappingDTO,
+  CreateSpecialistTicketDTO,
+  SpecialistTicketFilterOptions,
+  CreateMaintenanceRecordDTO,
+  UpdateMaintenanceRecordDTO,
+  MaintenanceRecordFilterOptions,
+  RecurringFaultOptions,
+  SetRecurringFaultPolicyDTO,
+  ResolveSpecialistTicketDTO,
+  ReopenSpecialistTicketDTO,
+  ApproveTicketRestartDTO,
 } from './dataStore.interface.js';
 
 export class InMemoryDataStore implements IDataStore {
   private organizations = new Map<string, Organization>();
   private users = new Map<string, User>();
   private memberships = new Map<string, OrganizationMembership>();
+  private invitations = new Map<string, OrganizationInvitation>();
   private plants = new Map<string, Plant>();
   private assets = new Map<string, Asset>();
+  private machines = new Map<string, Machine>();
+  private missingInfoTasks = new Map<string, MissingInformationTask>();
+  private componentMappings = new Map<string, ComponentMapping>();
+  private employeeBadges = new Map<string, EmployeeBadge>();
+  private publicKnowledge = new Map<string, PublicMachineKnowledge>();
   private auditEvents: AuditEvent[] = [];
+
+  // Phase B Add-on: Universal Industry Support & Engineering Asset Center
+  private industryProfiles = new Map<string, IndustryProfile>();
+  private engineeringModels = new Map<string, EngineeringModel3D>();
+  private manufacturerResources = new Map<string, ManufacturerResource>();
+  private engineeringDrawings = new Map<string, EngineeringDrawing>();
+
+  // Confidential Knowledge, Employee Directory, Specialists & Tickets
+  private employeeProfiles = new Map<string, EmployeeProfile>();
+  private machineSpecialists = new Map<string, MachineSpecialistMapping>();
+  private specialistTickets = new Map<string, SpecialistTicket>();
+
+  // Persistent Maintenance History & Recurring Faults
+  private maintenanceRecords = new Map<string, MaintenanceRecord>();
+  private recurringFaultPolicies = new Map<string, RecurringFaultThresholdConfig>();
+
+  // Security Events & Actionable Admin Alerts
+  private securityEvents = new Map<string, SecurityEvent>();
+  private securityAlerts = new Map<string, SecurityAlert>();
+
+  // Machine Knowledge Recovery Claims (Phase 3)
+  private evidenceClaims = new Map<string, MachineEvidenceClaim>();
+
+  // Published Approved Operational Guidance (Prompt 01)
+  private publishedGuidance = new Map<string, PublishedApprovedGuidance>();
+
+  // Expert Knowledge Library (Prompt 04)
+  private expertKnowledgeEntries = new Map<string, ExpertKnowledgeEntry>();
+
+  constructor() {
+    this.seedDefaultIndustryProfiles();
+  }
+
+  private seedDefaultIndustryProfiles(): void {
+    for (const p of DEFAULT_INDUSTRY_PROFILES) {
+      this.industryProfiles.set(p.id, { ...p });
+    }
+  }
 
   // Phase 3 Ingestion Data Sets
   private documents = new Map<string, TechnicalDocument>();
@@ -114,7 +247,7 @@ export class InMemoryDataStore implements IDataStore {
       if (u.email.toLowerCase() === dto.email.toLowerCase()) {
         throw new Error(`User with email '${dto.email}' already exists.`);
       }
-      if (u.externalAuthId === dto.externalAuthId) {
+      if (dto.externalAuthId && u.externalAuthId === dto.externalAuthId) {
         throw new Error(`User with externalAuthId '${dto.externalAuthId}' already exists.`);
       }
     }
@@ -143,6 +276,54 @@ export class InMemoryDataStore implements IDataStore {
     return null;
   }
 
+  private userSessions: Map<string, UserSession[]> = new Map();
+
+  public async updateUser(userId: string, updates: Partial<User>): Promise<User | null> {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    const updated: User = {
+      ...user,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.users.set(userId, updated);
+    return updated;
+  }
+
+  public async listUserSessions(userId: string): Promise<UserSession[]> {
+    let sessions = this.userSessions.get(userId);
+    if (!sessions || sessions.length === 0) {
+      sessions = [
+        {
+          id: `sess-${crypto.randomUUID().slice(0, 8)}`,
+          device: 'Industrial Toughbook CF-33 (Chrome / Linux x86_64)',
+          ipAddress: '10.240.12.84 (Plant Internal Subnet)',
+          lastActive: new Date().toISOString(),
+          isCurrent: true,
+        },
+        {
+          id: `sess-${crypto.randomUUID().slice(0, 8)}`,
+          device: 'Zebra TC57 Rugged Touch Computer (Android 13)',
+          ipAddress: '10.240.12.192 (Industrial WiFi Zone 2)',
+          lastActive: new Date(Date.now() - 3600000 * 2).toISOString(),
+          isCurrent: false,
+        },
+      ];
+      this.userSessions.set(userId, sessions);
+    }
+    return sessions;
+  }
+
+  public async revokeUserSession(userId: string, sessionId: string): Promise<boolean> {
+    const sessions = await this.listUserSessions(userId);
+    const filtered = sessions.filter((s) => s.id !== sessionId);
+    if (filtered.length !== sessions.length) {
+      this.userSessions.set(userId, filtered);
+      return true;
+    }
+    return false;
+  }
+
   // --------------------------------------------------------------------------
   // Organization Memberships
   // --------------------------------------------------------------------------
@@ -160,8 +341,10 @@ export class InMemoryDataStore implements IDataStore {
       userId: dto.userId,
       role: dto.role,
       status: dto.status ?? 'ACTIVE',
+      assignedPlantIds: dto.assignedPlantIds ?? [],
       createdAt: now,
       updatedAt: now,
+      user: this.users.get(dto.userId),
     };
     this.memberships.set(membership.id, membership);
     return membership;
@@ -170,18 +353,238 @@ export class InMemoryDataStore implements IDataStore {
   public async getMembership(userId: string, organizationId: string): Promise<OrganizationMembership | null> {
     for (const m of this.memberships.values()) {
       if (m.userId === userId && m.organizationId === organizationId) {
-        return m;
+        return {
+          ...m,
+          user: this.users.get(m.userId),
+        };
       }
     }
     return null;
   }
 
+  public async getMembershipById(organizationId: string, membershipId: string): Promise<OrganizationMembership | null> {
+    const m = this.memberships.get(membershipId);
+    if (!m || m.organizationId !== organizationId) return null;
+    return {
+      ...m,
+      user: this.users.get(m.userId),
+    };
+  }
+
   public async listUserMemberships(userId: string): Promise<OrganizationMembership[]> {
     const results: OrganizationMembership[] = [];
     for (const m of this.memberships.values()) {
-      if (m.userId === userId) results.push(m);
+      if (m.userId === userId) {
+        results.push({
+          ...m,
+          user: this.users.get(m.userId),
+        });
+      }
     }
     return results;
+  }
+
+  public async listOrganizationMembers(organizationId: string): Promise<OrganizationMembership[]> {
+    const results: OrganizationMembership[] = [];
+    for (const m of this.memberships.values()) {
+      if (m.organizationId === organizationId) {
+        results.push({
+          ...m,
+          user: this.users.get(m.userId),
+        });
+      }
+    }
+    return results;
+  }
+
+  public async updateMembershipRole(
+    organizationId: string,
+    membershipId: string,
+    role: OrgRole,
+    assignedPlantIds?: string[]
+  ): Promise<OrganizationMembership | null> {
+    const m = this.memberships.get(membershipId);
+    if (!m || m.organizationId !== organizationId) return null;
+
+    m.role = role;
+    if (assignedPlantIds !== undefined) {
+      m.assignedPlantIds = assignedPlantIds;
+    }
+    m.updatedAt = new Date().toISOString();
+    return {
+      ...m,
+      user: this.users.get(m.userId),
+    };
+  }
+
+  public async updateMembershipStatus(
+    organizationId: string,
+    membershipId: string,
+    status: MembershipStatus
+  ): Promise<OrganizationMembership | null> {
+    const m = this.memberships.get(membershipId);
+    if (!m || m.organizationId !== organizationId) return null;
+
+    m.status = status;
+    m.updatedAt = new Date().toISOString();
+    return {
+      ...m,
+      user: this.users.get(m.userId),
+    };
+  }
+
+  public async deleteMembership(organizationId: string, membershipId: string): Promise<boolean> {
+    const m = this.memberships.get(membershipId);
+    if (!m || m.organizationId !== organizationId) return false;
+    return this.memberships.delete(membershipId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Invitations
+  // --------------------------------------------------------------------------
+  public async createInvitation(dto: CreateInvitationDTO): Promise<OrganizationInvitation> {
+    // Check if there is an active pending invite for this email in this org
+    for (const inv of this.invitations.values()) {
+      if (
+        inv.organizationId === dto.organizationId &&
+        inv.email.toLowerCase() === dto.email.toLowerCase() &&
+        inv.status === 'PENDING'
+      ) {
+        if (new Date(inv.expiresAt) > new Date()) {
+          throw new Error(`An active invitation already exists for ${dto.email} in this organization.`);
+        } else {
+          inv.status = 'EXPIRED';
+        }
+      }
+    }
+
+    const now = new Date().toISOString();
+    const invitation: OrganizationInvitation = {
+      id: crypto.randomUUID(),
+      organizationId: dto.organizationId,
+      email: dto.email.toLowerCase(),
+      role: dto.role,
+      invitedByUserId: dto.invitedByUserId,
+      tokenHash: dto.tokenHash,
+      expiresAt: dto.expiresAt,
+      status: 'PENDING',
+      assignedPlantIds: dto.assignedPlantIds ?? [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.invitations.set(invitation.id, invitation);
+    return invitation;
+  }
+
+  public async getInvitationById(organizationId: string, invitationId: string): Promise<OrganizationInvitation | null> {
+    const inv = this.invitations.get(invitationId);
+    if (!inv || inv.organizationId !== organizationId) return null;
+
+    if (inv.status === 'PENDING' && new Date(inv.expiresAt) < new Date()) {
+      inv.status = 'EXPIRED';
+      inv.updatedAt = new Date().toISOString();
+    }
+    return inv;
+  }
+
+  public async getInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | null> {
+    for (const inv of this.invitations.values()) {
+      if (inv.tokenHash === tokenHash) {
+        if (inv.status === 'PENDING' && new Date(inv.expiresAt) < new Date()) {
+          inv.status = 'EXPIRED';
+          inv.updatedAt = new Date().toISOString();
+        }
+        return inv;
+      }
+    }
+    return null;
+  }
+
+  public async listInvitations(organizationId: string, status?: InvitationStatus): Promise<OrganizationInvitation[]> {
+    const now = new Date();
+    const results: OrganizationInvitation[] = [];
+    for (const inv of this.invitations.values()) {
+      if (inv.organizationId === organizationId) {
+        if (inv.status === 'PENDING' && new Date(inv.expiresAt) < now) {
+          inv.status = 'EXPIRED';
+          inv.updatedAt = now.toISOString();
+        }
+        if (!status || inv.status === status) {
+          results.push(inv);
+        }
+      }
+    }
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async updateInvitationStatus(
+    invitationId: string,
+    status: InvitationStatus
+  ): Promise<OrganizationInvitation | null> {
+    const inv = this.invitations.get(invitationId);
+    if (!inv) return null;
+
+    inv.status = status;
+    inv.updatedAt = new Date().toISOString();
+    return inv;
+  }
+
+  public async deleteInvitation(organizationId: string, invitationId: string): Promise<boolean> {
+    const inv = this.invitations.get(invitationId);
+    if (!inv || inv.organizationId !== organizationId) return false;
+    return this.invitations.delete(invitationId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Organization Registration & Onboarding
+  // --------------------------------------------------------------------------
+  public async registerOrganizationWithAdmin(
+    dto: RegisterOrganizationDTO
+  ): Promise<{ organization: Organization; adminUser: User; membership: OrganizationMembership }> {
+    // 1. Check duplicate slug
+    const existingOrg = await this.getOrganizationBySlug(dto.organizationSlug);
+    if (existingOrg) {
+      throw new Error(`Organization slug '${dto.organizationSlug}' is already claimed.`);
+    }
+
+    // 2. Create organization
+    const org = await this.createOrganization({
+      name: dto.organizationName,
+      slug: dto.organizationSlug,
+    });
+
+    // 3. Find or create administrator user
+    let user = await this.getUserByExternalAuthId(dto.externalAuthId);
+    if (!user) {
+      // Check if email already exists
+      for (const u of this.users.values()) {
+        if (u.email.toLowerCase() === dto.adminEmail.toLowerCase()) {
+          user = u;
+          break;
+        }
+      }
+      if (!user) {
+        user = await this.createUser({
+          externalAuthId: dto.externalAuthId,
+          email: dto.adminEmail,
+          fullName: dto.adminFullName,
+        });
+      }
+    }
+
+    // 4. Create initial membership as ORGANIZATION_OWNER
+    const membership = await this.createMembership({
+      organizationId: org.id,
+      userId: user.id,
+      role: 'ORGANIZATION_OWNER',
+      status: 'ACTIVE',
+    });
+
+    return {
+      organization: org,
+      adminUser: user,
+      membership,
+    };
   }
 
   // --------------------------------------------------------------------------
@@ -210,7 +613,15 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   public async getPlantById(organizationId: string, plantId: string): Promise<Plant | null> {
-    const plant = this.plants.get(plantId);
+    let plant = this.plants.get(plantId) ?? null;
+    if (!plant) {
+      for (const p of this.plants.values()) {
+        if (p.organizationId === organizationId && p.code === plantId) {
+          plant = p;
+          break;
+        }
+      }
+    }
     if (!plant || plant.organizationId !== organizationId) return null;
     return plant;
   }
@@ -249,7 +660,7 @@ export class InMemoryDataStore implements IDataStore {
     const asset: Asset = {
       id: crypto.randomUUID(),
       organizationId,
-      plantId: dto.plantId,
+      plantId: plant.id, // Ensure normalized plant UUID
       parentAssetId: dto.parentAssetId ?? null,
       assetTag: dto.assetTag,
       name: dto.name,
@@ -262,11 +673,36 @@ export class InMemoryDataStore implements IDataStore {
       updatedAt: now,
     };
     this.assets.set(asset.id, asset);
+
+    const machine: Machine = {
+      ...asset,
+      machineType: 'Industrial Machinery',
+      criticality: 'MEDIUM',
+      dataClassification: 'INTERNAL',
+      authorizedAccessScope: 'ORGANIZATION',
+      verificationState: asset.serialNumber ? 'PARTIALLY_VERIFIED' : 'UNVERIFIED',
+      documentationReadiness: 'INCOMPLETE',
+      technicalSpecs: {},
+      hasModel3d: false,
+      hasPidDiagram: false,
+      qrCodeData: `/machines/${asset.id}`,
+      revision: 1,
+    };
+    this.machines.set(machine.id, machine);
+
     return asset;
   }
 
   public async getAssetById(organizationId: string, assetId: string): Promise<Asset | null> {
-    const asset = this.assets.get(assetId);
+    let asset = this.assets.get(assetId) ?? null;
+    if (!asset) {
+      for (const a of this.assets.values()) {
+        if (a.organizationId === organizationId && a.assetTag === assetId) {
+          asset = a;
+          break;
+        }
+      }
+    }
     if (!asset || asset.organizationId !== organizationId) return null;
     return asset;
   }
@@ -334,6 +770,8 @@ export class InMemoryDataStore implements IDataStore {
       title: dto.title,
       category: dto.category,
       assetTags: dto.assetTags ?? [],
+      dataClassification: dto.dataClassification || 'INTERNAL',
+      isConfidential: dto.isConfidential ?? (dto.dataClassification === 'RESTRICTED_CONFIDENTIAL' || dto.dataClassification === 'RESTRICTED'),
       createdByUserId: dto.createdByUserId ?? null,
       createdAt: now,
       updatedAt: now,
@@ -960,12 +1398,16 @@ export class InMemoryDataStore implements IDataStore {
       assetId: dto.assetId,
       caseNumber,
       title: dto.title,
+      description: dto.description,
       severity: dto.severity || 'MEDIUM',
       status: dto.status || 'REPORTED',
       reportedByUserId: dto.reportedByUserId,
+      assignedTechnicianUserId: dto.assignedTechnicianUserId || null,
+      assignedTechnicianName: dto.assignedTechnicianName || null,
       symptomDescription: dto.symptomDescription,
       operatingConditions: dto.operatingConditions || {},
       visualAssetIds: dto.visualAssetIds || [],
+      supportingDocumentIds: dto.supportingDocumentIds || [],
       diagnosticHypothesis: dto.diagnosticHypothesis || null,
       checklist: dto.checklist || [],
       findings: dto.findings || null,
@@ -975,6 +1417,8 @@ export class InMemoryDataStore implements IDataStore {
       candidateForExpertKnowledge: dto.candidateForExpertKnowledge ?? false,
       createdAt: now,
       updatedAt: now,
+      resolvedAt: dto.resolvedAt || null,
+      closedAt: dto.closedAt || null,
     };
 
     this.maintenanceCases.set(maintenanceCase.id, maintenanceCase);
@@ -1019,6 +1463,11 @@ export class InMemoryDataStore implements IDataStore {
       if (filter?.status && c.status !== filter.status) continue;
       if (filter?.severity && c.severity !== filter.severity) continue;
       if (
+        filter?.assignedTechnicianUserId &&
+        c.assignedTechnicianUserId !== filter.assignedTechnicianUserId
+      )
+        continue;
+      if (
         filter?.candidateForExpertKnowledge !== undefined &&
         c.candidateForExpertKnowledge !== filter.candidateForExpertKnowledge
       )
@@ -1058,12 +1507,526 @@ export class InMemoryDataStore implements IDataStore {
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }
 
+  // --------------------------------------------------------------------------
+  // Machine Registry (Phase B)
+  // --------------------------------------------------------------------------
+  public async createMachine(organizationId: string, dto: CreateMachineDTO): Promise<Machine> {
+    let plant = await this.getPlantById(organizationId, dto.plantId);
+    if (!plant) {
+      const plants = await this.listPlants(organizationId);
+      if (plants.length > 0) {
+        plant = plants[0];
+      } else {
+        plant = await this.createPlant(organizationId, {
+          code: `PLANT-${organizationId.slice(0, 4).toUpperCase()}`,
+          name: 'Primary Operations Facility',
+          location: 'Industrial Complex',
+          airGappedMode: false,
+        });
+      }
+    }
+
+    for (const m of this.machines.values()) {
+      if (m.organizationId === organizationId && m.assetTag.toLowerCase() === dto.assetTag.toLowerCase()) {
+        throw new Error(`Machine with asset tag '${dto.assetTag}' already exists in this organization.`);
+      }
+    }
+
+    if (dto.parentAssetId) {
+      const parent = await this.getAssetById(organizationId, dto.parentAssetId);
+      if (!parent) {
+        throw new Error(`Parent asset '${dto.parentAssetId}' does not belong to organization.`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const machine: Machine = {
+      id,
+      organizationId,
+      plantId: plant.id,
+      parentAssetId: dto.parentAssetId ?? null,
+      assetTag: dto.assetTag,
+      name: dto.name,
+      machineType: dto.machineType ?? 'Industrial Machinery',
+      area: dto.area,
+      building: dto.building ?? null,
+      productionLine: dto.productionLine ?? null,
+      locationDescription: dto.locationDescription ?? null,
+      manufacturer: dto.manufacturer ?? null,
+      modelNumber: dto.modelNumber ?? null,
+      serialNumber: dto.serialNumber ?? null,
+      installationDate: dto.installationDate ?? null,
+      operationalState: dto.operationalState ?? 'OPTIMAL',
+      criticality: dto.criticality ?? 'MEDIUM',
+      department: dto.department ?? null,
+      dataClassification: dto.dataClassification ?? 'INTERNAL',
+      authorizedAccessScope: dto.authorizedAccessScope ?? 'ORGANIZATION',
+      verificationState: dto.verificationState ?? (dto.serialNumber ? 'PARTIALLY_VERIFIED' : 'UNVERIFIED'),
+      documentationReadiness: dto.documentationReadiness ?? 'INCOMPLETE',
+      technicalSpecs: dto.technicalSpecs ?? {},
+      hasModel3d: dto.hasModel3d ?? false,
+      model3dStorageKey: dto.model3dStorageKey ?? null,
+      model3dFormat: dto.model3dFormat ?? null,
+      hasPidDiagram: dto.hasPidDiagram ?? false,
+      pidStorageKey: dto.pidStorageKey ?? null,
+      qrCodeData: dto.qrCodeData ?? `/machines/${id}`,
+      provenance: dto.provenance ?? null,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.machines.set(machine.id, machine);
+
+    // Mirror to assets
+    const asset: Asset = {
+      id: machine.id,
+      organizationId: machine.organizationId,
+      plantId: machine.plantId,
+      parentAssetId: machine.parentAssetId,
+      assetTag: machine.assetTag,
+      name: machine.name,
+      area: machine.area,
+      manufacturer: machine.manufacturer ?? '',
+      modelNumber: machine.modelNumber ?? '',
+      serialNumber: machine.serialNumber ?? '',
+      operationalState: machine.operationalState,
+      createdAt: machine.createdAt,
+      updatedAt: machine.updatedAt,
+    };
+    this.assets.set(asset.id, asset);
+
+    return machine;
+  }
+
+  public async getMachineById(organizationId: string, machineId: string): Promise<Machine | null> {
+    let machine = this.machines.get(machineId) ?? null;
+    if (!machine) {
+      for (const m of this.machines.values()) {
+        if (m.organizationId === organizationId && m.assetTag === machineId) {
+          machine = m;
+          break;
+        }
+      }
+    }
+    if (!machine || machine.organizationId !== organizationId) return null;
+    return machine;
+  }
+
+  public async getMachineByAssetTag(organizationId: string, assetTag: string): Promise<Machine | null> {
+    for (const m of this.machines.values()) {
+      if (m.organizationId === organizationId && m.assetTag.toLowerCase() === assetTag.toLowerCase()) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  public async listMachines(organizationId: string, filters?: MachineFilterOptions): Promise<Machine[]> {
+    let list = Array.from(this.machines.values()).filter((m) => m.organizationId === organizationId);
+    if (filters?.plantId) {
+      list = list.filter((m) => m.plantId === filters.plantId);
+    }
+    if (filters?.search) {
+      const q = filters.search.toLowerCase();
+      list = list.filter(
+        (m) =>
+          m.name.toLowerCase().includes(q) ||
+          m.assetTag.toLowerCase().includes(q) ||
+          (m.manufacturer && m.manufacturer.toLowerCase().includes(q)) ||
+          (m.modelNumber && m.modelNumber.toLowerCase().includes(q))
+      );
+    }
+    if (filters?.documentationReadiness) {
+      list = list.filter((m) => m.documentationReadiness === filters.documentationReadiness);
+    }
+    if (filters?.operationalState) {
+      list = list.filter((m) => m.operationalState === filters.operationalState);
+    }
+    if (filters?.dataClassification) {
+      list = list.filter((m) => m.dataClassification === filters.dataClassification);
+    }
+    if (typeof filters?.hasModel3d === 'boolean') {
+      list = list.filter((m) => m.hasModel3d === filters.hasModel3d);
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async updateMachine(
+    organizationId: string,
+    machineId: string,
+    updates: Partial<Machine>
+  ): Promise<Machine | null> {
+    const m = await this.getMachineById(organizationId, machineId);
+    if (!m) return null;
+
+    Object.assign(m, updates, {
+      revision: (m.revision || 1) + 1,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Mirror to asset
+    const a = this.assets.get(m.id);
+    if (a) {
+      if (updates.name) a.name = updates.name;
+      if (updates.area) a.area = updates.area;
+      if (updates.manufacturer !== undefined) a.manufacturer = updates.manufacturer || '';
+      if (updates.modelNumber !== undefined) a.modelNumber = updates.modelNumber || '';
+      if (updates.serialNumber !== undefined) a.serialNumber = updates.serialNumber || '';
+      if (updates.operationalState) a.operationalState = updates.operationalState;
+      a.updatedAt = m.updatedAt;
+    }
+
+    return m;
+  }
+
+  public async deleteMachine(organizationId: string, machineId: string): Promise<boolean> {
+    const m = await this.getMachineById(organizationId, machineId);
+    if (!m) return false;
+    this.machines.delete(m.id);
+    this.assets.delete(m.id);
+    return true;
+  }
+
+  public async detectPotentialDuplicates(
+    organizationId: string,
+    params: { manufacturer?: string; modelNumber?: string; serialNumber?: string }
+  ): Promise<Machine[]> {
+    const matches: Machine[] = [];
+    const targetMfr = params.manufacturer?.trim().toLowerCase();
+    const targetModel = params.modelNumber?.trim().toLowerCase();
+    const targetSerial = params.serialNumber?.trim().toLowerCase();
+
+    for (const m of this.machines.values()) {
+      if (m.organizationId !== organizationId) continue;
+      const mfr = m.manufacturer?.trim().toLowerCase();
+      const model = m.modelNumber?.trim().toLowerCase();
+      const serial = m.serialNumber?.trim().toLowerCase();
+
+      // Check serial match (high confidence)
+      if (targetSerial && serial && targetSerial === serial) {
+        matches.push(m);
+        continue;
+      }
+      // Check manufacturer + model match
+      if (targetMfr && targetModel && mfr && model && targetMfr === mfr && targetModel === model) {
+        matches.push(m);
+      }
+    }
+    return matches;
+  }
+
+  public async getMachineLedgerSummary(organizationId: string, plantId?: string): Promise<MachineLedgerSummary> {
+    const all = Array.from(this.machines.values()).filter((m) => {
+      if (m.organizationId !== organizationId) return false;
+      if (plantId && m.plantId !== plantId) return false;
+      return true;
+    });
+
+    const pendingTasks = Array.from(this.missingInfoTasks.values()).filter((t) => {
+      if (t.organizationId !== organizationId) return false;
+      if (t.status !== 'SUBMITTED') return false;
+      if (plantId) {
+        const m = this.machines.get(t.machineId);
+        if (!m || m.plantId !== plantId) return false;
+      }
+      return true;
+    });
+
+    return {
+      totalMachines: all.length,
+      incompleteDocumentationCount: all.filter((m) => m.documentationReadiness === 'INCOMPLETE').length,
+      pendingReviewTasksCount: pendingTasks.length,
+      with3dModelCount: all.filter((m) => m.hasModel3d).length,
+      criticalMachinesCount: all.filter((m) => m.criticality === 'MISSION_CRITICAL' || m.criticality === 'HIGH').length,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Missing Information & Technician Tasks (Phase B)
+  // --------------------------------------------------------------------------
+  public async createMissingInfoTask(
+    organizationId: string,
+    dto: CreateMissingInfoTaskDTO
+  ): Promise<MissingInformationTask> {
+    const machine = await this.getMachineById(organizationId, dto.machineId);
+    if (!machine) {
+      throw new Error(`Machine '${dto.machineId}' not found in this organization.`);
+    }
+
+    const now = new Date().toISOString();
+    const task: MissingInformationTask = {
+      id: crypto.randomUUID(),
+      organizationId,
+      machineId: machine.id,
+      machineAssetTag: machine.assetTag,
+      machineName: machine.name,
+      assignedUserId: dto.assignedUserId ?? null,
+      assignedRole: dto.assignedRole ?? null,
+      requestedFields: dto.requestedFields,
+      instructions: dto.instructions,
+      dueDate: dto.dueDate ?? null,
+      status: 'NOT_STARTED',
+      submittedValues: null,
+      submittedByUserId: null,
+      submittedAt: null,
+      evidenceDescription: null,
+      evidenceAttachmentKeys: [],
+      reviewFeedback: null,
+      reviewedByUserId: null,
+      reviewedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.missingInfoTasks.set(task.id, task);
+    return task;
+  }
+
+  public async getMissingInfoTaskById(
+    organizationId: string,
+    taskId: string
+  ): Promise<MissingInformationTask | null> {
+    const t = this.missingInfoTasks.get(taskId);
+    if (!t || t.organizationId !== organizationId) return null;
+    return t;
+  }
+
+  public async listMissingInfoTasks(
+    organizationId: string,
+    filters?: MissingInfoTaskFilterOptions
+  ): Promise<MissingInformationTask[]> {
+    let list = Array.from(this.missingInfoTasks.values()).filter((t) => t.organizationId === organizationId);
+    if (filters?.machineId) {
+      list = list.filter((t) => t.machineId === filters.machineId);
+    }
+    if (filters?.assignedUserId) {
+      list = list.filter((t) => t.assignedUserId === filters.assignedUserId);
+    }
+    if (filters?.status) {
+      list = list.filter((t) => t.status === filters.status);
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async updateMissingInfoTask(
+    organizationId: string,
+    taskId: string,
+    updates: Partial<MissingInformationTask>
+  ): Promise<MissingInformationTask | null> {
+    const t = await this.getMissingInfoTaskById(organizationId, taskId);
+    if (!t) return null;
+
+    Object.assign(t, updates, { updatedAt: new Date().toISOString() });
+
+    // When reviewer approves the task, promote submitted values to machine's technicalSpecs
+    if (updates.status === 'APPROVED' && t.submittedValues) {
+      const machine = this.machines.get(t.machineId);
+      if (machine) {
+        machine.technicalSpecs = {
+          ...machine.technicalSpecs,
+          ...t.submittedValues,
+        };
+        if (t.submittedValues.serialNumber && typeof t.submittedValues.serialNumber === 'string') {
+          machine.serialNumber = t.submittedValues.serialNumber;
+        }
+        if (t.submittedValues.manufacturer && typeof t.submittedValues.manufacturer === 'string') {
+          machine.manufacturer = t.submittedValues.manufacturer;
+        }
+        if (t.submittedValues.modelNumber && typeof t.submittedValues.modelNumber === 'string') {
+          machine.modelNumber = t.submittedValues.modelNumber;
+        }
+        machine.verificationState = 'VERIFIED';
+        machine.documentationReadiness = 'READY';
+        machine.revision = (machine.revision || 1) + 1;
+        machine.updatedAt = new Date().toISOString();
+      }
+    }
+
+    return t;
+  }
+
+  // --------------------------------------------------------------------------
+  // Component Mappings (Phase B)
+  // --------------------------------------------------------------------------
+  public async createComponentMapping(
+    organizationId: string,
+    dto: CreateComponentMappingDTO
+  ): Promise<ComponentMapping> {
+    const machine = await this.getMachineById(organizationId, dto.machineId);
+    if (!machine) throw new Error(`Machine '${dto.machineId}' not found.`);
+
+    const now = new Date().toISOString();
+    const mapping: ComponentMapping = {
+      id: crypto.randomUUID(),
+      organizationId,
+      machineId: machine.id,
+      componentId: dto.componentId,
+      componentName: dto.componentName,
+      pidTag: dto.pidTag,
+      pidDrawingNumber: dto.pidDrawingNumber ?? null,
+      pidCoordinates: dto.pidCoordinates ?? null,
+      manualDocumentId: dto.manualDocumentId ?? null,
+      manualPageNumber: dto.manualPageNumber ?? null,
+      status: dto.status ?? 'SUGGESTED',
+      verifiedByUserId: null,
+      verifiedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.componentMappings.set(mapping.id, mapping);
+    return mapping;
+  }
+
+  public async listComponentMappings(organizationId: string, machineId: string): Promise<ComponentMapping[]> {
+    return Array.from(this.componentMappings.values())
+      .filter((m) => m.organizationId === organizationId && m.machineId === machineId)
+      .sort((a, b) => a.componentName.localeCompare(b.componentName));
+  }
+
+  public async updateComponentMapping(
+    organizationId: string,
+    mappingId: string,
+    updates: Partial<ComponentMapping>
+  ): Promise<ComponentMapping | null> {
+    const m = this.componentMappings.get(mappingId);
+    if (!m || m.organizationId !== organizationId) return null;
+    Object.assign(m, updates, { updatedAt: new Date().toISOString() });
+    return m;
+  }
+
+  public async deleteComponentMapping(organizationId: string, mappingId: string): Promise<boolean> {
+    const m = this.componentMappings.get(mappingId);
+    if (!m || m.organizationId !== organizationId) return false;
+    return this.componentMappings.delete(mappingId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Employee Badges (Phase B)
+  // --------------------------------------------------------------------------
+  public async issueEmployeeBadge(organizationId: string, data: IssueEmployeeBadgeDTO): Promise<EmployeeBadge> {
+    for (const b of this.employeeBadges.values()) {
+      if (b.organizationId === organizationId && b.badgeCode === data.badgeCode && b.status === 'ACTIVE') {
+        throw new Error(`Badge code '${data.badgeCode}' is already actively assigned.`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const badge: EmployeeBadge = {
+      id: crypto.randomUUID(),
+      organizationId,
+      userId: data.userId,
+      badgeCode: data.badgeCode,
+      status: 'ACTIVE',
+      pinHash: data.pinHash,
+      issuedAt: now,
+      expiresAt: data.expiresAt ?? null,
+      revokedAt: null,
+      lastUsedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.employeeBadges.set(badge.id, badge);
+    return badge;
+  }
+
+  public async getEmployeeBadgeByCode(badgeCode: string): Promise<EmployeeBadge | null> {
+    for (const b of this.employeeBadges.values()) {
+      if (b.badgeCode === badgeCode) {
+        return b;
+      }
+    }
+    return null;
+  }
+
+  public async getEmployeeBadgeByUserId(organizationId: string, userId: string): Promise<EmployeeBadge | null> {
+    for (const b of this.employeeBadges.values()) {
+      if (b.organizationId === organizationId && b.userId === userId && b.status === 'ACTIVE') {
+        return b;
+      }
+    }
+    return null;
+  }
+
+  public async updateEmployeeBadgeStatus(
+    organizationId: string,
+    badgeId: string,
+    status: BadgeStatus
+  ): Promise<EmployeeBadge | null> {
+    const b = this.employeeBadges.get(badgeId);
+    if (!b || b.organizationId !== organizationId) return null;
+    b.status = status;
+    if (status === 'REVOKED') {
+      b.revokedAt = new Date().toISOString();
+    }
+    b.updatedAt = new Date().toISOString();
+    return b;
+  }
+
+  // --------------------------------------------------------------------------
+  // Public Machine Knowledge (Phase B)
+  // --------------------------------------------------------------------------
+  public async getPublicMachineKnowledge(
+    manufacturer: string,
+    modelNumber: string
+  ): Promise<PublicMachineKnowledge | null> {
+    const key = `${manufacturer.trim().toLowerCase()}::${modelNumber.trim().toLowerCase()}`;
+    for (const k of this.publicKnowledge.values()) {
+      const entryKey = `${k.manufacturer.trim().toLowerCase()}::${k.modelNumber.trim().toLowerCase()}`;
+      if (entryKey === key) return k;
+    }
+    return null;
+  }
+
+  public async savePublicMachineKnowledge(data: SavePublicKnowledgeDTO): Promise<PublicMachineKnowledge> {
+    const now = new Date().toISOString();
+    const entry: PublicMachineKnowledge = {
+      id: crypto.randomUUID(),
+      manufacturer: data.manufacturer,
+      modelNumber: data.modelNumber,
+      productFamily: data.productFamily,
+      publicSpecs: data.publicSpecs,
+      sourceUrl: data.sourceUrl,
+      sourcePublisher: data.sourcePublisher,
+      retrievalDate: now.substring(0, 10),
+      verificationStatus: data.verificationStatus ?? 'PUBLIC_SUGGESTION',
+      approvedByUserId: null,
+      approvedAt: null,
+    };
+    this.publicKnowledge.set(entry.id, entry);
+    return entry;
+  }
+
+  public async updatePublicMachineKnowledgeStatus(
+    id: string,
+    status: 'APPROVED' | 'REJECTED',
+    approvedByUserId: string
+  ): Promise<PublicMachineKnowledge | null> {
+    const entry = this.publicKnowledge.get(id);
+    if (!entry) return null;
+    entry.verificationStatus = status;
+    entry.approvedByUserId = approvedByUserId;
+    entry.approvedAt = new Date().toISOString();
+    return entry;
+  }
+
   public clear(): void {
     this.organizations.clear();
     this.users.clear();
     this.memberships.clear();
+    this.invitations.clear();
     this.plants.clear();
     this.assets.clear();
+    this.machines.clear();
+    this.missingInfoTasks.clear();
+    this.componentMappings.clear();
+    this.employeeBadges.clear();
+    this.publicKnowledge.clear();
+    this.industryProfiles.clear();
+    this.engineeringModels.clear();
+    this.manufacturerResources.clear();
+    this.engineeringDrawings.clear();
+    this.seedDefaultIndustryProfiles();
     this.auditEvents = [];
     this.documents.clear();
     this.documentVersions.clear();
@@ -1078,4 +2041,3024 @@ export class InMemoryDataStore implements IDataStore {
     this.maintenanceCases.clear();
     this.caseHistory = [];
   }
+
+  // --------------------------------------------------------------------------
+  // Industry Profiles (Universal Industry Support)
+  // --------------------------------------------------------------------------
+  public async listIndustryProfiles(organizationId: string): Promise<IndustryProfile[]> {
+    const list: IndustryProfile[] = [];
+    for (const p of this.industryProfiles.values()) {
+      if (p.organizationId === 'GLOBAL' || p.organizationId === organizationId) {
+        list.push({ ...p });
+      }
+    }
+    return list;
+  }
+
+  public async getIndustryProfileByCode(organizationId: string, code: string): Promise<IndustryProfile | null> {
+    let globalMatch: IndustryProfile | null = null;
+    for (const p of this.industryProfiles.values()) {
+      if (p.code.toUpperCase() === code.toUpperCase()) {
+        if (p.organizationId === organizationId) {
+          return { ...p };
+        }
+        if (p.organizationId === 'GLOBAL') {
+          globalMatch = { ...p };
+        }
+      }
+    }
+    return globalMatch;
+  }
+
+  public async createIndustryProfile(organizationId: string, data: CreateIndustryProfileDTO): Promise<IndustryProfile> {
+    for (const p of this.industryProfiles.values()) {
+      if (p.organizationId === organizationId && p.code.toUpperCase() === data.code.toUpperCase()) {
+        throw new Error(`Industry profile with code '${data.code}' already exists in this organization.`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const profile: IndustryProfile = {
+      id,
+      organizationId,
+      code: data.code.toUpperCase(),
+      name: data.name,
+      description: data.description,
+      isCustom: data.isCustom ?? true,
+      assetCategories: data.assetCategories || [],
+      terminology: data.terminology,
+      drawingTypes: data.drawingTypes || [],
+      customFields: data.customFields || [],
+      standardCertifications: data.standardCertifications || [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.industryProfiles.set(id, profile);
+    return profile;
+  }
+
+  public async updateIndustryProfile(
+    organizationId: string,
+    profileId: string,
+    updates: Partial<IndustryProfile>
+  ): Promise<IndustryProfile | null> {
+    const p = this.industryProfiles.get(profileId);
+    if (!p) return null;
+    if (p.organizationId !== organizationId && p.organizationId !== 'GLOBAL') return null;
+
+    if (p.organizationId === 'GLOBAL') {
+      const customId = crypto.randomUUID();
+      const forked: IndustryProfile = {
+        ...p,
+        ...updates,
+        id: customId,
+        organizationId,
+        isCustom: true,
+        updatedAt: new Date().toISOString(),
+      };
+      this.industryProfiles.set(customId, forked);
+      return forked;
+    }
+
+    const updated: IndustryProfile = {
+      ...p,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.industryProfiles.set(profileId, updated);
+    return updated;
+  }
+
+  public async deleteIndustryProfile(organizationId: string, profileId: string): Promise<boolean> {
+    const p = this.industryProfiles.get(profileId);
+    if (!p || p.organizationId !== organizationId) return false;
+    return this.industryProfiles.delete(profileId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Engineering 3D Models & CAD Files
+  // --------------------------------------------------------------------------
+  public async createEngineeringModel3D(
+    organizationId: string,
+    data: CreateEngineeringModel3DDTO
+  ): Promise<EngineeringModel3D> {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+
+    let status: EngineeringAssetStatus = data.status ?? 'NEEDS_REVIEW';
+    let errorMessage: string | undefined = undefined;
+    let convertedStorageKey: string | undefined = data.convertedStorageKey;
+
+    if (data.fileSizeBytes <= 0) {
+      status = 'PROCESSING_FAILED';
+      errorMessage = 'Empty or corrupted CAD geometry file payload.';
+    } else if (['STEP', 'STP', 'IGES', 'IGS', 'STL', 'OBJ'].includes(data.fileFormat)) {
+      status = 'NEEDS_REVIEW';
+      convertedStorageKey = data.storageKey.replace(/\.[^.]+$/, '.glb');
+    }
+
+    const model: EngineeringModel3D = {
+      id,
+      organizationId,
+      plantId: data.plantId,
+      machineId: data.machineId,
+      assetId: data.assetId || data.machineId,
+      industryProfileCode: data.industryProfileCode,
+      assetCategory: data.assetCategory,
+      title: data.title,
+      manufacturer: data.manufacturer,
+      modelNumber: data.modelNumber,
+      sourceProvider: data.sourceProvider,
+      sourceUrl: data.sourceUrl,
+      fileFormat: data.fileFormat,
+      fileSizeBytes: data.fileSizeBytes,
+      fileHashSha256: data.fileHashSha256,
+      storageKey: data.storageKey,
+      convertedStorageKey,
+      modelRevision: data.modelRevision || '1.0',
+      status,
+      dataClassification: data.dataClassification || 'INTERNAL',
+      licenseUsageRights: data.licenseUsageRights,
+      uploadedByUserId: data.uploadedByUserId,
+      reviewNotes: data.reviewNotes,
+      errorMessage,
+      extractedComponentsCount: data.extractedComponentsCount || 12,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.engineeringModels.set(id, model);
+
+    if (data.machineId && status === 'APPROVED') {
+      const machine = this.machines.get(data.machineId);
+      if (machine && machine.organizationId === organizationId) {
+        machine.hasModel3d = true;
+        machine.model3dStorageKey = convertedStorageKey || model.storageKey;
+        machine.model3dFormat = model.fileFormat.toLowerCase() as any;
+        machine.revision += 1;
+        machine.updatedAt = now;
+      }
+    }
+
+    return model;
+  }
+
+  public async getEngineeringModel3DById(organizationId: string, modelId: string): Promise<EngineeringModel3D | null> {
+    const model = this.engineeringModels.get(modelId);
+    if (!model || model.organizationId !== organizationId) return null;
+    return { ...model };
+  }
+
+  public async listEngineeringModels3D(
+    organizationId: string,
+    filters?: EngineeringModelFilterOptions
+  ): Promise<EngineeringModel3D[]> {
+    let list: EngineeringModel3D[] = [];
+    for (const m of this.engineeringModels.values()) {
+      if (m.organizationId !== organizationId) continue;
+      if (filters?.plantId && m.plantId !== filters.plantId) continue;
+      if (filters?.machineId && m.machineId !== filters.machineId) continue;
+      if (filters?.status && m.status !== filters.status) continue;
+      if (filters?.fileFormat && m.fileFormat !== filters.fileFormat) continue;
+      if (filters?.industryProfileCode && m.industryProfileCode !== filters.industryProfileCode) continue;
+      list.push({ ...m });
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async updateEngineeringModel3D(
+    organizationId: string,
+    modelId: string,
+    updates: Partial<EngineeringModel3D>
+  ): Promise<EngineeringModel3D | null> {
+    const model = this.engineeringModels.get(modelId);
+    if (!model || model.organizationId !== organizationId) return null;
+
+    const now = new Date().toISOString();
+    const updated: EngineeringModel3D = {
+      ...model,
+      ...updates,
+      reviewedAt: updates.reviewedAt || (updates.status ? now : model.reviewedAt),
+      updatedAt: now,
+    };
+    this.engineeringModels.set(modelId, updated);
+
+    if (updated.status === 'APPROVED' && updated.machineId) {
+      const machine = this.machines.get(updated.machineId);
+      if (machine && machine.organizationId === organizationId) {
+        machine.hasModel3d = true;
+        machine.model3dStorageKey = updated.convertedStorageKey || updated.storageKey;
+        machine.model3dFormat = updated.fileFormat.toLowerCase() as any;
+        machine.revision += 1;
+        machine.updatedAt = now;
+      }
+    }
+
+    return updated;
+  }
+
+  public async deleteEngineeringModel3D(organizationId: string, modelId: string): Promise<boolean> {
+    const model = this.engineeringModels.get(modelId);
+    if (!model || model.organizationId !== organizationId) return false;
+    return this.engineeringModels.delete(modelId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Manufacturer Resources
+  // --------------------------------------------------------------------------
+  public async createManufacturerResource(
+    organizationId: string,
+    data: CreateManufacturerResourceDTO
+  ): Promise<ManufacturerResource> {
+    if (data.sourceType === 'OFFICIAL_URL' && data.sourceUrl) {
+      if (!data.sourceUrl.startsWith('http://') && !data.sourceUrl.startsWith('https://')) {
+        throw new Error('Invalid official URL: Must begin with http:// or https://');
+      }
+    }
+
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const res: ManufacturerResource = {
+      id,
+      organizationId,
+      machineId: data.machineId,
+      resourceType: data.resourceType,
+      title: data.title,
+      manufacturer: data.manufacturer,
+      modelNumber: data.modelNumber,
+      sourceType: data.sourceType,
+      sourceUrl: data.sourceUrl,
+      storageKey: data.storageKey,
+      fileFormat: data.fileFormat,
+      fileSizeBytes: data.fileSizeBytes,
+      fileHashSha256: data.fileHashSha256,
+      versionRevision: data.versionRevision || '1.0',
+      verificationStatus: data.verificationStatus || 'UNVERIFIED',
+      accessRequirements: data.accessRequirements,
+      usageRightsEvidence: data.usageRightsEvidence,
+      uploadedByUserId: data.uploadedByUserId,
+      reviewNotes: data.reviewNotes,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.manufacturerResources.set(id, res);
+    return res;
+  }
+
+  public async getManufacturerResourceById(organizationId: string, resourceId: string): Promise<ManufacturerResource | null> {
+    const res = this.manufacturerResources.get(resourceId);
+    if (!res || res.organizationId !== organizationId) return null;
+    return { ...res };
+  }
+
+  public async listManufacturerResources(
+    organizationId: string,
+    filters?: ManufacturerResourceFilterOptions
+  ): Promise<ManufacturerResource[]> {
+    let list: ManufacturerResource[] = [];
+    for (const r of this.manufacturerResources.values()) {
+      if (r.organizationId !== organizationId) continue;
+      if (filters?.machineId && r.machineId !== filters.machineId) continue;
+      if (filters?.resourceType && r.resourceType !== filters.resourceType) continue;
+      if (filters?.verificationStatus && r.verificationStatus !== filters.verificationStatus) continue;
+      if (filters?.manufacturer && !r.manufacturer.toLowerCase().includes(filters.manufacturer.toLowerCase())) continue;
+      list.push({ ...r });
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async updateManufacturerResource(
+    organizationId: string,
+    resourceId: string,
+    updates: Partial<ManufacturerResource>
+  ): Promise<ManufacturerResource | null> {
+    const res = this.manufacturerResources.get(resourceId);
+    if (!res || res.organizationId !== organizationId) return null;
+
+    const now = new Date().toISOString();
+    const updated: ManufacturerResource = {
+      ...res,
+      ...updates,
+      verifiedAt: updates.verifiedAt || (updates.verificationStatus ? now : res.verifiedAt),
+      updatedAt: now,
+    };
+    this.manufacturerResources.set(resourceId, updated);
+    return updated;
+  }
+
+  public async deleteManufacturerResource(organizationId: string, resourceId: string): Promise<boolean> {
+    const res = this.manufacturerResources.get(resourceId);
+    if (!res || res.organizationId !== organizationId) return false;
+    return this.manufacturerResources.delete(resourceId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Engineering Drawings
+  // --------------------------------------------------------------------------
+  public async createEngineeringDrawing(
+    organizationId: string,
+    data: CreateEngineeringDrawingDTO
+  ): Promise<EngineeringDrawing> {
+    for (const d of this.engineeringDrawings.values()) {
+      if (d.organizationId === organizationId && d.uniqueDrawingNumber.toLowerCase() === data.uniqueDrawingNumber.toLowerCase()) {
+        throw new Error(`Engineering drawing with number '${data.uniqueDrawingNumber}' already exists in this organization.`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+
+    let status: EngineeringAssetStatus = data.status ?? 'NEEDS_REVIEW';
+    let errorMessage: string | undefined = undefined;
+    if (data.fileSizeBytes <= 0) {
+      status = 'PROCESSING_FAILED';
+      errorMessage = 'Empty or unreadable drawing file payload.';
+    }
+
+    const dwg: EngineeringDrawing = {
+      id,
+      organizationId,
+      plantId: data.plantId,
+      machineId: data.machineId,
+      drawingTitle: data.drawingTitle,
+      uniqueDrawingNumber: data.uniqueDrawingNumber,
+      drawingType: data.drawingType,
+      discipline: data.discipline,
+      revision: data.revision || 'Rev A',
+      effectiveDate: data.effectiveDate,
+      source: data.source,
+      storageKey: data.storageKey,
+      originalFileName: data.originalFileName,
+      fileFormat: data.fileFormat,
+      fileSizeBytes: data.fileSizeBytes,
+      fileHashSha256: data.fileHashSha256,
+      status,
+      dataClassification: data.dataClassification || 'INTERNAL',
+      equipmentTags: data.equipmentTags || [],
+      uploadedByUserId: data.uploadedByUserId,
+      reviewNotes: data.reviewNotes,
+      errorMessage,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.engineeringDrawings.set(id, dwg);
+
+    if (data.machineId && status === 'APPROVED' && (data.drawingType === 'PID' || data.drawingType === 'PROCESS_FLOW')) {
+      const machine = this.machines.get(data.machineId);
+      if (machine && machine.organizationId === organizationId) {
+        machine.hasPidDiagram = true;
+        machine.pidStorageKey = dwg.storageKey;
+        machine.revision += 1;
+        machine.updatedAt = now;
+      }
+    }
+
+    return dwg;
+  }
+
+  public async getEngineeringDrawingById(organizationId: string, drawingId: string): Promise<EngineeringDrawing | null> {
+    const dwg = this.engineeringDrawings.get(drawingId);
+    if (!dwg || dwg.organizationId !== organizationId) return null;
+    return { ...dwg };
+  }
+
+  public async listEngineeringDrawings(
+    organizationId: string,
+    filters?: EngineeringDrawingFilterOptions
+  ): Promise<EngineeringDrawing[]> {
+    let list: EngineeringDrawing[] = [];
+    for (const d of this.engineeringDrawings.values()) {
+      if (d.organizationId !== organizationId) continue;
+      if (filters?.plantId && d.plantId !== filters.plantId) continue;
+      if (filters?.machineId && d.machineId !== filters.machineId) continue;
+      if (filters?.drawingType && d.drawingType !== filters.drawingType) continue;
+      if (filters?.discipline && d.discipline.toLowerCase() !== filters.discipline.toLowerCase()) continue;
+      if (filters?.status && d.status !== filters.status) continue;
+      list.push({ ...d });
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async updateEngineeringDrawing(
+    organizationId: string,
+    drawingId: string,
+    updates: Partial<EngineeringDrawing>
+  ): Promise<EngineeringDrawing | null> {
+    const dwg = this.engineeringDrawings.get(drawingId);
+    if (!dwg || dwg.organizationId !== organizationId) return null;
+
+    const now = new Date().toISOString();
+    const updated: EngineeringDrawing = {
+      ...dwg,
+      ...updates,
+      reviewedAt: updates.reviewedAt || (updates.status ? now : dwg.reviewedAt),
+      updatedAt: now,
+    };
+    this.engineeringDrawings.set(drawingId, updated);
+
+    if (updated.status === 'APPROVED' && updated.machineId && (updated.drawingType === 'PID' || updated.drawingType === 'PROCESS_FLOW')) {
+      const machine = this.machines.get(updated.machineId);
+      if (machine && machine.organizationId === organizationId) {
+        machine.hasPidDiagram = true;
+        machine.pidStorageKey = updated.storageKey;
+        machine.revision += 1;
+        machine.updatedAt = now;
+      }
+    }
+
+    return updated;
+  }
+
+  public async deleteEngineeringDrawing(organizationId: string, drawingId: string): Promise<boolean> {
+    const dwg = this.engineeringDrawings.get(drawingId);
+    if (!dwg || dwg.organizationId !== organizationId) return false;
+    return this.engineeringDrawings.delete(drawingId);
+  }
+
+  // --------------------------------------------------------------------------
+  // Engineering Asset Center Summary
+  // --------------------------------------------------------------------------
+  public async getEngineeringAssetCenterSummary(organizationId: string): Promise<EngineeringAssetCenterSummary> {
+    let totalModels3d = 0;
+    let approvedModels3d = 0;
+    let pendingReviewModels3d = 0;
+
+    for (const m of this.engineeringModels.values()) {
+      if (m.organizationId === organizationId) {
+        totalModels3d++;
+        if (m.status === 'APPROVED') approvedModels3d++;
+        if (m.status === 'NEEDS_REVIEW') pendingReviewModels3d++;
+      }
+    }
+
+    let totalDrawings = 0;
+    let approvedDrawings = 0;
+    for (const d of this.engineeringDrawings.values()) {
+      if (d.organizationId === organizationId) {
+        totalDrawings++;
+        if (d.status === 'APPROVED') approvedDrawings++;
+      }
+    }
+
+    let totalManufacturerResources = 0;
+    for (const r of this.manufacturerResources.values()) {
+      if (r.organizationId === organizationId) {
+        totalManufacturerResources++;
+      }
+    }
+
+    let totalProfiles = 0;
+    for (const p of this.industryProfiles.values()) {
+      if (p.organizationId === 'GLOBAL' || p.organizationId === organizationId) {
+        totalProfiles++;
+      }
+    }
+
+    return {
+      totalModels3d,
+      approvedModels3d,
+      pendingReviewModels3d,
+      totalDrawings,
+      approvedDrawings,
+      totalManufacturerResources,
+      totalIndustryProfiles: totalProfiles,
+      activeIndustryProfileCode: 'OIL_GAS_PETROCHEM',
+      supportedFormats: {
+        cad: ['GLB', 'GLTF', 'STEP', 'STP', 'IGES', 'IGS', 'STL', 'OBJ'],
+        drawings: ['PDF', 'PNG', 'JPG', 'SVG', 'CAD', 'DXF'],
+        resources: ['PDF', 'DOCX', 'STEP', 'ZIP', 'URL'],
+      },
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Employee and Technician Directory
+  // --------------------------------------------------------------------------
+  public async createEmployeeProfile(
+    organizationId: string,
+    dto: CreateEmployeeProfileDTO
+  ): Promise<EmployeeProfile> {
+    for (const p of this.employeeProfiles.values()) {
+      if (p.organizationId === organizationId && p.employeeNumber === dto.employeeNumber) {
+        throw new Error(`FORGEX_DUPLICATE_EMPLOYEE_NUMBER: Employee number '${dto.employeeNumber}' already exists.`);
+      }
+      if (p.organizationId === organizationId && p.userId === dto.userId) {
+        throw new Error(`FORGEX_DUPLICATE_EMPLOYEE_USER: User is already registered in employee directory.`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const profile: EmployeeProfile = {
+      id: crypto.randomUUID(),
+      organizationId,
+      userId: dto.userId,
+      employeeNumber: dto.employeeNumber,
+      fullName: dto.fullName,
+      email: dto.email,
+      role: dto.role,
+      department: dto.department || 'Operations',
+      assignedPlantIds: dto.assignedPlantIds || [],
+      accountStatus: dto.accountStatus || 'ACTIVE',
+      availabilityStatus: dto.availabilityStatus || 'AVAILABLE',
+      qualificationStatus: dto.qualificationStatus || 'CERTIFIED',
+      verifiedSkills: dto.verifiedSkills || [],
+      specializedMachineIds: dto.specializedMachineIds || [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.employeeProfiles.set(profile.id, profile);
+    return profile;
+  }
+
+  public async getEmployeeProfile(organizationId: string, id: string): Promise<EmployeeProfile | null> {
+    const profile = this.employeeProfiles.get(id);
+    if (!profile || profile.organizationId !== organizationId) return null;
+    return profile;
+  }
+
+  public async getEmployeeProfileByUserId(organizationId: string, userId: string): Promise<EmployeeProfile | null> {
+    for (const p of this.employeeProfiles.values()) {
+      if (p.organizationId === organizationId && p.userId === userId) {
+        return p;
+      }
+    }
+    return null;
+  }
+
+  public async updateEmployeeProfile(
+    organizationId: string,
+    id: string,
+    updates: Partial<EmployeeProfile>
+  ): Promise<EmployeeProfile | null> {
+    const profile = await this.getEmployeeProfile(organizationId, id);
+    if (!profile) return null;
+
+    Object.assign(profile, updates, { updatedAt: new Date().toISOString() });
+    this.employeeProfiles.set(id, profile);
+    return profile;
+  }
+
+  public async listEmployeeProfiles(
+    organizationId: string,
+    filters?: EmployeeProfileFilterOptions
+  ): Promise<EmployeeProfile[]> {
+    const results: EmployeeProfile[] = [];
+    for (const p of this.employeeProfiles.values()) {
+      if (p.organizationId !== organizationId) continue;
+      if (filters?.department && p.department !== filters.department) continue;
+      if (filters?.role && p.role !== filters.role) continue;
+      if (filters?.accountStatus && p.accountStatus !== filters.accountStatus) continue;
+      if (filters?.availabilityStatus && p.availabilityStatus !== filters.availabilityStatus) continue;
+      if (filters?.plantId && !p.assignedPlantIds.includes(filters.plantId) && p.assignedPlantIds.length > 0) {
+        continue;
+      }
+      results.push(p);
+    }
+    return results;
+  }
+
+  // --------------------------------------------------------------------------
+  // Machine-to-Specialist Mappings
+  // --------------------------------------------------------------------------
+  public async setMachineSpecialistMapping(
+    organizationId: string,
+    dto: SetMachineSpecialistMappingDTO
+  ): Promise<MachineSpecialistMapping> {
+    let existing: MachineSpecialistMapping | null = null;
+    for (const m of this.machineSpecialists.values()) {
+      if (m.organizationId === organizationId && m.machineId === dto.machineId) {
+        existing = m;
+        break;
+      }
+    }
+
+    const now = new Date().toISOString();
+    let computedStatus: SpecialistAssignmentStatus = dto.assignmentStatus || 'UNASSIGNED';
+
+    if (dto.primarySpecialistUserId) {
+      const specialistProfile = await this.getEmployeeProfileByUserId(organizationId, dto.primarySpecialistUserId);
+      const requiredCerts = dto.requiredCertifications || [];
+      if (specialistProfile && requiredCerts.length > 0) {
+        const hasAllCerts = requiredCerts.every((c) => specialistProfile.verifiedSkills.includes(c));
+        computedStatus = hasAllCerts ? 'ASSIGNED' : 'QUALIFICATION_PENDING';
+      } else {
+        computedStatus = 'ASSIGNED';
+      }
+    } else {
+      computedStatus = 'UNASSIGNED';
+    }
+
+    if (existing) {
+      existing.plantId = dto.plantId;
+      existing.primarySpecialistUserId = dto.primarySpecialistUserId ?? null;
+      existing.primarySpecialistName = dto.primarySpecialistName ?? null;
+      existing.backupSpecialistUserIds = dto.backupSpecialistUserIds || existing.backupSpecialistUserIds;
+      existing.requiredCertifications = dto.requiredCertifications || existing.requiredCertifications;
+      existing.assignmentStatus = computedStatus;
+      existing.escalationTimeoutMinutes = dto.escalationTimeoutMinutes || existing.escalationTimeoutMinutes;
+      existing.escalationRole = dto.escalationRole || existing.escalationRole;
+      existing.assignedByUserId = dto.assignedByUserId || existing.assignedByUserId;
+      existing.assignedAt = now;
+      existing.updatedAt = now;
+      this.machineSpecialists.set(existing.id, existing);
+      return existing;
+    }
+
+    const mapping: MachineSpecialistMapping = {
+      id: crypto.randomUUID(),
+      organizationId,
+      machineId: dto.machineId,
+      plantId: dto.plantId,
+      primarySpecialistUserId: dto.primarySpecialistUserId ?? null,
+      primarySpecialistName: dto.primarySpecialistName ?? null,
+      backupSpecialistUserIds: dto.backupSpecialistUserIds || [],
+      requiredCertifications: dto.requiredCertifications || [],
+      assignmentStatus: computedStatus,
+      escalationTimeoutMinutes: dto.escalationTimeoutMinutes || 60,
+      escalationRole: dto.escalationRole || 'PLANT_MANAGER',
+      assignedByUserId: dto.assignedByUserId || null,
+      assignedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.machineSpecialists.set(mapping.id, mapping);
+    return mapping;
+  }
+
+  public async getMachineSpecialistMapping(
+    organizationId: string,
+    machineId: string
+  ): Promise<MachineSpecialistMapping | null> {
+    for (const m of this.machineSpecialists.values()) {
+      if (m.organizationId === organizationId && m.machineId === machineId) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  public async listMachineSpecialistMappings(organizationId: string): Promise<MachineSpecialistMapping[]> {
+    const list: MachineSpecialistMapping[] = [];
+    for (const m of this.machineSpecialists.values()) {
+      if (m.organizationId === organizationId) {
+        list.push(m);
+      }
+    }
+    return list;
+  }
+
+  // --------------------------------------------------------------------------
+  // Specialist Tickets & Automatic Routing
+  // --------------------------------------------------------------------------
+  public async createSpecialistTicket(
+    organizationId: string,
+    dto: CreateSpecialistTicketDTO
+  ): Promise<SpecialistTicket> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const ticketNumber =
+      dto.ticketNumber || `TICK-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const initialHistory: TicketHistoryItem = {
+      id: crypto.randomUUID(),
+      ticketId: id,
+      actorUserId: dto.reportedByUserId,
+      action: 'TICKET_CREATED',
+      previousStatus: null,
+      newStatus: dto.status || 'OPEN',
+      notes: `Ticket created. Escalation reason: ${dto.escalationReason}. Assignment status: ${dto.assignmentStatus || 'NEEDS_SPECIALIST_ASSIGNMENT'}`,
+      timestamp: now,
+    };
+
+    const ticket: SpecialistTicket = {
+      id,
+      ticketNumber,
+      organizationId,
+      plantId: dto.plantId,
+      machineId: dto.machineId ?? null,
+      machineAssetTag: dto.machineAssetTag ?? null,
+      reportedByUserId: dto.reportedByUserId,
+      reportedByUserName: dto.reportedByUserName ?? null,
+      originalQuestion: dto.originalQuestion,
+      diagnosticDetails: dto.diagnosticDetails ?? null,
+      escalationReason: dto.escalationReason,
+      evidenceCheckResult: dto.evidenceCheckResult,
+      severity: dto.severity || 'MEDIUM',
+      assignedSpecialistUserId: dto.assignedSpecialistUserId ?? null,
+      assignedSpecialistName: dto.assignedSpecialistName ?? null,
+      assignmentStatus: dto.assignmentStatus || 'NEEDS_SPECIALIST_ASSIGNMENT',
+      status: dto.status || 'OPEN',
+      technicianObservations: null,
+      diagnosisOutcome: null,
+      repairOutcome: null,
+      proposedKnowledgeUpdate: null,
+      knowledgeUpdateStatus: 'NONE',
+      resolvedAt: null,
+      resolvedByUserId: null,
+      history: [initialHistory],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.specialistTickets.set(id, ticket);
+    return ticket;
+  }
+
+  public async getSpecialistTicketById(organizationId: string, id: string): Promise<SpecialistTicket | null> {
+    const ticket = this.specialistTickets.get(id);
+    if (!ticket || ticket.organizationId !== organizationId) return null;
+    return ticket;
+  }
+
+  public async updateSpecialistTicket(
+    organizationId: string,
+    id: string,
+    updates: Partial<SpecialistTicket> & { actorUserId?: string; note?: string }
+  ): Promise<SpecialistTicket | null> {
+    const ticket = await this.getSpecialistTicketById(organizationId, id);
+    if (!ticket) return null;
+
+    const previousStatus = ticket.status;
+    const actorUserId = updates.actorUserId || ticket.reportedByUserId;
+    const now = new Date().toISOString();
+
+    if (updates.status && updates.status !== previousStatus) {
+      ticket.history.push({
+        id: crypto.randomUUID(),
+        ticketId: ticket.id,
+        actorUserId,
+        action: 'STATUS_CHANGED',
+        previousStatus,
+        newStatus: updates.status,
+        notes: updates.note || `Status updated from ${previousStatus} to ${updates.status}`,
+        timestamp: now,
+      });
+
+      if (updates.status === 'RESOLVED' || updates.status === 'CLOSED') {
+        ticket.resolvedAt = now;
+        ticket.resolvedByUserId = actorUserId;
+      }
+    } else if (updates.note) {
+      ticket.history.push({
+        id: crypto.randomUUID(),
+        ticketId: ticket.id,
+        actorUserId,
+        action: 'NOTE_ADDED',
+        previousStatus: ticket.status,
+        newStatus: ticket.status,
+        notes: updates.note,
+        timestamp: now,
+      });
+    }
+
+    delete updates.actorUserId;
+    delete updates.note;
+
+    Object.assign(ticket, updates, { updatedAt: now });
+    this.specialistTickets.set(id, ticket);
+    return ticket;
+  }
+
+  public async listSpecialistTickets(
+    organizationId: string,
+    filters?: SpecialistTicketFilterOptions
+  ): Promise<SpecialistTicket[]> {
+    const results: SpecialistTicket[] = [];
+    for (const t of this.specialistTickets.values()) {
+      if (t.organizationId !== organizationId) continue;
+      if (filters?.assignedSpecialistUserId && t.assignedSpecialistUserId !== filters.assignedSpecialistUserId) {
+        continue;
+      }
+      if (filters?.reportedByUserId && t.reportedByUserId !== filters.reportedByUserId) {
+        continue;
+      }
+      if (filters?.machineId && t.machineId !== filters.machineId) {
+        continue;
+      }
+      if (filters?.status && t.status !== filters.status) {
+        continue;
+      }
+      if (filters?.assignmentStatus && t.assignmentStatus !== filters.assignmentStatus) {
+        continue;
+      }
+      if (filters?.severity && t.severity !== filters.severity) {
+        continue;
+      }
+      results.push(t);
+    }
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async getTicketOversightSummary(organizationId: string): Promise<TicketOversightSummary> {
+    let totalTickets = 0;
+    let openTickets = 0;
+    let unassignedTickets = 0;
+    let inProgressTickets = 0;
+    let resolvedTickets = 0;
+    let escalatedTickets = 0;
+    const specialistWorkloads: Record<
+      string,
+      { specialistName: string; activeCount: number; resolvedCount: number }
+    > = {};
+    const recentEscalations: SpecialistTicket[] = [];
+
+    for (const t of this.specialistTickets.values()) {
+      if (t.organizationId !== organizationId) continue;
+      totalTickets++;
+
+      if (t.status === 'OPEN') openTickets++;
+      if (t.status === 'IN_PROGRESS') inProgressTickets++;
+      if (t.status === 'RESOLVED' || t.status === 'CLOSED') resolvedTickets++;
+      if (t.assignmentStatus === 'NEEDS_SPECIALIST_ASSIGNMENT') unassignedTickets++;
+      if (
+        t.assignmentStatus === 'ESCALATED_TRIAGE' ||
+        t.assignmentStatus === 'NEEDS_SPECIALIST_ASSIGNMENT' ||
+        t.escalationReason === 'SAFETY_CRITICAL'
+      ) {
+        escalatedTickets++;
+        if (recentEscalations.length < 10) {
+          recentEscalations.push(t);
+        }
+      }
+
+      if (t.assignedSpecialistUserId) {
+        const key = t.assignedSpecialistUserId;
+        if (!specialistWorkloads[key]) {
+          specialistWorkloads[key] = {
+            specialistName: t.assignedSpecialistName || 'Specialist',
+            activeCount: 0,
+            resolvedCount: 0,
+          };
+        }
+        if (t.status === 'OPEN' || t.status === 'IN_PROGRESS') {
+          specialistWorkloads[key].activeCount++;
+        } else {
+          specialistWorkloads[key].resolvedCount++;
+        }
+      }
+    }
+
+    return {
+      totalTickets,
+      openTickets,
+      unassignedTickets,
+      inProgressTickets,
+      resolvedTickets,
+      escalatedTickets,
+      specialistWorkloads,
+      recentEscalations,
+    };
+  }
+
+  public async findActiveDuplicateTicket(
+    organizationId: string,
+    machineId: string,
+    questionOrSymptom: string
+  ): Promise<SpecialistTicket | null> {
+    const normalize = (str: string) =>
+      str
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const target = normalize(questionOrSymptom);
+    const targetWords = new Set(target.split(' ').filter((w) => w.length > 2));
+
+    for (const t of this.specialistTickets.values()) {
+      if (t.organizationId !== organizationId) continue;
+      if (t.machineId !== machineId) continue;
+
+      // Active status check
+      if (
+        t.status === 'OPEN' ||
+        t.status === 'IN_PROGRESS' ||
+        t.status === 'REOPENED' ||
+        t.status === 'PENDING_VERIFICATION' ||
+        t.status === 'PENDING_REVIEW'
+      ) {
+        const existingQ = normalize(t.originalQuestion);
+        if (existingQ === target) {
+          return t;
+        }
+
+        // Substantial word overlap for the same reported fault event
+        const existingWords = new Set(existingQ.split(' ').filter((w) => w.length > 2));
+        if (targetWords.size > 0 && existingWords.size > 0) {
+          let matches = 0;
+          for (const w of targetWords) {
+            if (existingWords.has(w)) matches++;
+          }
+          const overlap = matches / Math.min(targetWords.size, existingWords.size);
+          if (overlap >= 0.75) {
+            return t;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  public async getOperationalAnalytics(
+    organizationId: string,
+    filters?: OperationalAnalyticsFilterOptions
+  ): Promise<OperationalAnalyticsDashboard> {
+    const timeWindowDays = filters?.timeWindowDays ?? null;
+    const plantFilter = filters?.plantId ?? null;
+    const cutoff = timeWindowDays ? Date.now() - timeWindowDays * 24 * 3600 * 1000 : null;
+
+    // Filter tickets by org, plant, and time window
+    const tickets = Array.from(this.specialistTickets.values()).filter((t) => {
+      if (t.organizationId !== organizationId) return false;
+      if (plantFilter && t.plantId !== plantFilter) return false;
+      if (cutoff && new Date(t.createdAt).getTime() < cutoff) return false;
+      return true;
+    });
+
+    let openTicketsCount = 0;
+    let inProgressTicketsCount = 0;
+    let resolvedTicketsCount = 0;
+    let reopenedTicketsCount = 0;
+    let unassignedTicketsCount = 0;
+    let escalatedTicketsCount = 0;
+
+    const ticketsBySeverity: Record<TicketSeverity, number> = {
+      LOW: 0,
+      MEDIUM: 0,
+      HIGH: 0,
+      CRITICAL: 0,
+    };
+
+    const ticketsByStatus: Record<TicketStatus, number> = {
+      OPEN: 0,
+      IN_PROGRESS: 0,
+      PENDING_REVIEW: 0,
+      PENDING_VERIFICATION: 0,
+      RESOLVED: 0,
+      CLOSED: 0,
+      UNRESOLVED: 0,
+      REOPENED: 0,
+    };
+
+    const ticketsByType: Record<string, number> = {};
+    const reopenedTickets: SpecialistTicket[] = [];
+    const durationsMinutes: number[] = [];
+
+    // Specialist workload aggregator
+    const specialistStats = new Map<
+      string,
+      { specialistName: string; open: number; inProgress: number; resolved: number; overdue: number }
+    >();
+
+    const machineTicketStats = new Map<
+      string,
+      {
+        machineId: string;
+        assetTag: string;
+        name: string;
+        plantId: string;
+        total: number;
+        open: number;
+        resolved: number;
+        recurring: number;
+      }
+    >();
+
+    let overdueCasesCount = 0;
+    const now = Date.now();
+    const OVERDUE_THRESHOLD_MS = 24 * 3600 * 1000; // 24 hours SLA default
+
+    for (const t of tickets) {
+      // Status breakdown
+      if (ticketsByStatus[t.status] !== undefined) {
+        ticketsByStatus[t.status]++;
+      }
+
+      if (t.status === 'OPEN') openTicketsCount++;
+      if (t.status === 'IN_PROGRESS') inProgressTicketsCount++;
+      if (t.status === 'RESOLVED' || t.status === 'CLOSED') resolvedTicketsCount++;
+      if (t.assignmentStatus === 'NEEDS_SPECIALIST_ASSIGNMENT') unassignedTicketsCount++;
+      if (
+        t.assignmentStatus === 'ESCALATED_TRIAGE' ||
+        t.escalationReason === 'SAFETY_CRITICAL'
+      ) {
+        escalatedTicketsCount++;
+      }
+
+      // Reopened tracking
+      if ((t.reopenCount && t.reopenCount > 0) || t.status === 'REOPENED') {
+        reopenedTicketsCount++;
+        reopenedTickets.push(t);
+      }
+
+      // Severity breakdown
+      if (ticketsBySeverity[t.severity] !== undefined) {
+        ticketsBySeverity[t.severity]++;
+      }
+
+      // Category breakdown
+      const catKey = t.faultCategory || 'UNSPECIFIED_MALFUNCTION';
+      ticketsByType[catKey] = (ticketsByType[catKey] || 0) + 1;
+
+      // Time-to-Resolution (TTR) calculation:
+      // STRICT RULE: Only completed tickets with resolvedAt are included.
+      // Unresolved tickets (OPEN, IN_PROGRESS, PENDING_VERIFICATION, REOPENED, UNRESOLVED)
+      // are excluded from completed-resolution statistics to prevent skewing!
+      if ((t.status === 'RESOLVED' || t.status === 'CLOSED') && t.resolvedAt) {
+        const resolvedMs = new Date(t.resolvedAt).getTime();
+        const createdMs = new Date(t.createdAt).getTime();
+        const diffMinutes = Math.max(0, Math.round((resolvedMs - createdMs) / 60000));
+        durationsMinutes.push(diffMinutes);
+      }
+
+      // Overdue calculation
+      const isCompleted = t.status === 'RESOLVED' || t.status === 'CLOSED';
+      const isOverdue = !isCompleted && now - new Date(t.createdAt).getTime() > OVERDUE_THRESHOLD_MS;
+      if (isOverdue) overdueCasesCount++;
+
+      // Specialist workload
+      if (t.assignedSpecialistUserId) {
+        const specId = t.assignedSpecialistUserId;
+        if (!specialistStats.has(specId)) {
+          specialistStats.set(specId, {
+            specialistName: t.assignedSpecialistName || 'Specialist',
+            open: 0,
+            inProgress: 0,
+            resolved: 0,
+            overdue: 0,
+          });
+        }
+        const s = specialistStats.get(specId)!;
+        if (t.status === 'OPEN') s.open++;
+        else if (t.status === 'IN_PROGRESS') s.inProgress++;
+        else if (isCompleted) s.resolved++;
+        if (isOverdue) s.overdue++;
+      }
+
+      // Machine aggregation
+      if (t.machineId) {
+        const mId = t.machineId;
+        if (!machineTicketStats.has(mId)) {
+          const mObj = this.machines.get(mId);
+          machineTicketStats.set(mId, {
+            machineId: mId,
+            assetTag: t.machineAssetTag || mObj?.assetTag || 'UNKNOWN',
+            name: mObj?.name || t.machineAssetTag || 'Unknown Machine',
+            plantId: t.plantId,
+            total: 0,
+            open: 0,
+            resolved: 0,
+            recurring: 0,
+          });
+        }
+        const ms = machineTicketStats.get(mId)!;
+        ms.total++;
+        if (t.status === 'OPEN' || t.status === 'IN_PROGRESS') ms.open++;
+        if (isCompleted) ms.resolved++;
+      }
+    }
+
+    // Exact TTR Mean and Median calculation
+    const resolvedTicketsSampleCount = durationsMinutes.length;
+    let averageTimeToResolutionMinutes = 0;
+    let medianTimeToResolutionMinutes = 0;
+
+    if (resolvedTicketsSampleCount > 0) {
+      durationsMinutes.sort((a, b) => a - b);
+      const totalDuration = durationsMinutes.reduce((sum, d) => sum + d, 0);
+      averageTimeToResolutionMinutes = Number((totalDuration / resolvedTicketsSampleCount).toFixed(2));
+
+      const mid = Math.floor(resolvedTicketsSampleCount / 2);
+      if (resolvedTicketsSampleCount % 2 !== 0) {
+        medianTimeToResolutionMinutes = durationsMinutes[mid];
+      } else {
+        medianTimeToResolutionMinutes = Number(
+          ((durationsMinutes[mid - 1] + durationsMinutes[mid]) / 2).toFixed(2)
+        );
+      }
+    }
+
+    // Most frequently reported issues
+    const totalTicketsCount = tickets.length;
+    const mostFrequentlyReportedIssues: IssueFrequencyMetric[] = Object.entries(ticketsByType)
+      .map(([faultCategory, count]) => ({
+        faultCategory,
+        count,
+        percentage: totalTicketsCount > 0 ? Number(((count / totalTicketsCount) * 100).toFixed(1)) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    // Repeated faults from maintenance records
+    let repeatedFaultsCount = 0;
+    for (const r of this.maintenanceRecords.values()) {
+      if (r.organizationId !== organizationId) continue;
+      if (plantFilter && r.plantId !== plantFilter) continue;
+      if (cutoff && new Date(r.resolvedAt).getTime() < cutoff) continue;
+      if (r.isRecurringIncident) {
+        repeatedFaultsCount++;
+        const ms = machineTicketStats.get(r.machineId);
+        if (ms) ms.recurring++;
+      }
+    }
+
+    // Top affected machines
+    const topAffectedMachines: TopAffectedMachineMetric[] = Array.from(machineTicketStats.values())
+      .map((m) => ({
+        machineId: m.machineId,
+        assetTag: m.assetTag,
+        machineName: m.name,
+        plantId: m.plantId,
+        ticketCount: m.total,
+        recurringFaultCount: m.recurring,
+        openTicketCount: m.open,
+        resolvedTicketCount: m.resolved,
+      }))
+      .sort((a, b) => b.ticketCount - a.ticketCount);
+
+    // Unanswered Copilot questions
+    const unansweredQuestionsSample: UnansweredQuestionSample[] = [];
+    let unansweredCopilotQuestionsCount = 0;
+
+    for (const msg of this.messages.values()) {
+      const conv = this.conversations.get(msg.conversationId);
+      if (!conv || conv.organizationId !== organizationId) continue;
+      if (plantFilter && conv.plantId !== plantFilter) continue;
+      if (cutoff && new Date(msg.createdAt).getTime() < cutoff) continue;
+
+      if (
+        msg.senderType === 'ASSISTANT' &&
+        (msg.isInsufficientEvidence || msg.confidence === 'INSUFFICIENT_EVIDENCE')
+      ) {
+        unansweredCopilotQuestionsCount++;
+        if (unansweredQuestionsSample.length < 10) {
+          // Find preceding user question
+          const userMsg = Array.from(this.messages.values()).find(
+            (m) => m.conversationId === msg.conversationId && m.senderType === 'USER'
+          );
+          unansweredQuestionsSample.push({
+            conversationId: conv.id,
+            query: userMsg?.content || conv.title || 'Inquiry with insufficient evidence',
+            createdAt: msg.createdAt,
+            plantId: conv.plantId,
+            machineAssetTag: conv.assetId || null,
+          });
+        }
+      }
+    }
+
+    // Knowledge gaps by machine
+    const knowledgeGapsByMachine: KnowledgeGapMetric[] = [];
+    for (const machine of this.machines.values()) {
+      if (machine.organizationId !== organizationId) continue;
+      if (plantFilter && machine.plantId !== plantFilter) continue;
+
+      const isGap =
+        machine.documentationReadiness !== 'READY' ||
+        machine.verificationState !== 'VERIFIED';
+
+      if (isGap) {
+        const missingTasks = Array.from(this.missingInfoTasks.values()).filter(
+          (t) => t.machineId === machine.id && t.status !== 'APPROVED'
+        );
+        const missingFields = missingTasks.flatMap((t) => t.requestedFields);
+
+        const unverifiedClaims = Array.from(this.evidenceClaims.values()).filter(
+          (c) => c.machineId === machine.id && c.status !== 'APPROVED'
+        );
+
+        knowledgeGapsByMachine.push({
+          machineId: machine.id,
+          assetTag: machine.assetTag,
+          machineName: machine.name,
+          documentationReadiness: machine.documentationReadiness,
+          missingFields: Array.from(new Set(missingFields)),
+          unverifiedClaimsCount: unverifiedClaims.length,
+          unansweredQuestionsCount: unansweredQuestionsSample.filter(
+            (q) => q.machineAssetTag === machine.assetTag
+          ).length,
+        });
+      }
+    }
+
+    // Specialist workloads
+    const specialistWorkloads: SpecialistWorkloadMetric[] = Array.from(
+      specialistStats.entries()
+    ).map(([specialistId, s]) => ({
+      specialistId,
+      specialistName: s.specialistName,
+      openCount: s.open,
+      inProgressCount: s.inProgress,
+      resolvedCount: s.resolved,
+      overdueCount: s.overdue,
+    }));
+
+    return {
+      timeWindowDays,
+      plantFilter,
+      generatedAt: new Date().toISOString(),
+      totalTickets: totalTicketsCount,
+      openTicketsCount,
+      inProgressTicketsCount,
+      resolvedTicketsCount,
+      reopenedTicketsCount,
+      unassignedTicketsCount,
+      escalatedTicketsCount,
+      resolvedTicketsSampleCount,
+      averageTimeToResolutionMinutes,
+      medianTimeToResolutionMinutes,
+      ticketsBySeverity,
+      ticketsByStatus,
+      ticketsByType,
+      mostFrequentlyReportedIssues,
+      topAffectedMachines,
+      reopenedTickets,
+      repeatedFaultsCount,
+      unansweredCopilotQuestionsCount,
+      unansweredQuestionsSample,
+      knowledgeGapsByMachine,
+      specialistWorkloads,
+      overdueCasesCount,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Persistent Machine Maintenance History & Resolution Records
+  // --------------------------------------------------------------------------
+  public async createMaintenanceRecord(
+    organizationId: string,
+    data: CreateMaintenanceRecordDTO
+  ): Promise<MaintenanceRecord> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const recordNumber =
+      data.recordNumber ||
+      `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const priorRecords = Array.from(this.maintenanceRecords.values()).filter(
+      (r) =>
+        r.organizationId === organizationId &&
+        r.machineId === data.machineId &&
+        r.faultCategory === data.faultCategory
+    );
+    const isRecurringIncident = priorRecords.length > 0;
+    const recurrenceCount = priorRecords.length + 1;
+
+    const initialAudit: MaintenanceAuditEntry = {
+      id: crypto.randomUUID(),
+      versionNumber: 1,
+      action: 'RECORD_CREATED',
+      actorUserId: data.resolvingTechnicianUserId,
+      actorName: data.resolvingTechnicianName,
+      changes: {
+        status: { from: null, to: 'CREATED' },
+        rootCauseStatus: { from: null, to: data.rootCauseStatus || 'UNKNOWN' },
+      },
+      notes: 'Initial maintenance record generated from technician resolution',
+      timestamp: now,
+    };
+
+    const relatedIncidentRecordIds =
+      data.relatedIncidentRecordIds && data.relatedIncidentRecordIds.length > 0
+        ? data.relatedIncidentRecordIds
+        : priorRecords.map((r) => r.id);
+
+    const requiresRestartApproval = data.requiresRestartApproval ?? false;
+
+    const record: MaintenanceRecord = {
+      id,
+      recordNumber,
+      organizationId,
+      plantId: data.plantId,
+      machineId: data.machineId,
+      machineAssetTag: data.machineAssetTag,
+      ticketId: data.ticketId,
+      ticketNumber: data.ticketNumber,
+      componentId: data.componentId ?? null,
+      componentName: data.componentName ?? null,
+      reportingUserId: data.reportingUserId,
+      reportingUserName: data.reportingUserName ?? null,
+      assignedTechnicianUserId: data.assignedTechnicianUserId ?? null,
+      assignedTechnicianName: data.assignedTechnicianName ?? null,
+      resolvingTechnicianUserId: data.resolvingTechnicianUserId,
+      resolvingTechnicianName: data.resolvingTechnicianName,
+      faultCategory: data.faultCategory,
+      problemStatement: data.problemStatement,
+      observedSymptoms: data.observedSymptoms ?? [],
+      measurements: data.measurements ?? [],
+      rootCause: data.rootCause,
+      rootCauseStatus: data.rootCauseStatus || 'UNKNOWN',
+      repairActions: data.repairActions ?? [],
+      partsReplaced: data.partsReplaced ?? [],
+      postRepairTestResults: data.postRepairTestResults ?? [],
+      verificationState: data.verificationState || 'PENDING',
+      verificationNotes: data.verificationNotes ?? null,
+      verifiedByUserId: data.verifiedByUserId ?? null,
+      verifiedAt: data.verifiedAt ?? null,
+      requiresRestartApproval,
+      restartApproved: data.restartApproved ?? false,
+      restartApprovedByUserId: data.restartApprovedByUserId ?? null,
+      restartApprovedAt: data.restartApprovedAt ?? null,
+      restartNotes: data.restartNotes ?? null,
+      approvalStatus:
+        data.approvalStatus ||
+        (requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED'),
+      approvedByUserId: data.approvedByUserId ?? null,
+      approvedAt: data.approvedAt ?? null,
+      approvalNotes: data.approvalNotes ?? null,
+      resolvedAt: now,
+      closedAt: null,
+      relatedIncidentRecordIds,
+      attachments: data.attachments ?? [],
+      recordVersion: 1,
+      auditTrail: [initialAudit],
+      isRecurringIncident,
+      recurrenceCount,
+      knowledgeApproved: data.knowledgeApproved ?? false,
+      knowledgeApprovedAt: null,
+      knowledgeApprovedByUserId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.maintenanceRecords.set(id, record);
+    return record;
+  }
+
+  public async getMaintenanceRecordById(
+    organizationId: string,
+    id: string
+  ): Promise<MaintenanceRecord | null> {
+    const record = this.maintenanceRecords.get(id);
+    if (!record || record.organizationId !== organizationId) return null;
+    return record;
+  }
+
+  public async getMaintenanceRecordByNumber(
+    organizationId: string,
+    recordNumber: string
+  ): Promise<MaintenanceRecord | null> {
+    for (const r of this.maintenanceRecords.values()) {
+      if (r.organizationId === organizationId && r.recordNumber === recordNumber) {
+        return r;
+      }
+    }
+    return null;
+  }
+
+  public async listMaintenanceRecords(
+    organizationId: string,
+    filters?: MaintenanceRecordFilterOptions
+  ): Promise<MaintenanceRecord[]> {
+    const results: MaintenanceRecord[] = [];
+    for (const r of this.maintenanceRecords.values()) {
+      if (r.organizationId !== organizationId) continue;
+      if (filters?.machineId && r.machineId !== filters.machineId) continue;
+      if (filters?.plantId && r.plantId !== filters.plantId) continue;
+      if (filters?.ticketId && r.ticketId !== filters.ticketId) continue;
+      if (filters?.faultCategory && r.faultCategory !== filters.faultCategory) continue;
+      if (filters?.rootCauseStatus && r.rootCauseStatus !== filters.rootCauseStatus) continue;
+      if (filters?.verificationState && r.verificationState !== filters.verificationState) continue;
+      if (filters?.approvalStatus && r.approvalStatus !== filters.approvalStatus) continue;
+      if (
+        filters?.requiresRestartApproval !== undefined &&
+        r.requiresRestartApproval !== filters.requiresRestartApproval
+      ) {
+        continue;
+      }
+      if (
+        filters?.restartApproved !== undefined &&
+        r.restartApproved !== filters.restartApproved
+      ) {
+        continue;
+      }
+      results.push(r);
+    }
+    return results.sort(
+      (a, b) => new Date(b.resolvedAt).getTime() - new Date(a.resolvedAt).getTime()
+    );
+  }
+
+  public async updateMaintenanceRecord(
+    organizationId: string,
+    id: string,
+    updates: UpdateMaintenanceRecordDTO
+  ): Promise<MaintenanceRecord | null> {
+    const record = await this.getMaintenanceRecordById(organizationId, id);
+    if (!record) return null;
+
+    const now = new Date().toISOString();
+    const changes: Record<string, { from: any; to: any }> = {};
+
+    for (const [key, val] of Object.entries(updates)) {
+      if (key === 'actorUserId' || key === 'note') continue;
+      if (val !== undefined && (record as any)[key] !== val) {
+        changes[key] = { from: (record as any)[key], to: val };
+        (record as any)[key] = val;
+      }
+    }
+
+    record.recordVersion += 1;
+    record.auditTrail.push({
+      id: crypto.randomUUID(),
+      versionNumber: record.recordVersion,
+      action: 'RECORD_UPDATED',
+      actorUserId: updates.actorUserId,
+      changes,
+      notes: updates.note || 'Maintenance record updated with versioned audit trail',
+      timestamp: now,
+    });
+    record.updatedAt = now;
+
+    this.maintenanceRecords.set(id, record);
+    return record;
+  }
+
+  public async getMachineMaintenanceHistory(
+    organizationId: string,
+    machineId: string
+  ): Promise<MaintenanceRecord[]> {
+    return this.listMaintenanceRecords(organizationId, { machineId });
+  }
+
+  // --------------------------------------------------------------------------
+  // Recurring Fault Intelligence & Safety Limits
+  // --------------------------------------------------------------------------
+  public async setRecurringFaultPolicy(
+    organizationId: string,
+    data: SetRecurringFaultPolicyDTO
+  ): Promise<RecurringFaultThresholdConfig> {
+    const key = `${organizationId}:${data.machineId || 'DEFAULT'}:${data.machineType || 'ALL'}`;
+    const config: RecurringFaultThresholdConfig = {
+      machineType: data.machineType || 'ALL',
+      faultCategory: undefined,
+      timeWindowDays: data.timeWindowDays ?? 30,
+      recurrenceCountThreshold: data.recurrenceCountThreshold ?? 2,
+      requiresSafetyStop: data.requiresSafetyStop ?? false,
+      safetyLimits: data.safetyLimits,
+    };
+    this.recurringFaultPolicies.set(key, config);
+    return config;
+  }
+
+  public async getRecurringFaultPolicy(
+    organizationId: string,
+    machineId: string,
+    machineType?: string
+  ): Promise<RecurringFaultThresholdConfig> {
+    const machineKey = `${organizationId}:${machineId}:${machineType || 'ALL'}`;
+    if (this.recurringFaultPolicies.has(machineKey)) {
+      return this.recurringFaultPolicies.get(machineKey)!;
+    }
+    const machineAnyKey = `${organizationId}:${machineId}:ALL`;
+    if (this.recurringFaultPolicies.has(machineAnyKey)) {
+      return this.recurringFaultPolicies.get(machineAnyKey)!;
+    }
+
+    if (machineType) {
+      const typeKey = `${organizationId}:DEFAULT:${machineType}`;
+      if (this.recurringFaultPolicies.has(typeKey)) {
+        return this.recurringFaultPolicies.get(typeKey)!;
+      }
+    }
+
+    const orgKey = `${organizationId}:DEFAULT:ALL`;
+    if (this.recurringFaultPolicies.has(orgKey)) {
+      return this.recurringFaultPolicies.get(orgKey)!;
+    }
+
+    return {
+      machineType: machineType || 'ALL',
+      timeWindowDays: 30,
+      recurrenceCountThreshold: 2,
+      requiresSafetyStop: false,
+      safetyLimits: {
+        maxTemperatureC: 85,
+        maxVibrationMmS: 7.1,
+        maxPressureBar: 25,
+      },
+    };
+  }
+
+  public async detectRecurringFaults(
+    organizationId: string,
+    machineId: string,
+    options?: RecurringFaultOptions
+  ): Promise<RecurringFaultAnalysis> {
+    const machine = this.machines.get(machineId);
+    const assetTag = machine?.assetTag || 'UNKNOWN';
+    const policy = await this.getRecurringFaultPolicy(
+      organizationId,
+      machineId,
+      machine?.machineType
+    );
+
+    const windowDays = options?.timeWindowDays ?? policy.timeWindowDays ?? 30;
+    const threshold =
+      options?.recurrenceCountThreshold ?? policy.recurrenceCountThreshold ?? 2;
+
+    const cutoff = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
+    const allRecords = await this.getMachineMaintenanceHistory(organizationId, machineId);
+    const windowRecords = allRecords.filter((r) => new Date(r.resolvedAt) >= cutoff);
+
+    const categoryCounts: Record<string, MaintenanceRecord[]> = {};
+    for (const r of windowRecords) {
+      if (!categoryCounts[r.faultCategory]) {
+        categoryCounts[r.faultCategory] = [];
+      }
+      categoryCounts[r.faultCategory].push(r);
+    }
+
+    let dominantCategory = 'GENERAL_MALFUNCTION';
+    let maxCategoryRecords: MaintenanceRecord[] = [];
+
+    for (const [cat, recs] of Object.entries(categoryCounts)) {
+      if (recs.length > maxCategoryRecords.length) {
+        dominantCategory = cat;
+        maxCategoryRecords = recs;
+      }
+    }
+
+    if (maxCategoryRecords.length === 0 && allRecords.length > 0) {
+      dominantCategory = allRecords[0].faultCategory;
+      maxCategoryRecords = [allRecords[0]];
+    }
+
+    const recurrenceCount = maxCategoryRecords.length;
+    const isRecurringFault = recurrenceCount >= threshold;
+
+    const confirmedRootCauses: string[] = [];
+    const suspectedRootCauses: string[] = [];
+    let unknownRootCauseCount = 0;
+
+    for (const r of maxCategoryRecords) {
+      if (r.rootCauseStatus === 'CONFIRMED' && !confirmedRootCauses.includes(r.rootCause)) {
+        confirmedRootCauses.push(r.rootCause);
+      } else if (
+        r.rootCauseStatus === 'SUSPECTED' &&
+        !suspectedRootCauses.includes(r.rootCause)
+      ) {
+        suspectedRootCauses.push(r.rootCause);
+      } else if (r.rootCauseStatus === 'UNKNOWN') {
+        unknownRootCauseCount++;
+      }
+    }
+
+    let exceededLimitWarning: string | null = null;
+    let limitExceeded = false;
+
+    if (policy.safetyLimits) {
+      for (const r of maxCategoryRecords) {
+        for (const m of r.measurements) {
+          if (
+            policy.safetyLimits.maxTemperatureC !== undefined &&
+            (m.parameterName.toLowerCase().includes('temp') || m.unit === 'degC') &&
+            m.value >= policy.safetyLimits.maxTemperatureC
+          ) {
+            limitExceeded = true;
+            exceededLimitWarning = `[MANDATORY SAFETY STOP / HOLD] Temperature reading of ${m.value}${m.unit} exceeds verified threshold of ${policy.safetyLimits.maxTemperatureC}degC (source: ${m.source}).`;
+            break;
+          }
+          if (
+            policy.safetyLimits.maxVibrationMmS !== undefined &&
+            (m.parameterName.toLowerCase().includes('vib') || m.unit === 'mm/s') &&
+            m.value >= policy.safetyLimits.maxVibrationMmS
+          ) {
+            limitExceeded = true;
+            exceededLimitWarning = `[MANDATORY SAFETY STOP / HOLD] Vibration reading of ${m.value}${m.unit} exceeds verified threshold of ${policy.safetyLimits.maxVibrationMmS}mm/s (source: ${m.source}).`;
+            break;
+          }
+          if (
+            policy.safetyLimits.maxPressureBar !== undefined &&
+            (m.parameterName.toLowerCase().includes('press') || m.unit === 'bar') &&
+            m.value >= policy.safetyLimits.maxPressureBar
+          ) {
+            limitExceeded = true;
+            exceededLimitWarning = `[MANDATORY SAFETY STOP / HOLD] Pressure reading of ${m.value}${m.unit} exceeds verified threshold of ${policy.safetyLimits.maxPressureBar}bar (source: ${m.source}).`;
+            break;
+          }
+        }
+        if (limitExceeded) break;
+      }
+    }
+
+    const isSafetyCritical =
+      limitExceeded ||
+      policy.requiresSafetyStop ||
+      dominantCategory.includes('OVERHEAT') ||
+      dominantCategory.includes('PRESSURE') ||
+      dominantCategory.includes('BEARING');
+
+    let confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT_DATA';
+    if (recurrenceCount >= threshold && confirmedRootCauses.length > 0) {
+      confidence = 'HIGH';
+    } else if (recurrenceCount >= threshold) {
+      confidence = 'MEDIUM';
+    } else if (recurrenceCount === 1) {
+      confidence = 'LOW';
+    } else {
+      confidence = 'INSUFFICIENT_DATA';
+    }
+
+    const incidentTimeline = maxCategoryRecords.map((r) => ({
+      recordId: r.id,
+      recordNumber: r.recordNumber,
+      ticketNumber: r.ticketNumber,
+      resolvedAt: r.resolvedAt,
+      faultCategory: r.faultCategory,
+      rootCause: r.rootCause,
+      rootCauseStatus: r.rootCauseStatus,
+      repairActions: r.repairActions,
+      measurements: r.measurements,
+      isResolved: r.verificationState === 'PASSED',
+    }));
+
+    const evidenceSummary =
+      isRecurringFault
+        ? `Identified ${recurrenceCount} recurring incidents for fault category "${dominantCategory}" on asset ${assetTag} within the ${windowDays}-day monitoring window. Confirmed root causes: ${confirmedRootCauses.join(', ') || 'None'}. Suspected causes: ${suspectedRootCauses.join(', ') || 'None'}. Unknown causes: ${unknownRootCauseCount}.`
+        : `Normal fault baseline: ${recurrenceCount} incident(s) detected within ${windowDays} days (configured threshold: ${threshold}).`;
+
+    const recommendedInspectionSteps: string[] = [];
+    if (isSafetyCritical) {
+      recommendedInspectionSteps.push('Execute verified lock-out/tag-out (LOTO) procedure.');
+      recommendedInspectionSteps.push('Check thermal gradient and bearing lubrication condition with calibrated tools.');
+      recommendedInspectionSteps.push('Verify sensor telemetry calibrations against physical gauge readings.');
+      recommendedInspectionSteps.push('Obtain supervisory restart approval before returning unit to active service.');
+    } else {
+      recommendedInspectionSteps.push('Inspect mechanical couplings and verify alignment tolerances.');
+      recommendedInspectionSteps.push('Review technician repair logs and verify component replacement serials.');
+    }
+
+    let averageRecurrenceIntervalDays: number | null = null;
+    if (maxCategoryRecords.length > 1) {
+      const sortedDates = maxCategoryRecords
+        .map((r) => new Date(r.resolvedAt).getTime())
+        .sort((a, b) => a - b);
+      let totalDiffDays = 0;
+      for (let i = 1; i < sortedDates.length; i++) {
+        totalDiffDays += (sortedDates[i] - sortedDates[i - 1]) / (24 * 3600 * 1000);
+      }
+      averageRecurrenceIntervalDays = Number(
+        (totalDiffDays / (sortedDates.length - 1)).toFixed(1)
+      );
+    }
+
+    let priorRepairEffectiveness: 'EFFECTIVE' | 'PARTIALLY_EFFECTIVE' | 'INEFFECTIVE' | 'UNVERIFIED' =
+      'EFFECTIVE';
+    if (isRecurringFault) {
+      if (unknownRootCauseCount > 0 || (averageRecurrenceIntervalDays !== null && averageRecurrenceIntervalDays < 14)) {
+        priorRepairEffectiveness = 'INEFFECTIVE';
+      } else {
+        priorRepairEffectiveness = 'PARTIALLY_EFFECTIVE';
+      }
+    } else if (recurrenceCount === 0) {
+      priorRepairEffectiveness = 'UNVERIFIED';
+    }
+
+    return {
+      machineId,
+      machineAssetTag: assetTag,
+      isRecurringFault,
+      recurrenceCount,
+      faultCategory: dominantCategory,
+      componentId: maxCategoryRecords[0]?.componentId ?? null,
+      incidentTimeline,
+      relatedRecordIds: maxCategoryRecords.map((r) => r.id),
+      confirmedRootCauses,
+      suspectedRootCauses,
+      unknownRootCauseCount,
+      confidence,
+      evidenceSummary,
+      recommendedInspectionSteps,
+      isSafetyCritical,
+      safetyWarning: exceededLimitWarning,
+      requiresSafetyHold: limitExceeded || (isRecurringFault && policy.requiresSafetyStop),
+      requiresRestartApproval: isSafetyCritical,
+      priorRepairEffectiveness,
+      averageRecurrenceIntervalDays,
+      intelligenceSource: 'HISTORICAL_MAINTENANCE_RECORDS',
+      patternDisclaimer:
+        'Historical pattern intelligence is derived strictly from durable maintenance records. It does not constitute real-time sensor predictive maintenance.',
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Ticket Resolution & Lifecycle Actions
+  // --------------------------------------------------------------------------
+  public async resolveSpecialistTicket(
+    organizationId: string,
+    ticketId: string,
+    resolution: ResolveSpecialistTicketDTO
+  ): Promise<{ ticket: SpecialistTicket; record: MaintenanceRecord }> {
+    const ticket = await this.getSpecialistTicketById(organizationId, ticketId);
+    if (!ticket) {
+      throw new Error(`Specialist ticket ${ticketId} not found in organization ${organizationId}`);
+    }
+
+    const now = new Date().toISOString();
+    let verificationState: 'PENDING' | 'PASSED' | 'FAILED' | 'NOT_APPLICABLE' = 'PENDING';
+
+    const hasTests = resolution.postRepairTestResults && resolution.postRepairTestResults.length > 0;
+    if (hasTests) {
+      const allPassed = resolution.postRepairTestResults!.every((t) => t.passed);
+      verificationState = allPassed ? 'PASSED' : 'FAILED';
+    }
+
+    const isSafetyRelated =
+      ticket.escalationReason === 'SAFETY_CRITICAL' ||
+      ticket.severity === 'CRITICAL' ||
+      resolution.faultCategory.includes('OVERHEAT') ||
+      resolution.faultCategory.includes('PRESSURE') ||
+      resolution.faultCategory.includes('ELECTRICAL_HAZARD');
+
+    // Rule: Do not mark a safety-critical repair as fully verified without required checks
+    if (isSafetyRelated) {
+      if (!hasTests || verificationState !== 'PASSED') {
+        if (resolution.verificationState === 'PASSED') {
+          throw new Error(
+            'Safety-critical repair cannot be marked as fully verified (PASSED) without passing post-repair test results.'
+          );
+        }
+        verificationState = hasTests && !resolution.postRepairTestResults!.every((t) => t.passed) ? 'FAILED' : 'PENDING';
+      }
+    } else if (resolution.verificationState) {
+      verificationState = resolution.verificationState;
+    }
+
+    const requiresRestartApproval =
+      resolution.requiresRestartApproval !== undefined
+        ? resolution.requiresRestartApproval
+        : isSafetyRelated;
+
+    let newStatus: TicketStatus = 'RESOLVED';
+    if (verificationState === 'FAILED') {
+      newStatus = 'UNRESOLVED' as any;
+    } else if (requiresRestartApproval) {
+      newStatus = 'PENDING_VERIFICATION' as any;
+    } else {
+      newStatus = 'RESOLVED';
+    }
+
+    const record = await this.createMaintenanceRecord(organizationId, {
+      plantId: ticket.plantId,
+      machineId: ticket.machineId || '',
+      machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
+      ticketId: ticket.id,
+      ticketNumber: ticket.ticketNumber,
+      componentId: null,
+      reportingUserId: ticket.reportedByUserId,
+      reportingUserName: ticket.reportedByUserName,
+      assignedTechnicianUserId: ticket.assignedSpecialistUserId,
+      assignedTechnicianName: ticket.assignedSpecialistName,
+      resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
+      resolvingTechnicianName: resolution.resolvingTechnicianName,
+      faultCategory: resolution.faultCategory,
+      problemStatement: ticket.originalQuestion,
+      observedSymptoms: resolution.observedSymptoms ?? [],
+      measurements: resolution.measurements ?? [],
+      rootCause: resolution.rootCause,
+      rootCauseStatus: resolution.rootCauseStatus,
+      repairActions: resolution.repairActions,
+      partsReplaced: resolution.partsReplaced ?? [],
+      postRepairTestResults: resolution.postRepairTestResults ?? [],
+      verificationState,
+      requiresRestartApproval,
+      restartApproved: false,
+      approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+    });
+
+    const previousStatus = ticket.status;
+    ticket.status = newStatus;
+    ticket.faultCategory = resolution.faultCategory;
+    ticket.rootCause = resolution.rootCause;
+    ticket.rootCauseStatus = resolution.rootCauseStatus;
+    ticket.maintenanceRecordId = record.id;
+    ticket.requiresRestartApproval = requiresRestartApproval;
+    ticket.restartApproved = false;
+    ticket.technicianObservations = resolution.observedSymptoms?.join(', ') || null;
+    ticket.repairOutcome = `Actions: ${resolution.repairActions.join('; ')}. Verification: ${verificationState}.`;
+
+    if (newStatus === 'RESOLVED') {
+      ticket.resolvedAt = now;
+      ticket.resolvedByUserId = resolution.resolvingTechnicianUserId;
+    }
+
+    ticket.history.push({
+      id: crypto.randomUUID(),
+      ticketId: ticket.id,
+      actorUserId: resolution.resolvingTechnicianUserId,
+      action: 'TICKET_RESOLVED',
+      previousStatus,
+      newStatus,
+      notes:
+        resolution.notes ||
+        `Resolution logged. Root cause [${resolution.rootCauseStatus}]: ${resolution.rootCause}. Verification: ${verificationState}. Requires restart approval: ${requiresRestartApproval}`,
+      timestamp: now,
+    });
+    ticket.updatedAt = now;
+
+    this.specialistTickets.set(ticket.id, ticket);
+    return { ticket, record };
+  }
+
+  public async reopenSpecialistTicket(
+    organizationId: string,
+    ticketId: string,
+    data: ReopenSpecialistTicketDTO
+  ): Promise<{ ticket: SpecialistTicket; record?: MaintenanceRecord | null }> {
+    const ticket = await this.getSpecialistTicketById(organizationId, ticketId);
+    if (!ticket) {
+      throw new Error(`Specialist ticket ${ticketId} not found in organization ${organizationId}`);
+    }
+
+    const now = new Date().toISOString();
+    const previousStatus = ticket.status;
+    ticket.status = 'REOPENED';
+    ticket.reopenCount = (ticket.reopenCount || 0) + 1;
+    ticket.reopenedAt = now;
+    ticket.reopenedByUserId = data.actorUserId;
+    ticket.resolvedAt = null;
+    ticket.resolvedByUserId = null;
+
+    ticket.history.push({
+      id: crypto.randomUUID(),
+      ticketId: ticket.id,
+      actorUserId: data.actorUserId,
+      action: 'TICKET_REOPENED',
+      previousStatus,
+      newStatus: 'REOPENED',
+      notes: `Ticket reopened (reopen #${ticket.reopenCount}): ${data.reopenReason}`,
+      timestamp: now,
+    });
+    ticket.updatedAt = now;
+    this.specialistTickets.set(ticket.id, ticket);
+
+    let record: MaintenanceRecord | null = null;
+    if (ticket.maintenanceRecordId) {
+      record = await this.updateMaintenanceRecord(organizationId, ticket.maintenanceRecordId, {
+        actorUserId: data.actorUserId,
+        verificationState: 'FAILED',
+        note: `Ticket reopened due to recurring or unresolved issue: ${data.reopenReason}`,
+      });
+    }
+
+    return { ticket, record };
+  }
+
+  public async approveTicketRestart(
+    organizationId: string,
+    ticketId: string,
+    data: ApproveTicketRestartDTO
+  ): Promise<{ ticket: SpecialistTicket; record?: MaintenanceRecord | null }> {
+    const ticket = await this.getSpecialistTicketById(organizationId, ticketId);
+    if (!ticket) {
+      throw new Error(`Specialist ticket ${ticketId} not found in organization ${organizationId}`);
+    }
+
+    const now = new Date().toISOString();
+    const previousStatus = ticket.status;
+
+    ticket.restartApproved = true;
+    ticket.restartApprovedByUserId = data.actorUserId;
+    ticket.restartApprovedAt = now;
+    if (ticket.status === 'PENDING_VERIFICATION') {
+      ticket.status = 'RESOLVED';
+      ticket.resolvedAt = now;
+      ticket.resolvedByUserId = data.actorUserId;
+    }
+
+    ticket.history.push({
+      id: crypto.randomUUID(),
+      ticketId: ticket.id,
+      actorUserId: data.actorUserId,
+      action: 'RESTART_APPROVED',
+      previousStatus,
+      newStatus: ticket.status,
+      notes:
+        data.notes ||
+        `Restart authorized by supervisor (${data.actorName || data.actorUserId}). Verified safe for operation.`,
+      timestamp: now,
+    });
+    ticket.updatedAt = now;
+    this.specialistTickets.set(ticket.id, ticket);
+
+    let record: MaintenanceRecord | null = null;
+    if (ticket.maintenanceRecordId) {
+      record = await this.updateMaintenanceRecord(organizationId, ticket.maintenanceRecordId, {
+        actorUserId: data.actorUserId,
+        restartApproved: true,
+        restartApprovedByUserId: data.actorUserId,
+        restartApprovedAt: now,
+        restartNotes: data.notes || 'Restart authorized after physical inspection',
+        approvalStatus: 'APPROVED',
+        approvedByUserId: data.actorUserId,
+        approvedAt: now,
+        verificationState: 'PASSED',
+        note: 'Restart approved and verification confirmed',
+      });
+    }
+
+    return { ticket, record };
+  }
+
+  // ============================================================================
+  // Confidential Access Monitoring & Admin Security Alerts
+  // ============================================================================
+
+  public async recordSecurityEvent(dto: CreateSecurityEventDTO): Promise<SecurityEvent> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    const isBenign =
+      dto.isBenignInquiry !== undefined
+        ? dto.isBenignInquiry
+        : dto.decision === 'DENIED' && dto.severity !== 'CRITICAL' && dto.severity !== 'HIGH';
+
+    const event: SecurityEvent = {
+      id,
+      organizationId: dto.organizationId,
+      actorUserId: dto.actorUserId ?? null,
+      actorEmail: dto.actorEmail ?? null,
+      actorRole: dto.actorRole ?? null,
+      timestamp: now,
+      category: dto.category,
+      action: dto.action,
+      resourceCategory: dto.resourceCategory,
+      resourceId: dto.resourceId ?? null,
+      decision: dto.decision,
+      policyReasonCode: dto.policyReasonCode,
+      severity: dto.severity,
+      correlationId: dto.correlationId ?? null,
+      metadata: dto.metadata ?? {},
+      reviewStatus: 'OPEN',
+      assignedReviewerUserId: null,
+      reviewNotes: null,
+      resolvedAt: null,
+      resolvedByUserId: null,
+      isBenignInquiry: isBenign,
+    };
+
+    this.securityEvents.set(id, event);
+    return event;
+  }
+
+  public async listSecurityEvents(
+    organizationId: string,
+    filter?: ListSecurityEventsQuery
+  ): Promise<{ events: SecurityEvent[]; total: number }> {
+    let all = Array.from(this.securityEvents.values()).filter(
+      (e) => e.organizationId === organizationId
+    );
+
+    if (filter?.category) {
+      all = all.filter((e) => e.category === filter.category);
+    }
+    if (filter?.actorUserId) {
+      all = all.filter((e) => e.actorUserId === filter.actorUserId);
+    }
+    if (filter?.decision) {
+      all = all.filter((e) => e.decision === filter.decision);
+    }
+    if (filter?.severity) {
+      all = all.filter((e) => e.severity === filter.severity);
+    }
+    if (filter?.reviewStatus) {
+      all = all.filter((e) => e.reviewStatus === filter.reviewStatus);
+    }
+
+    all.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    const total = all.length;
+    const offset = filter?.offset ?? 0;
+    const limit = filter?.limit ?? 50;
+    const paged = all.slice(offset, offset + limit);
+
+    return { events: paged, total };
+  }
+
+  public async getSecurityEventById(
+    organizationId: string,
+    eventId: string
+  ): Promise<SecurityEvent | null> {
+    const event = this.securityEvents.get(eventId);
+    if (!event || event.organizationId !== organizationId) return null;
+    return event;
+  }
+
+  public async createSecurityAlert(dto: CreateSecurityAlertDTO): Promise<SecurityAlert> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    const alert: SecurityAlert = {
+      id,
+      organizationId: dto.organizationId,
+      alertType: dto.alertType,
+      severity: dto.severity,
+      status: 'OPEN',
+      title: dto.title,
+      summary: dto.summary,
+      actorUserId: dto.actorUserId ?? null,
+      actorEmail: dto.actorEmail ?? null,
+      actorRole: dto.actorRole ?? null,
+      resourceCategory: dto.resourceCategory,
+      resourceId: dto.resourceId ?? null,
+      eventCount: dto.correlatedEventIds && dto.correlatedEventIds.length > 0 ? dto.correlatedEventIds.length : 1,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      correlatedEventIds: dto.correlatedEventIds ?? [],
+      assignedReviewerUserId: null,
+      reviewNotes: null,
+      resolutionOutcome: null,
+      resolvedAt: null,
+      resolvedByUserId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.securityAlerts.set(id, alert);
+    return alert;
+  }
+
+  public async updateSecurityAlert(
+    organizationId: string,
+    alertId: string,
+    updates: Partial<SecurityAlert>
+  ): Promise<SecurityAlert | null> {
+    const existing = this.securityAlerts.get(alertId);
+    if (!existing || existing.organizationId !== organizationId) return null;
+
+    const updated: SecurityAlert = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.securityAlerts.set(alertId, updated);
+    return updated;
+  }
+
+  public async listSecurityAlerts(
+    organizationId: string,
+    filter?: ListSecurityAlertsQuery
+  ): Promise<{ alerts: SecurityAlert[]; total: number }> {
+    let all = Array.from(this.securityAlerts.values()).filter(
+      (a) => a.organizationId === organizationId
+    );
+
+    if (filter?.status) {
+      all = all.filter((a) => a.status === filter.status);
+    }
+    if (filter?.severity) {
+      all = all.filter((a) => a.severity === filter.severity);
+    }
+    if (filter?.alertType) {
+      all = all.filter((a) => a.alertType === filter.alertType);
+    }
+    if (filter?.actorUserId) {
+      all = all.filter((a) => a.actorUserId === filter.actorUserId);
+    }
+    if (filter?.search) {
+      const q = filter.search.toLowerCase();
+      all = all.filter(
+        (a) =>
+          a.title.toLowerCase().includes(q) ||
+          a.summary.toLowerCase().includes(q) ||
+          (a.actorEmail && a.actorEmail.toLowerCase().includes(q))
+      );
+    }
+
+    all.sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime());
+
+    const total = all.length;
+    const offset = filter?.offset ?? 0;
+    const limit = filter?.limit ?? 50;
+    const paged = all.slice(offset, offset + limit);
+
+    return { alerts: paged, total };
+  }
+
+  public async getSecurityAlertById(
+    organizationId: string,
+    alertId: string
+  ): Promise<SecurityAlert | null> {
+    const alert = this.securityAlerts.get(alertId);
+    if (!alert || alert.organizationId !== organizationId) return null;
+    return alert;
+  }
+
+  public async findOpenAlertForActorAndType(
+    organizationId: string,
+    actorUserId: string,
+    alertType: string
+  ): Promise<SecurityAlert | null> {
+    for (const a of this.securityAlerts.values()) {
+      if (
+        a.organizationId === organizationId &&
+        a.actorUserId === actorUserId &&
+        a.alertType === alertType &&
+        a.status === 'OPEN'
+      ) {
+        return a;
+      }
+    }
+    return null;
+  }
+
+  // ============================================================================
+  // Machine Knowledge Recovery System (Phase 3)
+  // ============================================================================
+
+  public async createEvidenceClaim(
+    organizationId: string,
+    dto: CreateEvidenceClaimDTO & { submittedByUserId: string; submittedByEmail?: string }
+  ): Promise<MachineEvidenceClaim> {
+    const machine = await this.getMachineById(organizationId, dto.machineId);
+    if (!machine) {
+      throw new Error(`Machine '${dto.machineId}' not found in organization.`);
+    }
+
+    const claimId = crypto.randomUUID();
+    const isSafetyCritical =
+      dto.isSafetyCritical !== undefined
+        ? dto.isSafetyCritical
+        : /\b(pressure|voltage|current|torque|loto|lockout|safety|mawp|temperature|relief|speed|rpm)\b/i.test(
+            dto.fieldName
+          );
+
+    const initialAudit: ClaimAuditEntry = {
+      action: 'SUBMITTED_FOR_REVIEW',
+      actorUserId: dto.submittedByUserId,
+      actorEmail: dto.submittedByEmail || null,
+      timestamp: new Date().toISOString(),
+      notes: 'Initial evidence collected and submitted for qualified engineering review',
+    };
+
+    const claim: MachineEvidenceClaim = {
+      id: claimId,
+      organizationId,
+      plantId: machine.plantId,
+      machineId: machine.id,
+      machineAssetTag: machine.assetTag,
+      fieldName: dto.fieldName,
+      displayName: dto.displayName || dto.fieldName,
+      claimValue: dto.claimValue,
+      unit: dto.unit || null,
+      sourceType: dto.sourceType,
+      sourceDocumentId: dto.sourceDocumentId || null,
+      sourceAttachmentKey: dto.sourceAttachmentKey || null,
+      sourcePageNumber: dto.sourcePageNumber || null,
+      sourceRegion: dto.sourceRegion || null,
+      sourceRevision: dto.sourceRevision || null,
+      sourceDate: dto.sourceDate || null,
+      extractionMethod: dto.extractionMethod,
+      confidence: dto.confidence || 'MEDIUM',
+      applicabilityStatus: dto.applicabilityStatus || 'UNCERTAIN',
+      applicabilityRationale: dto.applicabilityRationale || null,
+      status: 'AWAITING_REVIEW', // Never auto-approved!
+      submittedByUserId: dto.submittedByUserId,
+      submittedByEmail: dto.submittedByEmail || null,
+      submittedAt: new Date().toISOString(),
+      reviewedByUserId: null,
+      reviewedByEmail: null,
+      reviewedAt: null,
+      reviewNotes: null,
+      reviewRationale: null,
+      reviewerQualifications: null,
+      supersededByClaimId: null,
+      supersedesClaimId: null,
+      isSafetyCritical,
+      version: 1,
+      auditTrail: [initialAudit],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.evidenceClaims.set(claimId, claim);
+    return claim;
+  }
+
+  public async getEvidenceClaimById(
+    organizationId: string,
+    claimId: string
+  ): Promise<MachineEvidenceClaim | null> {
+    const claim = this.evidenceClaims.get(claimId);
+    if (!claim || claim.organizationId !== organizationId) return null;
+    return claim;
+  }
+
+  public async listEvidenceClaims(
+    organizationId: string,
+    filters?: ClaimFilterOptions
+  ): Promise<MachineEvidenceClaim[]> {
+    const res: MachineEvidenceClaim[] = [];
+    for (const claim of this.evidenceClaims.values()) {
+      if (claim.organizationId !== organizationId) continue;
+      if (filters?.machineId && claim.machineId !== filters.machineId) continue;
+      if (filters?.plantId && claim.plantId !== filters.plantId) continue;
+      if (filters?.status && claim.status !== filters.status) continue;
+      if (filters?.fieldName && claim.fieldName.toLowerCase() !== filters.fieldName.toLowerCase()) continue;
+      if (filters?.isSafetyCritical !== undefined && claim.isSafetyCritical !== filters.isSafetyCritical) continue;
+      if (filters?.submittedByUserId && claim.submittedByUserId !== filters.submittedByUserId) continue;
+      res.push(claim);
+    }
+    res.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return res;
+  }
+
+  public async reviewEvidenceClaim(
+    organizationId: string,
+    claimId: string,
+    review: ReviewEvidenceClaimDTO & { reviewedByUserId: string; reviewedByEmail?: string; actorRole?: string }
+  ): Promise<MachineEvidenceClaim> {
+    const claim = await this.getEvidenceClaimById(organizationId, claimId);
+    if (!claim) {
+      throw new Error(`Evidence claim '${claimId}' not found.`);
+    }
+
+    // Anti-self-approval rule: Technicians cannot approve their own submissions unless explicitly admin
+    if (claim.submittedByUserId === review.reviewedByUserId) {
+      const isSuperUser =
+        review.actorRole === 'ORGANIZATION_ADMIN' || review.actorRole === 'ORGANIZATION_OWNER';
+      if (!isSuperUser) {
+        throw new Error(
+          'Anti-self-approval violation: Technicians cannot approve their own submissions without explicit administrator authorization.'
+        );
+      }
+    }
+
+    // Role check: Only engineers, plant managers, or admins can review claims
+    const reviewerRole = review.actorRole || 'ENGINEER_TECHNICIAN';
+    const isAuthorizedReviewer =
+      reviewerRole === 'ORGANIZATION_ADMIN' ||
+      reviewerRole === 'ORGANIZATION_OWNER' ||
+      reviewerRole === 'PLANT_MANAGER' ||
+      reviewerRole === 'ENGINEER_TECHNICIAN';
+    if (!isAuthorizedReviewer) {
+      throw new Error('Unauthorized: Reviewer role has insufficient privileges to review machine knowledge claims.');
+    }
+
+    const now = new Date().toISOString();
+
+    if (review.decision === 'APPROVE') {
+      if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {
+        throw new Error('Approval requires a valid, substantive engineering review rationale.');
+      }
+      if (claim.isSafetyCritical && (!review.reviewerQualifications || review.reviewerQualifications.trim().length < 3)) {
+        throw new Error('Safety-critical specifications require verified reviewer engineering qualifications.');
+      }
+
+      // Check for prior approved claim for same machine & field: supersede it
+      for (const other of this.evidenceClaims.values()) {
+        if (
+          other.organizationId === organizationId &&
+          other.machineId === claim.machineId &&
+          other.fieldName.toLowerCase() === claim.fieldName.toLowerCase() &&
+          other.id !== claim.id &&
+          other.status === 'APPROVED'
+        ) {
+          other.status = 'SUPERSEDED';
+          other.supersededByClaimId = claim.id;
+          other.updatedAt = now;
+          other.auditTrail.push({
+            action: 'SUPERSEDED',
+            actorUserId: review.reviewedByUserId,
+            actorEmail: review.reviewedByEmail || null,
+            actorRole: reviewerRole,
+            timestamp: now,
+            notes: `Superseded by newly approved claim ${claim.id} (Value: ${claim.claimValue})`,
+          });
+          claim.supersedesClaimId = other.id;
+        }
+      }
+
+      if (review.correctedValue !== undefined) {
+        claim.claimValue = review.correctedValue;
+        if (review.correctedUnit) claim.unit = review.correctedUnit;
+        claim.auditTrail.push({
+          action: 'VALUE_CORRECTED',
+          actorUserId: review.reviewedByUserId,
+          actorEmail: review.reviewedByEmail || null,
+          actorRole: reviewerRole,
+          timestamp: now,
+          notes: `Value adjusted during review to: ${review.correctedValue} ${review.correctedUnit || ''}`.trim(),
+        });
+      }
+
+      claim.status = 'APPROVED';
+      claim.applicabilityStatus = 'APPLICABLE';
+      claim.reviewedByUserId = review.reviewedByUserId;
+      claim.reviewedByEmail = review.reviewedByEmail || null;
+      claim.reviewedAt = now;
+      claim.reviewNotes = review.reviewNotes;
+      claim.reviewRationale = review.reviewRationale;
+      claim.reviewerQualifications = review.reviewerQualifications || null;
+      claim.updatedAt = now;
+
+      claim.auditTrail.push({
+        action: 'APPROVED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewNotes,
+        qualificationProof: review.reviewerQualifications || null,
+      });
+
+      // Update machine registry profile
+      const machine = await this.getMachineById(organizationId, claim.machineId);
+      if (machine) {
+        const valStr = String(claim.claimValue);
+        const lowerField = claim.fieldName.toLowerCase();
+        if (lowerField === 'manufacturer') machine.manufacturer = valStr;
+        if (lowerField === 'modelnumber' || lowerField === 'model') machine.modelNumber = valStr;
+        if (lowerField === 'serialnumber' || lowerField === 'serial') machine.serialNumber = valStr;
+        if (lowerField === 'manufacturingyear' || lowerField === 'year') {
+          const num = parseInt(valStr, 10);
+          if (!isNaN(num)) (machine as any).manufacturingYear = num;
+        }
+
+        const formattedSpec = claim.unit ? `${claim.claimValue} ${claim.unit}` : claim.claimValue;
+        machine.technicalSpecs = {
+          ...machine.technicalSpecs,
+          [claim.fieldName]: formattedSpec,
+        };
+
+        if (machine.manufacturer && machine.modelNumber && machine.serialNumber) {
+          machine.verificationState = 'VERIFIED';
+          machine.documentationReadiness = 'READY';
+          (machine as any).identificationConfidence = 'VERIFIED';
+        } else if (machine.manufacturer || machine.modelNumber) {
+          machine.verificationState = 'PARTIALLY_VERIFIED';
+          (machine as any).identificationConfidence = 'PARTIAL';
+        }
+        machine.updatedAt = now;
+      }
+    } else if (review.decision === 'REJECT') {
+      if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {
+        throw new Error('Rejection requires a documented engineering rationale.');
+      }
+      claim.status = 'REJECTED';
+      claim.reviewedByUserId = review.reviewedByUserId;
+      claim.reviewedByEmail = review.reviewedByEmail || null;
+      claim.reviewedAt = now;
+      claim.reviewNotes = review.reviewNotes;
+      claim.reviewRationale = review.reviewRationale;
+      claim.updatedAt = now;
+      claim.auditTrail.push({
+        action: 'REJECTED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewRationale,
+      });
+    } else if (review.decision === 'REQUEST_ADDITIONAL_EVIDENCE') {
+      claim.status = 'NEEDS_ADDITIONAL_EVIDENCE';
+      claim.reviewedByUserId = review.reviewedByUserId;
+      claim.reviewedByEmail = review.reviewedByEmail || null;
+      claim.reviewedAt = now;
+      claim.reviewNotes = review.reviewNotes;
+      claim.reviewRationale = review.reviewRationale;
+      claim.updatedAt = now;
+      claim.auditTrail.push({
+        action: 'ADDITIONAL_EVIDENCE_REQUESTED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewNotes,
+      });
+    } else if (review.decision === 'SUPERSEDE') {
+      claim.status = 'SUPERSEDED';
+      claim.reviewedByUserId = review.reviewedByUserId;
+      claim.reviewedByEmail = review.reviewedByEmail || null;
+      claim.reviewedAt = now;
+      claim.reviewNotes = review.reviewNotes;
+      claim.reviewRationale = review.reviewRationale;
+      claim.updatedAt = now;
+      claim.auditTrail.push({
+        action: 'SUPERSEDED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewRationale,
+      });
+    }
+
+    return claim;
+  }
+
+  public async getMachineRecoveryProfile(
+    organizationId: string,
+    machineId: string
+  ): Promise<MachineRecoveryProfile | null> {
+    const machine = await this.getMachineById(organizationId, machineId);
+    if (!machine) return null;
+
+    const plant = await this.getPlantById(organizationId, machine.plantId);
+    const claims = await this.listEvidenceClaims(organizationId, { machineId });
+    const tasks = await this.listMissingInfoTasks(organizationId, { machineId });
+
+    const requirements = resolveRequirementsForCategory(machine.machineType);
+    const fields: RecoveryGapField[] = [];
+
+    let approvedFieldsCount = 0;
+    let missingFieldsCount = 0;
+    let awaitingReviewCount = 0;
+    let conflictingFieldsCount = 0;
+    let safetyCriticalPendingCount = 0;
+
+    for (const req of requirements) {
+      const fieldClaims = claims.filter(
+        (c) => c.fieldName.toLowerCase() === req.fieldName.toLowerCase()
+      );
+
+      const approved = fieldClaims.find((c) => c.status === 'APPROVED');
+      const activeUnreviewed = fieldClaims.filter(
+        (c) => c.status === 'AWAITING_REVIEW' || c.status === 'COLLECTED'
+      );
+      const nonRejected = fieldClaims.filter(
+        (c) => c.status !== 'REJECTED' && c.status !== 'SUPERSEDED'
+      );
+
+      // Check conflicts
+      const distinctVals = new Set(
+        nonRejected.map((c) => String(c.claimValue).trim().toLowerCase())
+      );
+      const isConflicting = distinctVals.size > 1;
+
+      let status: GapFieldStatus = 'GENUINELY_MISSING';
+      let currentApprovedVal: string | number | boolean | null = null;
+      let approvedProvenance = null;
+      let activeClaimId: string | null = null;
+
+      if (approved) {
+        status = 'APPROVED';
+        currentApprovedVal = approved.claimValue;
+        activeClaimId = approved.id;
+        approvedProvenance = {
+          sourceType: approved.sourceType,
+          sourceDocumentId: approved.sourceDocumentId,
+          sourceRevision: approved.sourceRevision,
+          reviewerUserId: approved.reviewedByUserId,
+          reviewerQualifications: approved.reviewerQualifications,
+          approvedAt: approved.reviewedAt,
+        };
+        approvedFieldsCount++;
+      } else if (machine.technicalSpecs && machine.technicalSpecs[req.fieldName] !== undefined) {
+        status = 'APPROVED';
+        currentApprovedVal = machine.technicalSpecs[req.fieldName];
+        approvedFieldsCount++;
+      } else if (isConflicting) {
+        status = 'CONFLICTING';
+        conflictingFieldsCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      } else if (activeUnreviewed.length > 0) {
+        status = 'AWAITING_REVIEW';
+        activeClaimId = activeUnreviewed[0].id;
+        awaitingReviewCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      } else if (fieldClaims.some((c) => c.status === 'SUPERSEDED')) {
+        status = 'SUPERSEDED';
+        missingFieldsCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      } else {
+        status = 'GENUINELY_MISSING';
+        missingFieldsCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      }
+
+      const conflictDetails = isConflicting
+        ? nonRejected.map((c) => ({
+            claimId: c.id,
+            value: c.claimValue,
+            sourceType: c.sourceType,
+            submittedBy: c.submittedByEmail || c.submittedByUserId,
+          }))
+        : undefined;
+
+      fields.push({
+        fieldName: req.fieldName,
+        displayName: req.displayName,
+        isRequired: req.isRequired,
+        isSafetyCritical: req.isSafetyCritical,
+        status,
+        currentApprovedValue: currentApprovedVal,
+        unit: req.unit || null,
+        pendingClaimsCount: activeUnreviewed.length,
+        conflictingClaimsCount: isConflicting ? nonRejected.length : 0,
+        activeClaimId,
+        approvedProvenance,
+        conflictDetails,
+      });
+    }
+
+    const unresolvedIdentityQuestions: string[] = [];
+    if (!machine.manufacturer || machine.manufacturer === 'UNKNOWN') {
+      unresolvedIdentityQuestions.push(
+        'Manufacturer identity unverified: OEM nameplate missing, damaged, or unconfirmed.'
+      );
+    }
+    if (!machine.modelNumber || machine.modelNumber === 'UNKNOWN') {
+      unresolvedIdentityQuestions.push(
+        'Model number unknown: Part catalog, tolerance specs, and OEM curves cannot be validated.'
+      );
+    }
+    if (!machine.serialNumber || machine.serialNumber === 'UNKNOWN') {
+      unresolvedIdentityQuestions.push(
+        'Asset serial number unconfirmed: Individual manufacturing batch and historical rework records cannot be definitively correlated.'
+      );
+    }
+    if (safetyCriticalPendingCount > 0) {
+      unresolvedIdentityQuestions.push(
+        `${safetyCriticalPendingCount} safety-critical specification(s) or operating limits remain unapproved or conflicting.`
+      );
+    }
+
+    let identificationConfidence: 'VERIFIED' | 'PARTIAL' | 'UNIDENTIFIED' = 'UNIDENTIFIED';
+    if (machine.manufacturer && machine.modelNumber && machine.serialNumber) {
+      identificationConfidence = 'VERIFIED';
+    } else if (machine.manufacturer || machine.modelNumber) {
+      identificationConfidence = 'PARTIAL';
+    }
+
+    const totalFieldsRequired = requirements.filter((r) => r.isRequired).length;
+    const readinessPercentage = Math.round(
+      (approvedFieldsCount / Math.max(1, totalFieldsRequired)) * 100
+    );
+
+    return {
+      machineId: machine.id,
+      assetTag: machine.assetTag,
+      name: machine.name,
+      plantId: machine.plantId,
+      plantName: plant?.name || 'Plant Area',
+      machineCategory: machine.machineType,
+      area: machine.area,
+      manufacturer: machine.manufacturer || null,
+      modelNumber: machine.modelNumber || null,
+      serialNumber: machine.serialNumber || null,
+      manufacturingYear: (machine as any).manufacturingYear || null,
+      identificationConfidence,
+      unresolvedIdentityQuestions,
+      fields,
+      totalFieldsRequired,
+      approvedFieldsCount,
+      missingFieldsCount,
+      awaitingReviewCount,
+      conflictingFieldsCount,
+      evidenceClaimsCount: claims.length,
+      openTasksCount: tasks.filter(
+        (t) => t.status === 'NOT_STARTED' || t.status === 'IN_PROGRESS' || t.status === 'SUBMITTED'
+      ).length,
+      readinessPercentage: Math.min(100, readinessPercentage),
+      safetyCriticalPendingCount,
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  public async getMachineRecoverySummary(
+    organizationId: string,
+    plantId?: string
+  ): Promise<MachineRecoverySummary> {
+    const allMachines = await this.listMachines(organizationId);
+    const machines = plantId ? allMachines.filter((m) => m.plantId === plantId) : allMachines;
+
+    let legacyOrIncompleteMachines = 0;
+    let unidentifiedCount = 0;
+    let partiallyIdentifiedCount = 0;
+    let verifiedCount = 0;
+
+    for (const m of machines) {
+      const hasMfr = Boolean(m.manufacturer && m.manufacturer !== 'UNKNOWN');
+      const hasModel = Boolean(m.modelNumber && m.modelNumber !== 'UNKNOWN');
+      const hasSerial = Boolean(m.serialNumber && m.serialNumber !== 'UNKNOWN');
+
+      if (hasMfr && hasModel && hasSerial && m.verificationState === 'VERIFIED') {
+        verifiedCount++;
+      } else if (hasMfr || hasModel) {
+        partiallyIdentifiedCount++;
+        legacyOrIncompleteMachines++;
+      } else {
+        unidentifiedCount++;
+        legacyOrIncompleteMachines++;
+      }
+    }
+
+    let claimsAwaitingReview = 0;
+    let approvedClaimsCount = 0;
+    let rejectedClaimsCount = 0;
+    let supersededClaimsCount = 0;
+
+    for (const c of this.evidenceClaims.values()) {
+      if (c.organizationId !== organizationId) continue;
+      if (plantId && c.plantId !== plantId) continue;
+      if (c.status === 'AWAITING_REVIEW' || c.status === 'COLLECTED') claimsAwaitingReview++;
+      else if (c.status === 'APPROVED') approvedClaimsCount++;
+      else if (c.status === 'REJECTED') rejectedClaimsCount++;
+      else if (c.status === 'SUPERSEDED') supersededClaimsCount++;
+    }
+
+    const allTasks = await this.listMissingInfoTasks(organizationId);
+    const tasks = plantId
+      ? allTasks.filter((t) => {
+          const machine = machines.find((m) => m.id === t.machineId);
+          return Boolean(machine);
+        })
+      : allTasks;
+
+    let openCollectionTasksCount = 0;
+    let overdueTasksCount = 0;
+    const nowMs = Date.now();
+
+    for (const t of tasks) {
+      const isOpen =
+        t.status === 'NOT_STARTED' || t.status === 'IN_PROGRESS' || t.status === 'SUBMITTED';
+      if (isOpen) {
+        openCollectionTasksCount++;
+        if (t.dueDate && new Date(t.dueDate).getTime() < nowMs) {
+          overdueTasksCount++;
+        }
+      }
+    }
+
+    return {
+      totalMachines: machines.length,
+      legacyOrIncompleteMachines,
+      unidentifiedCount,
+      partiallyIdentifiedCount,
+      verifiedCount,
+      claimsAwaitingReview,
+      approvedClaimsCount,
+      rejectedClaimsCount,
+      supersededClaimsCount,
+      openCollectionTasksCount,
+      overdueTasksCount,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Published Approved Operational Guidance (Prompt 01)
+  // --------------------------------------------------------------------------
+  public async publishGuidance(
+    organizationId: string,
+    reviewerUserId: string,
+    reviewerEmail: string,
+    dto: PublishGuidanceDTO
+  ): Promise<PublishedApprovedGuidance> {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+
+    let assetTag: string | null = dto.machineAssetTag || null;
+    if (dto.machineId && !assetTag) {
+      const machine = this.machines.get(dto.machineId);
+      if (machine) {
+        assetTag = machine.assetTag;
+      }
+    }
+
+    const guidance: PublishedApprovedGuidance = {
+      id,
+      organizationId,
+      plantId: dto.plantId,
+      machineId: dto.machineId || null,
+      machineAssetTag: assetTag,
+      title: dto.title,
+      guidanceContent: dto.guidanceContent,
+      sourceDocumentId: dto.sourceDocumentId || null,
+      sourceDocumentNumber: dto.sourceDocumentNumber || null,
+      sourceDocumentVersionId: dto.sourceDocumentVersionId || null,
+      sourceSectionHeading: dto.sourceSectionHeading || null,
+      sourcePageNumber: dto.sourcePageNumber ?? null,
+      applicableRoles: dto.applicableRoles && dto.applicableRoles.length > 0
+        ? dto.applicableRoles
+        : ['WORKER', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER'],
+      disclosureClassification: dto.disclosureClassification || 'WORKER_APPROVED',
+      reviewedByUserId: reviewerUserId,
+      reviewedByUserEmail: reviewerEmail,
+      approvedAt: now,
+      expiresAt: dto.expiresAt || null,
+      status: 'PUBLISHED',
+      supersededByPublicationId: null,
+      revisionNumber: 1,
+      revocationReason: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.publishedGuidance.set(id, guidance);
+
+    await this.recordAuditEvent({
+      organizationId,
+      actorUserId: reviewerUserId,
+      action: 'GUIDANCE_PUBLISHED',
+      resourceType: 'PUBLISHED_GUIDANCE',
+      resourceId: id,
+      metadata: {
+        title: guidance.title,
+        plantId: guidance.plantId,
+        machineId: guidance.machineId,
+        disclosureClassification: guidance.disclosureClassification,
+        applicableRoles: guidance.applicableRoles,
+      },
+    });
+
+    return guidance;
+  }
+
+  public async getPublishedGuidanceById(
+    organizationId: string,
+    id: string
+  ): Promise<PublishedApprovedGuidance | null> {
+    const item = this.publishedGuidance.get(id);
+    if (!item || item.organizationId !== organizationId) {
+      return null;
+    }
+    return item;
+  }
+
+  public async listPublishedGuidance(
+    organizationId: string,
+    filters?: ListGuidanceFilters
+  ): Promise<PublishedApprovedGuidance[]> {
+    const results: PublishedApprovedGuidance[] = [];
+
+    for (const item of this.publishedGuidance.values()) {
+      if (item.organizationId !== organizationId) continue;
+      if (filters?.plantId && item.plantId !== filters.plantId) continue;
+      if (filters?.machineId && item.machineId && item.machineId !== filters.machineId) continue;
+      if (filters?.status && item.status !== filters.status) continue;
+      if (filters?.role && !item.applicableRoles.includes(filters.role)) continue;
+
+      results.push(item);
+    }
+
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async supersedePublishedGuidance(
+    organizationId: string,
+    guidanceId: string,
+    supersededByGuidanceId: string
+  ): Promise<PublishedApprovedGuidance | null> {
+    const item = this.publishedGuidance.get(guidanceId);
+    if (!item || item.organizationId !== organizationId) {
+      return null;
+    }
+
+    item.status = 'SUPERSEDED';
+    item.supersededByPublicationId = supersededByGuidanceId;
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+
+  public async revokePublishedGuidance(
+    organizationId: string,
+    guidanceId: string,
+    reason?: string
+  ): Promise<PublishedApprovedGuidance | null> {
+    const item = this.publishedGuidance.get(guidanceId);
+    if (!item || item.organizationId !== organizationId) {
+      return null;
+    }
+
+    item.status = 'REVOKED';
+    item.revocationReason = reason || 'Revoked by administrator';
+    item.updatedAt = new Date().toISOString();
+    return item;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Expert Knowledge Library Methods (Prompt 04)
+  // ---------------------------------------------------------------------------
+
+  public async createExpertKnowledgeEntry(
+    organizationId: string,
+    data: CreateExpertKnowledgeDTO & { authorUserId: string; authorEmail?: string; authorRole?: string }
+  ): Promise<ExpertKnowledgeEntry> {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+
+    let machineAssetTag: string | null = data.machineAssetTag || null;
+    if (data.machineId && !machineAssetTag) {
+      const machine = await this.getMachineById(organizationId, data.machineId);
+      if (machine) {
+        machineAssetTag = machine.assetTag;
+      }
+    }
+
+    const entry: ExpertKnowledgeEntry = {
+      id,
+      organizationId,
+      plantId: data.plantId,
+      machineId: data.machineId || null,
+      machineAssetTag,
+      category: data.category,
+      title: data.title,
+      description: data.description,
+      symptoms: data.symptoms || [],
+      rootCause: data.rootCause || null,
+      resolutionSteps: data.resolutionSteps || [],
+      knownFailureModes: data.knownFailureModes || [],
+      gapDescription: data.gapDescription || null,
+      safetyPrecautions: data.safetyPrecautions || [],
+      technicalSpecifications: data.technicalSpecifications || {},
+      tags: data.tags || [],
+      status: 'AWAITING_REVIEW', // Unverified until approved
+      authorUserId: data.authorUserId,
+      authorEmail: data.authorEmail || null,
+      authorRole: data.authorRole || null,
+      dataClassification: data.dataClassification || 'INTERNAL',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.expertKnowledgeEntries.set(id, entry);
+    return entry;
+  }
+
+  public async getExpertKnowledgeEntryById(
+    organizationId: string,
+    id: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = this.expertKnowledgeEntries.get(id);
+    if (!entry || entry.organizationId !== organizationId) {
+      return null;
+    }
+    return entry;
+  }
+
+  public async listExpertKnowledgeEntries(
+    organizationId: string,
+    filters?: ExpertKnowledgeFilterOptions
+  ): Promise<ExpertKnowledgeEntry[]> {
+    const results: ExpertKnowledgeEntry[] = [];
+
+    for (const entry of this.expertKnowledgeEntries.values()) {
+      if (entry.organizationId !== organizationId) continue;
+      if (filters?.plantId && entry.plantId !== filters.plantId) continue;
+      if (filters?.machineId && entry.machineId && entry.machineId !== filters.machineId) continue;
+      if (filters?.category && entry.category !== filters.category) continue;
+      if (filters?.status && entry.status !== filters.status) continue;
+      if (filters?.dataClassification && entry.dataClassification !== filters.dataClassification) continue;
+      if (filters?.search) {
+        const q = filters.search.toLowerCase();
+        const matches =
+          entry.title.toLowerCase().includes(q) ||
+          entry.description.toLowerCase().includes(q) ||
+          (entry.machineAssetTag && entry.machineAssetTag.toLowerCase().includes(q)) ||
+          entry.tags.some((t) => t.toLowerCase().includes(q));
+        if (!matches) continue;
+      }
+
+      results.push(entry);
+    }
+
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async reviewExpertKnowledgeEntry(
+    organizationId: string,
+    id: string,
+    review: ReviewExpertKnowledgeDTO & { reviewedByUserId: string; reviewedByEmail?: string; actorRole?: string }
+  ): Promise<ExpertKnowledgeEntry> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) {
+      throw new Error(`Expert knowledge entry '${id}' not found.`);
+    }
+
+    // Anti-self-approval rule: Authors cannot approve their own submissions unless Admin
+    if (entry.authorUserId === review.reviewedByUserId) {
+      const isSuperUser = review.actorRole === 'ORGANIZATION_ADMIN' || review.actorRole === 'ORGANIZATION_OWNER';
+      if (!isSuperUser) {
+        throw new Error('Anti-self-approval violation: Authors cannot approve their own expert knowledge submissions.');
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    if (review.decision === 'APPROVE') {
+      if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {
+        throw new Error('Approval requires a valid engineering review rationale.');
+      }
+
+      entry.status = 'APPROVED';
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.reviewerQualifications = review.reviewerQualifications || null;
+      entry.updatedAt = now;
+    } else if (review.decision === 'REJECT') {
+      entry.status = 'REJECTED';
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.updatedAt = now;
+    } else if (review.decision === 'REVOKE') {
+      entry.status = 'REVOKED';
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.updatedAt = now;
+    } else if (review.decision === 'SUPERSEDE') {
+      entry.status = 'SUPERSEDED';
+      entry.supersededByEntryId = review.supersededByEntryId || null;
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.updatedAt = now;
+    }
+
+    return entry;
+  }
+
+  public async revokeExpertKnowledgeEntry(
+    organizationId: string,
+    id: string,
+    reason: string,
+    revokedByUserId: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) return null;
+
+    entry.status = 'REVOKED';
+    entry.reviewRationale = reason;
+    entry.reviewedByUserId = revokedByUserId;
+    entry.reviewedAt = new Date().toISOString();
+    entry.updatedAt = new Date().toISOString();
+    return entry;
+  }
 }
+
+// ----------------------------------------------------------------------------
+// Machine Category Gap Analysis Requirements (Phase 3)
+// ----------------------------------------------------------------------------
+interface CategoryFieldRequirement {
+  fieldName: string;
+  displayName: string;
+  isRequired: boolean;
+  isSafetyCritical: boolean;
+  unit?: string;
+}
+
+const CATEGORY_REQUIREMENTS: Record<string, CategoryFieldRequirement[]> = {
+  PUMP: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / OEM', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'modelNumber', displayName: 'Model Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'designDischargePressure', displayName: 'Design Discharge Pressure', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'suctionPressure', displayName: 'Suction Pressure Limit', isRequired: false, isSafetyCritical: false, unit: 'bar' },
+    { fieldName: 'nameplateRpm', displayName: 'Rated Speed (RPM)', isRequired: true, isSafetyCritical: false, unit: 'RPM' },
+    { fieldName: 'impellerDiameter', displayName: 'Impeller Diameter', isRequired: false, isSafetyCritical: false, unit: 'mm' },
+    { fieldName: 'sealType', displayName: 'Mechanical Seal Type', isRequired: false, isSafetyCritical: false },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'LOTO Electrical & Mechanical Isolation', isRequired: true, isSafetyCritical: true },
+  ],
+  MOTOR: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / OEM', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'modelNumber', displayName: 'Model Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'ratedVoltage', displayName: 'Rated Voltage', isRequired: true, isSafetyCritical: true, unit: 'V' },
+    { fieldName: 'fullLoadCurrent', displayName: 'Full Load Current (FLA)', isRequired: true, isSafetyCritical: true, unit: 'A' },
+    { fieldName: 'nameplateRpm', displayName: 'Rated Speed (RPM)', isRequired: true, isSafetyCritical: false, unit: 'RPM' },
+    { fieldName: 'insulationClass', displayName: 'Insulation Class', isRequired: false, isSafetyCritical: false },
+    { fieldName: 'frameSize', displayName: 'Frame Size', isRequired: false, isSafetyCritical: false },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'LOTO Arc-Flash & Lockout Procedure', isRequired: true, isSafetyCritical: true },
+  ],
+  BOILER: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / Vessel Fabricator', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'National Board / Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'designPressure', displayName: 'Design Pressure', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'maxAllowableWorkingPressure', displayName: 'Max Allowable Working Pressure (MAWP)', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'designTemperature', displayName: 'Design Temperature', isRequired: true, isSafetyCritical: true, unit: '°C' },
+    { fieldName: 'safetyValveSetPressure', displayName: 'Safety Relief Valve Set Pressure', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'hydrotestDate', displayName: 'Last Certified Hydrotest Date', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'Boiler Depressurization & Blind Flange LOTO', isRequired: true, isSafetyCritical: true },
+  ],
+  GENERAL: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / OEM', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'modelNumber', displayName: 'Model Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'operatingLimits', displayName: 'Operating Limits & Safe Envelopes', isRequired: true, isSafetyCritical: true },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'Standard Energy Control / LOTO Procedure', isRequired: true, isSafetyCritical: true },
+  ],
+};
+
+function resolveRequirementsForCategory(machineType: string): CategoryFieldRequirement[] {
+  const norm = (machineType || '').toUpperCase();
+  if (norm.includes('PUMP')) return CATEGORY_REQUIREMENTS.PUMP;
+  if (norm.includes('MOTOR')) return CATEGORY_REQUIREMENTS.MOTOR;
+  if (norm.includes('BOILER') || norm.includes('VESSEL') || norm.includes('PRESSURE')) return CATEGORY_REQUIREMENTS.BOILER;
+  return CATEGORY_REQUIREMENTS.GENERAL;
+}
+
+
+

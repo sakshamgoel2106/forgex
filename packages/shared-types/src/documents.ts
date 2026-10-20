@@ -103,6 +103,8 @@ export interface TechnicalDocument {
   title: string;
   category: DocumentType;
   assetTags: string[];
+  dataClassification?: string;
+  isConfidential?: boolean;
   createdByUserId?: string | null;
   createdAt: string;
   updatedAt: string;

@@ -11,6 +11,7 @@ import type {
 } from '@forgex/shared-types';
 import { logger } from '../utils/logger.js';
 import crypto from 'node:crypto';
+import { sanitizeFilename } from '../ingestion/fileValidator.js';
 
 export interface VisualEngineContext {
   organizationId: string;
@@ -85,8 +86,9 @@ export class VisualIntelligenceEngine {
         );
       }
 
-      // Generate server-controlled storage key
-      const storageKey = `visual/${organizationId}/${crypto.randomUUID()}-${resolvedFilename}`;
+      // Generate server-controlled storage key with sanitized filename
+      const safeFilename = sanitizeFilename(resolvedFilename);
+      const storageKey = `visual/${organizationId}/${crypto.randomUUID()}-${safeFilename}`;
       const payloadBuffer = Buffer.isBuffer(bufferToAnalyze)
         ? bufferToAnalyze
         : Buffer.from(bufferToAnalyze, 'base64');
@@ -101,7 +103,12 @@ export class VisualIntelligenceEngine {
         assetType = 'DIAGRAM';
       } else if (lower.includes('page') || lower.includes('manual')) {
         assetType = 'MANUAL_PAGE';
-      } else if (lower.includes('photo') || lower.includes('walkdown')) {
+      } else if (
+        lower.includes('photo') ||
+        lower.includes('walkdown') ||
+        lower.includes('nameplate') ||
+        lower.includes('rating_plate')
+      ) {
         assetType = 'PHOTOGRAPH';
       }
 

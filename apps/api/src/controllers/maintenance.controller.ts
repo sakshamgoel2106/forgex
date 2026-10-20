@@ -25,8 +25,19 @@ export class MaintenanceController {
         return;
       }
 
-      const { plantId, assetId, title, severity, symptomDescription, operatingConditions, visualAssetIds } =
-        req.body;
+      const {
+        plantId,
+        assetId,
+        title,
+        description,
+        severity,
+        symptomDescription,
+        operatingConditions,
+        visualAssetIds,
+        supportingDocumentIds,
+        assignedTechnicianUserId,
+        assignedTechnicianName,
+      } = req.body;
 
       if (!plantId || !assetId || !title || !symptomDescription) {
         res.status(400).json({
@@ -41,10 +52,14 @@ export class MaintenanceController {
           plantId,
           assetId,
           title,
+          description,
           severity,
           symptomDescription,
           operatingConditions,
           visualAssetIds,
+          supportingDocumentIds,
+          assignedTechnicianUserId,
+          assignedTechnicianName,
         },
         { organizationId, userId, userRole }
       );
@@ -241,6 +256,95 @@ export class MaintenanceController {
   };
 
   /**
+   * POST /api/v1/maintenance/cases/:id/assign
+   * Assigns a technician to a maintenance case.
+   */
+  public assignTechnician = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth?.organization.id;
+      const userId = req.auth?.user.id;
+      const userRole = req.auth?.membership.role;
+      const id = req.params.id as string;
+
+      if (!organizationId || !userId) {
+        res.status(401).json({ success: false, error: 'Unauthorized: Missing auth context' });
+        return;
+      }
+
+      const { technicianUserId, technicianName } = req.body;
+      if (!technicianUserId) {
+        res.status(400).json({
+          success: false,
+          error: "Validation failed: 'technicianUserId' is required.",
+        });
+        return;
+      }
+
+      const result = await this.workflowEngine.assignTechnician(
+        id,
+        { technicianUserId, technicianName },
+        { organizationId, userId, userRole }
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      logger.error({ error: err?.message }, 'Failed to assign technician');
+      const isAuthError = err?.message?.includes('Unauthorized');
+      const isNotFoundError = err?.message?.includes('not found');
+      res.status(isAuthError ? 403 : isNotFoundError ? 404 : 500).json({
+        success: false,
+        error: err?.message || 'Failed to assign technician.',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+
+  /**
+   * POST /api/v1/maintenance/cases/:id/close
+   * Formally closes a resolved maintenance case.
+   */
+  public closeCase = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth?.organization.id;
+      const userId = req.auth?.user.id;
+      const userRole = req.auth?.membership.role;
+      const id = req.params.id as string;
+
+      if (!organizationId || !userId) {
+        res.status(401).json({ success: false, error: 'Unauthorized: Missing auth context' });
+        return;
+      }
+
+      const { notes } = req.body;
+
+      const result = await this.workflowEngine.closeCase(
+        id,
+        { notes },
+        { organizationId, userId, userRole }
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      logger.error({ error: err?.message }, 'Failed to close case');
+      const isAuthError = err?.message?.includes('Unauthorized');
+      const isNotFoundError = err?.message?.includes('not found');
+      res.status(isAuthError ? 403 : isNotFoundError ? 404 : 500).json({
+        success: false,
+        error: err?.message || 'Failed to close maintenance case.',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  };
+
+  /**
    * POST /api/v1/maintenance/cases/:id/escalate
    * Escalates case to qualified human engineer.
    */
@@ -343,13 +447,15 @@ export class MaintenanceController {
         return;
       }
 
-      const { plantId, assetId, status, severity, candidateForExpertKnowledge } = req.query;
+      const { plantId, assetId, status, severity, assignedTechnicianUserId, candidateForExpertKnowledge } =
+        req.query;
 
       const cases = await this.dataStore.listMaintenanceCases(organizationId, {
         plantId: plantId as string | undefined,
         assetId: assetId as string | undefined,
         status: status as MaintenanceCaseStatus | undefined,
         severity: severity as MaintenanceCaseSeverity | undefined,
+        assignedTechnicianUserId: assignedTechnicianUserId as string | undefined,
         candidateForExpertKnowledge:
           candidateForExpertKnowledge !== undefined
             ? candidateForExpertKnowledge === 'true'

@@ -15,8 +15,9 @@ export class LocalStorageAdapter implements IStorageAdapter {
     const cleanKey = key.replace(/^[/\\]+/, '');
     const resolved = path.resolve(this.baseDir, cleanKey);
 
-    // Verify containment within baseDir to prevent path traversal
-    if (!resolved.startsWith(this.baseDir)) {
+    // Verify containment within baseDir with strict directory boundary to prevent path traversal prefix bypass
+    const baseDirWithSep = this.baseDir.endsWith(path.sep) ? this.baseDir : this.baseDir + path.sep;
+    if (!resolved.startsWith(baseDirWithSep) && resolved !== this.baseDir) {
       throw new Error(`Security Violation: Path traversal detected for key '${key}'.`);
     }
 
@@ -60,8 +61,14 @@ export class LocalStorageAdapter implements IStorageAdapter {
     }
   }
 
-  public async getSignedUrl(key: string, _expiresInSeconds = 3600): Promise<string> {
-    // In local dev, return the local documents download endpoint
-    return `/api/v1/documents/raw/${encodeURIComponent(key)}`;
+  public async getSignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {
+    const expiresAt = Date.now() + expiresInSeconds * 1000;
+    const secret = process.env.JWT_SECRET || 'super_secret_forgex_jwt_key_at_least_32_characters_long_min_change_me';
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(`${key}:${expiresAt}`)
+      .digest('hex');
+
+    return `/api/v1/engineering/storage-proxy?key=${encodeURIComponent(key)}&expires=${expiresAt}&signature=${signature}`;
   }
 }

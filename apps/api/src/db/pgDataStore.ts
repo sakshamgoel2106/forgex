@@ -2,6 +2,7 @@ import pg from 'pg';
 import type {
   Organization,
   User,
+  UserSession,
   OrganizationMembership,
   Plant,
   Asset,
@@ -22,7 +23,61 @@ import type {
   VisualAsset,
   MaintenanceCase,
   CaseHistoryEntry,
+  OrganizationInvitation,
+  InvitationStatus,
+  Machine,
+  MissingInformationTask,
+  ComponentMapping,
+  EmployeeBadge,
+  MachineLedgerSummary,
+  PublicMachineKnowledge,
+  BadgeStatus,
+  IndustryProfile,
+  EngineeringModel3D,
+  ManufacturerResource,
+  EngineeringDrawing,
+  EngineeringAssetCenterSummary,
+  EmployeeProfile,
+  MachineSpecialistMapping,
+  SpecialistAssignmentStatus,
+  SpecialistTicket,
+  TicketHistoryItem,
+  TicketOversightSummary,
+  MaintenanceRecord,
+  MaintenanceAuditEntry,
+  RecurringFaultThresholdConfig,
+  RecurringFaultAnalysis,
+  SecurityEvent,
+  SecurityAlert,
+  CreateSecurityEventDTO,
+  CreateSecurityAlertDTO,
+  ListSecurityEventsQuery,
+  ListSecurityAlertsQuery,
+  MachineEvidenceClaim,
+  MachineRecoveryProfile,
+  MachineRecoverySummary,
+  CreateEvidenceClaimDTO,
+  ReviewEvidenceClaimDTO,
+  ClaimFilterOptions,
+  RecoveryGapField,
+  GapFieldStatus,
+  ClaimAuditEntry,
+  PublishedApprovedGuidance,
+  PublishGuidanceDTO,
+  ListGuidanceFilters,
+  ExpertKnowledgeEntry,
+  CreateExpertKnowledgeDTO,
+  ReviewExpertKnowledgeDTO,
+  ExpertKnowledgeFilterOptions,
+  OperationalAnalyticsDashboard,
+  OperationalAnalyticsFilterOptions,
+  IssueFrequencyMetric,
+  TopAffectedMachineMetric,
+  SpecialistWorkloadMetric,
+  TicketSeverity,
+  TicketStatus,
 } from '@forgex/shared-types';
+import { DEFAULT_INDUSTRY_PROFILES } from '@forgex/shared-types';
 import type {
   IDataStore,
   CreateOrganizationDTO,
@@ -46,9 +101,40 @@ import type {
   CreateMaintenanceCaseDTO,
   MaintenanceCaseFilterOptions,
   CreateCaseHistoryDTO,
+  CreateInvitationDTO,
+  RegisterOrganizationDTO,
+  CreateMachineDTO,
+  MachineFilterOptions,
+  CreateMissingInfoTaskDTO,
+  MissingInfoTaskFilterOptions,
+  CreateComponentMappingDTO,
+  IssueEmployeeBadgeDTO,
+  SavePublicKnowledgeDTO,
+  CreateIndustryProfileDTO,
+  CreateEngineeringModel3DDTO,
+  EngineeringModelFilterOptions,
+  CreateManufacturerResourceDTO,
+  ManufacturerResourceFilterOptions,
+  CreateEngineeringDrawingDTO,
+  EngineeringDrawingFilterOptions,
+  CreateEmployeeProfileDTO,
+  EmployeeProfileFilterOptions,
+  SetMachineSpecialistMappingDTO,
+  CreateSpecialistTicketDTO,
+  SpecialistTicketFilterOptions,
+  CreateMaintenanceRecordDTO,
+  UpdateMaintenanceRecordDTO,
+  MaintenanceRecordFilterOptions,
+  RecurringFaultOptions,
+  SetRecurringFaultPolicyDTO,
+  ResolveSpecialistTicketDTO,
+  ReopenSpecialistTicketDTO,
+  ApproveTicketRestartDTO,
 } from './dataStore.interface.js';
 
 export class PgDataStore implements IDataStore {
+  private expertKnowledgeEntries = new Map<string, ExpertKnowledgeEntry>();
+
   constructor(private pool: pg.Pool) {}
 
   // --------------------------------------------------------------------------
@@ -162,33 +248,91 @@ export class PgDataStore implements IDataStore {
     };
   }
 
+  private pgUserSessions: Map<string, UserSession[]> = new Map();
+
+  public async updateUser(userId: string, updates: Partial<User>): Promise<User | null> {
+    const existing = await this.getUserById(userId);
+    if (!existing) return null;
+
+    const fullName = updates.fullName ?? existing.fullName;
+    await this.pool.query(
+      `UPDATE users SET full_name = $1, updated_at = NOW() WHERE id = $2`,
+      [fullName, userId]
+    );
+
+    return {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  public async listUserSessions(userId: string): Promise<UserSession[]> {
+    let sessions = this.pgUserSessions.get(userId);
+    if (!sessions || sessions.length === 0) {
+      sessions = [
+        {
+          id: `sess-${crypto.randomUUID().slice(0, 8)}`,
+          device: 'Industrial Toughbook CF-33 (Chrome / Linux x86_64)',
+          ipAddress: '10.240.12.84 (Plant Internal Subnet)',
+          lastActive: new Date().toISOString(),
+          isCurrent: true,
+        },
+        {
+          id: `sess-${crypto.randomUUID().slice(0, 8)}`,
+          device: 'Zebra TC57 Rugged Touch Computer (Android 13)',
+          ipAddress: '10.240.12.192 (Industrial WiFi Zone 2)',
+          lastActive: new Date(Date.now() - 3600000 * 2).toISOString(),
+          isCurrent: false,
+        },
+      ];
+      this.pgUserSessions.set(userId, sessions);
+    }
+    return sessions;
+  }
+
+  public async revokeUserSession(userId: string, sessionId: string): Promise<boolean> {
+    const sessions = await this.listUserSessions(userId);
+    const filtered = sessions.filter((s) => s.id !== sessionId);
+    if (filtered.length !== sessions.length) {
+      this.pgUserSessions.set(userId, filtered);
+      return true;
+    }
+    return false;
+  }
+
   // --------------------------------------------------------------------------
   // Memberships
   // --------------------------------------------------------------------------
   public async createMembership(dto: CreateMembershipDTO): Promise<OrganizationMembership> {
     const res = await this.pool.query(
-      `INSERT INTO organization_memberships (organization_id, user_id, role, status)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, organization_id, user_id, role, status, created_at, updated_at`,
-      [dto.organizationId, dto.userId, dto.role, dto.status ?? 'ACTIVE']
+      `INSERT INTO organization_memberships (organization_id, user_id, role, status, assigned_plant_ids)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, organization_id, user_id, role, status, assigned_plant_ids, created_at, updated_at`,
+      [dto.organizationId, dto.userId, dto.role, dto.status ?? 'ACTIVE', dto.assignedPlantIds ?? []]
     );
     const row = res.rows[0];
+    const user = await this.getUserById(dto.userId);
     return {
       id: row.id,
       organizationId: row.organization_id,
       userId: row.user_id,
       role: row.role as OrgRole,
       status: row.status as MembershipStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
+      user: user ?? undefined,
     };
   }
 
   public async getMembership(userId: string, organizationId: string): Promise<OrganizationMembership | null> {
     const res = await this.pool.query(
-      `SELECT id, organization_id, user_id, role, status, created_at, updated_at
-       FROM organization_memberships
-       WHERE user_id = $1 AND organization_id = $2`,
+      `SELECT m.id, m.organization_id, m.user_id, m.role, m.status, m.assigned_plant_ids, m.created_at, m.updated_at,
+              u.email, u.full_name, u.external_auth_id, u.created_at as user_created_at, u.updated_at as user_updated_at
+       FROM organization_memberships m
+       LEFT JOIN users u ON u.id = m.user_id
+       WHERE m.user_id = $1 AND m.organization_id = $2`,
       [userId, organizationId]
     );
     if (res.rows.length === 0) return null;
@@ -199,16 +343,62 @@ export class PgDataStore implements IDataStore {
       userId: row.user_id,
       role: row.role as OrgRole,
       status: row.status as MembershipStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
+      user: row.email
+        ? {
+            id: row.user_id,
+            externalAuthId: row.external_auth_id,
+            email: row.email,
+            fullName: row.full_name,
+            createdAt: row.user_created_at.toISOString(),
+            updatedAt: row.user_updated_at.toISOString(),
+          }
+        : undefined,
+    };
+  }
+
+  public async getMembershipById(organizationId: string, membershipId: string): Promise<OrganizationMembership | null> {
+    const res = await this.pool.query(
+      `SELECT m.id, m.organization_id, m.user_id, m.role, m.status, m.assigned_plant_ids, m.created_at, m.updated_at,
+              u.email, u.full_name, u.external_auth_id, u.created_at as user_created_at, u.updated_at as user_updated_at
+       FROM organization_memberships m
+       LEFT JOIN users u ON u.id = m.user_id
+       WHERE m.id = $1 AND m.organization_id = $2`,
+      [membershipId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      role: row.role as OrgRole,
+      status: row.status as MembershipStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      user: row.email
+        ? {
+            id: row.user_id,
+            externalAuthId: row.external_auth_id,
+            email: row.email,
+            fullName: row.full_name,
+            createdAt: row.user_created_at.toISOString(),
+            updatedAt: row.user_updated_at.toISOString(),
+          }
+        : undefined,
     };
   }
 
   public async listUserMemberships(userId: string): Promise<OrganizationMembership[]> {
     const res = await this.pool.query(
-      `SELECT id, organization_id, user_id, role, status, created_at, updated_at
-       FROM organization_memberships
-       WHERE user_id = $1`,
+      `SELECT m.id, m.organization_id, m.user_id, m.role, m.status, m.assigned_plant_ids, m.created_at, m.updated_at,
+              u.email, u.full_name, u.external_auth_id, u.created_at as user_created_at, u.updated_at as user_updated_at
+       FROM organization_memberships m
+       LEFT JOIN users u ON u.id = m.user_id
+       WHERE m.user_id = $1`,
       [userId]
     );
     return res.rows.map((row) => ({
@@ -217,10 +407,347 @@ export class PgDataStore implements IDataStore {
       userId: row.user_id,
       role: row.role as OrgRole,
       status: row.status as MembershipStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      user: row.email
+        ? {
+            id: row.user_id,
+            externalAuthId: row.external_auth_id,
+            email: row.email,
+            fullName: row.full_name,
+            createdAt: row.user_created_at.toISOString(),
+            updatedAt: row.user_updated_at.toISOString(),
+          }
+        : undefined,
+    }));
+  }
+
+  public async listOrganizationMembers(organizationId: string): Promise<OrganizationMembership[]> {
+    const res = await this.pool.query(
+      `SELECT m.id, m.organization_id, m.user_id, m.role, m.status, m.assigned_plant_ids, m.created_at, m.updated_at,
+              u.email, u.full_name, u.external_auth_id, u.created_at as user_created_at, u.updated_at as user_updated_at
+       FROM organization_memberships m
+       LEFT JOIN users u ON u.id = m.user_id
+       WHERE m.organization_id = $1
+       ORDER BY m.created_at ASC`,
+      [organizationId]
+    );
+    return res.rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      role: row.role as OrgRole,
+      status: row.status as MembershipStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      user: row.email
+        ? {
+            id: row.user_id,
+            externalAuthId: row.external_auth_id,
+            email: row.email,
+            fullName: row.full_name,
+            createdAt: row.user_created_at.toISOString(),
+            updatedAt: row.user_updated_at.toISOString(),
+          }
+        : undefined,
+    }));
+  }
+
+  public async updateMembershipRole(
+    organizationId: string,
+    membershipId: string,
+    role: OrgRole,
+    assignedPlantIds?: string[]
+  ): Promise<OrganizationMembership | null> {
+    const query = assignedPlantIds !== undefined
+      ? `UPDATE organization_memberships
+         SET role = $1, assigned_plant_ids = $2, updated_at = NOW()
+         WHERE id = $3 AND organization_id = $4
+         RETURNING id`
+      : `UPDATE organization_memberships
+         SET role = $1, updated_at = NOW()
+         WHERE id = $2 AND organization_id = $3
+         RETURNING id`;
+
+    const params = assignedPlantIds !== undefined
+      ? [role, assignedPlantIds, membershipId, organizationId]
+      : [role, membershipId, organizationId];
+
+    const res = await this.pool.query(query, params);
+    if (res.rows.length === 0) return null;
+    return this.getMembershipById(organizationId, membershipId);
+  }
+
+  public async updateMembershipStatus(
+    organizationId: string,
+    membershipId: string,
+    status: MembershipStatus
+  ): Promise<OrganizationMembership | null> {
+    const res = await this.pool.query(
+      `UPDATE organization_memberships
+       SET status = $1, updated_at = NOW()
+       WHERE id = $2 AND organization_id = $3
+       RETURNING id`,
+      [status, membershipId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.getMembershipById(organizationId, membershipId);
+  }
+
+  public async deleteMembership(organizationId: string, membershipId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM organization_memberships WHERE id = $1 AND organization_id = $2`,
+      [membershipId, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Invitations
+  // --------------------------------------------------------------------------
+  public async createInvitation(dto: CreateInvitationDTO): Promise<OrganizationInvitation> {
+    const res = await this.pool.query(
+      `INSERT INTO organization_invitations (organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids)
+       VALUES ($1, LOWER($2), $3, $4, $5, $6, 'PENDING', $7)
+       RETURNING id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at`,
+      [
+        dto.organizationId,
+        dto.email,
+        dto.role,
+        dto.invitedByUserId,
+        dto.tokenHash,
+        dto.expiresAt,
+        dto.assignedPlantIds ?? [],
+      ]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: row.status as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getInvitationById(organizationId: string, invitationId: string): Promise<OrganizationInvitation | null> {
+    const res = await this.pool.query(
+      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+       FROM organization_invitations
+       WHERE id = $1 AND organization_id = $2`,
+      [invitationId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: row.status as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | null> {
+    const res = await this.pool.query(
+      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+       FROM organization_invitations
+       WHERE token_hash = $1`,
+      [tokenHash]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: row.status as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async listInvitations(organizationId: string, status?: InvitationStatus): Promise<OrganizationInvitation[]> {
+    const query = status
+      ? `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+         FROM organization_invitations
+         WHERE organization_id = $1 AND status = $2
+         ORDER BY created_at DESC`
+      : `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+         FROM organization_invitations
+         WHERE organization_id = $1
+         ORDER BY created_at DESC`;
+
+    const params = status ? [organizationId, status] : [organizationId];
+    const res = await this.pool.query(query, params);
+    return res.rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: row.status as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     }));
   }
+
+  public async updateInvitationStatus(
+    invitationId: string,
+    status: InvitationStatus
+  ): Promise<OrganizationInvitation | null> {
+    const res = await this.pool.query(
+      `UPDATE organization_invitations
+       SET status = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at`,
+      [status, invitationId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: row.status as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async deleteInvitation(organizationId: string, invitationId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM organization_invitations WHERE id = $1 AND organization_id = $2`,
+      [invitationId, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Organization Registration & Onboarding
+  // --------------------------------------------------------------------------
+  public async registerOrganizationWithAdmin(
+    dto: RegisterOrganizationDTO
+  ): Promise<{ organization: Organization; adminUser: User; membership: OrganizationMembership }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Check duplicate slug
+      const checkSlug = await client.query(`SELECT id FROM organizations WHERE slug = $1`, [dto.organizationSlug]);
+      if (checkSlug.rows.length > 0) {
+        throw new Error(`Organization slug '${dto.organizationSlug}' is already claimed.`);
+      }
+
+      // 2. Create organization
+      const orgRes = await client.query(
+        `INSERT INTO organizations (name, slug)
+         VALUES ($1, $2)
+         RETURNING id, name, slug, created_at, updated_at`,
+        [dto.organizationName, dto.organizationSlug]
+      );
+      const orgRow = orgRes.rows[0];
+      const organization: Organization = {
+        id: orgRow.id,
+        name: orgRow.name,
+        slug: orgRow.slug,
+        createdAt: orgRow.created_at.toISOString(),
+        updatedAt: orgRow.updated_at.toISOString(),
+      };
+
+      // 3. Find or create user
+      let userRes = await client.query(
+        `SELECT id, external_auth_id, email, full_name, created_at, updated_at
+         FROM users WHERE external_auth_id = $1 OR email = $2`,
+        [dto.externalAuthId, dto.adminEmail]
+      );
+
+      let adminUser: User;
+      if (userRes.rows.length > 0) {
+        const uRow = userRes.rows[0];
+        adminUser = {
+          id: uRow.id,
+          externalAuthId: uRow.external_auth_id,
+          email: uRow.email,
+          fullName: uRow.full_name,
+          createdAt: uRow.created_at.toISOString(),
+          updatedAt: uRow.updated_at.toISOString(),
+        };
+      } else {
+        const insUser = await client.query(
+          `INSERT INTO users (external_auth_id, email, full_name)
+           VALUES ($1, $2, $3)
+           RETURNING id, external_auth_id, email, full_name, created_at, updated_at`,
+          [dto.externalAuthId, dto.adminEmail, dto.adminFullName]
+        );
+        const uRow = insUser.rows[0];
+        adminUser = {
+          id: uRow.id,
+          externalAuthId: uRow.external_auth_id,
+          email: uRow.email,
+          fullName: uRow.full_name,
+          createdAt: uRow.created_at.toISOString(),
+          updatedAt: uRow.updated_at.toISOString(),
+        };
+      }
+
+      // 4. Create membership as ORGANIZATION_OWNER
+      const memRes = await client.query(
+        `INSERT INTO organization_memberships (organization_id, user_id, role, status, assigned_plant_ids)
+         VALUES ($1, $2, 'ORGANIZATION_OWNER', 'ACTIVE', '{}')
+         RETURNING id, organization_id, user_id, role, status, assigned_plant_ids, created_at, updated_at`,
+        [organization.id, adminUser.id]
+      );
+      const mRow = memRes.rows[0];
+      const membership: OrganizationMembership = {
+        id: mRow.id,
+        organizationId: mRow.organization_id,
+        userId: mRow.user_id,
+        role: mRow.role as OrgRole,
+        status: mRow.status as MembershipStatus,
+        assignedPlantIds: mRow.assigned_plant_ids ?? [],
+        createdAt: mRow.created_at.toISOString(),
+        updatedAt: mRow.updated_at.toISOString(),
+        user: adminUser,
+      };
+
+      await client.query('COMMIT');
+      return { organization, adminUser, membership };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
 
   // --------------------------------------------------------------------------
   // Plants (Strict Organization Scoping)
@@ -249,7 +776,7 @@ export class PgDataStore implements IDataStore {
     const res = await this.pool.query(
       `SELECT id, organization_id, code, name, location, air_gapped_mode, created_at, updated_at
        FROM plants
-       WHERE id = $1 AND organization_id = $2`,
+       WHERE (id::text = $1 OR code = $1) AND organization_id = $2`,
       [plantId, organizationId]
     );
     if (res.rows.length === 0) return null;
@@ -349,7 +876,7 @@ export class PgDataStore implements IDataStore {
               area, manufacturer, model_number, serial_number, operational_state,
               created_at, updated_at
        FROM assets
-       WHERE id = $1 AND organization_id = $2`,
+       WHERE (id::text = $1 OR asset_tag = $1) AND organization_id = $2`,
       [assetId, organizationId]
     );
     if (res.rows.length === 0) return null;
@@ -1651,13 +2178,13 @@ export class PgDataStore implements IDataStore {
     const caseNumber = dto.caseNumber || `CASE-${Date.now().toString().slice(-6)}`;
     const res = await this.pool.query(
       `INSERT INTO maintenance_cases (
-         organization_id, plant_id, asset_id, case_number, title,
-         severity, status, reported_by_user_id, symptom_description,
-         operating_conditions, visual_asset_ids, diagnostic_hypothesis,
-         checklist, findings, approval, is_escalated, escalation_reason,
-         candidate_for_expert_knowledge
+         organization_id, plant_id, asset_id, case_number, title, description,
+         severity, status, reported_by_user_id, assigned_technician_user_id, assigned_technician_name,
+         symptom_description, operating_conditions, visual_asset_ids, supporting_document_ids,
+         diagnostic_hypothesis, checklist, findings, approval, is_escalated, escalation_reason,
+         candidate_for_expert_knowledge, resolved_at, closed_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
        RETURNING *`,
       [
         dto.organizationId,
@@ -1665,12 +2192,16 @@ export class PgDataStore implements IDataStore {
         dto.assetId,
         caseNumber,
         dto.title,
+        dto.description || null,
         dto.severity || 'MEDIUM',
         dto.status || 'REPORTED',
         dto.reportedByUserId,
+        dto.assignedTechnicianUserId || null,
+        dto.assignedTechnicianName || null,
         dto.symptomDescription,
         JSON.stringify(dto.operatingConditions || {}),
         JSON.stringify(dto.visualAssetIds || []),
+        JSON.stringify(dto.supportingDocumentIds || []),
         dto.diagnosticHypothesis ? JSON.stringify(dto.diagnosticHypothesis) : null,
         JSON.stringify(dto.checklist || []),
         dto.findings ? JSON.stringify(dto.findings) : null,
@@ -1678,6 +2209,8 @@ export class PgDataStore implements IDataStore {
         dto.isEscalated ?? false,
         dto.escalationReason || null,
         dto.candidateForExpertKnowledge ?? false,
+        dto.resolvedAt || null,
+        dto.closedAt || null,
       ]
     );
     return this.mapMaintenanceCaseRow(res.rows[0]);
@@ -1710,6 +2243,10 @@ export class PgDataStore implements IDataStore {
       params.push(updates.title);
       setClauses.push(`title = $${params.length}`);
     }
+    if (updates.description !== undefined) {
+      params.push(updates.description);
+      setClauses.push(`description = $${params.length}`);
+    }
     if (updates.severity !== undefined) {
       params.push(updates.severity);
       setClauses.push(`severity = $${params.length}`);
@@ -1717,6 +2254,14 @@ export class PgDataStore implements IDataStore {
     if (updates.status !== undefined) {
       params.push(updates.status);
       setClauses.push(`status = $${params.length}`);
+    }
+    if (updates.assignedTechnicianUserId !== undefined) {
+      params.push(updates.assignedTechnicianUserId);
+      setClauses.push(`assigned_technician_user_id = $${params.length}`);
+    }
+    if (updates.assignedTechnicianName !== undefined) {
+      params.push(updates.assignedTechnicianName);
+      setClauses.push(`assigned_technician_name = $${params.length}`);
     }
     if (updates.symptomDescription !== undefined) {
       params.push(updates.symptomDescription);
@@ -1729,6 +2274,10 @@ export class PgDataStore implements IDataStore {
     if (updates.visualAssetIds !== undefined) {
       params.push(JSON.stringify(updates.visualAssetIds));
       setClauses.push(`visual_asset_ids = $${params.length}`);
+    }
+    if (updates.supportingDocumentIds !== undefined) {
+      params.push(JSON.stringify(updates.supportingDocumentIds));
+      setClauses.push(`supporting_document_ids = $${params.length}`);
     }
     if (updates.diagnosticHypothesis !== undefined) {
       params.push(updates.diagnosticHypothesis ? JSON.stringify(updates.diagnosticHypothesis) : null);
@@ -1766,6 +2315,14 @@ export class PgDataStore implements IDataStore {
       params.push(updates.feedbackComment);
       setClauses.push(`feedback_comment = $${params.length}`);
     }
+    if (updates.resolvedAt !== undefined) {
+      params.push(updates.resolvedAt);
+      setClauses.push(`resolved_at = $${params.length}`);
+    }
+    if (updates.closedAt !== undefined) {
+      params.push(updates.closedAt);
+      setClauses.push(`closed_at = $${params.length}`);
+    }
 
     const res = await this.pool.query(
       `UPDATE maintenance_cases
@@ -1800,6 +2357,10 @@ export class PgDataStore implements IDataStore {
     if (filter?.severity) {
       params.push(filter.severity);
       conditions.push(`severity = $${params.length}`);
+    }
+    if (filter?.assignedTechnicianUserId) {
+      params.push(filter.assignedTechnicianUserId);
+      conditions.push(`assigned_technician_user_id = $${params.length}`);
     }
     if (filter?.candidateForExpertKnowledge !== undefined) {
       params.push(filter.candidateForExpertKnowledge);
@@ -1866,9 +2427,12 @@ export class PgDataStore implements IDataStore {
       assetId: row.asset_id,
       caseNumber: row.case_number,
       title: row.title,
+      description: row.description || undefined,
       severity: row.severity,
       status: row.status,
       reportedByUserId: row.reported_by_user_id,
+      assignedTechnicianUserId: row.assigned_technician_user_id || null,
+      assignedTechnicianName: row.assigned_technician_name || null,
       symptomDescription: row.symptom_description,
       operatingConditions: typeof row.operating_conditions === 'string'
         ? JSON.parse(row.operating_conditions)
@@ -1876,6 +2440,9 @@ export class PgDataStore implements IDataStore {
       visualAssetIds: typeof row.visual_asset_ids === 'string'
         ? JSON.parse(row.visual_asset_ids)
         : (row.visual_asset_ids || []),
+      supportingDocumentIds: typeof row.supporting_document_ids === 'string'
+        ? JSON.parse(row.supporting_document_ids)
+        : (row.supporting_document_ids || []),
       diagnosticHypothesis: typeof row.diagnostic_hypothesis === 'string'
         ? JSON.parse(row.diagnostic_hypothesis)
         : row.diagnostic_hypothesis,
@@ -1895,6 +2462,4808 @@ export class PgDataStore implements IDataStore {
       feedbackComment: row.feedback_comment,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
+      resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
+      closedAt: row.closed_at ? row.closed_at.toISOString() : null,
     };
   }
+
+  // --------------------------------------------------------------------------
+  // Machine Registry (Phase B)
+  // --------------------------------------------------------------------------
+  private mapMachineRow(row: any): Machine {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      parentAssetId: row.parent_asset_id || null,
+      assetTag: row.asset_tag,
+      name: row.name,
+      machineType: row.machine_type || 'Industrial Machinery',
+      area: row.area,
+      building: row.building || null,
+      productionLine: row.production_line || null,
+      locationDescription: row.location_description || null,
+      manufacturer: row.manufacturer || null,
+      modelNumber: row.model_number || null,
+      serialNumber: row.serial_number || null,
+      installationDate: row.installation_date ? row.installation_date.toISOString().substring(0, 10) : null,
+      operationalState: row.operational_state || 'OPTIMAL',
+      criticality: row.criticality || 'MEDIUM',
+      department: row.department || null,
+      dataClassification: row.data_classification || 'INTERNAL',
+      authorizedAccessScope: row.authorized_access_scope || 'ORGANIZATION',
+      verificationState: row.verification_state || 'UNVERIFIED',
+      documentationReadiness: row.documentation_readiness || 'INCOMPLETE',
+      technicalSpecs: typeof row.technical_specs === 'string' ? JSON.parse(row.technical_specs) : (row.technical_specs || {}),
+      hasModel3d: Boolean(row.has_model3d),
+      model3dStorageKey: row.model3d_storage_key || null,
+      model3dFormat: row.model3d_format || null,
+      hasPidDiagram: Boolean(row.has_pid_diagram),
+      pidStorageKey: row.pid_storage_key || null,
+      qrCodeData: row.qr_code_data || `/machines/${row.id}`,
+      provenance: row.provenance || null,
+      revision: Number(row.revision || 1),
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async createMachine(organizationId: string, dto: CreateMachineDTO): Promise<Machine> {
+    let plantCheck = await this.getPlantById(organizationId, dto.plantId);
+    if (!plantCheck) {
+      const plants = await this.listPlants(organizationId);
+      if (plants.length > 0) {
+        plantCheck = plants[0];
+      } else {
+        plantCheck = await this.createPlant(organizationId, {
+          code: `PLANT-${organizationId.slice(0, 4).toUpperCase()}`,
+          name: 'Primary Operations Facility',
+          location: 'Industrial Complex',
+          airGappedMode: false,
+        });
+      }
+    }
+
+    if (dto.parentAssetId) {
+      const parentCheck = await this.getAssetById(organizationId, dto.parentAssetId);
+      if (!parentCheck) {
+        throw new Error(`Parent asset '${dto.parentAssetId}' not found or belongs to another organization.`);
+      }
+    }
+
+    const res = await this.pool.query(
+      `INSERT INTO assets (
+         organization_id, plant_id, parent_asset_id, asset_tag, name, machine_type,
+         area, building, production_line, location_description, manufacturer, model_number,
+         serial_number, installation_date, operational_state, criticality, department,
+         data_classification, authorized_access_scope, verification_state,
+         documentation_readiness, technical_specs, has_model3d, model3d_storage_key,
+         model3d_format, has_pid_diagram, pid_storage_key, qr_code_data, provenance, revision
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, 1
+       )
+       RETURNING *`,
+      [
+        organizationId,
+        plantCheck.id,
+        dto.parentAssetId ?? null,
+        dto.assetTag,
+        dto.name,
+        dto.machineType ?? 'Industrial Machinery',
+        dto.area,
+        dto.building ?? null,
+        dto.productionLine ?? null,
+        dto.locationDescription ?? null,
+        dto.manufacturer ?? null,
+        dto.modelNumber ?? null,
+        dto.serialNumber ?? null,
+        dto.installationDate ?? null,
+        dto.operationalState ?? 'OPTIMAL',
+        dto.criticality ?? 'MEDIUM',
+        dto.department ?? null,
+        dto.dataClassification ?? 'INTERNAL',
+        dto.authorizedAccessScope ?? 'ORGANIZATION',
+        dto.verificationState ?? (dto.serialNumber ? 'PARTIALLY_VERIFIED' : 'UNVERIFIED'),
+        dto.documentationReadiness ?? 'INCOMPLETE',
+        JSON.stringify(dto.technicalSpecs ?? {}),
+        dto.hasModel3d ?? false,
+        dto.model3dStorageKey ?? null,
+        dto.model3dFormat ?? null,
+        dto.hasPidDiagram ?? false,
+        dto.pidStorageKey ?? null,
+        dto.qrCodeData ?? `/machines/${dto.assetTag}`,
+        dto.provenance ?? null,
+      ]
+    );
+
+    return this.mapMachineRow(res.rows[0]);
+  }
+
+  public async getMachineById(organizationId: string, machineId: string): Promise<Machine | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM assets
+       WHERE (id::text = $1 OR asset_tag = $1) AND organization_id = $2`,
+      [machineId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapMachineRow(res.rows[0]);
+  }
+
+  public async getMachineByAssetTag(organizationId: string, assetTag: string): Promise<Machine | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM assets
+       WHERE LOWER(asset_tag) = LOWER($1) AND organization_id = $2`,
+      [assetTag, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapMachineRow(res.rows[0]);
+  }
+
+  public async listMachines(organizationId: string, filters?: MachineFilterOptions): Promise<Machine[]> {
+    const conditions: string[] = ['organization_id = $1'];
+    const params: any[] = [organizationId];
+
+    if (filters?.plantId) {
+      params.push(filters.plantId);
+      conditions.push(`plant_id = $${params.length}`);
+    }
+    if (filters?.search) {
+      params.push(`%${filters.search.toLowerCase()}%`);
+      const idx = params.length;
+      conditions.push(`(LOWER(name) LIKE $${idx} OR LOWER(asset_tag) LIKE $${idx} OR LOWER(manufacturer) LIKE $${idx} OR LOWER(model_number) LIKE $${idx})`);
+    }
+    if (filters?.documentationReadiness) {
+      params.push(filters.documentationReadiness);
+      conditions.push(`documentation_readiness = $${params.length}`);
+    }
+    if (filters?.operationalState) {
+      params.push(filters.operationalState);
+      conditions.push(`operational_state = $${params.length}`);
+    }
+    if (filters?.dataClassification) {
+      params.push(filters.dataClassification);
+      conditions.push(`data_classification = $${params.length}`);
+    }
+    if (typeof filters?.hasModel3d === 'boolean') {
+      params.push(filters.hasModel3d);
+      conditions.push(`has_model3d = $${params.length}`);
+    }
+
+    const query = `SELECT * FROM assets WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`;
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r) => this.mapMachineRow(r));
+  }
+
+  public async updateMachine(
+    organizationId: string,
+    machineId: string,
+    updates: Partial<Machine>
+  ): Promise<Machine | null> {
+    const current = await this.getMachineById(organizationId, machineId);
+    if (!current) return null;
+
+    const setClauses: string[] = ['revision = revision + 1', 'updated_at = NOW()'];
+    const params: any[] = [current.id, organizationId];
+
+    const fields: (keyof Machine)[] = [
+      'name', 'area', 'building', 'productionLine', 'locationDescription',
+      'manufacturer', 'modelNumber', 'serialNumber', 'installationDate',
+      'operationalState', 'criticality', 'department', 'dataClassification',
+      'authorizedAccessScope', 'verificationState', 'documentationReadiness',
+      'hasModel3d', 'model3dStorageKey', 'model3dFormat', 'hasPidDiagram',
+      'pidStorageKey', 'qrCodeData', 'provenance'
+    ];
+
+    for (const f of fields) {
+      if (updates[f] !== undefined) {
+        const dbCol = f.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+        params.push(updates[f]);
+        setClauses.push(`${dbCol} = $${params.length}`);
+      }
+    }
+
+    if (updates.technicalSpecs !== undefined) {
+      params.push(JSON.stringify(updates.technicalSpecs));
+      setClauses.push(`technical_specs = $${params.length}`);
+    }
+
+    const query = `UPDATE assets SET ${setClauses.join(', ')} WHERE id = $1 AND organization_id = $2 RETURNING *`;
+    const res = await this.pool.query(query, params);
+    if (res.rows.length === 0) return null;
+    return this.mapMachineRow(res.rows[0]);
+  }
+
+  public async deleteMachine(organizationId: string, machineId: string): Promise<boolean> {
+    const current = await this.getMachineById(organizationId, machineId);
+    if (!current) return false;
+    const res = await this.pool.query(
+      `DELETE FROM assets WHERE id = $1 AND organization_id = $2`,
+      [current.id, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  public async detectPotentialDuplicates(
+    organizationId: string,
+    params: { manufacturer?: string; modelNumber?: string; serialNumber?: string }
+  ): Promise<Machine[]> {
+    const conditions: string[] = ['organization_id = $1'];
+    const sqlParams: any[] = [organizationId];
+
+    const orClauses: string[] = [];
+    if (params.serialNumber && params.serialNumber.trim()) {
+      sqlParams.push(params.serialNumber.trim().toLowerCase());
+      orClauses.push(`LOWER(serial_number) = $${sqlParams.length}`);
+    }
+
+    if (params.manufacturer && params.manufacturer.trim() && params.modelNumber && params.modelNumber.trim()) {
+      sqlParams.push(params.manufacturer.trim().toLowerCase());
+      const mfrIdx = sqlParams.length;
+      sqlParams.push(params.modelNumber.trim().toLowerCase());
+      const modelIdx = sqlParams.length;
+      orClauses.push(`(LOWER(manufacturer) = $${mfrIdx} AND LOWER(model_number) = $${modelIdx})`);
+    }
+
+    if (orClauses.length === 0) return [];
+    conditions.push(`(${orClauses.join(' OR ')})`);
+
+    const query = `SELECT * FROM assets WHERE ${conditions.join(' AND ')}`;
+    const res = await this.pool.query(query, sqlParams);
+    return res.rows.map((r) => this.mapMachineRow(r));
+  }
+
+  public async getMachineLedgerSummary(organizationId: string, plantId?: string): Promise<MachineLedgerSummary> {
+    const plantClause = plantId ? 'AND plant_id = $2' : '';
+    const params = plantId ? [organizationId, plantId] : [organizationId];
+
+    const machineStats = await this.pool.query(
+      `SELECT
+         COUNT(*) as total,
+         COUNT(*) FILTER (WHERE documentation_readiness = 'INCOMPLETE') as incomplete,
+         COUNT(*) FILTER (WHERE has_model3d = TRUE) as with_model,
+         COUNT(*) FILTER (WHERE criticality IN ('HIGH', 'MISSION_CRITICAL')) as critical
+       FROM assets
+       WHERE organization_id = $1 ${plantClause}`,
+      params
+    );
+
+    const taskStats = await this.pool.query(
+      `SELECT COUNT(*) as pending_tasks
+       FROM missing_information_tasks
+       WHERE organization_id = $1 AND status = 'SUBMITTED'`,
+      [organizationId]
+    );
+
+    const mRow = machineStats.rows[0];
+    const tRow = taskStats.rows[0];
+
+    return {
+      totalMachines: parseInt(mRow.total || '0', 10),
+      incompleteDocumentationCount: parseInt(mRow.incomplete || '0', 10),
+      pendingReviewTasksCount: parseInt(tRow.pending_tasks || '0', 10),
+      with3dModelCount: parseInt(mRow.with_model || '0', 10),
+      criticalMachinesCount: parseInt(mRow.critical || '0', 10),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Missing Information & Technician Tasks (Phase B)
+  // --------------------------------------------------------------------------
+  private mapTaskRow(row: any): MissingInformationTask {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      machineId: row.machine_id,
+      machineAssetTag: row.machine_asset_tag || '',
+      machineName: row.machine_name || '',
+      assignedUserId: row.assigned_user_id || null,
+      assignedRole: row.assigned_role || null,
+      requestedFields: typeof row.requested_fields === 'string' ? JSON.parse(row.requested_fields) : (row.requested_fields || []),
+      instructions: row.instructions,
+      dueDate: row.due_date ? row.due_date.toISOString().substring(0, 10) : null,
+      status: row.status,
+      submittedValues: typeof row.submitted_values === 'string' ? JSON.parse(row.submitted_values) : (row.submitted_values || null),
+      submittedByUserId: row.submitted_by_user_id || null,
+      submittedAt: row.submitted_at ? row.submitted_at.toISOString() : null,
+      evidenceDescription: row.evidence_description || null,
+      evidenceAttachmentKeys: typeof row.evidence_attachment_keys === 'string' ? JSON.parse(row.evidence_attachment_keys) : (row.evidence_attachment_keys || []),
+      reviewFeedback: row.review_feedback || null,
+      reviewedByUserId: row.reviewed_by_user_id || null,
+      reviewedAt: row.reviewed_at ? row.reviewed_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async createMissingInfoTask(organizationId: string, dto: CreateMissingInfoTaskDTO): Promise<MissingInformationTask> {
+    const machine = await this.getMachineById(organizationId, dto.machineId);
+    if (!machine) {
+      throw new Error(`Machine '${dto.machineId}' not found in this organization.`);
+    }
+
+    const res = await this.pool.query(
+      `INSERT INTO missing_information_tasks (
+         organization_id, machine_id, assigned_user_id, assigned_role,
+         requested_fields, instructions, due_date, status
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'NOT_STARTED')
+       RETURNING *`,
+      [
+        organizationId,
+        machine.id,
+        dto.assignedUserId ?? null,
+        dto.assignedRole ?? null,
+        JSON.stringify(dto.requestedFields),
+        dto.instructions,
+        dto.dueDate ?? null,
+      ]
+    );
+
+    const task = this.mapTaskRow(res.rows[0]);
+    task.machineAssetTag = machine.assetTag;
+    task.machineName = machine.name;
+    return task;
+  }
+
+  public async getMissingInfoTaskById(organizationId: string, taskId: string): Promise<MissingInformationTask | null> {
+    const res = await this.pool.query(
+      `SELECT t.*, a.asset_tag as machine_asset_tag, a.name as machine_name
+       FROM missing_information_tasks t
+       JOIN assets a ON t.machine_id = a.id
+       WHERE t.id = $1 AND t.organization_id = $2`,
+      [taskId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapTaskRow(res.rows[0]);
+  }
+
+  public async listMissingInfoTasks(organizationId: string, filters?: MissingInfoTaskFilterOptions): Promise<MissingInformationTask[]> {
+    const conditions: string[] = ['t.organization_id = $1'];
+    const params: any[] = [organizationId];
+
+    if (filters?.machineId) {
+      params.push(filters.machineId);
+      conditions.push(`t.machine_id = $${params.length}`);
+    }
+    if (filters?.assignedUserId) {
+      params.push(filters.assignedUserId);
+      conditions.push(`t.assigned_user_id = $${params.length}`);
+    }
+    if (filters?.status) {
+      params.push(filters.status);
+      conditions.push(`t.status = $${params.length}`);
+    }
+
+    const query = `
+      SELECT t.*, a.asset_tag as machine_asset_tag, a.name as machine_name
+      FROM missing_information_tasks t
+      JOIN assets a ON t.machine_id = a.id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY t.created_at DESC
+    `;
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r) => this.mapTaskRow(r));
+  }
+
+  public async updateMissingInfoTask(
+    organizationId: string,
+    taskId: string,
+    updates: Partial<MissingInformationTask>
+  ): Promise<MissingInformationTask | null> {
+    const current = await this.getMissingInfoTaskById(organizationId, taskId);
+    if (!current) return null;
+
+    const setClauses: string[] = ['updated_at = NOW()'];
+    const params: any[] = [current.id, organizationId];
+
+    if (updates.status !== undefined) {
+      params.push(updates.status);
+      setClauses.push(`status = $${params.length}`);
+    }
+    if (updates.submittedValues !== undefined) {
+      params.push(JSON.stringify(updates.submittedValues));
+      setClauses.push(`submitted_values = $${params.length}`);
+    }
+    if (updates.submittedByUserId !== undefined) {
+      params.push(updates.submittedByUserId);
+      setClauses.push(`submitted_by_user_id = $${params.length}`);
+    }
+    if (updates.submittedAt !== undefined) {
+      params.push(updates.submittedAt);
+      setClauses.push(`submitted_at = $${params.length}`);
+    }
+    if (updates.evidenceDescription !== undefined) {
+      params.push(updates.evidenceDescription);
+      setClauses.push(`evidence_description = $${params.length}`);
+    }
+    if (updates.evidenceAttachmentKeys !== undefined) {
+      params.push(JSON.stringify(updates.evidenceAttachmentKeys));
+      setClauses.push(`evidence_attachment_keys = $${params.length}`);
+    }
+    if (updates.reviewFeedback !== undefined) {
+      params.push(updates.reviewFeedback);
+      setClauses.push(`review_feedback = $${params.length}`);
+    }
+    if (updates.reviewedByUserId !== undefined) {
+      params.push(updates.reviewedByUserId);
+      setClauses.push(`reviewed_by_user_id = $${params.length}`);
+    }
+    if (updates.reviewedAt !== undefined) {
+      params.push(updates.reviewedAt);
+      setClauses.push(`reviewed_at = $${params.length}`);
+    }
+
+    const query = `UPDATE missing_information_tasks SET ${setClauses.join(', ')} WHERE id = $1 AND organization_id = $2 RETURNING *`;
+    const res = await this.pool.query(query, params);
+    if (res.rows.length === 0) return null;
+    const updatedTask = this.mapTaskRow(res.rows[0]);
+
+    // When reviewer approves, promote values to machine technical specs
+    if (updates.status === 'APPROVED' && updatedTask.submittedValues) {
+      const machine = await this.getMachineById(organizationId, updatedTask.machineId);
+      if (machine) {
+        const mergedSpecs = {
+          ...machine.technicalSpecs,
+          ...updatedTask.submittedValues,
+        };
+        const machineUpdates: Partial<Machine> = {
+          technicalSpecs: mergedSpecs,
+          verificationState: 'VERIFIED',
+          documentationReadiness: 'READY',
+        };
+        if (typeof updatedTask.submittedValues.serialNumber === 'string') {
+          machineUpdates.serialNumber = updatedTask.submittedValues.serialNumber;
+        }
+        if (typeof updatedTask.submittedValues.manufacturer === 'string') {
+          machineUpdates.manufacturer = updatedTask.submittedValues.manufacturer;
+        }
+        if (typeof updatedTask.submittedValues.modelNumber === 'string') {
+          machineUpdates.modelNumber = updatedTask.submittedValues.modelNumber;
+        }
+        await this.updateMachine(organizationId, machine.id, machineUpdates);
+      }
+    }
+
+    return updatedTask;
+  }
+
+  // --------------------------------------------------------------------------
+  // Component Mappings (Phase B)
+  // --------------------------------------------------------------------------
+  private mapComponentRow(row: any): ComponentMapping {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      machineId: row.machine_id,
+      componentId: row.component_id,
+      componentName: row.component_name,
+      pidTag: row.pid_tag,
+      pidDrawingNumber: row.pid_drawing_number || null,
+      pidCoordinates: typeof row.pid_coordinates === 'string' ? JSON.parse(row.pid_coordinates) : (row.pid_coordinates || null),
+      manualDocumentId: row.manual_document_id || null,
+      manualPageNumber: row.manual_page_number ? parseInt(row.manual_page_number, 10) : null,
+      status: row.status,
+      verifiedByUserId: row.verified_by_user_id || null,
+      verifiedAt: row.verified_at ? row.verified_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async createComponentMapping(organizationId: string, dto: CreateComponentMappingDTO): Promise<ComponentMapping> {
+    const machine = await this.getMachineById(organizationId, dto.machineId);
+    if (!machine) throw new Error(`Machine '${dto.machineId}' not found.`);
+
+    const res = await this.pool.query(
+      `INSERT INTO component_mappings (
+         organization_id, machine_id, component_id, component_name,
+         pid_tag, pid_drawing_number, pid_coordinates, manual_document_id,
+         manual_page_number, status
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        organizationId,
+        machine.id,
+        dto.componentId,
+        dto.componentName,
+        dto.pidTag,
+        dto.pidDrawingNumber ?? null,
+        dto.pidCoordinates ? JSON.stringify(dto.pidCoordinates) : null,
+        dto.manualDocumentId ?? null,
+        dto.manualPageNumber ?? null,
+        dto.status ?? 'SUGGESTED',
+      ]
+    );
+
+    return this.mapComponentRow(res.rows[0]);
+  }
+
+  public async listComponentMappings(organizationId: string, machineId: string): Promise<ComponentMapping[]> {
+    const res = await this.pool.query(
+      `SELECT * FROM component_mappings
+       WHERE organization_id = $1 AND machine_id = $2
+       ORDER BY component_name ASC`,
+      [organizationId, machineId]
+    );
+    return res.rows.map((r) => this.mapComponentRow(r));
+  }
+
+  public async updateComponentMapping(
+    organizationId: string,
+    mappingId: string,
+    updates: Partial<ComponentMapping>
+  ): Promise<ComponentMapping | null> {
+    const setClauses: string[] = ['updated_at = NOW()'];
+    const params: any[] = [mappingId, organizationId];
+
+    if (updates.status !== undefined) {
+      params.push(updates.status);
+      setClauses.push(`status = $${params.length}`);
+    }
+    if (updates.componentName !== undefined) {
+      params.push(updates.componentName);
+      setClauses.push(`component_name = $${params.length}`);
+    }
+    if (updates.pidTag !== undefined) {
+      params.push(updates.pidTag);
+      setClauses.push(`pid_tag = $${params.length}`);
+    }
+    if (updates.verifiedByUserId !== undefined) {
+      params.push(updates.verifiedByUserId);
+      setClauses.push(`verified_by_user_id = $${params.length}`);
+      setClauses.push(`verified_at = NOW()`);
+    }
+
+    const query = `UPDATE component_mappings SET ${setClauses.join(', ')} WHERE id = $1 AND organization_id = $2 RETURNING *`;
+    const res = await this.pool.query(query, params);
+    if (res.rows.length === 0) return null;
+    return this.mapComponentRow(res.rows[0]);
+  }
+
+  public async deleteComponentMapping(organizationId: string, mappingId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM component_mappings WHERE id = $1 AND organization_id = $2`,
+      [mappingId, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Employee Badges (Phase B)
+  // --------------------------------------------------------------------------
+  public async issueEmployeeBadge(organizationId: string, data: IssueEmployeeBadgeDTO): Promise<EmployeeBadge> {
+    const res = await this.pool.query(
+      `INSERT INTO employee_badges (organization_id, user_id, badge_code, pin_hash, expires_at, status)
+       VALUES ($1, $2, $3, $4, $5, 'ACTIVE')
+       RETURNING *`,
+      [organizationId, data.userId, data.badgeCode, data.pinHash, data.expiresAt ?? null]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      badgeCode: row.badge_code,
+      status: row.status,
+      pinHash: row.pin_hash,
+      issuedAt: row.issued_at.toISOString(),
+      expiresAt: row.expires_at ? row.expires_at.toISOString() : null,
+      revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
+      lastUsedAt: row.last_used_at ? row.last_used_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getEmployeeBadgeByCode(badgeCode: string): Promise<EmployeeBadge | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM employee_badges WHERE badge_code = $1`,
+      [badgeCode]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      badgeCode: row.badge_code,
+      status: row.status,
+      pinHash: row.pin_hash,
+      issuedAt: row.issued_at.toISOString(),
+      expiresAt: row.expires_at ? row.expires_at.toISOString() : null,
+      revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
+      lastUsedAt: row.last_used_at ? row.last_used_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getEmployeeBadgeByUserId(organizationId: string, userId: string): Promise<EmployeeBadge | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM employee_badges WHERE organization_id = $1 AND user_id = $2 AND status = 'ACTIVE'`,
+      [organizationId, userId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      badgeCode: row.badge_code,
+      status: row.status,
+      pinHash: row.pin_hash,
+      issuedAt: row.issued_at.toISOString(),
+      expiresAt: row.expires_at ? row.expires_at.toISOString() : null,
+      revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
+      lastUsedAt: row.last_used_at ? row.last_used_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async updateEmployeeBadgeStatus(
+    organizationId: string,
+    badgeId: string,
+    status: BadgeStatus
+  ): Promise<EmployeeBadge | null> {
+    const revokedClause = status === 'REVOKED' ? ', revoked_at = NOW()' : '';
+    const res = await this.pool.query(
+      `UPDATE employee_badges
+       SET status = $1, updated_at = NOW() ${revokedClause}
+       WHERE id = $2 AND organization_id = $3
+       RETURNING *`,
+      [status, badgeId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      badgeCode: row.badge_code,
+      status: row.status,
+      pinHash: row.pin_hash,
+      issuedAt: row.issued_at.toISOString(),
+      expiresAt: row.expires_at ? row.expires_at.toISOString() : null,
+      revokedAt: row.revoked_at ? row.revoked_at.toISOString() : null,
+      lastUsedAt: row.last_used_at ? row.last_used_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Public Machine Knowledge (Phase B)
+  // --------------------------------------------------------------------------
+  public async getPublicMachineKnowledge(
+    manufacturer: string,
+    modelNumber: string
+  ): Promise<PublicMachineKnowledge | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM public_machine_knowledge
+       WHERE LOWER(manufacturer) = LOWER($1) AND LOWER(model_number) = LOWER($2)`,
+      [manufacturer.trim(), modelNumber.trim()]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      manufacturer: row.manufacturer,
+      modelNumber: row.model_number,
+      productFamily: row.product_family || undefined,
+      publicSpecs: typeof row.public_specs === 'string' ? JSON.parse(row.public_specs) : (row.public_specs || {}),
+      sourceUrl: row.source_url,
+      sourcePublisher: row.source_publisher,
+      retrievalDate: row.retrieval_date ? row.retrieval_date.toISOString().substring(0, 10) : new Date().toISOString().substring(0, 10),
+      verificationStatus: row.verification_status,
+      approvedByUserId: row.approved_by_user_id || null,
+      approvedAt: row.approved_at ? row.approved_at.toISOString() : null,
+    };
+  }
+
+  public async savePublicMachineKnowledge(data: SavePublicKnowledgeDTO): Promise<PublicMachineKnowledge> {
+    const res = await this.pool.query(
+      `INSERT INTO public_machine_knowledge (
+         manufacturer, model_number, product_family, public_specs, source_url, source_publisher, verification_status
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (manufacturer, model_number) DO UPDATE
+       SET public_specs = EXCLUDED.public_specs,
+           source_url = EXCLUDED.source_url,
+           source_publisher = EXCLUDED.source_publisher,
+           retrieval_date = CURRENT_DATE
+       RETURNING *`,
+      [
+        data.manufacturer,
+        data.modelNumber,
+        data.productFamily ?? null,
+        JSON.stringify(data.publicSpecs),
+        data.sourceUrl,
+        data.sourcePublisher,
+        data.verificationStatus ?? 'PUBLIC_SUGGESTION',
+      ]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      manufacturer: row.manufacturer,
+      modelNumber: row.model_number,
+      productFamily: row.product_family || undefined,
+      publicSpecs: typeof row.public_specs === 'string' ? JSON.parse(row.public_specs) : (row.public_specs || {}),
+      sourceUrl: row.source_url,
+      sourcePublisher: row.source_publisher,
+      retrievalDate: row.retrieval_date ? row.retrieval_date.toISOString().substring(0, 10) : new Date().toISOString().substring(0, 10),
+      verificationStatus: row.verification_status,
+      approvedByUserId: row.approved_by_user_id || null,
+      approvedAt: row.approved_at ? row.approved_at.toISOString() : null,
+    };
+  }
+
+  public async updatePublicMachineKnowledgeStatus(
+    id: string,
+    status: 'APPROVED' | 'REJECTED',
+    approvedByUserId: string
+  ): Promise<PublicMachineKnowledge | null> {
+    const res = await this.pool.query(
+      `UPDATE public_machine_knowledge
+       SET verification_status = $1, approved_by_user_id = $2, approved_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [status, approvedByUserId, id]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      manufacturer: row.manufacturer,
+      modelNumber: row.model_number,
+      productFamily: row.product_family || undefined,
+      publicSpecs: typeof row.public_specs === 'string' ? JSON.parse(row.public_specs) : (row.public_specs || {}),
+      sourceUrl: row.source_url,
+      sourcePublisher: row.source_publisher,
+      retrievalDate: row.retrieval_date ? row.retrieval_date.toISOString().substring(0, 10) : new Date().toISOString().substring(0, 10),
+      verificationStatus: row.verification_status,
+      approvedByUserId: row.approved_by_user_id || null,
+      approvedAt: row.approved_at ? row.approved_at.toISOString() : null,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Industry Profiles (Universal Industry Support)
+  // --------------------------------------------------------------------------
+  public async listIndustryProfiles(organizationId: string): Promise<IndustryProfile[]> {
+    try {
+      const res = await this.pool.query(
+        `SELECT id, organization_id, code, name, description, is_custom,
+                asset_categories, terminology, drawing_types, custom_fields, standard_certifications,
+                created_at, updated_at
+         FROM industry_profiles
+         WHERE organization_id = 'GLOBAL' OR organization_id = $1
+         ORDER BY is_custom ASC, name ASC`,
+        [organizationId]
+      );
+      if (res.rows.length === 0) {
+        return DEFAULT_INDUSTRY_PROFILES;
+      }
+      return res.rows.map((r) => ({
+        id: r.id,
+        organizationId: r.organization_id,
+        code: r.code,
+        name: r.name,
+        description: r.description,
+        isCustom: r.is_custom,
+        assetCategories: typeof r.asset_categories === 'string' ? JSON.parse(r.asset_categories) : (r.asset_categories || []),
+        terminology: typeof r.terminology === 'string' ? JSON.parse(r.terminology) : (r.terminology || {}),
+        drawingTypes: typeof r.drawing_types === 'string' ? JSON.parse(r.drawing_types) : (r.drawing_types || []),
+        customFields: typeof r.custom_fields === 'string' ? JSON.parse(r.custom_fields) : (r.custom_fields || []),
+        standardCertifications: typeof r.standard_certifications === 'string' ? JSON.parse(r.standard_certifications) : (r.standard_certifications || []),
+        createdAt: r.created_at.toISOString(),
+        updatedAt: r.updated_at.toISOString(),
+      }));
+    } catch {
+      return DEFAULT_INDUSTRY_PROFILES;
+    }
+  }
+
+  public async getIndustryProfileByCode(organizationId: string, code: string): Promise<IndustryProfile | null> {
+    try {
+      const res = await this.pool.query(
+        `SELECT id, organization_id, code, name, description, is_custom,
+                asset_categories, terminology, drawing_types, custom_fields, standard_certifications,
+                created_at, updated_at
+         FROM industry_profiles
+         WHERE (organization_id = $1 OR organization_id = 'GLOBAL') AND UPPER(code) = UPPER($2)
+         ORDER BY (organization_id = $1) DESC
+         LIMIT 1`,
+        [organizationId, code]
+      );
+      if (res.rows.length === 0) {
+        const found = DEFAULT_INDUSTRY_PROFILES.find((p) => p.code.toUpperCase() === code.toUpperCase());
+        return found ? { ...found } : null;
+      }
+      const r = res.rows[0];
+      return {
+        id: r.id,
+        organizationId: r.organization_id,
+        code: r.code,
+        name: r.name,
+        description: r.description,
+        isCustom: r.is_custom,
+        assetCategories: typeof r.asset_categories === 'string' ? JSON.parse(r.asset_categories) : (r.asset_categories || []),
+        terminology: typeof r.terminology === 'string' ? JSON.parse(r.terminology) : (r.terminology || {}),
+        drawingTypes: typeof r.drawing_types === 'string' ? JSON.parse(r.drawing_types) : (r.drawing_types || []),
+        customFields: typeof r.custom_fields === 'string' ? JSON.parse(r.custom_fields) : (r.custom_fields || []),
+        standardCertifications: typeof r.standard_certifications === 'string' ? JSON.parse(r.standard_certifications) : (r.standard_certifications || []),
+        createdAt: r.created_at.toISOString(),
+        updatedAt: r.updated_at.toISOString(),
+      };
+    } catch {
+      const found = DEFAULT_INDUSTRY_PROFILES.find((p) => p.code.toUpperCase() === code.toUpperCase());
+      return found ? { ...found } : null;
+    }
+  }
+
+  public async createIndustryProfile(organizationId: string, data: CreateIndustryProfileDTO): Promise<IndustryProfile> {
+    const id = crypto.randomUUID();
+    const res = await this.pool.query(
+      `INSERT INTO industry_profiles (
+         id, organization_id, code, name, description, is_custom,
+         asset_categories, terminology, drawing_types, custom_fields, standard_certifications
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      [
+        id,
+        organizationId,
+        data.code.toUpperCase(),
+        data.name,
+        data.description,
+        data.isCustom ?? true,
+        JSON.stringify(data.assetCategories || []),
+        JSON.stringify(data.terminology || {}),
+        JSON.stringify(data.drawingTypes || []),
+        JSON.stringify(data.customFields || []),
+        JSON.stringify(data.standardCertifications || []),
+      ]
+    );
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      organizationId: r.organization_id,
+      code: r.code,
+      name: r.name,
+      description: r.description,
+      isCustom: r.is_custom,
+      assetCategories: typeof r.asset_categories === 'string' ? JSON.parse(r.asset_categories) : (r.asset_categories || []),
+      terminology: typeof r.terminology === 'string' ? JSON.parse(r.terminology) : (r.terminology || {}),
+      drawingTypes: typeof r.drawing_types === 'string' ? JSON.parse(r.drawing_types) : (r.drawing_types || []),
+      customFields: typeof r.custom_fields === 'string' ? JSON.parse(r.custom_fields) : (r.custom_fields || []),
+      standardCertifications: typeof r.standard_certifications === 'string' ? JSON.parse(r.standard_certifications) : (r.standard_certifications || []),
+      createdAt: r.created_at.toISOString(),
+      updatedAt: r.updated_at.toISOString(),
+    };
+  }
+
+  public async updateIndustryProfile(
+    organizationId: string,
+    profileId: string,
+    updates: Partial<IndustryProfile>
+  ): Promise<IndustryProfile | null> {
+    const check = await this.pool.query(
+      `SELECT * FROM industry_profiles WHERE id = $1 AND (organization_id = $2 OR organization_id = 'GLOBAL')`,
+      [profileId, organizationId]
+    );
+    if (check.rows.length === 0) return null;
+    const current = check.rows[0];
+
+    if (current.organization_id === 'GLOBAL') {
+      return this.createIndustryProfile(organizationId, {
+        code: updates.code || current.code,
+        name: updates.name || current.name,
+        description: updates.description || current.description,
+        isCustom: true,
+        assetCategories: updates.assetCategories || (typeof current.asset_categories === 'string' ? JSON.parse(current.asset_categories) : current.asset_categories),
+        terminology: updates.terminology || (typeof current.terminology === 'string' ? JSON.parse(current.terminology) : current.terminology),
+        drawingTypes: updates.drawingTypes || (typeof current.drawing_types === 'string' ? JSON.parse(current.drawing_types) : current.drawing_types),
+        customFields: updates.customFields || (typeof current.custom_fields === 'string' ? JSON.parse(current.custom_fields) : current.custom_fields),
+        standardCertifications: updates.standardCertifications || (typeof current.standard_certifications === 'string' ? JSON.parse(current.standard_certifications) : current.standard_certifications),
+      });
+    }
+
+    const res = await this.pool.query(
+      `UPDATE industry_profiles
+       SET name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           asset_categories = COALESCE($3, asset_categories),
+           terminology = COALESCE($4, terminology),
+           drawing_types = COALESCE($5, drawing_types),
+           custom_fields = COALESCE($6, custom_fields),
+           standard_certifications = COALESCE($7, standard_certifications),
+           updated_at = NOW()
+       WHERE id = $8 AND organization_id = $9
+       RETURNING *`,
+      [
+        updates.name ?? null,
+        updates.description ?? null,
+        updates.assetCategories ? JSON.stringify(updates.assetCategories) : null,
+        updates.terminology ? JSON.stringify(updates.terminology) : null,
+        updates.drawingTypes ? JSON.stringify(updates.drawingTypes) : null,
+        updates.customFields ? JSON.stringify(updates.customFields) : null,
+        updates.standardCertifications ? JSON.stringify(updates.standardCertifications) : null,
+        profileId,
+        organizationId,
+      ]
+    );
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      organizationId: r.organization_id,
+      code: r.code,
+      name: r.name,
+      description: r.description,
+      isCustom: r.is_custom,
+      assetCategories: typeof r.asset_categories === 'string' ? JSON.parse(r.asset_categories) : (r.asset_categories || []),
+      terminology: typeof r.terminology === 'string' ? JSON.parse(r.terminology) : (r.terminology || {}),
+      drawingTypes: typeof r.drawing_types === 'string' ? JSON.parse(r.drawing_types) : (r.drawing_types || []),
+      customFields: typeof r.custom_fields === 'string' ? JSON.parse(r.custom_fields) : (r.custom_fields || []),
+      standardCertifications: typeof r.standard_certifications === 'string' ? JSON.parse(r.standard_certifications) : (r.standard_certifications || []),
+      createdAt: r.created_at.toISOString(),
+      updatedAt: r.updated_at.toISOString(),
+    };
+  }
+
+  public async deleteIndustryProfile(organizationId: string, profileId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM industry_profiles WHERE id = $1 AND organization_id = $2`,
+      [profileId, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Engineering 3D Models & CAD Files
+  // --------------------------------------------------------------------------
+  public async createEngineeringModel3D(
+    organizationId: string,
+    data: CreateEngineeringModel3DDTO
+  ): Promise<EngineeringModel3D> {
+    const id = crypto.randomUUID();
+    let status = data.status ?? 'NEEDS_REVIEW';
+    let errorMessage: string | null = null;
+    let convertedStorageKey = data.convertedStorageKey ?? null;
+
+    if (data.fileSizeBytes <= 0) {
+      status = 'PROCESSING_FAILED';
+      errorMessage = 'Empty or corrupted CAD geometry file payload.';
+    } else if (['STEP', 'STP', 'IGES', 'IGS', 'STL', 'OBJ'].includes(data.fileFormat)) {
+      status = 'NEEDS_REVIEW';
+      convertedStorageKey = data.storageKey.replace(/\.[^.]+$/, '.glb');
+    }
+
+    const res = await this.pool.query(
+      `INSERT INTO engineering_models3d (
+         id, organization_id, plant_id, machine_id, asset_id, industry_profile_code,
+         asset_category, title, manufacturer, model_number, source_provider, source_url,
+         file_format, file_size_bytes, file_hash_sha256, storage_key, converted_storage_key,
+         model_revision, status, data_classification, license_usage_rights, uploaded_by_user_id,
+         review_notes, error_message, extracted_components_count
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+       RETURNING *`,
+      [
+        id,
+        organizationId,
+        data.plantId,
+        data.machineId ?? null,
+        data.assetId ?? data.machineId ?? null,
+        data.industryProfileCode,
+        data.assetCategory,
+        data.title,
+        data.manufacturer ?? null,
+        data.modelNumber ?? null,
+        data.sourceProvider ?? null,
+        data.sourceUrl ?? null,
+        data.fileFormat,
+        data.fileSizeBytes,
+        data.fileHashSha256,
+        data.storageKey,
+        convertedStorageKey,
+        data.modelRevision || '1.0',
+        status,
+        data.dataClassification || 'INTERNAL',
+        data.licenseUsageRights ?? null,
+        data.uploadedByUserId,
+        data.reviewNotes ?? null,
+        errorMessage,
+        data.extractedComponentsCount || 12,
+      ]
+    );
+    const r = res.rows[0];
+
+    if (data.machineId && status === 'APPROVED') {
+      await this.pool.query(
+        `UPDATE assets
+         SET has_model3d = TRUE,
+             model3d_storage_key = $1,
+             model3d_format = $2,
+             revision = revision + 1,
+             updated_at = NOW()
+         WHERE id = $3 AND organization_id = $4`,
+        [convertedStorageKey || data.storageKey, data.fileFormat, data.machineId, organizationId]
+      );
+    }
+
+    return this.mapEngineeringModelRow(r);
+  }
+
+  public async getEngineeringModel3DById(organizationId: string, modelId: string): Promise<EngineeringModel3D | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM engineering_models3d WHERE id = $1 AND organization_id = $2`,
+      [modelId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapEngineeringModelRow(res.rows[0]);
+  }
+
+  public async listEngineeringModels3D(
+    organizationId: string,
+    filters?: EngineeringModelFilterOptions
+  ): Promise<EngineeringModel3D[]> {
+    let query = `SELECT * FROM engineering_models3d WHERE organization_id = $1`;
+    const params: unknown[] = [organizationId];
+
+    if (filters?.plantId) {
+      params.push(filters.plantId);
+      query += ` AND plant_id = $${params.length}`;
+    }
+    if (filters?.machineId) {
+      params.push(filters.machineId);
+      query += ` AND machine_id = $${params.length}`;
+    }
+    if (filters?.status) {
+      params.push(filters.status);
+      query += ` AND status = $${params.length}`;
+    }
+    if (filters?.fileFormat) {
+      params.push(filters.fileFormat);
+      query += ` AND file_format = $${params.length}`;
+    }
+    if (filters?.industryProfileCode) {
+      params.push(filters.industryProfileCode);
+      query += ` AND industry_profile_code = $${params.length}`;
+    }
+
+    query += ` ORDER BY created_at DESC`;
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r) => this.mapEngineeringModelRow(r));
+  }
+
+  public async updateEngineeringModel3D(
+    organizationId: string,
+    modelId: string,
+    updates: Partial<EngineeringModel3D>
+  ): Promise<EngineeringModel3D | null> {
+    const res = await this.pool.query(
+      `UPDATE engineering_models3d
+       SET status = COALESCE($1, status),
+           reviewed_by_user_id = COALESCE($2, reviewed_by_user_id),
+           reviewed_at = CASE WHEN $1 IS NOT NULL THEN NOW() ELSE reviewed_at END,
+           review_notes = COALESCE($3, review_notes),
+           model_revision = COALESCE($4, model_revision),
+           updated_at = NOW()
+       WHERE id = $5 AND organization_id = $6
+       RETURNING *`,
+      [
+        updates.status ?? null,
+        updates.reviewedByUserId ?? null,
+        updates.reviewNotes ?? null,
+        updates.modelRevision ?? null,
+        modelId,
+        organizationId,
+      ]
+    );
+    if (res.rows.length === 0) return null;
+    const model = this.mapEngineeringModelRow(res.rows[0]);
+
+    if (model.status === 'APPROVED' && model.machineId) {
+      await this.pool.query(
+        `UPDATE assets
+         SET has_model3d = TRUE,
+             model3d_storage_key = $1,
+             model3d_format = $2,
+             revision = revision + 1,
+             updated_at = NOW()
+         WHERE id = $3 AND organization_id = $4`,
+        [model.convertedStorageKey || model.storageKey, model.fileFormat, model.machineId, organizationId]
+      );
+    }
+
+    return model;
+  }
+
+  public async deleteEngineeringModel3D(organizationId: string, modelId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM engineering_models3d WHERE id = $1 AND organization_id = $2`,
+      [modelId, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  private mapEngineeringModelRow(r: any): EngineeringModel3D {
+    return {
+      id: r.id,
+      organizationId: r.organization_id,
+      plantId: r.plant_id,
+      machineId: r.machine_id || undefined,
+      assetId: r.asset_id || r.machine_id || undefined,
+      industryProfileCode: r.industry_profile_code,
+      assetCategory: r.asset_category,
+      title: r.title,
+      manufacturer: r.manufacturer || undefined,
+      modelNumber: r.model_number || undefined,
+      sourceProvider: r.source_provider || undefined,
+      sourceUrl: r.source_url || undefined,
+      fileFormat: r.file_format,
+      fileSizeBytes: Number(r.file_size_bytes),
+      fileHashSha256: r.file_hash_sha256,
+      storageKey: r.storage_key,
+      convertedStorageKey: r.converted_storage_key || undefined,
+      modelRevision: r.model_revision,
+      status: r.status,
+      dataClassification: r.data_classification,
+      licenseUsageRights: r.license_usage_rights || undefined,
+      uploadedByUserId: r.uploaded_by_user_id,
+      reviewedByUserId: r.reviewed_by_user_id || undefined,
+      reviewedAt: r.reviewed_at ? r.reviewed_at.toISOString() : undefined,
+      reviewNotes: r.review_notes || undefined,
+      errorMessage: r.error_message || undefined,
+      extractedComponentsCount: r.extracted_components_count ?? 0,
+      createdAt: r.created_at.toISOString(),
+      updatedAt: r.updated_at.toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Manufacturer Resources
+  // --------------------------------------------------------------------------
+  public async createManufacturerResource(
+    organizationId: string,
+    data: CreateManufacturerResourceDTO
+  ): Promise<ManufacturerResource> {
+    if (data.sourceType === 'OFFICIAL_URL' && data.sourceUrl) {
+      if (!data.sourceUrl.startsWith('http://') && !data.sourceUrl.startsWith('https://')) {
+        throw new Error('Invalid official URL: Must begin with http:// or https://');
+      }
+    }
+
+    const id = crypto.randomUUID();
+    const res = await this.pool.query(
+      `INSERT INTO manufacturer_resources (
+         id, organization_id, machine_id, resource_type, title, manufacturer, model_number,
+         source_type, source_url, storage_key, file_format, file_size_bytes, file_hash_sha256,
+         version_revision, verification_status, access_requirements, usage_rights_evidence,
+         uploaded_by_user_id, review_notes
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       RETURNING *`,
+      [
+        id,
+        organizationId,
+        data.machineId ?? null,
+        data.resourceType,
+        data.title,
+        data.manufacturer,
+        data.modelNumber ?? null,
+        data.sourceType,
+        data.sourceUrl ?? null,
+        data.storageKey ?? null,
+        data.fileFormat ?? null,
+        data.fileSizeBytes ?? null,
+        data.fileHashSha256 ?? null,
+        data.versionRevision || '1.0',
+        data.verificationStatus || 'UNVERIFIED',
+        data.accessRequirements ?? null,
+        data.usageRightsEvidence ?? null,
+        data.uploadedByUserId,
+        data.reviewNotes ?? null,
+      ]
+    );
+    return this.mapManufacturerResourceRow(res.rows[0]);
+  }
+
+  public async getManufacturerResourceById(organizationId: string, resourceId: string): Promise<ManufacturerResource | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM manufacturer_resources WHERE id = $1 AND organization_id = $2`,
+      [resourceId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapManufacturerResourceRow(res.rows[0]);
+  }
+
+  public async listManufacturerResources(
+    organizationId: string,
+    filters?: ManufacturerResourceFilterOptions
+  ): Promise<ManufacturerResource[]> {
+    let query = `SELECT * FROM manufacturer_resources WHERE organization_id = $1`;
+    const params: unknown[] = [organizationId];
+
+    if (filters?.machineId) {
+      params.push(filters.machineId);
+      query += ` AND machine_id = $${params.length}`;
+    }
+    if (filters?.resourceType) {
+      params.push(filters.resourceType);
+      query += ` AND resource_type = $${params.length}`;
+    }
+    if (filters?.verificationStatus) {
+      params.push(filters.verificationStatus);
+      query += ` AND verification_status = $${params.length}`;
+    }
+    if (filters?.manufacturer) {
+      params.push(`%${filters.manufacturer}%`);
+      query += ` AND manufacturer ILIKE $${params.length}`;
+    }
+
+    query += ` ORDER BY created_at DESC`;
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r) => this.mapManufacturerResourceRow(r));
+  }
+
+  public async updateManufacturerResource(
+    organizationId: string,
+    resourceId: string,
+    updates: Partial<ManufacturerResource>
+  ): Promise<ManufacturerResource | null> {
+    const res = await this.pool.query(
+      `UPDATE manufacturer_resources
+       SET verification_status = COALESCE($1, verification_status),
+           verified_by_user_id = COALESCE($2, verified_by_user_id),
+           verified_at = CASE WHEN $1 IS NOT NULL THEN NOW() ELSE verified_at END,
+           review_notes = COALESCE($3, review_notes),
+           updated_at = NOW()
+       WHERE id = $4 AND organization_id = $5
+       RETURNING *`,
+      [
+        updates.verificationStatus ?? null,
+        updates.verifiedByUserId ?? null,
+        updates.reviewNotes ?? null,
+        resourceId,
+        organizationId,
+      ]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapManufacturerResourceRow(res.rows[0]);
+  }
+
+  public async deleteManufacturerResource(organizationId: string, resourceId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM manufacturer_resources WHERE id = $1 AND organization_id = $2`,
+      [resourceId, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  private mapManufacturerResourceRow(r: any): ManufacturerResource {
+    return {
+      id: r.id,
+      organizationId: r.organization_id,
+      machineId: r.machine_id || undefined,
+      resourceType: r.resource_type,
+      title: r.title,
+      manufacturer: r.manufacturer,
+      modelNumber: r.model_number || undefined,
+      sourceType: r.source_type,
+      sourceUrl: r.source_url || undefined,
+      storageKey: r.storage_key || undefined,
+      fileFormat: r.file_format || undefined,
+      fileSizeBytes: r.file_size_bytes ? Number(r.file_size_bytes) : undefined,
+      fileHashSha256: r.file_hash_sha256 || undefined,
+      versionRevision: r.version_revision,
+      verificationStatus: r.verification_status,
+      accessRequirements: r.access_requirements || undefined,
+      usageRightsEvidence: r.usage_rights_evidence || undefined,
+      uploadedByUserId: r.uploaded_by_user_id,
+      verifiedByUserId: r.verified_by_user_id || undefined,
+      verifiedAt: r.verified_at ? r.verified_at.toISOString() : undefined,
+      reviewNotes: r.review_notes || undefined,
+      createdAt: r.created_at.toISOString(),
+      updatedAt: r.updated_at.toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Engineering Drawings
+  // --------------------------------------------------------------------------
+  public async createEngineeringDrawing(
+    organizationId: string,
+    data: CreateEngineeringDrawingDTO
+  ): Promise<EngineeringDrawing> {
+    const id = crypto.randomUUID();
+    let status = data.status ?? 'NEEDS_REVIEW';
+    let errorMessage: string | null = null;
+    if (data.fileSizeBytes <= 0) {
+      status = 'PROCESSING_FAILED';
+      errorMessage = 'Empty or unreadable drawing file payload.';
+    }
+
+    const res = await this.pool.query(
+      `INSERT INTO engineering_drawings (
+         id, organization_id, plant_id, machine_id, drawing_title, unique_drawing_number,
+         drawing_type, discipline, revision, effective_date, source, storage_key,
+         original_file_name, file_format, file_size_bytes, file_hash_sha256, status,
+         data_classification, equipment_tags, uploaded_by_user_id, review_notes, error_message
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+       RETURNING *`,
+      [
+        id,
+        organizationId,
+        data.plantId,
+        data.machineId ?? null,
+        data.drawingTitle,
+        data.uniqueDrawingNumber,
+        data.drawingType,
+        data.discipline,
+        data.revision || 'Rev A',
+        data.effectiveDate ?? null,
+        data.source,
+        data.storageKey,
+        data.originalFileName,
+        data.fileFormat,
+        data.fileSizeBytes,
+        data.fileHashSha256,
+        status,
+        data.dataClassification || 'INTERNAL',
+        JSON.stringify(data.equipmentTags || []),
+        data.uploadedByUserId,
+        data.reviewNotes ?? null,
+        errorMessage,
+      ]
+    );
+    const dwg = this.mapEngineeringDrawingRow(res.rows[0]);
+
+    if (data.machineId && status === 'APPROVED' && (data.drawingType === 'PID' || data.drawingType === 'PROCESS_FLOW')) {
+      await this.pool.query(
+        `UPDATE assets
+         SET has_pid_diagram = TRUE,
+             pid_storage_key = $1,
+             revision = revision + 1,
+             updated_at = NOW()
+         WHERE id = $2 AND organization_id = $3`,
+        [dwg.storageKey, data.machineId, organizationId]
+      );
+    }
+
+    return dwg;
+  }
+
+  public async getEngineeringDrawingById(organizationId: string, drawingId: string): Promise<EngineeringDrawing | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM engineering_drawings WHERE id = $1 AND organization_id = $2`,
+      [drawingId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapEngineeringDrawingRow(res.rows[0]);
+  }
+
+  public async listEngineeringDrawings(
+    organizationId: string,
+    filters?: EngineeringDrawingFilterOptions
+  ): Promise<EngineeringDrawing[]> {
+    let query = `SELECT * FROM engineering_drawings WHERE organization_id = $1`;
+    const params: unknown[] = [organizationId];
+
+    if (filters?.plantId) {
+      params.push(filters.plantId);
+      query += ` AND plant_id = $${params.length}`;
+    }
+    if (filters?.machineId) {
+      params.push(filters.machineId);
+      query += ` AND machine_id = $${params.length}`;
+    }
+    if (filters?.drawingType) {
+      params.push(filters.drawingType);
+      query += ` AND drawing_type = $${params.length}`;
+    }
+    if (filters?.discipline) {
+      params.push(filters.discipline);
+      query += ` AND discipline ILIKE $${params.length}`;
+    }
+    if (filters?.status) {
+      params.push(filters.status);
+      query += ` AND status = $${params.length}`;
+    }
+
+    query += ` ORDER BY created_at DESC`;
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r) => this.mapEngineeringDrawingRow(r));
+  }
+
+  public async updateEngineeringDrawing(
+    organizationId: string,
+    drawingId: string,
+    updates: Partial<EngineeringDrawing>
+  ): Promise<EngineeringDrawing | null> {
+    const res = await this.pool.query(
+      `UPDATE engineering_drawings
+       SET status = COALESCE($1, status),
+           reviewed_by_user_id = COALESCE($2, reviewed_by_user_id),
+           reviewed_at = CASE WHEN $1 IS NOT NULL THEN NOW() ELSE reviewed_at END,
+           review_notes = COALESCE($3, review_notes),
+           revision = COALESCE($4, revision),
+           updated_at = NOW()
+       WHERE id = $5 AND organization_id = $6
+       RETURNING *`,
+      [
+        updates.status ?? null,
+        updates.reviewedByUserId ?? null,
+        updates.reviewNotes ?? null,
+        updates.revision ?? null,
+        drawingId,
+        organizationId,
+      ]
+    );
+    if (res.rows.length === 0) return null;
+    const dwg = this.mapEngineeringDrawingRow(res.rows[0]);
+
+    if (dwg.status === 'APPROVED' && dwg.machineId && (dwg.drawingType === 'PID' || dwg.drawingType === 'PROCESS_FLOW')) {
+      await this.pool.query(
+        `UPDATE assets
+         SET has_pid_diagram = TRUE,
+             pid_storage_key = $1,
+             revision = revision + 1,
+             updated_at = NOW()
+         WHERE id = $2 AND organization_id = $3`,
+        [dwg.storageKey, dwg.machineId, organizationId]
+      );
+    }
+
+    return dwg;
+  }
+
+  public async deleteEngineeringDrawing(organizationId: string, drawingId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM engineering_drawings WHERE id = $1 AND organization_id = $2`,
+      [drawingId, organizationId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  private mapEngineeringDrawingRow(r: any): EngineeringDrawing {
+    return {
+      id: r.id,
+      organizationId: r.organization_id,
+      plantId: r.plant_id,
+      machineId: r.machine_id || undefined,
+      drawingTitle: r.drawing_title,
+      uniqueDrawingNumber: r.unique_drawing_number,
+      drawingType: r.drawing_type,
+      discipline: r.discipline,
+      revision: r.revision,
+      effectiveDate: r.effective_date ? r.effective_date.toISOString().substring(0, 10) : undefined,
+      source: r.source,
+      storageKey: r.storage_key,
+      originalFileName: r.original_file_name,
+      fileFormat: r.file_format,
+      fileSizeBytes: Number(r.file_size_bytes),
+      fileHashSha256: r.file_hash_sha256,
+      status: r.status,
+      dataClassification: r.data_classification,
+      equipmentTags: typeof r.equipment_tags === 'string' ? JSON.parse(r.equipment_tags) : (r.equipment_tags || []),
+      uploadedByUserId: r.uploaded_by_user_id,
+      reviewedByUserId: r.reviewed_by_user_id || undefined,
+      reviewedAt: r.reviewed_at ? r.reviewed_at.toISOString() : undefined,
+      reviewNotes: r.review_notes || undefined,
+      errorMessage: r.error_message || undefined,
+      createdAt: r.created_at.toISOString(),
+      updatedAt: r.updated_at.toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Engineering Asset Center Summary
+  // --------------------------------------------------------------------------
+  public async getEngineeringAssetCenterSummary(organizationId: string): Promise<EngineeringAssetCenterSummary> {
+    try {
+      const modelsRes = await this.pool.query(
+        `SELECT COUNT(*) as total,
+                COUNT(*) FILTER (WHERE status = 'APPROVED') as approved,
+                COUNT(*) FILTER (WHERE status = 'NEEDS_REVIEW') as pending
+         FROM engineering_models3d
+         WHERE organization_id = $1`,
+        [organizationId]
+      );
+      const drawingsRes = await this.pool.query(
+        `SELECT COUNT(*) as total,
+                COUNT(*) FILTER (WHERE status = 'APPROVED') as approved
+         FROM engineering_drawings
+         WHERE organization_id = $1`,
+        [organizationId]
+      );
+      const resRes = await this.pool.query(
+        `SELECT COUNT(*) as total FROM manufacturer_resources WHERE organization_id = $1`,
+        [organizationId]
+      );
+      const profRes = await this.pool.query(
+        `SELECT COUNT(*) as total FROM industry_profiles WHERE organization_id = 'GLOBAL' OR organization_id = $1`,
+        [organizationId]
+      );
+
+      const mRow = modelsRes.rows[0];
+      const dRow = drawingsRes.rows[0];
+      const rRow = resRes.rows[0];
+      const pRow = profRes.rows[0];
+
+      return {
+        totalModels3d: Number(mRow?.total || 0),
+        approvedModels3d: Number(mRow?.approved || 0),
+        pendingReviewModels3d: Number(mRow?.pending || 0),
+        totalDrawings: Number(dRow?.total || 0),
+        approvedDrawings: Number(dRow?.approved || 0),
+        totalManufacturerResources: Number(rRow?.total || 0),
+        totalIndustryProfiles: Number(pRow?.total || DEFAULT_INDUSTRY_PROFILES.length),
+        activeIndustryProfileCode: 'OIL_GAS_PETROCHEM',
+        supportedFormats: {
+          cad: ['GLB', 'GLTF', 'STEP', 'STP', 'IGES', 'IGS', 'STL', 'OBJ'],
+          drawings: ['PDF', 'PNG', 'JPG', 'SVG', 'CAD', 'DXF'],
+          resources: ['PDF', 'DOCX', 'STEP', 'ZIP', 'URL'],
+        },
+      };
+    } catch {
+      return {
+        totalModels3d: 0,
+        approvedModels3d: 0,
+        pendingReviewModels3d: 0,
+        totalDrawings: 0,
+        approvedDrawings: 0,
+        totalManufacturerResources: 0,
+        totalIndustryProfiles: DEFAULT_INDUSTRY_PROFILES.length,
+        activeIndustryProfileCode: 'OIL_GAS_PETROCHEM',
+        supportedFormats: {
+          cad: ['GLB', 'GLTF', 'STEP', 'STP', 'IGES', 'IGS', 'STL', 'OBJ'],
+          drawings: ['PDF', 'PNG', 'JPG', 'SVG', 'CAD', 'DXF'],
+          resources: ['PDF', 'DOCX', 'STEP', 'ZIP', 'URL'],
+        },
+      };
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Employee and Technician Directory
+  // --------------------------------------------------------------------------
+  public async createEmployeeProfile(
+    organizationId: string,
+    dto: CreateEmployeeProfileDTO
+  ): Promise<EmployeeProfile> {
+    const res = await this.pool.query(
+      `INSERT INTO employee_profiles (
+         organization_id, user_id, employee_number, department,
+         assigned_plant_ids, account_status, availability_status, qualification_status,
+         verified_skills, specialized_machine_ids
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        organizationId,
+        dto.userId,
+        dto.employeeNumber,
+        dto.department || 'Operations',
+        JSON.stringify(dto.assignedPlantIds || []),
+        dto.accountStatus || 'ACTIVE',
+        dto.availabilityStatus || 'AVAILABLE',
+        dto.qualificationStatus || 'CERTIFIED',
+        JSON.stringify(dto.verifiedSkills || []),
+        JSON.stringify(dto.specializedMachineIds || []),
+      ]
+    );
+
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      employeeNumber: row.employee_number,
+      fullName: dto.fullName,
+      email: dto.email,
+      role: dto.role,
+      department: row.department,
+      assignedPlantIds: typeof row.assigned_plant_ids === 'string' ? JSON.parse(row.assigned_plant_ids) : row.assigned_plant_ids,
+      accountStatus: row.account_status,
+      availabilityStatus: row.availability_status,
+      qualificationStatus: row.qualification_status,
+      verifiedSkills: typeof row.verified_skills === 'string' ? JSON.parse(row.verified_skills) : row.verified_skills,
+      specializedMachineIds: typeof row.specialized_machine_ids === 'string' ? JSON.parse(row.specialized_machine_ids) : row.specialized_machine_ids,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getEmployeeProfile(organizationId: string, id: string): Promise<EmployeeProfile | null> {
+    const res = await this.pool.query(
+      `SELECT ep.*, u.full_name, u.email, om.role
+       FROM employee_profiles ep
+       JOIN users u ON u.id = ep.user_id
+       LEFT JOIN organization_memberships om ON om.user_id = ep.user_id AND om.organization_id = ep.organization_id
+       WHERE ep.organization_id = $1 AND ep.id = $2`,
+      [organizationId, id]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      employeeNumber: row.employee_number,
+      fullName: row.full_name,
+      email: row.email,
+      role: row.role || 'TECHNICIAN',
+      department: row.department,
+      assignedPlantIds: typeof row.assigned_plant_ids === 'string' ? JSON.parse(row.assigned_plant_ids) : row.assigned_plant_ids,
+      accountStatus: row.account_status,
+      availabilityStatus: row.availability_status,
+      qualificationStatus: row.qualification_status,
+      verifiedSkills: typeof row.verified_skills === 'string' ? JSON.parse(row.verified_skills) : row.verified_skills,
+      specializedMachineIds: typeof row.specialized_machine_ids === 'string' ? JSON.parse(row.specialized_machine_ids) : row.specialized_machine_ids,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getEmployeeProfileByUserId(organizationId: string, userId: string): Promise<EmployeeProfile | null> {
+    const res = await this.pool.query(
+      `SELECT ep.*, u.full_name, u.email, om.role
+       FROM employee_profiles ep
+       JOIN users u ON u.id = ep.user_id
+       LEFT JOIN organization_memberships om ON om.user_id = ep.user_id AND om.organization_id = ep.organization_id
+       WHERE ep.organization_id = $1 AND ep.user_id = $2`,
+      [organizationId, userId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      employeeNumber: row.employee_number,
+      fullName: row.full_name,
+      email: row.email,
+      role: row.role || 'TECHNICIAN',
+      department: row.department,
+      assignedPlantIds: typeof row.assigned_plant_ids === 'string' ? JSON.parse(row.assigned_plant_ids) : row.assigned_plant_ids,
+      accountStatus: row.account_status,
+      availabilityStatus: row.availability_status,
+      qualificationStatus: row.qualification_status,
+      verifiedSkills: typeof row.verified_skills === 'string' ? JSON.parse(row.verified_skills) : row.verified_skills,
+      specializedMachineIds: typeof row.specialized_machine_ids === 'string' ? JSON.parse(row.specialized_machine_ids) : row.specialized_machine_ids,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async updateEmployeeProfile(
+    organizationId: string,
+    id: string,
+    updates: Partial<EmployeeProfile>
+  ): Promise<EmployeeProfile | null> {
+    const setClauses: string[] = ['updated_at = NOW()'];
+    const values: unknown[] = [organizationId, id];
+
+    if (updates.department !== undefined) {
+      values.push(updates.department);
+      setClauses.push(`department = $${values.length}`);
+    }
+    if (updates.assignedPlantIds !== undefined) {
+      values.push(JSON.stringify(updates.assignedPlantIds));
+      setClauses.push(`assigned_plant_ids = $${values.length}`);
+    }
+    if (updates.accountStatus !== undefined) {
+      values.push(updates.accountStatus);
+      setClauses.push(`account_status = $${values.length}`);
+    }
+    if (updates.availabilityStatus !== undefined) {
+      values.push(updates.availabilityStatus);
+      setClauses.push(`availability_status = $${values.length}`);
+    }
+    if (updates.qualificationStatus !== undefined) {
+      values.push(updates.qualificationStatus);
+      setClauses.push(`qualification_status = $${values.length}`);
+    }
+    if (updates.verifiedSkills !== undefined) {
+      values.push(JSON.stringify(updates.verifiedSkills));
+      setClauses.push(`verified_skills = $${values.length}`);
+    }
+    if (updates.specializedMachineIds !== undefined) {
+      values.push(JSON.stringify(updates.specializedMachineIds));
+      setClauses.push(`specialized_machine_ids = $${values.length}`);
+    }
+
+    await this.pool.query(
+      `UPDATE employee_profiles SET ${setClauses.join(', ')} WHERE organization_id = $1 AND id = $2`,
+      values
+    );
+
+    return this.getEmployeeProfile(organizationId, id);
+  }
+
+  public async listEmployeeProfiles(
+    organizationId: string,
+    filters?: EmployeeProfileFilterOptions
+  ): Promise<EmployeeProfile[]> {
+    const conditions: string[] = ['ep.organization_id = $1'];
+    const values: unknown[] = [organizationId];
+
+    if (filters?.department) {
+      values.push(filters.department);
+      conditions.push(`ep.department = $${values.length}`);
+    }
+    if (filters?.accountStatus) {
+      values.push(filters.accountStatus);
+      conditions.push(`ep.account_status = $${values.length}`);
+    }
+    if (filters?.availabilityStatus) {
+      values.push(filters.availabilityStatus);
+      conditions.push(`ep.availability_status = $${values.length}`);
+    }
+
+    const res = await this.pool.query(
+      `SELECT ep.*, u.full_name, u.email, om.role
+       FROM employee_profiles ep
+       JOIN users u ON u.id = ep.user_id
+       LEFT JOIN organization_memberships om ON om.user_id = ep.user_id AND om.organization_id = ep.organization_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY ep.created_at ASC`,
+      values
+    );
+
+    return res.rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      employeeNumber: row.employee_number,
+      fullName: row.full_name,
+      email: row.email,
+      role: row.role || 'TECHNICIAN',
+      department: row.department,
+      assignedPlantIds: typeof row.assigned_plant_ids === 'string' ? JSON.parse(row.assigned_plant_ids) : row.assigned_plant_ids,
+      accountStatus: row.account_status,
+      availabilityStatus: row.availability_status,
+      qualificationStatus: row.qualification_status,
+      verifiedSkills: typeof row.verified_skills === 'string' ? JSON.parse(row.verified_skills) : row.verified_skills,
+      specializedMachineIds: typeof row.specialized_machine_ids === 'string' ? JSON.parse(row.specialized_machine_ids) : row.specialized_machine_ids,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+
+  // --------------------------------------------------------------------------
+  // Machine-to-Specialist Mappings
+  // --------------------------------------------------------------------------
+  public async setMachineSpecialistMapping(
+    organizationId: string,
+    dto: SetMachineSpecialistMappingDTO
+  ): Promise<MachineSpecialistMapping> {
+    let computedStatus: SpecialistAssignmentStatus = dto.assignmentStatus || 'UNASSIGNED';
+
+    if (dto.primarySpecialistUserId) {
+      const specialistProfile = await this.getEmployeeProfileByUserId(organizationId, dto.primarySpecialistUserId);
+      const requiredCerts = dto.requiredCertifications || [];
+      if (specialistProfile && requiredCerts.length > 0) {
+        const hasAllCerts = requiredCerts.every((c) => specialistProfile.verifiedSkills.includes(c));
+        computedStatus = hasAllCerts ? 'ASSIGNED' : 'QUALIFICATION_PENDING';
+      } else {
+        computedStatus = 'ASSIGNED';
+      }
+    } else {
+      computedStatus = 'UNASSIGNED';
+    }
+
+    const res = await this.pool.query(
+      `INSERT INTO machine_specialist_mappings (
+         organization_id, machine_id, plant_id, primary_specialist_user_id,
+         backup_specialist_user_ids, required_certifications, assignment_status,
+         escalation_timeout_minutes, escalation_role, assigned_by_user_id, assigned_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+       ON CONFLICT (organization_id, machine_id)
+       DO UPDATE SET
+         plant_id = EXCLUDED.plant_id,
+         primary_specialist_user_id = EXCLUDED.primary_specialist_user_id,
+         backup_specialist_user_ids = EXCLUDED.backup_specialist_user_ids,
+         required_certifications = EXCLUDED.required_certifications,
+         assignment_status = EXCLUDED.assignment_status,
+         escalation_timeout_minutes = EXCLUDED.escalation_timeout_minutes,
+         escalation_role = EXCLUDED.escalation_role,
+         assigned_by_user_id = EXCLUDED.assigned_by_user_id,
+         assigned_at = NOW(),
+         updated_at = NOW()
+       RETURNING *`,
+      [
+        organizationId,
+        dto.machineId,
+        dto.plantId,
+        dto.primarySpecialistUserId || null,
+        JSON.stringify(dto.backupSpecialistUserIds || []),
+        JSON.stringify(dto.requiredCertifications || []),
+        computedStatus,
+        dto.escalationTimeoutMinutes || 60,
+        dto.escalationRole || 'PLANT_MANAGER',
+        dto.assignedByUserId || null,
+      ]
+    );
+
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      machineId: row.machine_id,
+      plantId: row.plant_id,
+      primarySpecialistUserId: row.primary_specialist_user_id,
+      primarySpecialistName: dto.primarySpecialistName ?? null,
+      backupSpecialistUserIds: typeof row.backup_specialist_user_ids === 'string' ? JSON.parse(row.backup_specialist_user_ids) : row.backup_specialist_user_ids,
+      requiredCertifications: typeof row.required_certifications === 'string' ? JSON.parse(row.required_certifications) : row.required_certifications,
+      assignmentStatus: row.assignment_status,
+      escalationTimeoutMinutes: row.escalation_timeout_minutes,
+      escalationRole: row.escalation_role,
+      assignedByUserId: row.assigned_by_user_id,
+      assignedAt: row.assigned_at?.toISOString() || null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getMachineSpecialistMapping(
+    organizationId: string,
+    machineId: string
+  ): Promise<MachineSpecialistMapping | null> {
+    const res = await this.pool.query(
+      `SELECT msm.*, u.full_name as primary_name
+       FROM machine_specialist_mappings msm
+       LEFT JOIN users u ON u.id = msm.primary_specialist_user_id
+       WHERE msm.organization_id = $1 AND msm.machine_id = $2`,
+      [organizationId, machineId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      machineId: row.machine_id,
+      plantId: row.plant_id,
+      primarySpecialistUserId: row.primary_specialist_user_id,
+      primarySpecialistName: row.primary_name || null,
+      backupSpecialistUserIds: typeof row.backup_specialist_user_ids === 'string' ? JSON.parse(row.backup_specialist_user_ids) : row.backup_specialist_user_ids,
+      requiredCertifications: typeof row.required_certifications === 'string' ? JSON.parse(row.required_certifications) : row.required_certifications,
+      assignmentStatus: row.assignment_status,
+      escalationTimeoutMinutes: row.escalation_timeout_minutes,
+      escalationRole: row.escalation_role,
+      assignedByUserId: row.assigned_by_user_id,
+      assignedAt: row.assigned_at?.toISOString() || null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async listMachineSpecialistMappings(organizationId: string): Promise<MachineSpecialistMapping[]> {
+    const res = await this.pool.query(
+      `SELECT msm.*, u.full_name as primary_name
+       FROM machine_specialist_mappings msm
+       LEFT JOIN users u ON u.id = msm.primary_specialist_user_id
+       WHERE msm.organization_id = $1`,
+      [organizationId]
+    );
+    return res.rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      machineId: row.machine_id,
+      plantId: row.plant_id,
+      primarySpecialistUserId: row.primary_specialist_user_id,
+      primarySpecialistName: row.primary_name || null,
+      backupSpecialistUserIds: typeof row.backup_specialist_user_ids === 'string' ? JSON.parse(row.backup_specialist_user_ids) : row.backup_specialist_user_ids,
+      requiredCertifications: typeof row.required_certifications === 'string' ? JSON.parse(row.required_certifications) : row.required_certifications,
+      assignmentStatus: row.assignment_status,
+      escalationTimeoutMinutes: row.escalation_timeout_minutes,
+      escalationRole: row.escalation_role,
+      assignedByUserId: row.assigned_by_user_id,
+      assignedAt: row.assigned_at?.toISOString() || null,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+
+  // --------------------------------------------------------------------------
+  // Specialist Tickets & Automatic Routing
+  // --------------------------------------------------------------------------
+  public async createSpecialistTicket(
+    organizationId: string,
+    dto: CreateSpecialistTicketDTO
+  ): Promise<SpecialistTicket> {
+    const ticketNumber =
+      dto.ticketNumber || `TICK-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const initialHistory: TicketHistoryItem = {
+      id: 'hist_' + Math.random().toString(36).substring(2, 10),
+      ticketId: '',
+      actorUserId: dto.reportedByUserId,
+      action: 'TICKET_CREATED',
+      previousStatus: null,
+      newStatus: dto.status || 'OPEN',
+      notes: `Escalation reason: ${dto.escalationReason}`,
+      timestamp: new Date().toISOString(),
+    };
+
+    const res = await this.pool.query(
+      `INSERT INTO specialist_tickets (
+         ticket_number, organization_id, plant_id, machine_id, machine_asset_tag,
+         reported_by_user_id, original_question, diagnostic_details, escalation_reason,
+         evidence_check_result, severity, assigned_specialist_user_id, assignment_status,
+         status, history
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING *`,
+      [
+        ticketNumber,
+        organizationId,
+        dto.plantId,
+        dto.machineId || null,
+        dto.machineAssetTag || null,
+        dto.reportedByUserId,
+        dto.originalQuestion,
+        dto.diagnosticDetails || null,
+        dto.escalationReason,
+        JSON.stringify(dto.evidenceCheckResult),
+        dto.severity || 'MEDIUM',
+        dto.assignedSpecialistUserId || null,
+        dto.assignmentStatus || 'NEEDS_SPECIALIST_ASSIGNMENT',
+        dto.status || 'OPEN',
+        JSON.stringify([initialHistory]),
+      ]
+    );
+
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      ticketNumber: row.ticket_number,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      machineId: row.machine_id,
+      machineAssetTag: row.machine_asset_tag,
+      reportedByUserId: row.reported_by_user_id,
+      reportedByUserName: dto.reportedByUserName || null,
+      originalQuestion: row.original_question,
+      diagnosticDetails: row.diagnostic_details,
+      escalationReason: row.escalation_reason,
+      evidenceCheckResult: typeof row.evidence_check_result === 'string' ? JSON.parse(row.evidence_check_result) : row.evidence_check_result,
+      severity: row.severity,
+      assignedSpecialistUserId: row.assigned_specialist_user_id,
+      assignedSpecialistName: dto.assignedSpecialistName || null,
+      assignmentStatus: row.assignment_status,
+      status: row.status,
+      technicianObservations: row.technician_observations,
+      diagnosisOutcome: row.diagnosis_outcome,
+      repairOutcome: row.repair_outcome,
+      proposedKnowledgeUpdate: row.proposed_knowledge_update,
+      knowledgeUpdateStatus: row.knowledge_update_status,
+      resolvedAt: row.resolved_at?.toISOString() || null,
+      resolvedByUserId: row.resolved_by_user_id,
+      history: typeof row.history === 'string' ? JSON.parse(row.history) : row.history,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getSpecialistTicketById(organizationId: string, id: string): Promise<SpecialistTicket | null> {
+    const res = await this.pool.query(
+      `SELECT st.*, u.full_name as reporter_name, s.full_name as specialist_name
+       FROM specialist_tickets st
+       LEFT JOIN users u ON u.id = st.reported_by_user_id
+       LEFT JOIN users s ON s.id = st.assigned_specialist_user_id
+       WHERE st.organization_id = $1 AND st.id = $2`,
+      [organizationId, id]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      ticketNumber: row.ticket_number,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      machineId: row.machine_id,
+      machineAssetTag: row.machine_asset_tag,
+      reportedByUserId: row.reported_by_user_id,
+      reportedByUserName: row.reporter_name || null,
+      originalQuestion: row.original_question,
+      diagnosticDetails: row.diagnostic_details,
+      escalationReason: row.escalation_reason,
+      evidenceCheckResult: typeof row.evidence_check_result === 'string' ? JSON.parse(row.evidence_check_result) : row.evidence_check_result,
+      severity: row.severity,
+      assignedSpecialistUserId: row.assigned_specialist_user_id,
+      assignedSpecialistName: row.specialist_name || null,
+      assignmentStatus: row.assignment_status,
+      status: row.status,
+      technicianObservations: row.technician_observations,
+      diagnosisOutcome: row.diagnosis_outcome,
+      repairOutcome: row.repair_outcome,
+      proposedKnowledgeUpdate: row.proposed_knowledge_update,
+      knowledgeUpdateStatus: row.knowledge_update_status,
+      resolvedAt: row.resolved_at?.toISOString() || null,
+      resolvedByUserId: row.resolved_by_user_id,
+      history: typeof row.history === 'string' ? JSON.parse(row.history) : row.history,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async updateSpecialistTicket(
+    organizationId: string,
+    id: string,
+    updates: Partial<SpecialistTicket> & { actorUserId?: string; note?: string }
+  ): Promise<SpecialistTicket | null> {
+    const existing = await this.getSpecialistTicketById(organizationId, id);
+    if (!existing) return null;
+
+    const history = [...existing.history];
+    const actorUserId = updates.actorUserId || existing.reportedByUserId;
+    const now = new Date().toISOString();
+
+    if (updates.status && updates.status !== existing.status) {
+      history.push({
+        id: 'hist_' + Math.random().toString(36).substring(2, 10),
+        ticketId: id,
+        actorUserId,
+        action: 'STATUS_CHANGED',
+        previousStatus: existing.status,
+        newStatus: updates.status,
+        notes: updates.note || `Status changed from ${existing.status} to ${updates.status}`,
+        timestamp: now,
+      });
+    }
+
+    const setClauses: string[] = ['updated_at = NOW()', 'history = $3'];
+    const values: unknown[] = [organizationId, id, JSON.stringify(history)];
+
+    if (updates.status) {
+      values.push(updates.status);
+      setClauses.push(`status = $${values.length}`);
+      if (updates.status === 'RESOLVED' || updates.status === 'CLOSED') {
+        values.push(actorUserId);
+        setClauses.push(`resolved_at = NOW(), resolved_by_user_id = $${values.length}`);
+      }
+    }
+    if (updates.assignedSpecialistUserId !== undefined) {
+      values.push(updates.assignedSpecialistUserId);
+      setClauses.push(`assigned_specialist_user_id = $${values.length}`);
+    }
+    if (updates.assignmentStatus !== undefined) {
+      values.push(updates.assignmentStatus);
+      setClauses.push(`assignment_status = $${values.length}`);
+    }
+    if (updates.technicianObservations !== undefined) {
+      values.push(updates.technicianObservations);
+      setClauses.push(`technician_observations = $${values.length}`);
+    }
+    if (updates.diagnosisOutcome !== undefined) {
+      values.push(updates.diagnosisOutcome);
+      setClauses.push(`diagnosis_outcome = $${values.length}`);
+    }
+    if (updates.repairOutcome !== undefined) {
+      values.push(updates.repairOutcome);
+      setClauses.push(`repair_outcome = $${values.length}`);
+    }
+    if (updates.proposedKnowledgeUpdate !== undefined) {
+      values.push(updates.proposedKnowledgeUpdate);
+      setClauses.push(`proposed_knowledge_update = $${values.length}`);
+    }
+    if (updates.knowledgeUpdateStatus !== undefined) {
+      values.push(updates.knowledgeUpdateStatus);
+      setClauses.push(`knowledge_update_status = $${values.length}`);
+    }
+
+    await this.pool.query(
+      `UPDATE specialist_tickets SET ${setClauses.join(', ')} WHERE organization_id = $1 AND id = $2`,
+      values
+    );
+
+    return this.getSpecialistTicketById(organizationId, id);
+  }
+
+  public async listSpecialistTickets(
+    organizationId: string,
+    filters?: SpecialistTicketFilterOptions
+  ): Promise<SpecialistTicket[]> {
+    const conditions: string[] = ['st.organization_id = $1'];
+    const values: unknown[] = [organizationId];
+
+    if (filters?.assignedSpecialistUserId) {
+      values.push(filters.assignedSpecialistUserId);
+      conditions.push(`st.assigned_specialist_user_id = $${values.length}`);
+    }
+    if (filters?.reportedByUserId) {
+      values.push(filters.reportedByUserId);
+      conditions.push(`st.reported_by_user_id = $${values.length}`);
+    }
+    if (filters?.machineId) {
+      values.push(filters.machineId);
+      conditions.push(`st.machine_id = $${values.length}`);
+    }
+    if (filters?.status) {
+      values.push(filters.status);
+      conditions.push(`st.status = $${values.length}`);
+    }
+    if (filters?.assignmentStatus) {
+      values.push(filters.assignmentStatus);
+      conditions.push(`st.assignment_status = $${values.length}`);
+    }
+    if (filters?.severity) {
+      values.push(filters.severity);
+      conditions.push(`st.severity = $${values.length}`);
+    }
+
+    const res = await this.pool.query(
+      `SELECT st.*, u.full_name as reporter_name, s.full_name as specialist_name
+       FROM specialist_tickets st
+       LEFT JOIN users u ON u.id = st.reported_by_user_id
+       LEFT JOIN users s ON s.id = st.assigned_specialist_user_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY st.created_at DESC`,
+      values
+    );
+
+    return res.rows.map((row) => ({
+      id: row.id,
+      ticketNumber: row.ticket_number,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      machineId: row.machine_id,
+      machineAssetTag: row.machine_asset_tag,
+      reportedByUserId: row.reported_by_user_id,
+      reportedByUserName: row.reporter_name || null,
+      originalQuestion: row.original_question,
+      diagnosticDetails: row.diagnostic_details,
+      escalationReason: row.escalation_reason,
+      evidenceCheckResult: typeof row.evidence_check_result === 'string' ? JSON.parse(row.evidence_check_result) : row.evidence_check_result,
+      severity: row.severity,
+      assignedSpecialistUserId: row.assigned_specialist_user_id,
+      assignedSpecialistName: row.specialist_name || null,
+      assignmentStatus: row.assignment_status,
+      status: row.status,
+      technicianObservations: row.technician_observations,
+      diagnosisOutcome: row.diagnosis_outcome,
+      repairOutcome: row.repair_outcome,
+      proposedKnowledgeUpdate: row.proposed_knowledge_update,
+      knowledgeUpdateStatus: row.knowledge_update_status,
+      resolvedAt: row.resolved_at?.toISOString() || null,
+      resolvedByUserId: row.resolved_by_user_id,
+      history: typeof row.history === 'string' ? JSON.parse(row.history) : row.history,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+
+  public async getTicketOversightSummary(organizationId: string): Promise<TicketOversightSummary> {
+    const tickets = await this.listSpecialistTickets(organizationId);
+    let totalTickets = 0;
+    let openTickets = 0;
+    let unassignedTickets = 0;
+    let inProgressTickets = 0;
+    let resolvedTickets = 0;
+    let escalatedTickets = 0;
+    const specialistWorkloads: Record<
+      string,
+      { specialistName: string; activeCount: number; resolvedCount: number }
+    > = {};
+    const recentEscalations: SpecialistTicket[] = [];
+
+    for (const t of tickets) {
+      totalTickets++;
+      if (t.status === 'OPEN') openTickets++;
+      if (t.status === 'IN_PROGRESS') inProgressTickets++;
+      if (t.status === 'RESOLVED' || t.status === 'CLOSED') resolvedTickets++;
+      if (t.assignmentStatus === 'NEEDS_SPECIALIST_ASSIGNMENT') unassignedTickets++;
+      if (
+        t.assignmentStatus === 'ESCALATED_TRIAGE' ||
+        t.assignmentStatus === 'NEEDS_SPECIALIST_ASSIGNMENT' ||
+        t.escalationReason === 'SAFETY_CRITICAL'
+      ) {
+        escalatedTickets++;
+        if (recentEscalations.length < 10) {
+          recentEscalations.push(t);
+        }
+      }
+
+      if (t.assignedSpecialistUserId) {
+        const key = t.assignedSpecialistUserId;
+        if (!specialistWorkloads[key]) {
+          specialistWorkloads[key] = {
+            specialistName: t.assignedSpecialistName || 'Specialist',
+            activeCount: 0,
+            resolvedCount: 0,
+          };
+        }
+        if (t.status === 'OPEN' || t.status === 'IN_PROGRESS') {
+          specialistWorkloads[key].activeCount++;
+        } else {
+          specialistWorkloads[key].resolvedCount++;
+        }
+      }
+    }
+
+    return {
+      totalTickets,
+      openTickets,
+      unassignedTickets,
+      inProgressTickets,
+      resolvedTickets,
+      escalatedTickets,
+      specialistWorkloads,
+      recentEscalations,
+    };
+  }
+
+  public async findActiveDuplicateTicket(
+    organizationId: string,
+    machineId: string,
+    questionOrSymptom: string
+  ): Promise<SpecialistTicket | null> {
+    const normalize = (str: string) =>
+      str
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const target = normalize(questionOrSymptom);
+    const targetWords = new Set(target.split(' ').filter((w) => w.length > 2));
+
+    const activeTickets = await this.listSpecialistTickets(organizationId, { machineId });
+    for (const t of activeTickets) {
+      if (
+        t.status === 'OPEN' ||
+        t.status === 'IN_PROGRESS' ||
+        t.status === 'REOPENED' ||
+        t.status === 'PENDING_VERIFICATION' ||
+        t.status === 'PENDING_REVIEW'
+      ) {
+        const existingQ = normalize(t.originalQuestion);
+        if (existingQ === target) {
+          return t;
+        }
+
+        const existingWords = new Set(existingQ.split(' ').filter((w) => w.length > 2));
+        if (targetWords.size > 0 && existingWords.size > 0) {
+          let matches = 0;
+          for (const w of targetWords) {
+            if (existingWords.has(w)) matches++;
+          }
+          const overlap = matches / Math.min(targetWords.size, existingWords.size);
+          if (overlap >= 0.75) {
+            return t;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  public async getOperationalAnalytics(
+    organizationId: string,
+    filters?: OperationalAnalyticsFilterOptions
+  ): Promise<OperationalAnalyticsDashboard> {
+    const timeWindowDays = filters?.timeWindowDays ?? null;
+    const plantFilter = filters?.plantId ?? null;
+    const cutoff = timeWindowDays ? Date.now() - timeWindowDays * 24 * 3600 * 1000 : null;
+
+    const allTickets = await this.listSpecialistTickets(organizationId);
+    const tickets = allTickets.filter((t) => {
+      if (plantFilter && t.plantId !== plantFilter) return false;
+      if (cutoff && new Date(t.createdAt).getTime() < cutoff) return false;
+      return true;
+    });
+
+    let openTicketsCount = 0;
+    let inProgressTicketsCount = 0;
+    let resolvedTicketsCount = 0;
+    let reopenedTicketsCount = 0;
+    let unassignedTicketsCount = 0;
+    let escalatedTicketsCount = 0;
+
+    const ticketsBySeverity: Record<TicketSeverity, number> = {
+      LOW: 0,
+      MEDIUM: 0,
+      HIGH: 0,
+      CRITICAL: 0,
+    };
+
+    const ticketsByStatus: Record<TicketStatus, number> = {
+      OPEN: 0,
+      IN_PROGRESS: 0,
+      PENDING_REVIEW: 0,
+      PENDING_VERIFICATION: 0,
+      RESOLVED: 0,
+      CLOSED: 0,
+      UNRESOLVED: 0,
+      REOPENED: 0,
+    };
+
+    const ticketsByType: Record<string, number> = {};
+    const reopenedTickets: SpecialistTicket[] = [];
+    const durationsMinutes: number[] = [];
+
+    const specialistStats = new Map<
+      string,
+      { specialistName: string; open: number; inProgress: number; resolved: number; overdue: number }
+    >();
+
+    const machineTicketStats = new Map<
+      string,
+      {
+        machineId: string;
+        assetTag: string;
+        name: string;
+        plantId: string;
+        total: number;
+        open: number;
+        resolved: number;
+        recurring: number;
+      }
+    >();
+
+    let overdueCasesCount = 0;
+    const now = Date.now();
+    const OVERDUE_THRESHOLD_MS = 24 * 3600 * 1000;
+
+    for (const t of tickets) {
+      if (ticketsByStatus[t.status] !== undefined) {
+        ticketsByStatus[t.status]++;
+      }
+
+      if (t.status === 'OPEN') openTicketsCount++;
+      if (t.status === 'IN_PROGRESS') inProgressTicketsCount++;
+      if (t.status === 'RESOLVED' || t.status === 'CLOSED') resolvedTicketsCount++;
+      if (t.assignmentStatus === 'NEEDS_SPECIALIST_ASSIGNMENT') unassignedTicketsCount++;
+      if (
+        t.assignmentStatus === 'ESCALATED_TRIAGE' ||
+        t.escalationReason === 'SAFETY_CRITICAL'
+      ) {
+        escalatedTicketsCount++;
+      }
+
+      if ((t.reopenCount && t.reopenCount > 0) || t.status === 'REOPENED') {
+        reopenedTicketsCount++;
+        reopenedTickets.push(t);
+      }
+
+      if (ticketsBySeverity[t.severity] !== undefined) {
+        ticketsBySeverity[t.severity]++;
+      }
+
+      const catKey = t.faultCategory || 'UNSPECIFIED_MALFUNCTION';
+      ticketsByType[catKey] = (ticketsByType[catKey] || 0) + 1;
+
+      // STRICT RULE: Only completed tickets with resolvedAt are included.
+      if ((t.status === 'RESOLVED' || t.status === 'CLOSED') && t.resolvedAt) {
+        const resolvedMs = new Date(t.resolvedAt).getTime();
+        const createdMs = new Date(t.createdAt).getTime();
+        const diffMinutes = Math.max(0, Math.round((resolvedMs - createdMs) / 60000));
+        durationsMinutes.push(diffMinutes);
+      }
+
+      const isCompleted = t.status === 'RESOLVED' || t.status === 'CLOSED';
+      const isOverdue = !isCompleted && now - new Date(t.createdAt).getTime() > OVERDUE_THRESHOLD_MS;
+      if (isOverdue) overdueCasesCount++;
+
+      if (t.assignedSpecialistUserId) {
+        const specId = t.assignedSpecialistUserId;
+        if (!specialistStats.has(specId)) {
+          specialistStats.set(specId, {
+            specialistName: t.assignedSpecialistName || 'Specialist',
+            open: 0,
+            inProgress: 0,
+            resolved: 0,
+            overdue: 0,
+          });
+        }
+        const s = specialistStats.get(specId)!;
+        if (t.status === 'OPEN') s.open++;
+        else if (t.status === 'IN_PROGRESS') s.inProgress++;
+        else if (isCompleted) s.resolved++;
+        if (isOverdue) s.overdue++;
+      }
+
+      if (t.machineId) {
+        const mId = t.machineId;
+        if (!machineTicketStats.has(mId)) {
+          machineTicketStats.set(mId, {
+            machineId: mId,
+            assetTag: t.machineAssetTag || 'UNKNOWN',
+            name: t.machineAssetTag || 'Unknown Machine',
+            plantId: t.plantId,
+            total: 0,
+            open: 0,
+            resolved: 0,
+            recurring: 0,
+          });
+        }
+        const ms = machineTicketStats.get(mId)!;
+        ms.total++;
+        if (t.status === 'OPEN' || t.status === 'IN_PROGRESS') ms.open++;
+        if (isCompleted) ms.resolved++;
+      }
+    }
+
+    const resolvedTicketsSampleCount = durationsMinutes.length;
+    let averageTimeToResolutionMinutes = 0;
+    let medianTimeToResolutionMinutes = 0;
+
+    if (resolvedTicketsSampleCount > 0) {
+      durationsMinutes.sort((a, b) => a - b);
+      const totalDuration = durationsMinutes.reduce((sum, d) => sum + d, 0);
+      averageTimeToResolutionMinutes = Number((totalDuration / resolvedTicketsSampleCount).toFixed(2));
+
+      const mid = Math.floor(resolvedTicketsSampleCount / 2);
+      if (resolvedTicketsSampleCount % 2 !== 0) {
+        medianTimeToResolutionMinutes = durationsMinutes[mid];
+      } else {
+        medianTimeToResolutionMinutes = Number(
+          ((durationsMinutes[mid - 1] + durationsMinutes[mid]) / 2).toFixed(2)
+        );
+      }
+    }
+
+    const totalTicketsCount = tickets.length;
+    const mostFrequentlyReportedIssues: IssueFrequencyMetric[] = Object.entries(ticketsByType)
+      .map(([faultCategory, count]) => ({
+        faultCategory,
+        count,
+        percentage: totalTicketsCount > 0 ? Number(((count / totalTicketsCount) * 100).toFixed(1)) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const allRecords = await this.listMaintenanceRecords(organizationId);
+    let repeatedFaultsCount = 0;
+    for (const r of allRecords) {
+      if (plantFilter && r.plantId !== plantFilter) continue;
+      if (cutoff && new Date(r.resolvedAt).getTime() < cutoff) continue;
+      if (r.isRecurringIncident) {
+        repeatedFaultsCount++;
+        const ms = machineTicketStats.get(r.machineId);
+        if (ms) ms.recurring++;
+      }
+    }
+
+    const topAffectedMachines: TopAffectedMachineMetric[] = Array.from(machineTicketStats.values())
+      .map((m) => ({
+        machineId: m.machineId,
+        assetTag: m.assetTag,
+        machineName: m.name,
+        plantId: m.plantId,
+        ticketCount: m.total,
+        recurringFaultCount: m.recurring,
+        openTicketCount: m.open,
+        resolvedTicketCount: m.resolved,
+      }))
+      .sort((a, b) => b.ticketCount - a.ticketCount);
+
+    const specialistWorkloads: SpecialistWorkloadMetric[] = Array.from(
+      specialistStats.entries()
+    ).map(([specialistId, s]) => ({
+      specialistId,
+      specialistName: s.specialistName,
+      openCount: s.open,
+      inProgressCount: s.inProgress,
+      resolvedCount: s.resolved,
+      overdueCount: s.overdue,
+    }));
+
+    return {
+      timeWindowDays,
+      plantFilter,
+      generatedAt: new Date().toISOString(),
+      totalTickets: totalTicketsCount,
+      openTicketsCount,
+      inProgressTicketsCount,
+      resolvedTicketsCount,
+      reopenedTicketsCount,
+      unassignedTicketsCount,
+      escalatedTicketsCount,
+      resolvedTicketsSampleCount,
+      averageTimeToResolutionMinutes,
+      medianTimeToResolutionMinutes,
+      ticketsBySeverity,
+      ticketsByStatus,
+      ticketsByType,
+      mostFrequentlyReportedIssues,
+      topAffectedMachines,
+      reopenedTickets,
+      repeatedFaultsCount,
+      unansweredCopilotQuestionsCount: 0,
+      unansweredQuestionsSample: [],
+      knowledgeGapsByMachine: [],
+      specialistWorkloads,
+      overdueCasesCount,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Persistent Machine Maintenance History & Resolution Records (Postgres)
+  // --------------------------------------------------------------------------
+  private mapRowToMaintenanceRecord(row: any): MaintenanceRecord {
+    return {
+      id: row.id,
+      recordNumber: row.record_number,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      machineId: row.machine_id,
+      machineAssetTag: row.machine_asset_tag,
+      ticketId: row.ticket_id,
+      ticketNumber: row.ticket_number,
+      componentId: row.component_id || null,
+      componentName: row.component_name || null,
+      reportingUserId: row.reporting_user_id,
+      reportingUserName: row.reporting_user_name || null,
+      assignedTechnicianUserId: row.assigned_technician_user_id || null,
+      assignedTechnicianName: row.assigned_technician_name || null,
+      resolvingTechnicianUserId: row.resolving_technician_user_id,
+      resolvingTechnicianName: row.resolving_technician_name,
+      faultCategory: row.fault_category,
+      problemStatement: row.problem_statement,
+      observedSymptoms:
+        typeof row.observed_symptoms === 'string'
+          ? JSON.parse(row.observed_symptoms)
+          : row.observed_symptoms || [],
+      measurements:
+        typeof row.measurements === 'string'
+          ? JSON.parse(row.measurements)
+          : row.measurements || [],
+      rootCause: row.root_cause,
+      rootCauseStatus: row.root_cause_status,
+      repairActions:
+        typeof row.repair_actions === 'string'
+          ? JSON.parse(row.repair_actions)
+          : row.repair_actions || [],
+      partsReplaced:
+        typeof row.parts_replaced === 'string'
+          ? JSON.parse(row.parts_replaced)
+          : row.parts_replaced || [],
+      postRepairTestResults:
+        typeof row.post_repair_test_results === 'string'
+          ? JSON.parse(row.post_repair_test_results)
+          : row.post_repair_test_results || [],
+      verificationState: row.verification_state,
+      verificationNotes: row.verification_notes || null,
+      verifiedByUserId: row.verified_by_user_id || null,
+      verifiedAt: row.verified_at ? new Date(row.verified_at).toISOString() : null,
+      requiresRestartApproval: row.requires_restart_approval,
+      restartApproved: row.restart_approved,
+      restartApprovedByUserId: row.restart_approved_by_user_id || null,
+      restartApprovedAt: row.restart_approved_at
+        ? new Date(row.restart_approved_at).toISOString()
+        : null,
+      restartNotes: row.restart_notes || null,
+      approvalStatus: row.approval_status,
+      approvedByUserId: row.approved_by_user_id || null,
+      approvedAt: row.approved_at ? new Date(row.approved_at).toISOString() : null,
+      approvalNotes: row.approval_notes || null,
+      resolvedAt: row.resolved_at
+        ? new Date(row.resolved_at).toISOString()
+        : new Date().toISOString(),
+      closedAt: row.closed_at ? new Date(row.closed_at).toISOString() : null,
+      relatedIncidentRecordIds:
+        typeof row.related_incident_record_ids === 'string'
+          ? JSON.parse(row.related_incident_record_ids)
+          : row.related_incident_record_ids || [],
+      attachments:
+        typeof row.attachments === 'string'
+          ? JSON.parse(row.attachments)
+          : row.attachments || [],
+      recordVersion: row.record_version,
+      auditTrail:
+        typeof row.audit_trail === 'string'
+          ? JSON.parse(row.audit_trail)
+          : row.audit_trail || [],
+      isRecurringIncident: row.is_recurring_incident,
+      recurrenceCount: row.recurrence_count,
+      knowledgeApproved: row.knowledge_approved,
+      knowledgeApprovedAt: row.knowledge_approved_at
+        ? new Date(row.knowledge_approved_at).toISOString()
+        : null,
+      knowledgeApprovedByUserId: row.knowledge_approved_by_user_id || null,
+      createdAt: new Date(row.created_at).toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
+  }
+
+  public async createMaintenanceRecord(
+    organizationId: string,
+    data: CreateMaintenanceRecordDTO
+  ): Promise<MaintenanceRecord> {
+    const id = 'mr_' + Math.random().toString(36).substring(2, 10);
+    const now = new Date().toISOString();
+    const recordNumber =
+      data.recordNumber ||
+      `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // Query prior records for recurrence count
+    const countRes = await this.pool.query(
+      `SELECT id FROM maintenance_records WHERE organization_id = $1 AND machine_id = $2 AND fault_category = $3`,
+      [organizationId, data.machineId, data.faultCategory]
+    );
+    const priorIds = countRes.rows.map((r: any) => r.id);
+    const isRecurringIncident = priorIds.length > 0;
+    const recurrenceCount = priorIds.length + 1;
+
+    const initialAudit: MaintenanceAuditEntry = {
+      id: 'audit_' + Math.random().toString(36).substring(2, 10),
+      versionNumber: 1,
+      action: 'RECORD_CREATED',
+      actorUserId: data.resolvingTechnicianUserId,
+      actorName: data.resolvingTechnicianName,
+      changes: {
+        status: { from: null, to: 'CREATED' },
+        rootCauseStatus: { from: null, to: data.rootCauseStatus || 'UNKNOWN' },
+      },
+      notes: 'Initial maintenance record generated from technician resolution',
+      timestamp: now,
+    };
+
+    const relatedIncidentRecordIds =
+      data.relatedIncidentRecordIds && data.relatedIncidentRecordIds.length > 0
+        ? data.relatedIncidentRecordIds
+        : priorIds;
+
+    const requiresRestartApproval = data.requiresRestartApproval ?? false;
+    const approvalStatus =
+      data.approvalStatus ||
+      (requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED');
+
+    const res = await this.pool.query(
+      `INSERT INTO maintenance_records (
+        id, record_number, organization_id, plant_id, machine_id, machine_asset_tag,
+        ticket_id, ticket_number, component_id, component_name, reporting_user_id,
+        reporting_user_name, assigned_technician_user_id, assigned_technician_name,
+        resolving_technician_user_id, resolving_technician_name, fault_category,
+        problem_statement, observed_symptoms, measurements, root_cause, root_cause_status,
+        repair_actions, parts_replaced, post_repair_test_results, verification_state,
+        verification_notes, verified_by_user_id, verified_at, requires_restart_approval,
+        restart_approved, restart_approved_by_user_id, restart_approved_at, restart_notes,
+        approval_status, approved_by_user_id, approved_at, approval_notes, resolved_at,
+        closed_at, related_incident_record_ids, attachments, record_version, audit_trail,
+        is_recurring_incident, recurrence_count, knowledge_approved, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+        $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
+        $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49
+      ) RETURNING *`,
+      [
+        id,
+        recordNumber,
+        organizationId,
+        data.plantId,
+        data.machineId,
+        data.machineAssetTag,
+        data.ticketId,
+        data.ticketNumber,
+        data.componentId ?? null,
+        data.componentName ?? null,
+        data.reportingUserId,
+        data.reportingUserName ?? null,
+        data.assignedTechnicianUserId ?? null,
+        data.assignedTechnicianName ?? null,
+        data.resolvingTechnicianUserId,
+        data.resolvingTechnicianName,
+        data.faultCategory,
+        data.problemStatement,
+        JSON.stringify(data.observedSymptoms || []),
+        JSON.stringify(data.measurements || []),
+        data.rootCause,
+        data.rootCauseStatus || 'UNKNOWN',
+        JSON.stringify(data.repairActions || []),
+        JSON.stringify(data.partsReplaced || []),
+        JSON.stringify(data.postRepairTestResults || []),
+        data.verificationState || 'PENDING',
+        data.verificationNotes ?? null,
+        data.verifiedByUserId ?? null,
+        data.verifiedAt ?? null,
+        requiresRestartApproval,
+        data.restartApproved ?? false,
+        data.restartApprovedByUserId ?? null,
+        data.restartApprovedAt ?? null,
+        data.restartNotes ?? null,
+        approvalStatus,
+        data.approvedByUserId ?? null,
+        data.approvedAt ?? null,
+        data.approvalNotes ?? null,
+        now,
+        null,
+        JSON.stringify(relatedIncidentRecordIds),
+        JSON.stringify(data.attachments || []),
+        1,
+        JSON.stringify([initialAudit]),
+        isRecurringIncident,
+        recurrenceCount,
+        data.knowledgeApproved ?? false,
+        now,
+        now,
+      ]
+    );
+
+    return this.mapRowToMaintenanceRecord(res.rows[0]);
+  }
+
+  public async getMaintenanceRecordById(
+    organizationId: string,
+    id: string
+  ): Promise<MaintenanceRecord | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM maintenance_records WHERE organization_id = $1 AND id = $2`,
+      [organizationId, id]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapRowToMaintenanceRecord(res.rows[0]);
+  }
+
+  public async getMaintenanceRecordByNumber(
+    organizationId: string,
+    recordNumber: string
+  ): Promise<MaintenanceRecord | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM maintenance_records WHERE organization_id = $1 AND record_number = $2`,
+      [organizationId, recordNumber]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapRowToMaintenanceRecord(res.rows[0]);
+  }
+
+  public async listMaintenanceRecords(
+    organizationId: string,
+    filters?: MaintenanceRecordFilterOptions
+  ): Promise<MaintenanceRecord[]> {
+    const whereClauses: string[] = ['organization_id = $1'];
+    const values: unknown[] = [organizationId];
+
+    if (filters?.machineId) {
+      values.push(filters.machineId);
+      whereClauses.push(`machine_id = $${values.length}`);
+    }
+    if (filters?.plantId) {
+      values.push(filters.plantId);
+      whereClauses.push(`plant_id = $${values.length}`);
+    }
+    if (filters?.ticketId) {
+      values.push(filters.ticketId);
+      whereClauses.push(`ticket_id = $${values.length}`);
+    }
+    if (filters?.faultCategory) {
+      values.push(filters.faultCategory);
+      whereClauses.push(`fault_category = $${values.length}`);
+    }
+    if (filters?.rootCauseStatus) {
+      values.push(filters.rootCauseStatus);
+      whereClauses.push(`root_cause_status = $${values.length}`);
+    }
+    if (filters?.verificationState) {
+      values.push(filters.verificationState);
+      whereClauses.push(`verification_state = $${values.length}`);
+    }
+    if (filters?.approvalStatus) {
+      values.push(filters.approvalStatus);
+      whereClauses.push(`approval_status = $${values.length}`);
+    }
+    if (filters?.requiresRestartApproval !== undefined) {
+      values.push(filters.requiresRestartApproval);
+      whereClauses.push(`requires_restart_approval = $${values.length}`);
+    }
+    if (filters?.restartApproved !== undefined) {
+      values.push(filters.restartApproved);
+      whereClauses.push(`restart_approved = $${values.length}`);
+    }
+
+    const res = await this.pool.query(
+      `SELECT * FROM maintenance_records WHERE ${whereClauses.join(' AND ')} ORDER BY resolved_at DESC`,
+      values
+    );
+    return res.rows.map((row: any) => this.mapRowToMaintenanceRecord(row));
+  }
+
+  public async updateMaintenanceRecord(
+    organizationId: string,
+    id: string,
+    updates: UpdateMaintenanceRecordDTO
+  ): Promise<MaintenanceRecord | null> {
+    const existing = await this.getMaintenanceRecordById(organizationId, id);
+    if (!existing) return null;
+
+    const now = new Date().toISOString();
+    const changes: Record<string, { from: any; to: any }> = {};
+
+    for (const [key, val] of Object.entries(updates)) {
+      if (key === 'actorUserId' || key === 'note') continue;
+      if (val !== undefined && (existing as any)[key] !== val) {
+        changes[key] = { from: (existing as any)[key], to: val };
+        (existing as any)[key] = val;
+      }
+    }
+
+    const newVersion = existing.recordVersion + 1;
+    const auditTrail = [...existing.auditTrail];
+    auditTrail.push({
+      id: 'audit_' + Math.random().toString(36).substring(2, 10),
+      versionNumber: newVersion,
+      action: 'RECORD_UPDATED',
+      actorUserId: updates.actorUserId,
+      changes,
+      notes: updates.note || 'Maintenance record updated with versioned audit trail',
+      timestamp: now,
+    });
+
+    const setClauses: string[] = [
+      'updated_at = NOW()',
+      'record_version = $3',
+      'audit_trail = $4',
+    ];
+    const values: unknown[] = [organizationId, id, newVersion, JSON.stringify(auditTrail)];
+
+    if (updates.observedSymptoms !== undefined) {
+      values.push(JSON.stringify(updates.observedSymptoms));
+      setClauses.push(`observed_symptoms = $${values.length}`);
+    }
+    if (updates.measurements !== undefined) {
+      values.push(JSON.stringify(updates.measurements));
+      setClauses.push(`measurements = $${values.length}`);
+    }
+    if (updates.rootCause !== undefined) {
+      values.push(updates.rootCause);
+      setClauses.push(`root_cause = $${values.length}`);
+    }
+    if (updates.rootCauseStatus !== undefined) {
+      values.push(updates.rootCauseStatus);
+      setClauses.push(`root_cause_status = $${values.length}`);
+    }
+    if (updates.repairActions !== undefined) {
+      values.push(JSON.stringify(updates.repairActions));
+      setClauses.push(`repair_actions = $${values.length}`);
+    }
+    if (updates.partsReplaced !== undefined) {
+      values.push(JSON.stringify(updates.partsReplaced));
+      setClauses.push(`parts_replaced = $${values.length}`);
+    }
+    if (updates.postRepairTestResults !== undefined) {
+      values.push(JSON.stringify(updates.postRepairTestResults));
+      setClauses.push(`post_repair_test_results = $${values.length}`);
+    }
+    if (updates.verificationState !== undefined) {
+      values.push(updates.verificationState);
+      setClauses.push(`verification_state = $${values.length}`);
+    }
+    if (updates.verificationNotes !== undefined) {
+      values.push(updates.verificationNotes);
+      setClauses.push(`verification_notes = $${values.length}`);
+    }
+    if (updates.verifiedByUserId !== undefined) {
+      values.push(updates.verifiedByUserId);
+      setClauses.push(`verified_by_user_id = $${values.length}`);
+    }
+    if (updates.verifiedAt !== undefined) {
+      values.push(updates.verifiedAt);
+      setClauses.push(`verified_at = $${values.length}`);
+    }
+    if (updates.requiresRestartApproval !== undefined) {
+      values.push(updates.requiresRestartApproval);
+      setClauses.push(`requires_restart_approval = $${values.length}`);
+    }
+    if (updates.restartApproved !== undefined) {
+      values.push(updates.restartApproved);
+      setClauses.push(`restart_approved = $${values.length}`);
+    }
+    if (updates.restartApprovedByUserId !== undefined) {
+      values.push(updates.restartApprovedByUserId);
+      setClauses.push(`restart_approved_by_user_id = $${values.length}`);
+    }
+    if (updates.restartApprovedAt !== undefined) {
+      values.push(updates.restartApprovedAt);
+      setClauses.push(`restart_approved_at = $${values.length}`);
+    }
+    if (updates.restartNotes !== undefined) {
+      values.push(updates.restartNotes);
+      setClauses.push(`restart_notes = $${values.length}`);
+    }
+    if (updates.approvalStatus !== undefined) {
+      values.push(updates.approvalStatus);
+      setClauses.push(`approval_status = $${values.length}`);
+    }
+    if (updates.approvedByUserId !== undefined) {
+      values.push(updates.approvedByUserId);
+      setClauses.push(`approved_by_user_id = $${values.length}`);
+    }
+    if (updates.approvedAt !== undefined) {
+      values.push(updates.approvedAt);
+      setClauses.push(`approved_at = $${values.length}`);
+    }
+    if (updates.approvalNotes !== undefined) {
+      values.push(updates.approvalNotes);
+      setClauses.push(`approval_notes = $${values.length}`);
+    }
+    if (updates.closedAt !== undefined) {
+      values.push(updates.closedAt);
+      setClauses.push(`closed_at = $${values.length}`);
+    }
+    if (updates.relatedIncidentRecordIds !== undefined) {
+      values.push(JSON.stringify(updates.relatedIncidentRecordIds));
+      setClauses.push(`related_incident_record_ids = $${values.length}`);
+    }
+    if (updates.attachments !== undefined) {
+      values.push(JSON.stringify(updates.attachments));
+      setClauses.push(`attachments = $${values.length}`);
+    }
+    if (updates.knowledgeApproved !== undefined) {
+      values.push(updates.knowledgeApproved);
+      setClauses.push(`knowledge_approved = $${values.length}`);
+    }
+
+    const res = await this.pool.query(
+      `UPDATE maintenance_records SET ${setClauses.join(', ')} WHERE organization_id = $1 AND id = $2 RETURNING *`,
+      values
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapRowToMaintenanceRecord(res.rows[0]);
+  }
+
+  public async getMachineMaintenanceHistory(
+    organizationId: string,
+    machineId: string
+  ): Promise<MaintenanceRecord[]> {
+    return this.listMaintenanceRecords(organizationId, { machineId });
+  }
+
+  // --------------------------------------------------------------------------
+  // Recurring Fault Intelligence & Policies (Postgres)
+  // --------------------------------------------------------------------------
+  public async setRecurringFaultPolicy(
+    organizationId: string,
+    data: SetRecurringFaultPolicyDTO
+  ): Promise<RecurringFaultThresholdConfig> {
+    const id = 'rfp_' + Math.random().toString(36).substring(2, 10);
+    const timeWindowDays = data.timeWindowDays ?? 30;
+    const recurrenceCountThreshold = data.recurrenceCountThreshold ?? 2;
+    const requiresSafetyStop = data.requiresSafetyStop ?? false;
+    const safetyLimits = data.safetyLimits || {};
+
+    await this.pool.query(
+      `INSERT INTO machine_recurring_fault_policies (
+        id, organization_id, machine_id, machine_type, time_window_days,
+        recurrence_threshold_count, requires_safety_stop, safety_limits, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      ON CONFLICT (organization_id, machine_id)
+      DO UPDATE SET
+        time_window_days = EXCLUDED.time_window_days,
+        recurrence_threshold_count = EXCLUDED.recurrence_threshold_count,
+        requires_safety_stop = EXCLUDED.requires_safety_stop,
+        safety_limits = EXCLUDED.safety_limits,
+        updated_at = NOW()`,
+      [
+        id,
+        organizationId,
+        data.machineId || null,
+        data.machineType || null,
+        timeWindowDays,
+        recurrenceCountThreshold,
+        requiresSafetyStop,
+        JSON.stringify(safetyLimits),
+      ]
+    );
+
+    return {
+      machineType: data.machineType || 'ALL',
+      timeWindowDays,
+      recurrenceCountThreshold,
+      requiresSafetyStop,
+      safetyLimits: data.safetyLimits,
+    };
+  }
+
+  public async getRecurringFaultPolicy(
+    organizationId: string,
+    machineId: string,
+    machineType?: string
+  ): Promise<RecurringFaultThresholdConfig> {
+    const res = await this.pool.query(
+      `SELECT * FROM machine_recurring_fault_policies
+       WHERE organization_id = $1 AND (machine_id = $2 OR machine_id IS NULL)
+       ORDER BY machine_id NULLS LAST LIMIT 1`,
+      [organizationId, machineId]
+    );
+
+    if (res.rows.length > 0) {
+      const row = res.rows[0];
+      return {
+        machineType: row.machine_type || machineType || 'ALL',
+        timeWindowDays: row.time_window_days,
+        recurrenceCountThreshold: row.recurrence_threshold_count,
+        requiresSafetyStop: row.requires_safety_stop,
+        safetyLimits:
+          typeof row.safety_limits === 'string'
+            ? JSON.parse(row.safety_limits)
+            : row.safety_limits,
+      };
+    }
+
+    return {
+      machineType: machineType || 'ALL',
+      timeWindowDays: 30,
+      recurrenceCountThreshold: 2,
+      requiresSafetyStop: false,
+      safetyLimits: {
+        maxTemperatureC: 85,
+        maxVibrationMmS: 7.1,
+        maxPressureBar: 25,
+      },
+    };
+  }
+
+  public async detectRecurringFaults(
+    organizationId: string,
+    machineId: string,
+    options?: RecurringFaultOptions
+  ): Promise<RecurringFaultAnalysis> {
+    const machine = await this.getMachineById(organizationId, machineId);
+    const assetTag = machine?.assetTag || 'UNKNOWN';
+    const policy = await this.getRecurringFaultPolicy(
+      organizationId,
+      machineId,
+      machine?.machineType
+    );
+
+    const windowDays = options?.timeWindowDays ?? policy.timeWindowDays ?? 30;
+    const threshold =
+      options?.recurrenceCountThreshold ?? policy.recurrenceCountThreshold ?? 2;
+
+    const cutoff = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
+    const allRecords = await this.getMachineMaintenanceHistory(organizationId, machineId);
+    const windowRecords = allRecords.filter((r) => new Date(r.resolvedAt) >= cutoff);
+
+    const categoryCounts: Record<string, MaintenanceRecord[]> = {};
+    for (const r of windowRecords) {
+      if (!categoryCounts[r.faultCategory]) {
+        categoryCounts[r.faultCategory] = [];
+      }
+      categoryCounts[r.faultCategory].push(r);
+    }
+
+    let dominantCategory = 'GENERAL_MALFUNCTION';
+    let maxCategoryRecords: MaintenanceRecord[] = [];
+
+    for (const [cat, recs] of Object.entries(categoryCounts)) {
+      if (recs.length > maxCategoryRecords.length) {
+        dominantCategory = cat;
+        maxCategoryRecords = recs;
+      }
+    }
+
+    if (maxCategoryRecords.length === 0 && allRecords.length > 0) {
+      dominantCategory = allRecords[0].faultCategory;
+      maxCategoryRecords = [allRecords[0]];
+    }
+
+    const recurrenceCount = maxCategoryRecords.length;
+    const isRecurringFault = recurrenceCount >= threshold;
+
+    const confirmedRootCauses: string[] = [];
+    const suspectedRootCauses: string[] = [];
+    let unknownRootCauseCount = 0;
+
+    for (const r of maxCategoryRecords) {
+      if (r.rootCauseStatus === 'CONFIRMED' && !confirmedRootCauses.includes(r.rootCause)) {
+        confirmedRootCauses.push(r.rootCause);
+      } else if (
+        r.rootCauseStatus === 'SUSPECTED' &&
+        !suspectedRootCauses.includes(r.rootCause)
+      ) {
+        suspectedRootCauses.push(r.rootCause);
+      } else if (r.rootCauseStatus === 'UNKNOWN') {
+        unknownRootCauseCount++;
+      }
+    }
+
+    let exceededLimitWarning: string | null = null;
+    let limitExceeded = false;
+
+    if (policy.safetyLimits) {
+      for (const r of maxCategoryRecords) {
+        for (const m of r.measurements) {
+          if (
+            policy.safetyLimits.maxTemperatureC !== undefined &&
+            (m.parameterName.toLowerCase().includes('temp') || m.unit === 'degC') &&
+            m.value >= policy.safetyLimits.maxTemperatureC
+          ) {
+            limitExceeded = true;
+            exceededLimitWarning = `[MANDATORY SAFETY STOP / HOLD] Temperature reading of ${m.value}${m.unit} exceeds verified threshold of ${policy.safetyLimits.maxTemperatureC}degC (source: ${m.source}).`;
+            break;
+          }
+          if (
+            policy.safetyLimits.maxVibrationMmS !== undefined &&
+            (m.parameterName.toLowerCase().includes('vib') || m.unit === 'mm/s') &&
+            m.value >= policy.safetyLimits.maxVibrationMmS
+          ) {
+            limitExceeded = true;
+            exceededLimitWarning = `[MANDATORY SAFETY STOP / HOLD] Vibration reading of ${m.value}${m.unit} exceeds verified threshold of ${policy.safetyLimits.maxVibrationMmS}mm/s (source: ${m.source}).`;
+            break;
+          }
+          if (
+            policy.safetyLimits.maxPressureBar !== undefined &&
+            (m.parameterName.toLowerCase().includes('press') || m.unit === 'bar') &&
+            m.value >= policy.safetyLimits.maxPressureBar
+          ) {
+            limitExceeded = true;
+            exceededLimitWarning = `[MANDATORY SAFETY STOP / HOLD] Pressure reading of ${m.value}${m.unit} exceeds verified threshold of ${policy.safetyLimits.maxPressureBar}bar (source: ${m.source}).`;
+            break;
+          }
+        }
+        if (limitExceeded) break;
+      }
+    }
+
+    const isSafetyCritical =
+      limitExceeded ||
+      policy.requiresSafetyStop ||
+      dominantCategory.includes('OVERHEAT') ||
+      dominantCategory.includes('PRESSURE') ||
+      dominantCategory.includes('BEARING');
+
+    let confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT_DATA';
+    if (recurrenceCount >= threshold && confirmedRootCauses.length > 0) {
+      confidence = 'HIGH';
+    } else if (recurrenceCount >= threshold) {
+      confidence = 'MEDIUM';
+    } else if (recurrenceCount === 1) {
+      confidence = 'LOW';
+    } else {
+      confidence = 'INSUFFICIENT_DATA';
+    }
+
+    const incidentTimeline = maxCategoryRecords.map((r) => ({
+      recordId: r.id,
+      recordNumber: r.recordNumber,
+      ticketNumber: r.ticketNumber,
+      resolvedAt: r.resolvedAt,
+      faultCategory: r.faultCategory,
+      rootCause: r.rootCause,
+      rootCauseStatus: r.rootCauseStatus,
+      repairActions: r.repairActions,
+      measurements: r.measurements,
+      isResolved: r.verificationState === 'PASSED',
+    }));
+
+    const evidenceSummary =
+      isRecurringFault
+        ? `Identified ${recurrenceCount} recurring incidents for fault category "${dominantCategory}" on asset ${assetTag} within the ${windowDays}-day monitoring window. Confirmed root causes: ${confirmedRootCauses.join(', ') || 'None'}. Suspected causes: ${suspectedRootCauses.join(', ') || 'None'}. Unknown causes: ${unknownRootCauseCount}.`
+        : `Normal fault baseline: ${recurrenceCount} incident(s) detected within ${windowDays} days (configured threshold: ${threshold}).`;
+
+    const recommendedInspectionSteps: string[] = [];
+    if (isSafetyCritical) {
+      recommendedInspectionSteps.push('Execute verified lock-out/tag-out (LOTO) procedure.');
+      recommendedInspectionSteps.push('Check thermal gradient and bearing lubrication condition with calibrated tools.');
+      recommendedInspectionSteps.push('Verify sensor telemetry calibrations against physical gauge readings.');
+      recommendedInspectionSteps.push('Obtain supervisory restart approval before returning unit to active service.');
+    } else {
+      recommendedInspectionSteps.push('Inspect mechanical couplings and verify alignment tolerances.');
+      recommendedInspectionSteps.push('Review technician repair logs and verify component replacement serials.');
+    }
+
+    return {
+      machineId,
+      machineAssetTag: assetTag,
+      isRecurringFault,
+      recurrenceCount,
+      faultCategory: dominantCategory,
+      componentId: maxCategoryRecords[0]?.componentId ?? null,
+      incidentTimeline,
+      relatedRecordIds: maxCategoryRecords.map((r) => r.id),
+      confirmedRootCauses,
+      suspectedRootCauses,
+      unknownRootCauseCount,
+      confidence,
+      evidenceSummary,
+      recommendedInspectionSteps,
+      isSafetyCritical,
+      safetyWarning: exceededLimitWarning,
+      requiresSafetyHold: limitExceeded || (isRecurringFault && policy.requiresSafetyStop),
+      requiresRestartApproval: isSafetyCritical,
+      priorRepairEffectiveness: isRecurringFault ? 'PARTIALLY_EFFECTIVE' : 'EFFECTIVE',
+      averageRecurrenceIntervalDays: null,
+      intelligenceSource: 'HISTORICAL_MAINTENANCE_RECORDS',
+      patternDisclaimer:
+        'Historical pattern intelligence is derived strictly from durable maintenance records. It does not constitute real-time sensor predictive maintenance.',
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Ticket Resolution & Lifecycle Actions (Postgres)
+  // --------------------------------------------------------------------------
+  public async resolveSpecialistTicket(
+    organizationId: string,
+    ticketId: string,
+    resolution: ResolveSpecialistTicketDTO
+  ): Promise<{ ticket: SpecialistTicket; record: MaintenanceRecord }> {
+    const ticket = await this.getSpecialistTicketById(organizationId, ticketId);
+    if (!ticket) {
+      throw new Error(`Specialist ticket ${ticketId} not found in organization ${organizationId}`);
+    }
+
+    const now = new Date().toISOString();
+    let verificationState: 'PENDING' | 'PASSED' | 'FAILED' | 'NOT_APPLICABLE' = 'PENDING';
+
+    const hasTests = resolution.postRepairTestResults && resolution.postRepairTestResults.length > 0;
+    if (hasTests) {
+      const allPassed = resolution.postRepairTestResults!.every((t) => t.passed);
+      verificationState = allPassed ? 'PASSED' : 'FAILED';
+    }
+
+    const isSafetyRelated =
+      ticket.escalationReason === 'SAFETY_CRITICAL' ||
+      ticket.severity === 'CRITICAL' ||
+      resolution.faultCategory.includes('OVERHEAT') ||
+      resolution.faultCategory.includes('PRESSURE') ||
+      resolution.faultCategory.includes('ELECTRICAL_HAZARD');
+
+    // Rule: Do not mark a safety-critical repair as fully verified without required checks
+    if (isSafetyRelated) {
+      if (!hasTests || verificationState !== 'PASSED') {
+        if (resolution.verificationState === 'PASSED') {
+          throw new Error(
+            'Safety-critical repair cannot be marked as fully verified (PASSED) without passing post-repair test results.'
+          );
+        }
+        verificationState = hasTests && !resolution.postRepairTestResults!.every((t) => t.passed) ? 'FAILED' : 'PENDING';
+      }
+    } else if (resolution.verificationState) {
+      verificationState = resolution.verificationState;
+    }
+
+    const requiresRestartApproval =
+      resolution.requiresRestartApproval !== undefined
+        ? resolution.requiresRestartApproval
+        : isSafetyRelated;
+
+    let newStatus: TicketStatus = 'RESOLVED';
+    if (verificationState === 'FAILED') {
+      newStatus = 'UNRESOLVED' as any;
+    } else if (requiresRestartApproval) {
+      newStatus = 'PENDING_VERIFICATION' as any;
+    } else {
+      newStatus = 'RESOLVED';
+    }
+
+    const record = await this.createMaintenanceRecord(organizationId, {
+      plantId: ticket.plantId,
+      machineId: ticket.machineId || '',
+      machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
+      ticketId: ticket.id,
+      ticketNumber: ticket.ticketNumber,
+      componentId: null,
+      reportingUserId: ticket.reportedByUserId,
+      reportingUserName: ticket.reportedByUserName,
+      assignedTechnicianUserId: ticket.assignedSpecialistUserId,
+      assignedTechnicianName: ticket.assignedSpecialistName,
+      resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
+      resolvingTechnicianName: resolution.resolvingTechnicianName,
+      faultCategory: resolution.faultCategory,
+      problemStatement: ticket.originalQuestion,
+      observedSymptoms: resolution.observedSymptoms ?? [],
+      measurements: resolution.measurements ?? [],
+      rootCause: resolution.rootCause,
+      rootCauseStatus: resolution.rootCauseStatus,
+      repairActions: resolution.repairActions,
+      partsReplaced: resolution.partsReplaced ?? [],
+      postRepairTestResults: resolution.postRepairTestResults ?? [],
+      verificationState,
+      requiresRestartApproval,
+      restartApproved: false,
+      approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+    });
+
+    const previousStatus = ticket.status;
+    const history = [...ticket.history];
+    history.push({
+      id: 'hist_' + Math.random().toString(36).substring(2, 10),
+      ticketId: ticket.id,
+      actorUserId: resolution.resolvingTechnicianUserId,
+      action: 'TICKET_RESOLVED',
+      previousStatus,
+      newStatus,
+      notes:
+        resolution.notes ||
+        `Resolution logged. Root cause [${resolution.rootCauseStatus}]: ${resolution.rootCause}. Verification: ${verificationState}. Requires restart approval: ${requiresRestartApproval}`,
+      timestamp: now,
+    });
+
+    await this.pool.query(
+      `UPDATE specialist_tickets
+       SET status = $3,
+           fault_category = $4,
+           root_cause = $5,
+           root_cause_status = $6,
+           maintenance_record_id = $7,
+           requires_restart_approval = $8,
+           restart_approved = FALSE,
+           technician_observations = $9,
+           repair_outcome = $10,
+           resolved_at = CASE WHEN $3 = 'RESOLVED' THEN NOW() ELSE resolved_at END,
+           resolved_by_user_id = CASE WHEN $3 = 'RESOLVED' THEN $11 ELSE resolved_by_user_id END,
+           history = $12,
+           updated_at = NOW()
+       WHERE organization_id = $1 AND id = $2`,
+      [
+        organizationId,
+        ticketId,
+        newStatus,
+        resolution.faultCategory,
+        resolution.rootCause,
+        resolution.rootCauseStatus,
+        record.id,
+        requiresRestartApproval,
+        resolution.observedSymptoms?.join(', ') || null,
+        `Actions: ${resolution.repairActions.join('; ')}. Verification: ${verificationState}.`,
+        resolution.resolvingTechnicianUserId,
+        JSON.stringify(history),
+      ]
+    );
+
+    const updatedTicket = await this.getSpecialistTicketById(organizationId, ticketId);
+    return { ticket: updatedTicket!, record };
+  }
+
+  public async reopenSpecialistTicket(
+    organizationId: string,
+    ticketId: string,
+    data: ReopenSpecialistTicketDTO
+  ): Promise<{ ticket: SpecialistTicket; record?: MaintenanceRecord | null }> {
+    const ticket = await this.getSpecialistTicketById(organizationId, ticketId);
+    if (!ticket) {
+      throw new Error(`Specialist ticket ${ticketId} not found in organization ${organizationId}`);
+    }
+
+    const now = new Date().toISOString();
+    const previousStatus = ticket.status;
+    const reopenCount = (ticket.reopenCount || 0) + 1;
+    const history = [...ticket.history];
+    history.push({
+      id: 'hist_' + Math.random().toString(36).substring(2, 10),
+      ticketId: ticket.id,
+      actorUserId: data.actorUserId,
+      action: 'TICKET_REOPENED',
+      previousStatus,
+      newStatus: 'REOPENED',
+      notes: `Ticket reopened (reopen #${reopenCount}): ${data.reopenReason}`,
+      timestamp: now,
+    });
+
+    await this.pool.query(
+      `UPDATE specialist_tickets
+       SET status = 'REOPENED',
+           reopen_count = $3,
+           reopened_at = NOW(),
+           reopened_by_user_id = $4,
+           resolved_at = NULL,
+           resolved_by_user_id = NULL,
+           history = $5,
+           updated_at = NOW()
+       WHERE organization_id = $1 AND id = $2`,
+      [organizationId, ticketId, reopenCount, data.actorUserId, JSON.stringify(history)]
+    );
+
+    let record: MaintenanceRecord | null = null;
+    if (ticket.maintenanceRecordId) {
+      record = await this.updateMaintenanceRecord(organizationId, ticket.maintenanceRecordId, {
+        actorUserId: data.actorUserId,
+        verificationState: 'FAILED',
+        note: `Ticket reopened due to recurring or unresolved issue: ${data.reopenReason}`,
+      });
+    }
+
+    const updatedTicket = await this.getSpecialistTicketById(organizationId, ticketId);
+    return { ticket: updatedTicket!, record };
+  }
+
+  public async approveTicketRestart(
+    organizationId: string,
+    ticketId: string,
+    data: ApproveTicketRestartDTO
+  ): Promise<{ ticket: SpecialistTicket; record?: MaintenanceRecord | null }> {
+    const ticket = await this.getSpecialistTicketById(organizationId, ticketId);
+    if (!ticket) {
+      throw new Error(`Specialist ticket ${ticketId} not found in organization ${organizationId}`);
+    }
+
+    const now = new Date().toISOString();
+    const previousStatus = ticket.status;
+    const newStatus = ticket.status === 'PENDING_VERIFICATION' ? 'RESOLVED' : ticket.status;
+    const history = [...ticket.history];
+    history.push({
+      id: 'hist_' + Math.random().toString(36).substring(2, 10),
+      ticketId: ticket.id,
+      actorUserId: data.actorUserId,
+      action: 'RESTART_APPROVED',
+      previousStatus,
+      newStatus,
+      notes:
+        data.notes ||
+        `Restart authorized by supervisor (${data.actorName || data.actorUserId}). Verified safe for operation.`,
+      timestamp: now,
+    });
+
+    await this.pool.query(
+      `UPDATE specialist_tickets
+       SET restart_approved = TRUE,
+           restart_approved_by_user_id = $3,
+           restart_approved_at = NOW(),
+           status = $4,
+           resolved_at = CASE WHEN $4 = 'RESOLVED' THEN NOW() ELSE resolved_at END,
+           resolved_by_user_id = CASE WHEN $4 = 'RESOLVED' THEN $3 ELSE resolved_by_user_id END,
+           history = $5,
+           updated_at = NOW()
+       WHERE organization_id = $1 AND id = $2`,
+      [organizationId, ticketId, data.actorUserId, newStatus, JSON.stringify(history)]
+    );
+
+    let record: MaintenanceRecord | null = null;
+    if (ticket.maintenanceRecordId) {
+      record = await this.updateMaintenanceRecord(organizationId, ticket.maintenanceRecordId, {
+        actorUserId: data.actorUserId,
+        restartApproved: true,
+        restartApprovedByUserId: data.actorUserId,
+        restartApprovedAt: now,
+        restartNotes: data.notes || 'Restart authorized after physical inspection',
+        approvalStatus: 'APPROVED',
+        approvedByUserId: data.actorUserId,
+        approvedAt: now,
+        verificationState: 'PASSED',
+        note: 'Restart approved and verification confirmed',
+      });
+    }
+
+    const updatedTicket = await this.getSpecialistTicketById(organizationId, ticketId);
+    return { ticket: updatedTicket!, record };
+  }
+
+  // ============================================================================
+  // Confidential Access Monitoring & Admin Security Alerts
+  // ============================================================================
+
+  public async recordSecurityEvent(dto: CreateSecurityEventDTO): Promise<SecurityEvent> {
+    const isBenign =
+      dto.isBenignInquiry !== undefined
+        ? dto.isBenignInquiry
+        : dto.decision === 'DENIED' && dto.severity !== 'CRITICAL' && dto.severity !== 'HIGH';
+
+    const sql = `
+      INSERT INTO security_events (
+        id, organization_id, actor_user_id, actor_email, actor_role, category, action,
+        resource_category, resource_id, decision, policy_reason_code, severity, correlation_id,
+        metadata, review_status, is_benign_inquiry, created_at
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'OPEN', $14, NOW()
+      ) RETURNING *
+    `;
+    const res = await this.pool.query(sql, [
+      dto.organizationId,
+      dto.actorUserId || null,
+      dto.actorEmail || null,
+      dto.actorRole || null,
+      dto.category,
+      dto.action,
+      dto.resourceCategory,
+      dto.resourceId || null,
+      dto.decision,
+      dto.policyReasonCode,
+      dto.severity,
+      dto.correlationId || null,
+      JSON.stringify(dto.metadata || {}),
+      isBenign,
+    ]);
+    return this.mapSecurityEventRow(res.rows[0]);
+  }
+
+  public async listSecurityEvents(
+    organizationId: string,
+    filter?: ListSecurityEventsQuery
+  ): Promise<{ events: SecurityEvent[]; total: number }> {
+    const conditions = ['organization_id = $1'];
+    const params: any[] = [organizationId];
+    let idx = 2;
+
+    if (filter?.category) {
+      conditions.push(`category = $${idx++}`);
+      params.push(filter.category);
+    }
+    if (filter?.actorUserId) {
+      conditions.push(`actor_user_id = $${idx++}`);
+      params.push(filter.actorUserId);
+    }
+    if (filter?.decision) {
+      conditions.push(`decision = $${idx++}`);
+      params.push(filter.decision);
+    }
+    if (filter?.severity) {
+      conditions.push(`severity = $${idx++}`);
+      params.push(filter.severity);
+    }
+    if (filter?.reviewStatus) {
+      conditions.push(`review_status = $${idx++}`);
+      params.push(filter.reviewStatus);
+    }
+
+    const countSql = `SELECT COUNT(*) FROM security_events WHERE ${conditions.join(' AND ')}`;
+    const countRes = await this.pool.query(countSql, params);
+    const total = parseInt(countRes.rows[0].count, 10);
+
+    const limit = filter?.limit ?? 50;
+    const offset = filter?.offset ?? 0;
+    params.push(limit, offset);
+
+    const sql = `
+      SELECT * FROM security_events
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC
+      LIMIT $${idx++} OFFSET $${idx++}
+    `;
+    const res = await this.pool.query(sql, params);
+    return {
+      events: res.rows.map((r) => this.mapSecurityEventRow(r)),
+      total,
+    };
+  }
+
+  public async getSecurityEventById(
+    organizationId: string,
+    eventId: string
+  ): Promise<SecurityEvent | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM security_events WHERE organization_id = $1 AND id = $2`,
+      [organizationId, eventId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapSecurityEventRow(res.rows[0]);
+  }
+
+  public async createSecurityAlert(dto: CreateSecurityAlertDTO): Promise<SecurityAlert> {
+    const eventCount = dto.correlatedEventIds && dto.correlatedEventIds.length > 0 ? dto.correlatedEventIds.length : 1;
+    const sql = `
+      INSERT INTO security_alerts (
+        id, organization_id, alert_type, severity, status, title, summary,
+        actor_user_id, actor_email, actor_role, resource_category, resource_id,
+        event_count, first_seen_at, last_seen_at, correlated_event_ids, created_at, updated_at
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, 'OPEN', $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), $12, NOW(), NOW()
+      ) RETURNING *
+    `;
+    const res = await this.pool.query(sql, [
+      dto.organizationId,
+      dto.alertType,
+      dto.severity,
+      dto.title,
+      dto.summary,
+      dto.actorUserId || null,
+      dto.actorEmail || null,
+      dto.actorRole || null,
+      dto.resourceCategory,
+      dto.resourceId || null,
+      eventCount,
+      JSON.stringify(dto.correlatedEventIds || []),
+    ]);
+    return this.mapSecurityAlertRow(res.rows[0]);
+  }
+
+  public async updateSecurityAlert(
+    organizationId: string,
+    alertId: string,
+    updates: Partial<SecurityAlert>
+  ): Promise<SecurityAlert | null> {
+    const setClauses: string[] = ['updated_at = NOW()'];
+    const params: any[] = [organizationId, alertId];
+    let idx = 3;
+
+    if (updates.status !== undefined) {
+      setClauses.push(`status = $${idx++}`);
+      params.push(updates.status);
+    }
+    if (updates.severity !== undefined) {
+      setClauses.push(`severity = $${idx++}`);
+      params.push(updates.severity);
+    }
+    if (updates.eventCount !== undefined) {
+      setClauses.push(`event_count = $${idx++}`);
+      params.push(updates.eventCount);
+    }
+    if (updates.lastSeenAt !== undefined) {
+      setClauses.push(`last_seen_at = $${idx++}`);
+      params.push(updates.lastSeenAt);
+    }
+    if (updates.correlatedEventIds !== undefined) {
+      setClauses.push(`correlated_event_ids = $${idx++}`);
+      params.push(JSON.stringify(updates.correlatedEventIds));
+    }
+    if (updates.assignedReviewerUserId !== undefined) {
+      setClauses.push(`assigned_reviewer_user_id = $${idx++}`);
+      params.push(updates.assignedReviewerUserId);
+    }
+    if (updates.reviewNotes !== undefined) {
+      setClauses.push(`review_notes = $${idx++}`);
+      params.push(updates.reviewNotes);
+    }
+    if (updates.resolutionOutcome !== undefined) {
+      setClauses.push(`resolution_outcome = $${idx++}`);
+      params.push(updates.resolutionOutcome);
+    }
+    if (updates.resolvedAt !== undefined) {
+      setClauses.push(`resolved_at = $${idx++}`);
+      params.push(updates.resolvedAt);
+    }
+    if (updates.resolvedByUserId !== undefined) {
+      setClauses.push(`resolved_by_user_id = $${idx++}`);
+      params.push(updates.resolvedByUserId);
+    }
+
+    const sql = `
+      UPDATE security_alerts
+      SET ${setClauses.join(', ')}
+      WHERE organization_id = $1 AND id = $2
+      RETURNING *
+    `;
+    const res = await this.pool.query(sql, params);
+    if (res.rows.length === 0) return null;
+    return this.mapSecurityAlertRow(res.rows[0]);
+  }
+
+  public async listSecurityAlerts(
+    organizationId: string,
+    filter?: ListSecurityAlertsQuery
+  ): Promise<{ alerts: SecurityAlert[]; total: number }> {
+    const conditions = ['organization_id = $1'];
+    const params: any[] = [organizationId];
+    let idx = 2;
+
+    if (filter?.status) {
+      conditions.push(`status = $${idx++}`);
+      params.push(filter.status);
+    }
+    if (filter?.severity) {
+      conditions.push(`severity = $${idx++}`);
+      params.push(filter.severity);
+    }
+    if (filter?.alertType) {
+      conditions.push(`alert_type = $${idx++}`);
+      params.push(filter.alertType);
+    }
+    if (filter?.actorUserId) {
+      conditions.push(`actor_user_id = $${idx++}`);
+      params.push(filter.actorUserId);
+    }
+    if (filter?.search) {
+      conditions.push(`(title ILIKE $${idx} OR summary ILIKE $${idx} OR actor_email ILIKE $${idx})`);
+      params.push(`%${filter.search}%`);
+      idx++;
+    }
+
+    const countSql = `SELECT COUNT(*) FROM security_alerts WHERE ${conditions.join(' AND ')}`;
+    const countRes = await this.pool.query(countSql, params);
+    const total = parseInt(countRes.rows[0].count, 10);
+
+    const limit = filter?.limit ?? 50;
+    const offset = filter?.offset ?? 0;
+    params.push(limit, offset);
+
+    const sql = `
+      SELECT * FROM security_alerts
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY last_seen_at DESC
+      LIMIT $${idx++} OFFSET $${idx++}
+    `;
+    const res = await this.pool.query(sql, params);
+    return {
+      alerts: res.rows.map((r) => this.mapSecurityAlertRow(r)),
+      total,
+    };
+  }
+
+  public async getSecurityAlertById(
+    organizationId: string,
+    alertId: string
+  ): Promise<SecurityAlert | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM security_alerts WHERE organization_id = $1 AND id = $2`,
+      [organizationId, alertId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapSecurityAlertRow(res.rows[0]);
+  }
+
+  public async findOpenAlertForActorAndType(
+    organizationId: string,
+    actorUserId: string,
+    alertType: string
+  ): Promise<SecurityAlert | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM security_alerts
+       WHERE organization_id = $1 AND actor_user_id = $2 AND alert_type = $3 AND status = 'OPEN'
+       ORDER BY created_at DESC LIMIT 1`,
+      [organizationId, actorUserId, alertType]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapSecurityAlertRow(res.rows[0]);
+  }
+
+  private mapSecurityEventRow(row: any): SecurityEvent {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      actorUserId: row.actor_user_id || null,
+      actorEmail: row.actor_email || null,
+      actorRole: row.actor_role || null,
+      timestamp: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      category: row.category,
+      action: row.action,
+      resourceCategory: row.resource_category,
+      resourceId: row.resource_id || null,
+      decision: row.decision,
+      policyReasonCode: row.policy_reason_code,
+      severity: row.severity,
+      correlationId: row.correlation_id || null,
+      metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata || {},
+      reviewStatus: row.review_status || 'OPEN',
+      assignedReviewerUserId: row.assigned_reviewer_user_id || null,
+      reviewNotes: row.review_notes || null,
+      resolvedAt: row.resolved_at ? new Date(row.resolved_at).toISOString() : null,
+      resolvedByUserId: row.resolved_by_user_id || null,
+      isBenignInquiry: Boolean(row.is_benign_inquiry),
+    };
+  }
+
+  private mapSecurityAlertRow(row: any): SecurityAlert {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      alertType: row.alert_type,
+      severity: row.severity,
+      status: row.status,
+      title: row.title,
+      summary: row.summary,
+      actorUserId: row.actor_user_id || null,
+      actorEmail: row.actor_email || null,
+      actorRole: row.actor_role || null,
+      resourceCategory: row.resource_category,
+      resourceId: row.resource_id || null,
+      eventCount: parseInt(row.event_count || '1', 10),
+      firstSeenAt: row.first_seen_at ? new Date(row.first_seen_at).toISOString() : new Date().toISOString(),
+      lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : new Date().toISOString(),
+      correlatedEventIds: typeof row.correlated_event_ids === 'string' ? JSON.parse(row.correlated_event_ids) : row.correlated_event_ids || [],
+      assignedReviewerUserId: row.assigned_reviewer_user_id || null,
+      reviewNotes: row.review_notes || null,
+      resolutionOutcome: row.resolution_outcome || null,
+      resolvedAt: row.resolved_at ? new Date(row.resolved_at).toISOString() : null,
+      resolvedByUserId: row.resolved_by_user_id || null,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+    };
+  }
+
+  // ============================================================================
+  // Machine Knowledge Recovery System (Phase 3)
+  // ============================================================================
+
+  private mapClaimRow(row: any): MachineEvidenceClaim {
+    let claimValue: string | number | boolean = row.claim_value;
+    if (row.claim_value_type === 'NUMBER') {
+      const n = Number(row.claim_value);
+      if (!isNaN(n)) claimValue = n;
+    } else if (row.claim_value_type === 'BOOLEAN') {
+      claimValue = row.claim_value === 'true';
+    }
+
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      plantId: row.plant_id,
+      machineId: row.machine_id,
+      machineAssetTag: row.machine_asset_tag,
+      fieldName: row.field_name,
+      displayName: row.display_name || row.field_name,
+      claimValue,
+      unit: row.unit || null,
+      sourceType: row.source_type,
+      sourceDocumentId: row.source_document_id || null,
+      sourceAttachmentKey: row.source_attachment_key || null,
+      sourcePageNumber: row.source_page_number || null,
+      sourceRegion: row.source_region || null,
+      sourceRevision: row.source_revision || null,
+      sourceDate: row.source_date ? new Date(row.source_date).toISOString().slice(0, 10) : null,
+      extractionMethod: row.extraction_method,
+      confidence: row.confidence,
+      applicabilityStatus: row.applicability_status,
+      applicabilityRationale: row.applicability_rationale || null,
+      status: row.status,
+      submittedByUserId: row.submitted_by_user_id,
+      submittedByEmail: row.submitted_by_email || null,
+      submittedAt: row.submitted_at ? new Date(row.submitted_at).toISOString() : new Date().toISOString(),
+      reviewedByUserId: row.reviewed_by_user_id || null,
+      reviewedByEmail: row.reviewed_by_email || null,
+      reviewedAt: row.reviewed_at ? new Date(row.reviewed_at).toISOString() : null,
+      reviewNotes: row.review_notes || null,
+      reviewRationale: row.review_rationale || null,
+      reviewerQualifications: row.reviewer_qualifications || null,
+      supersededByClaimId: row.superseded_by_claim_id || null,
+      supersedesClaimId: row.supersedes_claim_id || null,
+      isSafetyCritical: Boolean(row.is_safety_critical),
+      version: parseInt(row.version || '1', 10),
+      auditTrail: typeof row.audit_trail === 'string' ? JSON.parse(row.audit_trail) : row.audit_trail || [],
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+    };
+  }
+
+  public async createEvidenceClaim(
+    organizationId: string,
+    dto: CreateEvidenceClaimDTO & { submittedByUserId: string; submittedByEmail?: string }
+  ): Promise<MachineEvidenceClaim> {
+    const machine = await this.getMachineById(organizationId, dto.machineId);
+    if (!machine) {
+      throw new Error(`Machine '${dto.machineId}' not found in organization.`);
+    }
+
+    const isSafetyCritical =
+      dto.isSafetyCritical !== undefined
+        ? dto.isSafetyCritical
+        : /\b(pressure|voltage|current|torque|loto|lockout|safety|mawp|temperature|relief|speed|rpm)\b/i.test(
+            dto.fieldName
+          );
+
+    let valType: 'STRING' | 'NUMBER' | 'BOOLEAN' = 'STRING';
+    if (typeof dto.claimValue === 'number') valType = 'NUMBER';
+    else if (typeof dto.claimValue === 'boolean') valType = 'BOOLEAN';
+
+    const initialAudit: ClaimAuditEntry = {
+      action: 'SUBMITTED_FOR_REVIEW',
+      actorUserId: dto.submittedByUserId,
+      actorEmail: dto.submittedByEmail || null,
+      timestamp: new Date().toISOString(),
+      notes: 'Initial evidence collected and submitted for qualified engineering review',
+    };
+
+    const res = await this.pool.query(
+      `INSERT INTO machine_evidence_claims (
+         organization_id, plant_id, machine_id, machine_asset_tag, field_name, display_name,
+         claim_value, claim_value_type, unit, source_type, source_document_id, source_attachment_key,
+         source_page_number, source_region, source_revision, source_date, extraction_method,
+         confidence, applicability_status, applicability_rationale, status, submitted_by_user_id,
+         submitted_by_email, is_safety_critical, version, audit_trail
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+         'AWAITING_REVIEW', $21, $22, $23, 1, $24
+       ) RETURNING *`,
+      [
+        organizationId,
+        machine.plantId,
+        machine.id,
+        machine.assetTag,
+        dto.fieldName,
+        dto.displayName || dto.fieldName,
+        String(dto.claimValue),
+        valType,
+        dto.unit || null,
+        dto.sourceType,
+        dto.sourceDocumentId || null,
+        dto.sourceAttachmentKey || null,
+        dto.sourcePageNumber || null,
+        dto.sourceRegion || null,
+        dto.sourceRevision || null,
+        dto.sourceDate || null,
+        dto.extractionMethod,
+        dto.confidence || 'MEDIUM',
+        dto.applicabilityStatus || 'UNCERTAIN',
+        dto.applicabilityRationale || null,
+        dto.submittedByUserId,
+        dto.submittedByEmail || null,
+        isSafetyCritical,
+        JSON.stringify([initialAudit]),
+      ]
+    );
+
+    return this.mapClaimRow(res.rows[0]);
+  }
+
+  public async getEvidenceClaimById(
+    organizationId: string,
+    claimId: string
+  ): Promise<MachineEvidenceClaim | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM machine_evidence_claims WHERE id = $1 AND organization_id = $2`,
+      [claimId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapClaimRow(res.rows[0]);
+  }
+
+  public async listEvidenceClaims(
+    organizationId: string,
+    filters?: ClaimFilterOptions
+  ): Promise<MachineEvidenceClaim[]> {
+    const conditions: string[] = ['organization_id = $1'];
+    const params: any[] = [organizationId];
+
+    if (filters?.machineId) {
+      params.push(filters.machineId);
+      conditions.push(`machine_id = $${params.length}`);
+    }
+    if (filters?.plantId) {
+      params.push(filters.plantId);
+      conditions.push(`plant_id = $${params.length}`);
+    }
+    if (filters?.status) {
+      params.push(filters.status);
+      conditions.push(`status = $${params.length}`);
+    }
+    if (filters?.fieldName) {
+      params.push(filters.fieldName.toLowerCase());
+      conditions.push(`LOWER(field_name) = $${params.length}`);
+    }
+    if (filters?.isSafetyCritical !== undefined) {
+      params.push(filters.isSafetyCritical);
+      conditions.push(`is_safety_critical = $${params.length}`);
+    }
+    if (filters?.submittedByUserId) {
+      params.push(filters.submittedByUserId);
+      conditions.push(`submitted_by_user_id = $${params.length}`);
+    }
+
+    const query = `SELECT * FROM machine_evidence_claims WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`;
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r) => this.mapClaimRow(r));
+  }
+
+  public async reviewEvidenceClaim(
+    organizationId: string,
+    claimId: string,
+    review: ReviewEvidenceClaimDTO & { reviewedByUserId: string; reviewedByEmail?: string; actorRole?: string }
+  ): Promise<MachineEvidenceClaim> {
+    const claim = await this.getEvidenceClaimById(organizationId, claimId);
+    if (!claim) {
+      throw new Error(`Evidence claim '${claimId}' not found.`);
+    }
+
+    if (claim.submittedByUserId === review.reviewedByUserId) {
+      const isSuperUser =
+        review.actorRole === 'ORGANIZATION_ADMIN' || review.actorRole === 'ORGANIZATION_OWNER';
+      if (!isSuperUser) {
+        throw new Error(
+          'Anti-self-approval violation: Technicians cannot approve their own submissions without explicit administrator authorization.'
+        );
+      }
+    }
+
+    const reviewerRole = review.actorRole || 'ENGINEER_TECHNICIAN';
+    const isAuthorizedReviewer =
+      reviewerRole === 'ORGANIZATION_ADMIN' ||
+      reviewerRole === 'ORGANIZATION_OWNER' ||
+      reviewerRole === 'PLANT_MANAGER' ||
+      reviewerRole === 'ENGINEER_TECHNICIAN';
+    if (!isAuthorizedReviewer) {
+      throw new Error('Unauthorized: Reviewer role has insufficient privileges to review machine knowledge claims.');
+    }
+
+    const now = new Date().toISOString();
+    const updatedAuditTrail = [...claim.auditTrail];
+
+    let newStatus = claim.status;
+    let newApplicability = claim.applicabilityStatus;
+    let claimValStr = String(claim.claimValue);
+    let claimUnit = claim.unit;
+
+    if (review.decision === 'APPROVE') {
+      if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {
+        throw new Error('Approval requires a valid, substantive engineering review rationale.');
+      }
+      if (claim.isSafetyCritical && (!review.reviewerQualifications || review.reviewerQualifications.trim().length < 3)) {
+        throw new Error('Safety-critical specifications require verified reviewer engineering qualifications.');
+      }
+
+      // Supersede prior approved claims for same machine & field
+      await this.pool.query(
+        `UPDATE machine_evidence_claims
+         SET status = 'SUPERSEDED', superseded_by_claim_id = $1, updated_at = NOW()
+         WHERE organization_id = $2 AND machine_id = $3 AND LOWER(field_name) = LOWER($4) AND id != $1 AND status = 'APPROVED'`,
+        [claim.id, organizationId, claim.machineId, claim.fieldName]
+      );
+
+      if (review.correctedValue !== undefined) {
+        claimValStr = String(review.correctedValue);
+        if (review.correctedUnit) claimUnit = review.correctedUnit;
+        updatedAuditTrail.push({
+          action: 'VALUE_CORRECTED',
+          actorUserId: review.reviewedByUserId,
+          actorEmail: review.reviewedByEmail || null,
+          actorRole: reviewerRole,
+          timestamp: now,
+          notes: `Value adjusted during review to: ${review.correctedValue} ${review.correctedUnit || ''}`.trim(),
+        });
+      }
+
+      newStatus = 'APPROVED';
+      newApplicability = 'APPLICABLE';
+      updatedAuditTrail.push({
+        action: 'APPROVED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewNotes,
+        qualificationProof: review.reviewerQualifications || null,
+      });
+
+      // Update machine technical specs & verification state
+      const machine = await this.getMachineById(organizationId, claim.machineId);
+      if (machine) {
+        const lowerField = claim.fieldName.toLowerCase();
+        let mfr = machine.manufacturer;
+        let model = machine.modelNumber;
+        let serial = machine.serialNumber;
+        let year = (machine as any).manufacturingYear;
+
+        if (lowerField === 'manufacturer') mfr = claimValStr;
+        if (lowerField === 'modelnumber' || lowerField === 'model') model = claimValStr;
+        if (lowerField === 'serialnumber' || lowerField === 'serial') serial = claimValStr;
+        if (lowerField === 'manufacturingyear' || lowerField === 'year') {
+          const num = parseInt(claimValStr, 10);
+          if (!isNaN(num)) year = num;
+        }
+
+        const formattedSpec = claimUnit ? `${claimValStr} ${claimUnit}` : claimValStr;
+        const newSpecs = {
+          ...machine.technicalSpecs,
+          [claim.fieldName]: formattedSpec,
+        };
+
+        let verState = machine.verificationState;
+        let docState = machine.documentationReadiness;
+        let identConf = (machine as any).identificationConfidence || 'UNIDENTIFIED';
+
+        if (mfr && model && serial) {
+          verState = 'VERIFIED';
+          docState = 'READY';
+          identConf = 'VERIFIED';
+        } else if (mfr || model) {
+          verState = 'PARTIALLY_VERIFIED';
+          identConf = 'PARTIAL';
+        }
+
+        await this.pool.query(
+          `UPDATE assets
+           SET manufacturer = $1, model_number = $2, serial_number = $3, manufacturing_year = $4,
+               technical_specs = $5, verification_state = $6, documentation_readiness = $7,
+               identification_confidence = $8, updated_at = NOW()
+           WHERE id = $9 AND organization_id = $10`,
+          [
+            mfr,
+            model,
+            serial,
+            year || null,
+            JSON.stringify(newSpecs),
+            verState,
+            docState,
+            identConf,
+            machine.id,
+            organizationId,
+          ]
+        );
+      }
+    } else if (review.decision === 'REJECT') {
+      if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {
+        throw new Error('Rejection requires a documented engineering rationale.');
+      }
+      newStatus = 'REJECTED';
+      updatedAuditTrail.push({
+        action: 'REJECTED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewRationale,
+      });
+    } else if (review.decision === 'REQUEST_ADDITIONAL_EVIDENCE') {
+      newStatus = 'NEEDS_ADDITIONAL_EVIDENCE';
+      updatedAuditTrail.push({
+        action: 'ADDITIONAL_EVIDENCE_REQUESTED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewNotes,
+      });
+    } else if (review.decision === 'SUPERSEDE') {
+      newStatus = 'SUPERSEDED';
+      updatedAuditTrail.push({
+        action: 'SUPERSEDED',
+        actorUserId: review.reviewedByUserId,
+        actorEmail: review.reviewedByEmail || null,
+        actorRole: reviewerRole,
+        timestamp: now,
+        notes: review.reviewRationale,
+      });
+    }
+
+    const updateRes = await this.pool.query(
+      `UPDATE machine_evidence_claims
+       SET status = $1, applicability_status = $2, claim_value = $3, unit = $4,
+           reviewed_by_user_id = $5, reviewed_by_email = $6, reviewed_at = NOW(),
+           review_notes = $7, review_rationale = $8, reviewer_qualifications = $9,
+           audit_trail = $10, updated_at = NOW()
+       WHERE id = $11 AND organization_id = $12
+       RETURNING *`,
+      [
+        newStatus,
+        newApplicability,
+        claimValStr,
+        claimUnit || null,
+        review.reviewedByUserId,
+        review.reviewedByEmail || null,
+        review.reviewNotes,
+        review.reviewRationale,
+        review.reviewerQualifications || null,
+        JSON.stringify(updatedAuditTrail),
+        claim.id,
+        organizationId,
+      ]
+    );
+
+    return this.mapClaimRow(updateRes.rows[0]);
+  }
+
+  public async getMachineRecoveryProfile(
+    organizationId: string,
+    machineId: string
+  ): Promise<MachineRecoveryProfile | null> {
+    const machine = await this.getMachineById(organizationId, machineId);
+    if (!machine) return null;
+
+    const plant = await this.getPlantById(organizationId, machine.plantId);
+    const claims = await this.listEvidenceClaims(organizationId, { machineId });
+    const tasks = await this.listMissingInfoTasks(organizationId, { machineId });
+
+    const requirements = resolveRequirementsForCategory(machine.machineType);
+    const fields: RecoveryGapField[] = [];
+
+    let approvedFieldsCount = 0;
+    let missingFieldsCount = 0;
+    let awaitingReviewCount = 0;
+    let conflictingFieldsCount = 0;
+    let safetyCriticalPendingCount = 0;
+
+    for (const req of requirements) {
+      const fieldClaims = claims.filter(
+        (c) => c.fieldName.toLowerCase() === req.fieldName.toLowerCase()
+      );
+
+      const approved = fieldClaims.find((c) => c.status === 'APPROVED');
+      const activeUnreviewed = fieldClaims.filter(
+        (c) => c.status === 'AWAITING_REVIEW' || c.status === 'COLLECTED'
+      );
+      const nonRejected = fieldClaims.filter(
+        (c) => c.status !== 'REJECTED' && c.status !== 'SUPERSEDED'
+      );
+
+      const distinctVals = new Set(
+        nonRejected.map((c) => String(c.claimValue).trim().toLowerCase())
+      );
+      const isConflicting = distinctVals.size > 1;
+
+      let status: GapFieldStatus = 'GENUINELY_MISSING';
+      let currentApprovedVal: string | number | boolean | null = null;
+      let approvedProvenance = null;
+      let activeClaimId: string | null = null;
+
+      if (approved) {
+        status = 'APPROVED';
+        currentApprovedVal = approved.claimValue;
+        activeClaimId = approved.id;
+        approvedProvenance = {
+          sourceType: approved.sourceType,
+          sourceDocumentId: approved.sourceDocumentId,
+          sourceRevision: approved.sourceRevision,
+          reviewerUserId: approved.reviewedByUserId,
+          reviewerQualifications: approved.reviewerQualifications,
+          approvedAt: approved.reviewedAt,
+        };
+        approvedFieldsCount++;
+      } else if (machine.technicalSpecs && machine.technicalSpecs[req.fieldName] !== undefined) {
+        status = 'APPROVED';
+        currentApprovedVal = machine.technicalSpecs[req.fieldName];
+        approvedFieldsCount++;
+      } else if (isConflicting) {
+        status = 'CONFLICTING';
+        conflictingFieldsCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      } else if (activeUnreviewed.length > 0) {
+        status = 'AWAITING_REVIEW';
+        activeClaimId = activeUnreviewed[0].id;
+        awaitingReviewCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      } else if (fieldClaims.some((c) => c.status === 'SUPERSEDED')) {
+        status = 'SUPERSEDED';
+        missingFieldsCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      } else {
+        status = 'GENUINELY_MISSING';
+        missingFieldsCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      }
+
+      const conflictDetails = isConflicting
+        ? nonRejected.map((c) => ({
+            claimId: c.id,
+            value: c.claimValue,
+            sourceType: c.sourceType,
+            submittedBy: c.submittedByEmail || c.submittedByUserId,
+          }))
+        : undefined;
+
+      fields.push({
+        fieldName: req.fieldName,
+        displayName: req.displayName,
+        isRequired: req.isRequired,
+        isSafetyCritical: req.isSafetyCritical,
+        status,
+        currentApprovedValue: currentApprovedVal,
+        unit: req.unit || null,
+        pendingClaimsCount: activeUnreviewed.length,
+        conflictingClaimsCount: isConflicting ? nonRejected.length : 0,
+        activeClaimId,
+        approvedProvenance,
+        conflictDetails,
+      });
+    }
+
+    const unresolvedIdentityQuestions: string[] = [];
+    if (!machine.manufacturer || machine.manufacturer === 'UNKNOWN') {
+      unresolvedIdentityQuestions.push(
+        'Manufacturer identity unverified: OEM nameplate missing, damaged, or unconfirmed.'
+      );
+    }
+    if (!machine.modelNumber || machine.modelNumber === 'UNKNOWN') {
+      unresolvedIdentityQuestions.push(
+        'Model number unknown: Part catalog, tolerance specs, and OEM curves cannot be validated.'
+      );
+    }
+    if (!machine.serialNumber || machine.serialNumber === 'UNKNOWN') {
+      unresolvedIdentityQuestions.push(
+        'Asset serial number unconfirmed: Individual manufacturing batch and historical rework records cannot be definitively correlated.'
+      );
+    }
+    if (safetyCriticalPendingCount > 0) {
+      unresolvedIdentityQuestions.push(
+        `${safetyCriticalPendingCount} safety-critical specification(s) or operating limits remain unapproved or conflicting.`
+      );
+    }
+
+    let identificationConfidence: 'VERIFIED' | 'PARTIAL' | 'UNIDENTIFIED' = 'UNIDENTIFIED';
+    if (machine.manufacturer && machine.modelNumber && machine.serialNumber) {
+      identificationConfidence = 'VERIFIED';
+    } else if (machine.manufacturer || machine.modelNumber) {
+      identificationConfidence = 'PARTIAL';
+    }
+
+    const totalFieldsRequired = requirements.filter((r) => r.isRequired).length;
+    const readinessPercentage = Math.round(
+      (approvedFieldsCount / Math.max(1, totalFieldsRequired)) * 100
+    );
+
+    return {
+      machineId: machine.id,
+      assetTag: machine.assetTag,
+      name: machine.name,
+      plantId: machine.plantId,
+      plantName: plant?.name || 'Plant Area',
+      machineCategory: machine.machineType,
+      area: machine.area,
+      manufacturer: machine.manufacturer || null,
+      modelNumber: machine.modelNumber || null,
+      serialNumber: machine.serialNumber || null,
+      manufacturingYear: (machine as any).manufacturingYear || null,
+      identificationConfidence,
+      unresolvedIdentityQuestions,
+      fields,
+      totalFieldsRequired,
+      approvedFieldsCount,
+      missingFieldsCount,
+      awaitingReviewCount,
+      conflictingFieldsCount,
+      evidenceClaimsCount: claims.length,
+      openTasksCount: tasks.filter(
+        (t) => t.status === 'NOT_STARTED' || t.status === 'IN_PROGRESS' || t.status === 'SUBMITTED'
+      ).length,
+      readinessPercentage: Math.min(100, readinessPercentage),
+      safetyCriticalPendingCount,
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  public async getMachineRecoverySummary(
+    organizationId: string,
+    plantId?: string
+  ): Promise<MachineRecoverySummary> {
+    const allMachines = await this.listMachines(organizationId);
+    const machines = plantId ? allMachines.filter((m) => m.plantId === plantId) : allMachines;
+
+    let legacyOrIncompleteMachines = 0;
+    let unidentifiedCount = 0;
+    let partiallyIdentifiedCount = 0;
+    let verifiedCount = 0;
+
+    for (const m of machines) {
+      const hasMfr = Boolean(m.manufacturer && m.manufacturer !== 'UNKNOWN');
+      const hasModel = Boolean(m.modelNumber && m.modelNumber !== 'UNKNOWN');
+      const hasSerial = Boolean(m.serialNumber && m.serialNumber !== 'UNKNOWN');
+
+      if (hasMfr && hasModel && hasSerial && m.verificationState === 'VERIFIED') {
+        verifiedCount++;
+      } else if (hasMfr || hasModel) {
+        partiallyIdentifiedCount++;
+        legacyOrIncompleteMachines++;
+      } else {
+        unidentifiedCount++;
+        legacyOrIncompleteMachines++;
+      }
+    }
+
+    let claimsAwaitingReview = 0;
+    let approvedClaimsCount = 0;
+    let rejectedClaimsCount = 0;
+    let supersededClaimsCount = 0;
+
+    const allClaims = await this.listEvidenceClaims(organizationId, plantId ? { plantId } : undefined);
+    for (const c of allClaims) {
+      if (c.status === 'AWAITING_REVIEW' || c.status === 'COLLECTED') claimsAwaitingReview++;
+      else if (c.status === 'APPROVED') approvedClaimsCount++;
+      else if (c.status === 'REJECTED') rejectedClaimsCount++;
+      else if (c.status === 'SUPERSEDED') supersededClaimsCount++;
+    }
+
+    const allTasks = await this.listMissingInfoTasks(organizationId);
+    const tasks = plantId
+      ? allTasks.filter((t) => {
+          const machine = machines.find((m) => m.id === t.machineId);
+          return Boolean(machine);
+        })
+      : allTasks;
+
+    let openCollectionTasksCount = 0;
+    let overdueTasksCount = 0;
+    const nowMs = Date.now();
+
+    for (const t of tasks) {
+      const isOpen =
+        t.status === 'NOT_STARTED' || t.status === 'IN_PROGRESS' || t.status === 'SUBMITTED';
+      if (isOpen) {
+        openCollectionTasksCount++;
+        if (t.dueDate && new Date(t.dueDate).getTime() < nowMs) {
+          overdueTasksCount++;
+        }
+      }
+    }
+
+    return {
+      totalMachines: machines.length,
+      legacyOrIncompleteMachines,
+      unidentifiedCount,
+      partiallyIdentifiedCount,
+      verifiedCount,
+      claimsAwaitingReview,
+      approvedClaimsCount,
+      rejectedClaimsCount,
+      supersededClaimsCount,
+      openCollectionTasksCount,
+      overdueTasksCount,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Published Approved Operational Guidance (Prompt 01)
+  // --------------------------------------------------------------------------
+  private mapGuidanceRow(r: any): PublishedApprovedGuidance {
+    return {
+      id: r.id,
+      organizationId: r.organization_id,
+      plantId: r.plant_id,
+      machineId: r.machine_id || null,
+      machineAssetTag: r.machine_asset_tag || null,
+      title: r.title,
+      guidanceContent: r.guidance_content,
+      sourceDocumentId: r.source_document_id || null,
+      sourceDocumentNumber: r.source_document_number || null,
+      sourceDocumentVersionId: r.source_document_version_id || null,
+      sourceSectionHeading: r.source_section_heading || null,
+      sourcePageNumber: r.source_page_number ?? null,
+      applicableRoles: typeof r.applicable_roles === 'string' ? JSON.parse(r.applicable_roles) : (r.applicable_roles || []),
+      disclosureClassification: r.disclosure_classification,
+      reviewedByUserId: r.reviewed_by_user_id,
+      reviewedByUserEmail: r.reviewed_by_email,
+      approvedAt: r.approved_at instanceof Date ? r.approved_at.toISOString() : r.approved_at,
+      expiresAt: r.expires_at ? (r.expires_at instanceof Date ? r.expires_at.toISOString() : r.expires_at) : null,
+      status: r.status,
+      supersededByPublicationId: r.superseded_by_publication_id || null,
+      revisionNumber: r.revision_number,
+      revocationReason: r.revocation_reason || null,
+      createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+      updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at,
+    };
+  }
+
+  public async publishGuidance(
+    organizationId: string,
+    reviewerUserId: string,
+    reviewerEmail: string,
+    dto: PublishGuidanceDTO
+  ): Promise<PublishedApprovedGuidance> {
+    let assetTag: string | null = dto.machineAssetTag || null;
+    if (dto.machineId && !assetTag) {
+      const machine = await this.getMachineById(organizationId, dto.machineId);
+      if (machine) {
+        assetTag = machine.assetTag;
+      }
+    }
+
+    const applicableRoles = dto.applicableRoles && dto.applicableRoles.length > 0
+      ? dto.applicableRoles
+      : ['WORKER', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER'];
+    const disclosureClassification = dto.disclosureClassification || 'WORKER_APPROVED';
+
+    const res = await this.pool.query(
+      `INSERT INTO forgex_published_guidance (
+        organization_id, plant_id, machine_id, machine_asset_tag, title,
+        guidance_content, source_document_id, source_document_number,
+        source_document_version_id, source_section_heading, source_page_number,
+        applicable_roles, disclosure_classification, reviewed_by_user_id,
+        reviewed_by_email, expires_at, status, revision_number
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1)
+      RETURNING *`,
+      [
+        organizationId,
+        dto.plantId,
+        dto.machineId || null,
+        assetTag,
+        dto.title,
+        dto.guidanceContent,
+        dto.sourceDocumentId || null,
+        dto.sourceDocumentNumber || null,
+        dto.sourceDocumentVersionId || null,
+        dto.sourceSectionHeading || null,
+        dto.sourcePageNumber ?? null,
+        JSON.stringify(applicableRoles),
+        disclosureClassification,
+        reviewerUserId,
+        reviewerEmail,
+        dto.expiresAt || null,
+        'PUBLISHED',
+      ]
+    );
+
+    const guidance = this.mapGuidanceRow(res.rows[0]);
+
+    await this.recordAuditEvent({
+      organizationId,
+      actorUserId: reviewerUserId,
+      action: 'GUIDANCE_PUBLISHED',
+      resourceType: 'PUBLISHED_GUIDANCE',
+      resourceId: guidance.id,
+      metadata: {
+        title: guidance.title,
+        plantId: guidance.plantId,
+        machineId: guidance.machineId,
+        disclosureClassification: guidance.disclosureClassification,
+        applicableRoles: guidance.applicableRoles,
+      },
+    });
+
+    return guidance;
+  }
+
+  public async getPublishedGuidanceById(
+    organizationId: string,
+    id: string
+  ): Promise<PublishedApprovedGuidance | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM forgex_published_guidance WHERE id = $1 AND organization_id = $2`,
+      [id, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapGuidanceRow(res.rows[0]);
+  }
+
+  public async listPublishedGuidance(
+    organizationId: string,
+    filters?: ListGuidanceFilters
+  ): Promise<PublishedApprovedGuidance[]> {
+    const conditions: string[] = ['organization_id = $1'];
+    const params: any[] = [organizationId];
+
+    if (filters?.plantId) {
+      params.push(filters.plantId);
+      conditions.push(`plant_id = $${params.length}`);
+    }
+    if (filters?.machineId) {
+      params.push(filters.machineId);
+      conditions.push(`(machine_id = $${params.length} OR machine_id IS NULL)`);
+    }
+    if (filters?.status) {
+      params.push(filters.status);
+      conditions.push(`status = $${params.length}`);
+    }
+    if (filters?.role) {
+      params.push(JSON.stringify(filters.role));
+      conditions.push(`applicable_roles @> $${params.length}::jsonb`);
+    }
+
+    const query = `SELECT * FROM forgex_published_guidance WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`;
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r) => this.mapGuidanceRow(r));
+  }
+
+  public async supersedePublishedGuidance(
+    organizationId: string,
+    guidanceId: string,
+    supersededByGuidanceId: string
+  ): Promise<PublishedApprovedGuidance | null> {
+    const res = await this.pool.query(
+      `UPDATE forgex_published_guidance
+       SET status = 'SUPERSEDED', superseded_by_publication_id = $1, updated_at = NOW()
+       WHERE id = $2 AND organization_id = $3
+       RETURNING *`,
+      [supersededByGuidanceId, guidanceId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapGuidanceRow(res.rows[0]);
+  }
+
+  public async revokePublishedGuidance(
+    organizationId: string,
+    guidanceId: string,
+    reason?: string
+  ): Promise<PublishedApprovedGuidance | null> {
+    const res = await this.pool.query(
+      `UPDATE forgex_published_guidance
+       SET status = 'REVOKED', revocation_reason = $1, updated_at = NOW()
+       WHERE id = $2 AND organization_id = $3
+       RETURNING *`,
+      [reason || 'Revoked by administrator', guidanceId, organizationId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapGuidanceRow(res.rows[0]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Expert Knowledge Library Methods (Prompt 04)
+  // ---------------------------------------------------------------------------
+
+  public async createExpertKnowledgeEntry(
+    organizationId: string,
+    data: CreateExpertKnowledgeDTO & { authorUserId: string; authorEmail?: string; authorRole?: string }
+  ): Promise<ExpertKnowledgeEntry> {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+
+    let machineAssetTag: string | null = data.machineAssetTag || null;
+    if (data.machineId && !machineAssetTag) {
+      const machine = await this.getMachineById(organizationId, data.machineId);
+      if (machine) {
+        machineAssetTag = machine.assetTag;
+      }
+    }
+
+    const entry: ExpertKnowledgeEntry = {
+      id,
+      organizationId,
+      plantId: data.plantId,
+      machineId: data.machineId || null,
+      machineAssetTag,
+      category: data.category,
+      title: data.title,
+      description: data.description,
+      symptoms: data.symptoms || [],
+      rootCause: data.rootCause || null,
+      resolutionSteps: data.resolutionSteps || [],
+      knownFailureModes: data.knownFailureModes || [],
+      gapDescription: data.gapDescription || null,
+      safetyPrecautions: data.safetyPrecautions || [],
+      technicalSpecifications: data.technicalSpecifications || {},
+      tags: data.tags || [],
+      status: 'AWAITING_REVIEW', // Unverified until approved
+      authorUserId: data.authorUserId,
+      authorEmail: data.authorEmail || null,
+      authorRole: data.authorRole || null,
+      dataClassification: data.dataClassification || 'INTERNAL',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.expertKnowledgeEntries.set(id, entry);
+    return entry;
+  }
+
+  public async getExpertKnowledgeEntryById(
+    organizationId: string,
+    id: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = this.expertKnowledgeEntries.get(id);
+    if (!entry || entry.organizationId !== organizationId) {
+      return null;
+    }
+    return entry;
+  }
+
+  public async listExpertKnowledgeEntries(
+    organizationId: string,
+    filters?: ExpertKnowledgeFilterOptions
+  ): Promise<ExpertKnowledgeEntry[]> {
+    const results: ExpertKnowledgeEntry[] = [];
+
+    for (const entry of this.expertKnowledgeEntries.values()) {
+      if (entry.organizationId !== organizationId) continue;
+      if (filters?.plantId && entry.plantId !== filters.plantId) continue;
+      if (filters?.machineId && entry.machineId && entry.machineId !== filters.machineId) continue;
+      if (filters?.category && entry.category !== filters.category) continue;
+      if (filters?.status && entry.status !== filters.status) continue;
+      if (filters?.dataClassification && entry.dataClassification !== filters.dataClassification) continue;
+      if (filters?.search) {
+        const q = filters.search.toLowerCase();
+        const matches =
+          entry.title.toLowerCase().includes(q) ||
+          entry.description.toLowerCase().includes(q) ||
+          (entry.machineAssetTag && entry.machineAssetTag.toLowerCase().includes(q)) ||
+          entry.tags.some((t) => t.toLowerCase().includes(q));
+        if (!matches) continue;
+      }
+
+      results.push(entry);
+    }
+
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public async reviewExpertKnowledgeEntry(
+    organizationId: string,
+    id: string,
+    review: ReviewExpertKnowledgeDTO & { reviewedByUserId: string; reviewedByEmail?: string; actorRole?: string }
+  ): Promise<ExpertKnowledgeEntry> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) {
+      throw new Error(`Expert knowledge entry '${id}' not found.`);
+    }
+
+    if (entry.authorUserId === review.reviewedByUserId) {
+      const isSuperUser = review.actorRole === 'ORGANIZATION_ADMIN' || review.actorRole === 'ORGANIZATION_OWNER';
+      if (!isSuperUser) {
+        throw new Error('Anti-self-approval violation: Authors cannot approve their own expert knowledge submissions.');
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    if (review.decision === 'APPROVE') {
+      if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {
+        throw new Error('Approval requires a valid engineering review rationale.');
+      }
+
+      entry.status = 'APPROVED';
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.reviewerQualifications = review.reviewerQualifications || null;
+      entry.updatedAt = now;
+    } else if (review.decision === 'REJECT') {
+      entry.status = 'REJECTED';
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.updatedAt = now;
+    } else if (review.decision === 'REVOKE') {
+      entry.status = 'REVOKED';
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.updatedAt = now;
+    } else if (review.decision === 'SUPERSEDE') {
+      entry.status = 'SUPERSEDED';
+      entry.supersededByEntryId = review.supersededByEntryId || null;
+      entry.reviewedByUserId = review.reviewedByUserId;
+      entry.reviewedByEmail = review.reviewedByEmail || null;
+      entry.reviewedAt = now;
+      entry.reviewRationale = review.reviewRationale;
+      entry.updatedAt = now;
+    }
+
+    return entry;
+  }
+
+  public async revokeExpertKnowledgeEntry(
+    organizationId: string,
+    id: string,
+    reason: string,
+    revokedByUserId: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) return null;
+
+    entry.status = 'REVOKED';
+    entry.reviewRationale = reason;
+    entry.reviewedByUserId = revokedByUserId;
+    entry.reviewedAt = new Date().toISOString();
+    entry.updatedAt = new Date().toISOString();
+    return entry;
+  }
 }
+
+// ----------------------------------------------------------------------------
+// Machine Category Gap Analysis Requirements (Phase 3)
+// ----------------------------------------------------------------------------
+interface CategoryFieldRequirement {
+  fieldName: string;
+  displayName: string;
+  isRequired: boolean;
+  isSafetyCritical: boolean;
+  unit?: string;
+}
+
+const CATEGORY_REQUIREMENTS: Record<string, CategoryFieldRequirement[]> = {
+  PUMP: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / OEM', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'modelNumber', displayName: 'Model Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'designDischargePressure', displayName: 'Design Discharge Pressure', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'suctionPressure', displayName: 'Suction Pressure Limit', isRequired: false, isSafetyCritical: false, unit: 'bar' },
+    { fieldName: 'nameplateRpm', displayName: 'Rated Speed (RPM)', isRequired: true, isSafetyCritical: false, unit: 'RPM' },
+    { fieldName: 'impellerDiameter', displayName: 'Impeller Diameter', isRequired: false, isSafetyCritical: false, unit: 'mm' },
+    { fieldName: 'sealType', displayName: 'Mechanical Seal Type', isRequired: false, isSafetyCritical: false },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'LOTO Electrical & Mechanical Isolation', isRequired: true, isSafetyCritical: true },
+  ],
+  MOTOR: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / OEM', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'modelNumber', displayName: 'Model Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'ratedVoltage', displayName: 'Rated Voltage', isRequired: true, isSafetyCritical: true, unit: 'V' },
+    { fieldName: 'fullLoadCurrent', displayName: 'Full Load Current (FLA)', isRequired: true, isSafetyCritical: true, unit: 'A' },
+    { fieldName: 'nameplateRpm', displayName: 'Rated Speed (RPM)', isRequired: true, isSafetyCritical: false, unit: 'RPM' },
+    { fieldName: 'insulationClass', displayName: 'Insulation Class', isRequired: false, isSafetyCritical: false },
+    { fieldName: 'frameSize', displayName: 'Frame Size', isRequired: false, isSafetyCritical: false },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'LOTO Arc-Flash & Lockout Procedure', isRequired: true, isSafetyCritical: true },
+  ],
+  BOILER: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / Vessel Fabricator', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'National Board / Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'designPressure', displayName: 'Design Pressure', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'maxAllowableWorkingPressure', displayName: 'Max Allowable Working Pressure (MAWP)', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'designTemperature', displayName: 'Design Temperature', isRequired: true, isSafetyCritical: true, unit: '°C' },
+    { fieldName: 'safetyValveSetPressure', displayName: 'Safety Relief Valve Set Pressure', isRequired: true, isSafetyCritical: true, unit: 'bar' },
+    { fieldName: 'hydrotestDate', displayName: 'Last Certified Hydrotest Date', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'Boiler Depressurization & Blind Flange LOTO', isRequired: true, isSafetyCritical: true },
+  ],
+  GENERAL: [
+    { fieldName: 'manufacturer', displayName: 'Manufacturer / OEM', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'modelNumber', displayName: 'Model Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'serialNumber', displayName: 'Serial Number', isRequired: true, isSafetyCritical: false },
+    { fieldName: 'operatingLimits', displayName: 'Operating Limits & Safe Envelopes', isRequired: true, isSafetyCritical: true },
+    { fieldName: 'lotoIsolationProcedure', displayName: 'Standard Energy Control / LOTO Procedure', isRequired: true, isSafetyCritical: true },
+  ],
+};
+
+function resolveRequirementsForCategory(machineType: string): CategoryFieldRequirement[] {
+  const norm = (machineType || '').toUpperCase();
+  if (norm.includes('PUMP')) return CATEGORY_REQUIREMENTS.PUMP;
+  if (norm.includes('MOTOR')) return CATEGORY_REQUIREMENTS.MOTOR;
+  if (norm.includes('BOILER') || norm.includes('VESSEL') || norm.includes('PRESSURE')) return CATEGORY_REQUIREMENTS.BOILER;
+  return CATEGORY_REQUIREMENTS.GENERAL;
+}
+
+

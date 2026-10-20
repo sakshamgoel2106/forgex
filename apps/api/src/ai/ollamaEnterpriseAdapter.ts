@@ -25,6 +25,36 @@ export class OllamaEnterpriseAdapter implements IMultimodalGenerationProvider {
     const { query, authorizedEvidence, conversationHistory, assetContext, plantContext } = request;
 
     if (!authorizedEvidence || authorizedEvidence.length === 0) {
+      if (plantContext?.code === 'GENERAL') {
+        const generalPrompt = `Technician General Engineering Inquiry: ${query}\nPlease explain the fundamental scientific or engineering principles clearly. Note that this is general knowledge and not verified for a specific plant asset.`;
+        try {
+          const response = await fetch(`${this.endpoint}/api/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: this.modelName,
+              system: 'You are ForgeX AI, an industrial AI Copilot operating in an Enterprise air-gapped facility. Answer general scientific and engineering inquiries accurately from fundamental principles.',
+              prompt: generalPrompt,
+              stream: false,
+              options: { temperature: 0.1 },
+            }),
+          });
+          if (response.ok) {
+            const data = (await response.json()) as { response: string };
+            return {
+              answerText: `### [GENERAL ENGINEERING PRINCIPLE — GENERAL KNOWLEDGE]\n${data.response}\n\n### Operational Advisory\nNote: This is general scientific/engineering knowledge. For machine-specific operating parameters, verified equipment documentation must be consulted.`,
+              confidence: 'HIGH',
+              isInsufficientEvidence: false,
+              conflictDetected: false,
+              usedEvidenceChunkIds: [],
+              modelUsed: this.modelName,
+            };
+          }
+        } catch {
+          // Fall through to standard offline notice
+        }
+      }
+
       return {
         answerText:
           'Insufficient evidence in authorized plant documentation to answer this question safely. Please consult senior engineering or verify documentation access for your plant.',

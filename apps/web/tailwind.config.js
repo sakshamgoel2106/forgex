@@ -5,54 +5,64 @@ export default {
   theme: {
     extend: {
       colors: {
+        // ForgeX Production Design System Tokens
+        'forge-bg': '#F5F6F7', // Warm off-white
+        'forge-surface': '#FFFFFF',
+        'forge-sidebar': '#151C24', // Deep Graphite
+        'forge-border': '#E2E8F0',
+        'forge-border-strong': '#CBD5E1',
+        // Text
+        'forge-text-primary': '#1A202C', // Charcoal
+        'forge-text-secondary': '#64748B', // Slate
+        'forge-text-tertiary': '#94A3B8',
+        'forge-text-inverse': '#F8FAFC',
+        // Semantic
+        'forge-amber': '#D97706', // Active/Warning - Restrained
+        'forge-amber-bg': '#FFFBEB',
+        'forge-teal': '#0F766E', // Healthy/Confirmed
+        'forge-teal-bg': '#F0FDFA',
+        'forge-red': '#DC2626', // Critical only
+        'forge-red-bg': '#FEF2F2',
+        'forge-blue': '#2563EB', // Info/Link
+
+        // Legacy / Dark Theme tokens
         industrial: {
-          bg: '#070B10',       // Main background
-          sidebar: '#070B10',  // Sidebar background
-          surface: '#101722',  // Surface / Card background
-          border: '#1E293B',   // Primary borders
-          borderLight: '#334155', // Hover/elevated borders
-          accent: '#A3E635',   // Primary accent (Lime)
-          accentHover: '#BEF264',
-          accentMuted: '#4D7C0F',
-          text: '#F8FAFC',     // Primary text
-          secondary: '#94A3B8',// Secondary text
-          muted: '#64748B',    // Muted text / tertiary
+          bg: '#F5F6F7',
+          sidebar: '#F8FAFC',
+          surface: '#FFFFFF',
+          border: '#E2E8F0',
+          borderLight: '#CBD5E1',
+          accent: '#2563EB',
+          accentHover: '#1D4ED8',
+          accentMuted: '#93C5FD',
+          text: '#1A202C',
+          secondary: '#64748B',
+          muted: '#94A3B8',
         },
         graphite: {
-          950: '#070B10', // Main chassis background
-          900: '#101722', // Card / surface background
-          850: '#101722', // Surface / Card
-          800: '#1E293B', // Borders / Dividers
-          750: '#263345', // Subtle elevated borders
-          700: '#334155', // Active hover state
-          600: '#475569', // Subtle borders / disabled
-          500: '#64748B', // Muted labels
-          400: '#94A3B8', // Secondary text
-          300: '#CBD5E1', // Primary labels
-          200: '#E2E8F0', // Primary text
-          100: '#F8FAFC', // Bright white highlights
+          950: '#070B10',
+          900: '#101722',
+          850: '#101722',
+          800: '#1E293B',
+          750: '#263345',
+          700: '#334155',
+          600: '#475569',
+          500: '#64748B',
+          400: '#94A3B8',
+          300: '#CBD5E1',
+          200: '#E2E8F0',
+          100: '#F8FAFC',
         },
         accent: {
-          DEFAULT: '#A3E635',
-          foreground: '#0B0F14',
-          hover: '#BEF264',
+          DEFAULT: '#1D4ED8',
+          foreground: '#FFFFFF',
+          hover: '#1E40AF',
         },
         semantic: {
           green: '#10B981',
           amber: '#F59E0B',
           red: '#EF4444',
           blue: '#3B82F6',
-        },
-        hazard: {
-          500: '#F59E0B',
-          400: '#FBBF24',
-          600: '#D97706',
-        },
-        telemetry: {
-          cyan: '#38BDF8',
-          emerald: '#10B981',
-          rose: '#EF4444',
-          amber: '#F59E0B',
         },
       },
       fontFamily: {
@@ -66,17 +76,20 @@ export default {
         ],
         mono: [
           '"JetBrains Mono"',
+          '"Geist Mono"',
           '"Fira Code"',
           'ui-monospace',
-          'SFMono-Regular',
-          'Menlo',
-          'Monaco',
-          'Consolas',
           'monospace',
         ],
       },
       borderRadius: {
+        'forge-sm': '6px',
+        'forge-md': '8px',
+        'forge-lg': '10px',
         industrial: '6px',
+      },
+      boxShadow: {
+        'forge-card': '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
       },
     },
   },

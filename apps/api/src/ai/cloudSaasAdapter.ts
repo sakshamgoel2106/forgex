@@ -29,6 +29,17 @@ export class CloudSaasAdapter implements IMultimodalGenerationProvider {
     const { query, authorizedEvidence } = request;
 
     if (!authorizedEvidence || authorizedEvidence.length === 0) {
+      if (request.plantContext?.code === 'GENERAL') {
+        return {
+          answerText: `### [GENERAL ENGINEERING PRINCIPLE — GENERAL KNOWLEDGE]\nScientific principles and engineering foundations govern industrial machinery. General operational knowledge must be verified against equipment documentation for asset-specific parameters.\n\n### Operational Advisory\nNote: This is general scientific/engineering knowledge. For machine-specific operating parameters, verified equipment documentation must be consulted.`,
+          confidence: 'HIGH',
+          isInsufficientEvidence: false,
+          conflictDetected: false,
+          usedEvidenceChunkIds: [],
+          modelUsed: this.modelName,
+        };
+      }
+
       return {
         answerText:
           'Insufficient evidence in authorized plant documentation to answer this question safely. Please consult senior engineering or verify documentation access for your plant.',

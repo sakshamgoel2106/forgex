@@ -60,6 +60,20 @@ export function createMaintenanceRouter(
     controller.reviewApproval
   );
 
+  // Assign technician to case
+  router.post(
+    '/cases/:id/assign',
+    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN']),
+    controller.assignTechnician
+  );
+
+  // Formally close case
+  router.post(
+    '/cases/:id/close',
+    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN']),
+    controller.closeCase
+  );
+
   // Escalate case to human
   router.post(
     '/cases/:id/escalate',

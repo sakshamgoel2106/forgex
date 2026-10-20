@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Wrench,
   AlertTriangle,
@@ -11,6 +11,8 @@ import {
   UserCheck,
   History,
   Lock,
+  UserPlus,
+  CheckCheck,
 } from 'lucide-react';
 import { StatusBadge, type StatusTone } from '../ui/StatusBadge';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
@@ -23,6 +25,7 @@ import type {
   MaintenanceCaseSeverity,
   ChecklistStepStatus,
 } from '@forgex/shared-types';
+import { apiFetch } from '../../lib/api';
 
 interface DemoCase extends MaintenanceCase {
   history: Array<{
@@ -343,6 +346,10 @@ export const SopExecutionView: React.FC = () => {
   const [escalateReason, setEscalateReason] = useState('');
   const [approvalNotes, setApprovalNotes] = useState('');
 
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [selectedTechName, setSelectedTechName] = useState('Elena Rostova (Lead Technician)');
+  const [isLoading, setIsLoading] = useState(false);
+
   // Findings input state
   const [findingsText, setFindingsText] = useState('');
   const [measuredTorque, setMeasuredTorque] = useState('45');
@@ -352,6 +359,44 @@ export const SopExecutionView: React.FC = () => {
   const [newAssetTag, setNewAssetTag] = useState('P-101-A');
   const [newSeverity, setNewSeverity] = useState<MaintenanceCaseSeverity>('HIGH');
   const [newSymptoms, setNewSymptoms] = useState('');
+
+  // Initial load from live API
+  useEffect(() => {
+    let isMounted = true;
+    async function loadCases() {
+      try {
+        const res = await apiFetch('/api/v1/maintenance/cases');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data) && json.data.length > 0 && isMounted) {
+            setCases((prev) => {
+              const liveIds = new Set(json.data.map((c: any) => c.id));
+              const enrichedLive: DemoCase[] = json.data.map((lc: any) => ({
+                ...lc,
+                history: lc.history || [
+                  {
+                    id: `h-init-${lc.id}`,
+                    action: 'CASE_SYNCED',
+                    user: 'ForgeX Enterprise Core',
+                    timestamp: lc.createdAt,
+                    notes: `Synchronized with plant asset registry. Status: ${lc.status}`,
+                  },
+                ],
+              }));
+              const nonOverlapping = prev.filter((c) => !liveIds.has(c.id));
+              return [...enrichedLive, ...nonOverlapping];
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load live maintenance cases, keeping initial state', err);
+      }
+    }
+    loadCases();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const activeCase = cases.find((c) => c.id === activeCaseId) || cases[0];
 
@@ -375,6 +420,8 @@ export const SopExecutionView: React.FC = () => {
         return 'warning';
       case 'RESOLVED':
         return 'healthy';
+      case 'CLOSED':
+        return 'healthy';
       case 'ESCALATED_HUMAN':
         return 'critical';
       case 'REJECTED':
@@ -385,15 +432,17 @@ export const SopExecutionView: React.FC = () => {
   };
 
   // Step toggle handler
-  const handleToggleStep = (stepId: string) => {
+  const handleToggleStep = async (stepId: string) => {
+    const prevStatus = activeCase.checklist.find((s) => s.id === stepId)?.status;
+    const nextStatus: ChecklistStepStatus = prevStatus === 'COMPLETED' ? 'PENDING' : 'COMPLETED';
+
     const updatedChecklist = activeCase.checklist.map((s) => {
       if (s.id === stepId) {
-        const nextStatus: ChecklistStepStatus = s.status === 'COMPLETED' ? 'PENDING' : 'COMPLETED';
         return {
           ...s,
           status: nextStatus,
           completedAt: nextStatus === 'COMPLETED' ? new Date().toISOString() : null,
-          completedByUserId: nextStatus === 'COMPLETED' ? 'Elena Rostova (Technician)' : null,
+          completedByUserId: nextStatus === 'COMPLETED' ? 'Elena Rostova (Lead Technician)' : null,
         };
       }
       return s;
@@ -406,18 +455,29 @@ export const SopExecutionView: React.FC = () => {
     };
 
     setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
+
+    try {
+      await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/steps/${stepId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: nextStatus }),
+      });
+    } catch (err) {
+      console.warn('Backend step update call failed', err);
+    }
   };
 
   // Submit Findings Handler
-  const handleSubmitFindings = () => {
+  const handleSubmitFindings = async () => {
+    const findings = {
+      observations: findingsText || 'Gland follower aligned and torqued in 3-pass cross-star pattern.',
+      measuredValues: { finalTorqueFtLbs: Number(measuredTorque) || 45 },
+      resolutionSummary: 'P-101-A seal overhaul complete. Zero weepage observed.',
+    };
+
     const updatedCase: DemoCase = {
       ...activeCase,
       status: 'PENDING_APPROVAL',
-      findings: {
-        observations: findingsText || 'Gland follower aligned and torqued in 3-pass cross-star pattern.',
-        measuredValues: { finalTorqueFtLbs: Number(measuredTorque) || 45 },
-        resolutionSummary: 'P-101-A seal overhaul complete. Zero weepage observed.',
-      },
+      findings,
       approval: {
         status: 'PENDING',
         reviewedByUserId: null,
@@ -437,20 +497,31 @@ export const SopExecutionView: React.FC = () => {
     };
 
     setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
+
+    try {
+      await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/findings`, {
+        method: 'POST',
+        body: JSON.stringify(findings),
+      });
+    } catch (err) {
+      console.warn('Backend findings submission call failed', err);
+    }
   };
 
   // Approval Review Handler
-  const handleReviewApproval = (approved: boolean) => {
+  const handleReviewApproval = async (approved: boolean) => {
     const newStatus: MaintenanceCaseStatus = approved ? 'RESOLVED' : 'REJECTED';
+    const now = new Date().toISOString();
     const updatedCase: DemoCase = {
       ...activeCase,
       status: newStatus,
       approval: {
         status: approved ? 'APPROVED' : 'REJECTED',
         reviewedByUserId: 'Marcus Vance (Plant Manager)',
-        reviewedAt: new Date().toISOString(),
+        reviewedAt: now,
         reviewerNotes: approvalNotes || (approved ? 'Sign-off complete.' : 'Rework required.'),
       },
+      resolvedAt: approved ? now : activeCase.resolvedAt,
       candidateForExpertKnowledge: approved,
       history: [
         ...activeCase.history,
@@ -458,7 +529,7 @@ export const SopExecutionView: React.FC = () => {
           id: `hist-${Date.now()}`,
           action: approved ? 'WORK_ORDER_APPROVED' : 'WORK_ORDER_REJECTED',
           user: 'Marcus Vance (Plant Manager)',
-          timestamp: new Date().toISOString(),
+          timestamp: now,
           notes: approvalNotes || (approved ? 'Approved by supervisor.' : 'Rejected for rework.'),
         },
       ],
@@ -466,10 +537,84 @@ export const SopExecutionView: React.FC = () => {
 
     setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
     setApprovalNotes('');
+
+    try {
+      await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/approval`, {
+        method: 'POST',
+        body: JSON.stringify({ approved, reviewerNotes: approvalNotes }),
+      });
+    } catch (err) {
+      console.warn('Backend approval call failed', err);
+    }
+  };
+
+  // Close Case Handler
+  const handleCloseCase = async () => {
+    const now = new Date().toISOString();
+    const updatedCase: DemoCase = {
+      ...activeCase,
+      status: 'CLOSED',
+      closedAt: now,
+      history: [
+        ...activeCase.history,
+        {
+          id: `hist-${Date.now()}`,
+          action: 'CASE_CLOSED',
+          user: 'Marcus Vance (Plant Manager)',
+          timestamp: now,
+          notes: 'Maintenance case verified and formally closed.',
+        },
+      ],
+    };
+
+    setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
+
+    try {
+      await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/close`, {
+        method: 'POST',
+        body: JSON.stringify({ notes: 'Formally closed via UI' }),
+      });
+    } catch (err) {
+      console.warn('Backend close case call failed', err);
+    }
+  };
+
+  // Assign Technician Handler
+  const handleAssignTechnician = async () => {
+    const techName = selectedTechName;
+    const updatedCase: DemoCase = {
+      ...activeCase,
+      assignedTechnicianName: techName,
+      history: [
+        ...activeCase.history,
+        {
+          id: `hist-${Date.now()}`,
+          action: 'TECHNICIAN_ASSIGNED',
+          user: 'Marcus Vance (Plant Manager)',
+          timestamp: new Date().toISOString(),
+          notes: `Assigned technician: ${techName}`,
+        },
+      ],
+    };
+
+    setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
+    setIsAssignModalOpen(false);
+
+    try {
+      await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/assign`, {
+        method: 'POST',
+        body: JSON.stringify({
+          technicianUserId: 'usr-lead-tech',
+          technicianName: techName,
+        }),
+      });
+    } catch (err) {
+      console.warn('Backend assign technician call failed', err);
+    }
   };
 
   // Escalate Handler
-  const handleEscalateCase = () => {
+  const handleEscalateCase = async () => {
     if (!escalateReason.trim()) return;
 
     const updatedCase: DemoCase = {
@@ -492,11 +637,21 @@ export const SopExecutionView: React.FC = () => {
     setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
     setIsEscalateModalOpen(false);
     setEscalateReason('');
+
+    try {
+      await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/escalate`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: escalateReason }),
+      });
+    } catch (err) {
+      console.warn('Backend escalate call failed', err);
+    }
   };
 
   // New Case Creation Handler
-  const handleCreateNewCase = () => {
+  const handleCreateNewCase = async () => {
     if (!newTitle.trim() || !newSymptoms.trim()) return;
+    setIsLoading(true);
 
     const newCase: DemoCase = {
       id: `case-${Date.now()}`,
@@ -508,6 +663,7 @@ export const SopExecutionView: React.FC = () => {
       severity: newSeverity,
       status: 'REPORTED',
       reportedByUserId: 'Elena Rostova (Lead Technician)',
+      assignedTechnicianName: 'Elena Rostova (Lead Technician)',
       symptomDescription: newSymptoms,
       operatingConditions: { runtimeHours: 3500 },
       visualAssetIds: [],
@@ -530,27 +686,69 @@ export const SopExecutionView: React.FC = () => {
     setCases([newCase, ...cases]);
     setActiveCaseId(newCase.id);
     setIsNewCaseModalOpen(false);
+    const titleToSubmit = newTitle;
+    const symptomsToSubmit = newSymptoms;
     setNewTitle('');
     setNewSymptoms('');
+
+    try {
+      const res = await apiFetch('/api/v1/maintenance/cases', {
+        method: 'POST',
+        body: JSON.stringify({
+          plantId: 'f29c2d0e-ca17-40b4-b9b3-7c4a8f5e1b8a', // canonical PLANT-TX-04 UUID
+          assetId: 'c19c2d0e-ca17-40b4-b9b3-7c4a8f5e1b8b', // canonical PUMP-204-B UUID
+          title: titleToSubmit,
+          severity: newSeverity,
+          symptomDescription: symptomsToSubmit,
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          // Immediately trigger diagnosis
+          const diagRes = await apiFetch(`/api/v1/maintenance/cases/${json.data.id}/diagnose`, {
+            method: 'POST',
+          });
+          const diagJson = await diagRes.json();
+          const finalCase = diagJson.success ? diagJson.data : json.data;
+          setCases((prev) =>
+            prev.map((c) =>
+              c.id === newCase.id
+                ? { ...finalCase, history: c.history }
+                : c
+            )
+          );
+          setActiveCaseId(finalCase.id);
+        }
+      }
+    } catch (err) {
+      console.warn('Backend case creation call failed', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E] font-sans">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7] text-[#1A202C] font-sans">
       {/* Top Telemetry Header */}
-      <div className="p-3 border-b border-[#182333] bg-[#070B10] flex items-center justify-between text-xs font-mono">
+      <div className="p-3 border-b border-[#E2E8F0] bg-white flex items-center justify-between text-xs font-mono text-[#1A202C]">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-[#A3E635] font-semibold">
+          <div className="flex items-center gap-1.5 text-[#2563EB] font-bold">
             <Wrench className="w-4 h-4" />
             <span>MAINTENANCE & TROUBLESHOOTING WORKSPACE</span>
           </div>
-          <span className="text-slate-600">|</span>
-          <span className="text-white font-bold">{activeCase.caseNumber}</span>
-          <span className="text-[#A3E635]">[{activeCase.plantId}]</span>
+          <span className="text-[#CBD5E1]">|</span>
+          <span className="text-[#1A202C] font-bold">{activeCase.caseNumber}</span>
+          <span className="text-[#2563EB] font-semibold">[{activeCase.plantId}]</span>
         </div>
 
         <div className="flex items-center gap-3">
           <StatusBadge label={activeCase.status} tone={getStatusTone(activeCase.status)} />
-          <Button size="sm" onClick={() => setIsNewCaseModalOpen(true)} className="bg-[#A3E635] text-[#06090E] hover:bg-[#b2f043] font-bold shadow-[0_4px_16px_rgba(163,230,53,0.3)]">
+          <Button
+            size="sm"
+            onClick={() => setIsNewCaseModalOpen(true)}
+            className="bg-[#151C24] hover:bg-black text-white font-medium shadow-sm"
+          >
             <Plus className="w-3.5 h-3.5 mr-1" />
             Report Case
           </Button>
@@ -560,10 +758,10 @@ export const SopExecutionView: React.FC = () => {
       {/* Main Split: Case Explorer (Left) + Evidence-to-Action Workspace (Right) */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Case Explorer & Filters */}
-        <div className="w-80 border-r border-[#182333] bg-[#070B10] flex flex-col justify-between overflow-hidden">
+        <div className="w-80 border-r border-[#E2E8F0] bg-[#F8FAFC] flex flex-col justify-between overflow-hidden">
           {/* Filter Pills */}
-          <div className="p-3 border-b border-[#182333] space-y-2">
-            <div className="text-[10px] font-mono uppercase text-slate-400 font-semibold">
+          <div className="p-3 border-b border-[#E2E8F0] space-y-2 bg-white">
+            <div className="text-[10px] font-mono uppercase text-[#64748B] font-semibold">
               Filter by Operational State
             </div>
             <div className="flex flex-wrap gap-1">
@@ -574,8 +772,8 @@ export const SopExecutionView: React.FC = () => {
                     onClick={() => setStatusFilter(filter)}
                     className={`px-2 py-0.5 rounded text-[10px] font-mono transition border ${
                       statusFilter === filter
-                        ? 'bg-[#10241A] text-[#A3E635] border-[#1E4D2B] font-semibold shadow-[0_0_8px_rgba(163,230,53,0.15)]'
-                        : 'bg-[#0D141F] text-slate-400 border-[#182333] hover:text-white hover:bg-[#121B27]'
+                        ? 'bg-[#2563EB] text-white border-[#2563EB] font-semibold shadow-xs'
+                        : 'bg-white text-[#475569] border-[#E2E8F0] hover:text-[#1A202C] hover:bg-slate-50'
                     }`}
                   >
                     {filter === 'EXPERT_CANDIDATE' ? '⭐ Expert Candidates' : filter}
@@ -595,20 +793,20 @@ export const SopExecutionView: React.FC = () => {
                   onClick={() => setActiveCaseId(c.id)}
                   className={`p-2.5 rounded-xl border text-xs font-mono cursor-pointer transition ${
                     isSelected
-                      ? 'bg-[#12241A] border-[#1E4028] text-white shadow-lg shadow-[#A3E635]/5'
-                      : 'bg-[#101722] border-[#1E293B] hover:border-slate-700 text-slate-300'
+                      ? 'bg-white border-[#2563EB] text-[#1A202C] shadow-sm ring-1 ring-[#2563EB]'
+                      : 'bg-white border-[#E2E8F0] hover:border-slate-300 text-[#1A202C] shadow-xs'
                   }`}
                 >
-                  <div className="flex justify-between items-center text-[10px] text-slate-400 mb-1">
-                    <span className="font-bold text-[#A3E635]">{c.caseNumber}</span>
+                  <div className="flex justify-between items-center text-[10px] text-[#64748B] mb-1">
+                    <span className="font-bold text-[#2563EB]">{c.caseNumber}</span>
                     <StatusBadge label={c.status} tone={getStatusTone(c.status)} />
                   </div>
-                  <div className="font-semibold text-white line-clamp-1">{c.title}</div>
-                  <div className="text-[10px] text-slate-400 mt-1 line-clamp-1 font-sans">
+                  <div className="font-semibold text-[#1A202C] line-clamp-1">{c.title}</div>
+                  <div className="text-[10px] text-[#64748B] mt-1 line-clamp-1 font-sans">
                     {c.symptomDescription}
                   </div>
                   {c.candidateForExpertKnowledge && (
-                    <div className="mt-1.5 flex items-center gap-1 text-[9px] text-[#A3E635] font-bold">
+                    <div className="mt-1.5 flex items-center gap-1 text-[9px] text-amber-600 font-bold">
                       <span>⭐ Nominated Expert Knowledge</span>
                     </div>
                   )}
@@ -619,33 +817,65 @@ export const SopExecutionView: React.FC = () => {
         </div>
 
         {/* Right: Detailed Case Workspace Stage */}
-        <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6 bg-[#070B10]">
+        <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6 bg-[#F5F6F7]">
           {/* Header Banner */}
-          <div className="flex justify-between items-start pb-4 border-b border-[#1E293B]">
+          <div className="flex justify-between items-start pb-4 border-b border-[#E2E8F0]">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-base font-bold font-mono text-white uppercase tracking-wide">
+                <h1 className="text-base font-bold font-mono text-[#1A202C] uppercase tracking-wide">
                   {activeCase.title}
                 </h1>
                 <StatusBadge label={activeCase.status} tone={getStatusTone(activeCase.status)} />
                 <span
                   className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
                     activeCase.severity === 'CRITICAL'
-                      ? 'bg-rose-950 text-rose-400 border border-rose-800'
-                      : 'bg-amber-950 text-amber-400 border border-amber-800'
+                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                      : 'bg-amber-50 text-amber-700 border border-amber-200'
                   }`}
                 >
                   SEVERITY: {activeCase.severity}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 mt-1 font-mono">
-                Case: {activeCase.caseNumber} • Plant: {activeCase.plantId} • Reported by:{' '}
-                {activeCase.reportedByUserId}
-              </p>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B] mt-1 font-mono">
+                <span>Case: <strong className="text-[#1A202C]">{activeCase.caseNumber}</strong></span>
+                <span>•</span>
+                <span>Plant: {activeCase.plantId}</span>
+                <span>•</span>
+                <span className="flex items-center gap-1.5">
+                  Tech: <strong className="text-[#1A202C]">{activeCase.assignedTechnicianName || 'Unassigned'}</strong>
+                  {activeCase.status !== 'CLOSED' && (
+                    <button
+                      onClick={() => setIsAssignModalOpen(true)}
+                      className="text-[10px] text-[#2563EB] underline hover:text-[#1D4ED8] flex items-center gap-0.5 ml-1 font-medium"
+                    >
+                      <UserPlus className="w-3 h-3" />
+                      {activeCase.assignedTechnicianName ? 'Reassign' : 'Assign'}
+                    </button>
+                  )}
+                </span>
+                <span>•</span>
+                <span>Created: {new Date(activeCase.createdAt).toLocaleDateString()}</span>
+                {activeCase.resolvedAt && (
+                  <>
+                    <span>•</span>
+                    <span className="text-emerald-700 font-semibold">
+                      Resolved: {new Date(activeCase.resolvedAt).toLocaleTimeString()}
+                    </span>
+                  </>
+                )}
+                {activeCase.closedAt && (
+                  <>
+                    <span>•</span>
+                    <span className="text-[#64748B] font-semibold">
+                      Closed: {new Date(activeCase.closedAt).toLocaleTimeString()}
+                    </span>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center gap-2">
-              {activeCase.status !== 'RESOLVED' && !activeCase.isEscalated && (
+              {activeCase.status !== 'RESOLVED' && activeCase.status !== 'CLOSED' && !activeCase.isEscalated && (
                 <Button
                   variant="danger"
                   size="sm"
@@ -675,7 +905,7 @@ export const SopExecutionView: React.FC = () => {
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-[#A3E635]" />
+                  <BookOpen className="w-4 h-4 text-[#2563EB]" />
                   <CardTitle>Grounded Diagnostic Hypothesis & Safety Directives</CardTitle>
                 </div>
                 <StatusBadge
@@ -686,14 +916,14 @@ export const SopExecutionView: React.FC = () => {
                 />
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="p-3.5 rounded-xl bg-[#070B10] border border-[#1E293B] space-y-2">
-                  <div className="text-[10px] font-mono text-[#A3E635] uppercase font-semibold">
+                <div className="p-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
+                  <div className="text-[10px] font-mono text-[#2563EB] uppercase font-bold">
                     Primary Root Cause Assessment
                   </div>
-                  <p className="text-xs text-slate-200 font-mono leading-relaxed">
+                  <p className="text-xs text-[#1A202C] font-mono leading-relaxed">
                     {activeCase.diagnosticHypothesis.primaryHypothesis}
                   </p>
-                  <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 pt-1 font-sans">
+                  <ul className="list-disc list-inside text-xs text-[#475569] space-y-1 pt-1 font-sans">
                     {activeCase.diagnosticHypothesis.rootCauses.map((r, i) => (
                       <li key={i}>{r}</li>
                     ))}
@@ -701,13 +931,13 @@ export const SopExecutionView: React.FC = () => {
                 </div>
 
                 {/* Safety Critical Directives */}
-                <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-900/60 space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-rose-400 uppercase">
-                    <ShieldAlert className="w-4 h-4 text-rose-400" />
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-rose-700 uppercase">
+                    <ShieldAlert className="w-4 h-4 text-rose-600" />
                     <span>Safety-Critical Controls (Non-Negotiable)</span>
                   </div>
                   {activeCase.diagnosticHypothesis.safetyCriticalWarnings.map((warn, i) => (
-                    <p key={i} className="text-[11px] font-mono text-rose-300/90 leading-relaxed">
+                    <p key={i} className="text-[11px] font-mono text-rose-800 leading-relaxed">
                       • {warn}
                     </p>
                   ))}
@@ -715,20 +945,20 @@ export const SopExecutionView: React.FC = () => {
 
                 {/* Grounded Citation Cards */}
                 <div>
-                  <div className="text-[10px] font-mono text-slate-400 uppercase font-semibold mb-2">
+                  <div className="text-[10px] font-mono text-[#64748B] uppercase font-semibold mb-2">
                     Verified Technical Manual Evidence Citations
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {activeCase.diagnosticHypothesis.evidenceCitations.map((cit, i) => (
                       <div
                         key={i}
-                        className="p-3.5 rounded-xl bg-[#070B10] border border-[#1E293B] space-y-1 text-xs font-mono"
+                        className="p-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-1 text-xs font-mono"
                       >
                         <div className="flex justify-between items-start text-[10px]">
-                          <span className="font-bold text-amber-400">{cit.documentNumber}</span>
-                          <span className="text-slate-400">Page {cit.pageNumber}</span>
+                          <span className="font-bold text-amber-700">{cit.documentNumber}</span>
+                          <span className="text-[#64748B]">Page {cit.pageNumber}</span>
                         </div>
-                        <p className="text-[11px] text-slate-300 font-sans leading-relaxed">
+                        <p className="text-[11px] text-[#475569] font-sans leading-relaxed">
                           "{cit.snippet}"
                         </p>
                       </div>
@@ -743,10 +973,10 @@ export const SopExecutionView: React.FC = () => {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-[#A3E635]" />
+                <CheckCircle2 className="w-4 h-4 text-[#2563EB]" />
                 <CardTitle>Approved Procedural Checklist (Evidence-Backed Steps)</CardTitle>
               </div>
-              <span className="text-xs font-mono text-slate-400">
+              <span className="text-xs font-mono text-[#64748B]">
                 Completed:{' '}
                 {activeCase.checklist.filter((s) => s.status === 'COMPLETED').length} /{' '}
                 {activeCase.checklist.length}
@@ -754,7 +984,7 @@ export const SopExecutionView: React.FC = () => {
             </CardHeader>
             <CardContent>
               {activeCase.checklist.length === 0 ? (
-                <div className="text-xs font-mono text-slate-500 italic py-4 text-center">
+                <div className="text-xs font-mono text-[#64748B] italic py-4 text-center">
                   No automated checklist generated for this case status.
                 </div>
               ) : (
@@ -766,8 +996,8 @@ export const SopExecutionView: React.FC = () => {
                         key={step.id}
                         className={`p-3.5 rounded-xl border transition space-y-2.5 ${
                           isDone
-                            ? 'bg-emerald-950/10 border-emerald-800/40 text-slate-300'
-                            : 'bg-[#070B10] border-[#1E293B] text-white'
+                            ? 'bg-emerald-50/70 border-emerald-200 text-[#1A202C]'
+                            : 'bg-[#F8FAFC] border-[#E2E8F0] text-[#1A202C]'
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
@@ -776,20 +1006,20 @@ export const SopExecutionView: React.FC = () => {
                               type="checkbox"
                               checked={isDone}
                               onChange={() => handleToggleStep(step.id)}
-                              className="mt-1 w-4 h-4 rounded border-[#1E293B] text-[#A3E635] focus:ring-0 cursor-pointer"
+                              className="mt-1 w-4 h-4 rounded border-[#CBD5E1] text-[#2563EB] focus:ring-0 cursor-pointer"
                             />
                             <div>
                               <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold font-mono text-white">
+                                <span className="text-xs font-bold font-mono text-[#1A202C]">
                                   Step {step.stepNumber}: {step.title}
                                 </span>
                                 {step.requiresLoto && (
-                                  <span className="px-1.5 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 text-[9px] font-mono font-bold flex items-center gap-1">
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[9px] font-mono font-bold flex items-center gap-1">
                                     <Lock className="w-2.5 h-2.5" /> LOTO REQUIRED
                                   </span>
                                 )}
                               </div>
-                              <p className="text-xs text-slate-300 font-sans mt-1 leading-relaxed">
+                              <p className="text-xs text-[#475569] font-sans mt-1 leading-relaxed">
                                 {step.instruction}
                               </p>
                             </div>
@@ -803,8 +1033,8 @@ export const SopExecutionView: React.FC = () => {
 
                         {/* Citation Reference Link */}
                         {step.citation && (
-                          <div className="text-[10px] font-mono text-[#A3E635] pl-7 flex items-center gap-1.5">
-                            <FileText className="w-3 h-3 text-[#A3E635]" />
+                          <div className="text-[10px] font-mono text-[#2563EB] pl-7 flex items-center gap-1.5 font-medium">
+                            <FileText className="w-3 h-3 text-[#2563EB]" />
                             <span>
                               CITED: {step.citation.documentNumber} (Page {step.citation.pageNumber})
                             </span>
@@ -813,7 +1043,7 @@ export const SopExecutionView: React.FC = () => {
 
                         {/* Technician Notes on Step */}
                         {step.technicianNotes && (
-                          <div className="text-[11px] font-mono text-slate-400 pl-7 italic">
+                          <div className="text-[11px] font-mono text-[#64748B] pl-7 italic">
                             Notes: {step.technicianNotes}
                           </div>
                         )}
@@ -835,18 +1065,18 @@ export const SopExecutionView: React.FC = () => {
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-mono text-slate-300">
+                    <label className="text-xs font-mono text-[#475569] font-semibold">
                       Measured Final Torque (ft-lbs / Nm)
                     </label>
                     <input
                       type="text"
                       value={measuredTorque}
                       onChange={(e) => setMeasuredTorque(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#A3E635]"
+                      className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-xs font-mono text-slate-300">
+                    <label className="text-xs font-mono text-[#475569] font-semibold">
                       Technician Observations & Corrective Actions
                     </label>
                     <input
@@ -854,13 +1084,16 @@ export const SopExecutionView: React.FC = () => {
                       placeholder="e.g. Cleaned gland follower plate and completed 3-pass torque..."
                       value={findingsText}
                       onChange={(e) => setFindingsText(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#A3E635]"
+                      className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                     />
                   </div>
                 </div>
 
                 <div className="flex justify-end pt-2">
-                  <Button onClick={handleSubmitFindings} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
+                  <Button
+                    onClick={handleSubmitFindings}
+                    className="bg-[#151C24] hover:bg-black text-white font-medium shadow-sm"
+                  >
                     <Send className="w-3.5 h-3.5 mr-1.5" />
                     Submit Work Order for Supervisor Approval
                   </Button>
@@ -871,26 +1104,26 @@ export const SopExecutionView: React.FC = () => {
 
           {/* Supervisor Approval & Review Panel */}
           {activeCase.status === 'PENDING_APPROVAL' && (
-            <Card className="border-amber-500/40 bg-amber-500/5">
+            <Card className="border-amber-300 bg-amber-50/30">
               <CardHeader>
                 <div className="flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-amber-400" />
+                  <UserCheck className="w-4 h-4 text-amber-600" />
                   <CardTitle>Supervisor Review & Work Order Authorization</CardTitle>
                 </div>
                 <StatusBadge label="AWAITING APPROVAL" tone="warning" pulse />
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="p-3.5 rounded-xl bg-[#070B10] border border-[#1E293B] space-y-1 text-xs font-mono">
-                  <div className="text-[10px] text-slate-400 uppercase">
+                <div className="p-3.5 rounded-xl bg-white border border-amber-200 space-y-1 text-xs font-mono">
+                  <div className="text-[10px] text-[#64748B] uppercase font-bold">
                     SUBMITTED RESOLUTION
                   </div>
-                  <p className="text-slate-200">
+                  <p className="text-[#1A202C]">
                     {activeCase.findings?.resolutionSummary || 'Work completed per approved SOP.'}
                   </p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-mono text-slate-300">
+                  <label className="text-xs font-mono text-[#475569] font-semibold">
                     Supervisor Reviewer Notes / Sign-Off Comments
                   </label>
                   <input
@@ -898,7 +1131,7 @@ export const SopExecutionView: React.FC = () => {
                     placeholder="Enter review notes before sign-off..."
                     value={approvalNotes}
                     onChange={(e) => setApprovalNotes(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-[#070B10] border border-[#1E293B] rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#A3E635]"
+                    className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
                   />
                 </div>
 
@@ -906,7 +1139,11 @@ export const SopExecutionView: React.FC = () => {
                   <Button variant="danger" size="sm" onClick={() => handleReviewApproval(false)}>
                     Reject Work Order (Request Rework)
                   </Button>
-                  <Button variant="primary" size="sm" onClick={() => handleReviewApproval(true)} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
+                  <Button
+                    size="sm"
+                    onClick={() => handleReviewApproval(true)}
+                    className="bg-[#2563EB] hover:bg-blue-700 text-white font-semibold shadow-sm"
+                  >
                     Approve Work Order (Mark Resolved)
                   </Button>
                 </div>
@@ -914,30 +1151,68 @@ export const SopExecutionView: React.FC = () => {
             </Card>
           )}
 
+          {/* Work Order Resolved Card with Formally Close Action */}
+          {activeCase.status === 'RESOLVED' && (
+            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-xs font-mono font-bold text-emerald-800">
+                  WORK ORDER RESOLVED & SUPERVISOR APPROVED
+                </span>
+                <p className="text-[11px] text-[#475569] font-sans">
+                  Approved by {activeCase.approval?.reviewedByUserId || 'Marcus Vance (Plant Manager)'} at{' '}
+                  {activeCase.resolvedAt ? new Date(activeCase.resolvedAt).toLocaleTimeString() : 'Recent'}.
+                  {activeCase.approval?.reviewerNotes && ` Note: "${activeCase.approval.reviewerNotes}"`}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={handleCloseCase}
+                className="bg-[#151C24] hover:bg-black text-white font-bold shrink-0 shadow-sm"
+              >
+                <CheckCheck className="w-3.5 h-3.5 mr-1" />
+                Formally Close Case
+              </Button>
+            </div>
+          )}
+
+          {/* Closed Case Archive Banner */}
+          {activeCase.status === 'CLOSED' && (
+            <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-2 text-xs font-mono text-[#475569]">
+                <CheckCheck className="w-4 h-4 text-emerald-600" />
+                <span>
+                  Case formally verified, audited, and closed at{' '}
+                  {activeCase.closedAt ? new Date(activeCase.closedAt).toLocaleTimeString() : 'N/A'}.
+                </span>
+              </div>
+              <StatusBadge label="CLOSED & ARCHIVED" tone="healthy" />
+            </div>
+          )}
+
           {/* Case History & Audit Ledger */}
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
-                <History className="w-4 h-4 text-slate-400" />
+                <History className="w-4 h-4 text-[#64748B]" />
                 <CardTitle>Case History & Audit Trail</CardTitle>
               </div>
-              <span className="text-[10px] font-mono text-slate-400">TAMPER-EVIDENT</span>
+              <span className="text-[10px] font-mono text-[#64748B]">TAMPER-EVIDENT</span>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
                 {activeCase.history.map((h) => (
                   <div
                     key={h.id}
-                    className="p-3 rounded-lg bg-[#070B10] border border-[#1E293B] flex items-start justify-between text-xs font-mono"
+                    className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-start justify-between text-xs font-mono"
                   >
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-2 font-bold text-slate-200">
+                      <div className="flex items-center gap-2 font-bold text-[#1A202C]">
                         <span>{h.action}</span>
-                        <span className="text-slate-400 text-[10px]">by {h.user}</span>
+                        <span className="text-[#64748B] text-[10px]">by {h.user}</span>
                       </div>
-                      {h.notes && <p className="text-[11px] text-slate-400 font-sans">{h.notes}</p>}
+                      {h.notes && <p className="text-[11px] text-[#475569] font-sans">{h.notes}</p>}
                     </div>
-                    <span className="text-[10px] text-slate-400 shrink-0">
+                    <span className="text-[10px] text-[#64748B] shrink-0">
                       {new Date(h.timestamp).toLocaleTimeString()}
                     </span>
                   </div>
@@ -966,7 +1241,7 @@ export const SopExecutionView: React.FC = () => {
         }
       >
         <div className="space-y-3 font-mono text-xs">
-          <p className="text-slate-300">
+          <p className="text-[#475569]">
             Provide the specific risk or reason why automated procedures cannot safely proceed:
           </p>
           <textarea
@@ -974,7 +1249,7 @@ export const SopExecutionView: React.FC = () => {
             value={escalateReason}
             onChange={(e) => setEscalateReason(e.target.value)}
             placeholder="e.g. Suspected structural fissure or high-pressure gas leak requiring metallurgist..."
-            className="w-full p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-xs text-white font-mono focus:outline-none focus:border-rose-500"
+            className="w-full p-2.5 rounded-lg bg-white border border-[#CBD5E1] text-xs text-[#1A202C] font-mono focus:outline-none focus:border-rose-500"
           />
         </div>
       </Modal>
@@ -990,31 +1265,37 @@ export const SopExecutionView: React.FC = () => {
             <Button variant="secondary" size="sm" onClick={() => setIsNewCaseModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" size="sm" onClick={handleCreateNewCase} className="bg-[#A3E635] text-[#070B10] hover:bg-[#bef264] font-semibold">
-              Create Maintenance Case
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleCreateNewCase}
+              disabled={isLoading}
+              className="bg-[#151C24] hover:bg-black text-white font-semibold"
+            >
+              {isLoading ? 'Creating Case...' : 'Create Maintenance Case'}
             </Button>
           </div>
         }
       >
         <div className="space-y-3 font-mono text-xs">
           <div className="space-y-1">
-            <label className="text-slate-400">Case Title</label>
+            <label className="text-[#475569] font-medium">Case Title</label>
             <input
               type="text"
               placeholder="e.g. Seal Weepage on Crude Booster Pump"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
-              className="w-full px-3 py-1.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white"
+              className="w-full px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-slate-400">Asset Tag</label>
+              <label className="text-[#475569] font-medium">Asset Tag</label>
               <select
                 value={newAssetTag}
                 onChange={(e) => setNewAssetTag(e.target.value)}
-                className="w-full px-3 py-1.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white"
+                className="w-full px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
               >
                 <option value="P-101-A">P-101-A (Booster Pump)</option>
                 <option value="COMP-201">COMP-201 (Gas Compressor)</option>
@@ -1023,11 +1304,11 @@ export const SopExecutionView: React.FC = () => {
             </div>
 
             <div className="space-y-1">
-              <label className="text-slate-400">Severity</label>
+              <label className="text-[#475569] font-medium">Severity</label>
               <select
                 value={newSeverity}
                 onChange={(e) => setNewSeverity(e.target.value as MaintenanceCaseSeverity)}
-                className="w-full px-3 py-1.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white"
+                className="w-full px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
               >
                 <option value="LOW">LOW</option>
                 <option value="MEDIUM">MEDIUM</option>
@@ -1038,15 +1319,62 @@ export const SopExecutionView: React.FC = () => {
           </div>
 
           <div className="space-y-1">
-            <label className="text-slate-400">Reported Symptoms & Operating Anomalies</label>
+            <label className="text-[#475569] font-medium">Reported Symptoms & Operating Anomalies</label>
             <textarea
               rows={3}
               placeholder="Describe audible noise, weepage, vibration, or temperature readings..."
               value={newSymptoms}
               onChange={(e) => setNewSymptoms(e.target.value)}
-              className="w-full p-2.5 rounded-lg bg-[#070B10] border border-[#1E293B] text-white font-mono"
+              className="w-full p-2.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] font-mono focus:outline-none focus:border-[#2563EB]"
             />
           </div>
+        </div>
+      </Modal>
+
+      {/* Assign Technician Modal */}
+      <Modal
+        isOpen={isAssignModalOpen}
+        onClose={() => setIsAssignModalOpen(false)}
+        title="Assign Technician to Maintenance Case"
+        subtitle="Designate lead certified personnel responsible for field procedure"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setIsAssignModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleAssignTechnician}
+              className="bg-[#151C24] hover:bg-black text-white font-semibold"
+            >
+              Confirm Assignment
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3 font-mono text-xs">
+          <div className="space-y-1">
+            <label className="text-[#475569] font-medium">Select Qualified Technician</label>
+            <select
+              value={selectedTechName}
+              onChange={(e) => setSelectedTechName(e.target.value)}
+              className="w-full px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+            >
+              <option value="Elena Rostova (Lead Technician)">
+                Elena Rostova (Lead Technician - Rotating Equipment)
+              </option>
+              <option value="Devon Miller (Senior Reliability Tech)">
+                Devon Miller (Senior Reliability Tech - Vibration & Alignment)
+              </option>
+              <option value="Kavita Patel (Instrumentation Tech)">
+                Kavita Patel (Instrumentation Tech - Control Valves & Seals)
+              </option>
+            </select>
+          </div>
+          <p className="text-[11px] text-[#64748B] font-sans">
+            Assigned technician will receive procedural checklists, LOTO requirements, and be credited on audit history.
+          </p>
         </div>
       </Modal>
     </div>

@@ -3,16 +3,18 @@ import multer from 'multer';
 import { DocumentController } from '../controllers/document.controller.js';
 import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
+import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import type { IngestionQueue } from '../jobs/ingestionQueue.js';
 import { requireRole } from '../middleware/auth.middleware.js';
 
 export function createDocumentRouter(
   dataStore: IDataStore,
   storageAdapter: IStorageAdapter,
-  ingestionQueue: IngestionQueue
+  ingestionQueue: IngestionQueue,
+  vectorStore?: IVectorStoreAdapter
 ): Router {
   const router = Router();
-  const controller = new DocumentController(dataStore, storageAdapter, ingestionQueue);
+  const controller = new DocumentController(dataStore, storageAdapter, ingestionQueue, vectorStore);
 
   // Configure Multer for secure in-memory streaming validation
   const upload = multer({
@@ -23,42 +25,42 @@ export function createDocumentRouter(
     },
   });
 
-  // Upload: Organization Admin & Engineer/Technician
+  // Upload: Organization Admin & Owner
   router.post(
     '/upload',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN']),
+    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
     upload.single('file'),
     controller.upload
   );
 
-  // Read: All authorized members
+  // Read: Strictly restricted to authorized administrators (Workers, Techs, Engineers denied direct document access)
   router.get(
     '/',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
     controller.list
   );
 
   router.get(
     '/:id',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
     controller.getById
   );
 
   router.get(
     '/:id/pages',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
     controller.getPages
   );
 
   router.get(
     '/:id/versions',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
     controller.getVersions
   );
 
   router.get(
     '/:id/download',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
     controller.download
   );
 

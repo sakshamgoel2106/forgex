@@ -7,6 +7,7 @@ export type MaintenanceCaseStatus =
   | 'IN_PROGRESS'
   | 'PENDING_APPROVAL'
   | 'RESOLVED'
+  | 'CLOSED'
   | 'ESCALATED_HUMAN'
   | 'REJECTED';
 
@@ -66,12 +67,16 @@ export interface MaintenanceCase {
   assetId: string;
   caseNumber: string;
   title: string;
+  description?: string;
   severity: MaintenanceCaseSeverity;
   status: MaintenanceCaseStatus;
   reportedByUserId: string;
+  assignedTechnicianUserId?: string | null;
+  assignedTechnicianName?: string | null;
   symptomDescription: string;
   operatingConditions?: Record<string, any>;
   visualAssetIds: string[];
+  supportingDocumentIds?: string[];
   diagnosticHypothesis?: DiagnosticHypothesis | null;
   checklist: ChecklistStep[];
   findings?: TechnicianFindings | null;
@@ -83,6 +88,8 @@ export interface MaintenanceCase {
   feedbackComment?: string | null;
   createdAt: string;
   updatedAt: string;
+  resolvedAt?: string | null;
+  closedAt?: string | null;
 }
 
 export interface CaseHistoryEntry {
@@ -100,10 +107,19 @@ export interface CreateMaintenanceCaseRequest {
   plantId: string;
   assetId: string;
   title: string;
+  description?: string;
   severity?: MaintenanceCaseSeverity;
   symptomDescription: string;
   operatingConditions?: Record<string, any>;
   visualAssetIds?: string[];
+  supportingDocumentIds?: string[];
+  assignedTechnicianUserId?: string;
+  assignedTechnicianName?: string;
+}
+
+export interface AssignTechnicianRequest {
+  technicianUserId: string;
+  technicianName?: string;
 }
 
 export interface UpdateChecklistStepRequest {
@@ -125,6 +141,10 @@ export interface ApproveCaseRequest {
 
 export interface EscalateCaseRequest {
   reason: string;
+}
+
+export interface CloseCaseRequest {
+  notes?: string;
 }
 
 export interface ProvideFeedbackRequest {

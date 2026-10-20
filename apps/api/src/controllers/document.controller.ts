@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import type { DocumentType } from '@forgex/shared-types';
 import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
+import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import type { IngestionQueue } from '../jobs/ingestionQueue.js';
 import { validateUpload, sanitizeFilename } from '../ingestion/fileValidator.js';
 import { logger } from '../utils/logger.js';
@@ -11,7 +12,8 @@ export class DocumentController {
   constructor(
     private dataStore: IDataStore,
     private storageAdapter: IStorageAdapter,
-    private ingestionQueue: IngestionQueue
+    private ingestionQueue: IngestionQueue,
+    private vectorStore?: IVectorStoreAdapter
   ) {}
 
   /**
@@ -98,7 +100,7 @@ export class DocumentController {
       if (!document) {
         document = await this.dataStore.createDocument({
           organizationId,
-          plantId,
+          plantId: plant.id,
           documentNumber,
           title,
           category: category as DocumentType,
@@ -113,7 +115,7 @@ export class DocumentController {
 
       // 4. Generate server-controlled storage key (never trust user input)
       const randomToken = crypto.randomBytes(6).toString('hex');
-      const storageKey = `org_${organizationId}/plant_${plantId}/${document.id}/v${versionNumber}_${Date.now()}_${randomToken}.${validatedFile.extension}`;
+      const storageKey = `org_${organizationId}/plant_${plant.id}/${document.id}/v${versionNumber}_${Date.now()}_${randomToken}.${validatedFile.extension}`;
 
       // 5. Store file in configured object storage adapter
       const putResult = await this.storageAdapter.putObject(
@@ -183,8 +185,14 @@ export class DocumentController {
 
       const { plantId, category, search } = req.query;
 
+      let resolvedPlantId = typeof plantId === 'string' ? plantId : undefined;
+      if (resolvedPlantId) {
+        const plant = await this.dataStore.getPlantById(organizationId, resolvedPlantId);
+        if (plant) resolvedPlantId = plant.id;
+      }
+
       const documents = await this.dataStore.listDocuments(organizationId, {
-        plantId: typeof plantId === 'string' ? plantId : undefined,
+        plantId: resolvedPlantId,
         category: typeof category === 'string' ? (category as DocumentType) : undefined,
         search: typeof search === 'string' ? search : undefined,
       });
@@ -249,17 +257,26 @@ export class DocumentController {
         return;
       }
 
-      const versionId =
-        typeof req.query.versionId === 'string'
-          ? req.query.versionId
-          : document.latestVersion?.id;
+      let targetVersionId = document.latestVersion?.id;
 
-      if (!versionId) {
+      if (typeof req.query.versionId === 'string' && req.query.versionId) {
+        const requestedVersion = await this.dataStore.getDocumentVersionById(req.query.versionId);
+        if (!requestedVersion || requestedVersion.documentId !== document.id) {
+          res.status(404).json({
+            success: false,
+            error: 'Document version not found or does not belong to this document',
+          });
+          return;
+        }
+        targetVersionId = requestedVersion.id;
+      }
+
+      if (!targetVersionId) {
         res.status(200).json({ success: true, data: [] });
         return;
       }
 
-      const pages = await this.dataStore.listDocumentPages(versionId);
+      const pages = await this.dataStore.listDocumentPages(targetVersionId);
       res.status(200).json({
         success: true,
         data: pages,
@@ -321,12 +338,37 @@ export class DocumentController {
         return;
       }
 
-      const buffer = await this.storageAdapter.getObject(document.latestVersion.storageKey);
+      const requestedVersionId = typeof req.query.versionId === 'string' ? req.query.versionId : undefined;
+      let targetVersion = document.latestVersion;
 
-      res.setHeader('Content-Type', document.latestVersion.mimeType);
+      if (requestedVersionId) {
+        const specificVersion = await this.dataStore.getDocumentVersionById(requestedVersionId);
+        if (!specificVersion || specificVersion.documentId !== document.id) {
+          res.status(404).json({ success: false, error: 'Document version not found' });
+          return;
+        }
+        targetVersion = specificVersion;
+      }
+
+      const buffer = await this.storageAdapter.getObject(targetVersion.storageKey);
+
+      await this.dataStore.recordAuditEvent({
+        organizationId,
+        actorUserId: req.auth?.user.id,
+        action: 'CONFIDENTIAL_DOCUMENT_DOWNLOADED',
+        resourceType: 'DOCUMENT',
+        resourceId: document.id,
+        metadata: {
+          documentNumber: document.documentNumber,
+          versionId: targetVersion.id,
+          filename: targetVersion.filename,
+        },
+      });
+
+      res.setHeader('Content-Type', targetVersion.mimeType || 'application/pdf');
       res.setHeader(
         'Content-Disposition',
-        `inline; filename="${document.latestVersion.filename}"`
+        `inline; filename="${targetVersion.filename || 'document.pdf'}"`
       );
       res.status(200).send(buffer);
     } catch (err: any) {
@@ -410,13 +452,24 @@ export class DocumentController {
         return;
       }
 
-      // Cleanup stored files
+      // Cleanup stored files and external vector store points
       const versions = await this.dataStore.listDocumentVersions(document.id);
       for (const v of versions) {
         try {
           await this.storageAdapter.deleteObject(v.storageKey);
         } catch {
           // ignore if already deleted
+        }
+
+        if (this.vectorStore) {
+          try {
+            await this.vectorStore.deleteByFilter('forgex_knowledge', {
+              documentVersionId: v.id,
+              organizationId,
+            });
+          } catch (vErr: any) {
+            logger.warn({ err: vErr?.message, versionId: v.id }, 'Failed to delete vectors during document purge');
+          }
         }
       }
 

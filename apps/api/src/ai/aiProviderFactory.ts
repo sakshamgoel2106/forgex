@@ -17,8 +17,8 @@ export function createGenerationProvider(): IMultimodalGenerationProvider {
   const mode = process.env.INFERENCE_PROVIDER || config.INFERENCE_PROVIDER || 'local';
 
   // Strict Enterprise Air-Gap Guarantee
-  if (config.DEPLOYMENT_MODE === 'enterprise') {
-    if (mode === 'saas' || mode === 'cloud' || mode === 'openai' || mode === 'azure') {
+  if (config.DEPLOYMENT_MODE === 'enterprise' || config.AIR_GAPPED_MODE) {
+    if (mode === 'saas' || mode === 'cloud' || mode === 'openai' || mode === 'azure' || mode === 'gemini') {
       throw new Error(
         'Enterprise Air-Gap Policy: Cloud inference is strictly prohibited in Enterprise deployment mode.'
       );

@@ -7,21 +7,21 @@ export const MaintenanceWorkspaceView: React.FC = () => {
   const [tab, setTab] = useState<'cases' | 'troubleshooting'>('cases');
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#06090E]">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7] text-[#1A202C]">
       {/* Sub-navigation Tab Bar */}
-      <div className="px-4 py-2 border-b border-[#182333] bg-[#070B10] flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-1.5 bg-[#0D141F] p-1 rounded-xl border border-[#182333]">
+      <div className="px-4 py-2.5 border-b border-[#E2E8F0] bg-white flex items-center justify-between shrink-0 shadow-xs">
+        <div className="flex items-center gap-1.5 bg-[#F1F5F9] p-1 rounded-xl border border-[#E2E8F0]">
           <button
             onClick={() => setTab('cases')}
             className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium flex items-center gap-2 transition ${
               tab === 'cases'
-                ? 'bg-[#10241A] text-[#A3E635] font-semibold border border-[#1E4D2B] shadow-[0_0_8px_rgba(163,230,53,0.15)]'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-white text-[#1A202C] font-semibold border border-[#E2E8F0] shadow-sm'
+                : 'text-[#64748B] hover:text-[#1A202C]'
             }`}
           >
-            <Wrench className="w-3.5 h-3.5" />
+            <Wrench className="w-3.5 h-3.5 text-[#2563EB]" />
             <span>Active Cases & Guided SOPs</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#06090E] text-[#A3E635] border border-[#1E4D2B]">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-[#2563EB] border border-blue-200 font-bold">
               3
             </span>
           </button>
@@ -30,22 +30,22 @@ export const MaintenanceWorkspaceView: React.FC = () => {
             onClick={() => setTab('troubleshooting')}
             className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium flex items-center gap-2 transition ${
               tab === 'troubleshooting'
-                ? 'bg-[#10241A] text-[#A3E635] font-semibold border border-[#1E4D2B] shadow-[0_0_8px_rgba(163,230,53,0.15)]'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-white text-[#1A202C] font-semibold border border-[#E2E8F0] shadow-sm'
+                : 'text-[#64748B] hover:text-[#1A202C]'
             }`}
           >
-            <HelpCircle className="w-3.5 h-3.5" />
+            <HelpCircle className="w-3.5 h-3.5 text-[#2563EB]" />
             <span>Diagnostic Troubleshooting & Root Cause</span>
           </button>
         </div>
 
-        <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-slate-400">
-          <span className="flex items-center gap-1.5 text-amber-400">
-            <AlertTriangle className="w-3.5 h-3.5" /> LOTO Gate Enforced
+        <div className="hidden sm:flex items-center gap-3 text-xs font-mono">
+          <span className="flex items-center gap-1.5 text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-semibold">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> LOTO Gate Enforced
           </span>
-          <span className="text-slate-700">|</span>
-          <span className="flex items-center gap-1.5 text-[#A3E635]">
-            <FileCheck2 className="w-3.5 h-3.5" /> Step Auditing Active
+          <span className="text-[#CBD5E1]">|</span>
+          <span className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-semibold">
+            <FileCheck2 className="w-3.5 h-3.5 text-emerald-600" /> Step Auditing Active
           </span>
         </div>
       </div>

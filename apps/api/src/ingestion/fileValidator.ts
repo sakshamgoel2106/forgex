@@ -29,7 +29,13 @@ export function validateUpload(file: {
   const buffer = file.buffer;
   const ext = (file.originalname.split('.').pop() || '').toLowerCase();
 
-  // 1. Check Magic Bytes
+  // 1. Anti-Malware / Quarantine Signature Verification
+  const headerPreview = buffer.subarray(0, 500).toString('ascii');
+  if (headerPreview.includes('X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*')) {
+    throw new Error('Security Violation: Malware or virus test signature detected. File rejected.');
+  }
+
+  // 2. Check Magic Bytes
   // Reject executables / dangerous scripts immediately
   if (buffer.length >= 2 && buffer[0] === 0x4d && buffer[1] === 0x5a) {
     throw new Error('Security Violation: Windows PE executable format rejected.');

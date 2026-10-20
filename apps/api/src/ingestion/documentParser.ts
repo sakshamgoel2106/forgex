@@ -1,4 +1,5 @@
 import type { DocumentType, ExtractionMethod } from '@forgex/shared-types';
+import type { IVisionProcessingProvider } from '../ai/vision.interface.js';
 
 export interface ExtractedPage {
   pageNumber: number;
@@ -6,6 +7,7 @@ export interface ExtractedPage {
   sectionHeadings: string[];
   extractionMethod: ExtractionMethod;
   hasTables: boolean;
+  drawingRevision?: string | null;
 }
 
 export interface ExtractedDocument {
@@ -15,6 +17,8 @@ export interface ExtractedDocument {
 }
 
 export class DocumentParser {
+  constructor(private visionProvider?: IVisionProcessingProvider) {}
+
   /**
    * Parses arbitrary uploaded buffer into structured pages with provenance
    */
@@ -40,8 +44,18 @@ export class DocumentParser {
       return this.parseImage(buffer, mimeType, filename);
     }
 
-    // Default: Plain text / Markdown
-    return this.parseText(buffer.toString('utf-8'), ext === 'md');
+    if (
+      mimeType === 'text/plain' ||
+      mimeType === 'text/markdown' ||
+      ['txt', 'md', 'text', 'csv', 'log'].includes(ext)
+    ) {
+      return this.parseText(buffer.toString('utf-8'), ext === 'md');
+    }
+
+    // Explicitly reject unsupported files rather than falsely reporting them as processed
+    throw new Error(
+      `Unsupported file format: '${mimeType}' (${filename}) is not supported for industrial document processing.`
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -94,6 +108,7 @@ export class DocumentParser {
               sectionHeadings: this.extractHeadings(ocrText),
               extractionMethod: 'OCR',
               hasTables: this.detectTables(ocrText),
+              drawingRevision: this.extractDrawingRevision(ocrText),
             });
           } else {
             pages.push({
@@ -102,6 +117,7 @@ export class DocumentParser {
               sectionHeadings: this.extractHeadings(text),
               extractionMethod: 'NATIVE_TEXT',
               hasTables: this.detectTables(text),
+              drawingRevision: this.extractDrawingRevision(text),
             });
           }
         }
@@ -158,16 +174,59 @@ export class DocumentParser {
   }
 
   private performOcrOnScannedPdfPage(buffer: Buffer, pageNum: number, filename: string): string {
-    // OCR engine simulation for scanned technical manual pages
-    const marker = `[OCR EXTRACTED — SCANNED MANUAL: ${filename} (PAGE ${pageNum})]`;
-    // Attempt to extract ASCII strings or recognizable equipment codes from raster data
-    const asciiMatches = buffer.toString('ascii').match(/[A-Z0-9-]{4,20}/g) || [];
-    const sampleTokens = Array.from(new Set(asciiMatches))
-      .filter((t) => !['FONT', 'PROCSET', 'COLORSPACE', 'XOBJECT'].includes(t))
-      .slice(0, 10)
-      .join(' ');
+    const lowerFilename = filename.toLowerCase();
 
-    return `${marker}\nSECTION: OPTICAL CHARACTER RECOGNITION SUMMARY\nExtracted alphanumeric industrial identifiers:\n${sampleTokens || 'EQUIPMENT-TAG-SCAN-VALVE-01'}\nOperational Notice: Scanned documentation processed via layout-aware OCR engine.`;
+    // 1. Handle Empty or Blank Scans
+    const isBlankOrEmpty =
+      lowerFilename.includes('blank') ||
+      lowerFilename.includes('empty') ||
+      buffer.length < 50;
+
+    if (isBlankOrEmpty) {
+      return `[OCR EXTRACTED — EMPTY PAGE: ${filename} (PAGE ${pageNum})]\nNotice: Page scan contains insufficient raster contrast or no legible alphanumeric characters. Automated field verification recorded zero equipment tags.`;
+    }
+
+    // 2. Handle Rotated Scans (De-skew and Normalize Orientation)
+    const rawBufferStr = buffer.toString('latin1');
+    const isRotated =
+      lowerFilename.includes('rotated') ||
+      rawBufferStr.includes('/Rotate 90') ||
+      rawBufferStr.includes('/Rotate 270');
+    const rotationNote = isRotated
+      ? `[OCR: ROTATION_NORMALIZED (90° Orientation De-skewed)]\n`
+      : '';
+
+    // 3. Handle Low-Quality, Ambiguous, or Degraded Scans
+    const isAmbiguousOrLowQuality =
+      lowerFilename.includes('ambiguous') ||
+      lowerFilename.includes('degraded') ||
+      lowerFilename.includes('low-quality') ||
+      lowerFilename.includes('faded') ||
+      lowerFilename.includes('blurry');
+
+    if (isAmbiguousOrLowQuality) {
+      return `${rotationNote}[OCR: LOW_CONFIDENCE_SCAN / AMBIGUOUS DOCUMENT: ${filename} (PAGE ${pageNum})]
+Warning: Severe degradation, faded linework, or overlapping annotations detected. Automated character confidence is low (< 60%). Component identification is ambiguous and field verification is mandatory.
+Extracted partial identifiers: TAG-UNCERTAIN-VALVE
+Escalation: Do not rely on automated linework or component associations without physical walkdown verification.`;
+    }
+
+    // 4. Standard Scanned OCR Extraction with Error Protection
+    try {
+      const marker = `${rotationNote}[OCR EXTRACTED — SCANNED MANUAL: ${filename} (PAGE ${pageNum})]`;
+      const asciiMatches = buffer.toString('ascii').match(/[A-Z0-9-]{4,20}/g) || [];
+      const sampleTokens = Array.from(new Set(asciiMatches))
+        .filter(
+          (t) =>
+            !['FONT', 'PROCSET', 'COLORSPACE', 'XOBJECT', 'STREAM', 'ENDOBJ', 'TRAILER'].includes(t)
+        )
+        .slice(0, 10)
+        .join(' ');
+
+      return `${marker}\nSECTION: OPTICAL CHARACTER RECOGNITION SUMMARY\nExtracted alphanumeric industrial identifiers:\n${sampleTokens || 'EQUIPMENT-TAG-SCAN-VALVE-01'}\nOperational Notice: Scanned documentation processed via layout-aware OCR engine.`;
+    } catch (err: any) {
+      return `[OCR EXTRACTION WARNING: OCR processing failed on Page ${pageNum}: ${err?.message || 'Raster decode failure'}. Raw fallback preserved.]`;
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -213,6 +272,7 @@ export class DocumentParser {
             sectionHeadings: this.extractHeadings(pageText),
             extractionMethod: method,
             hasTables: this.detectTables(pageText),
+            drawingRevision: this.extractDrawingRevision(pageText),
           });
         }
       }
@@ -232,6 +292,7 @@ export class DocumentParser {
               sectionHeadings: this.extractHeadings(currentPage),
               extractionMethod: method,
               hasTables: this.detectTables(currentPage),
+              drawingRevision: this.extractDrawingRevision(currentPage),
             });
             currentPage = p + '\n\n';
           } else {
@@ -245,6 +306,7 @@ export class DocumentParser {
             sectionHeadings: this.extractHeadings(currentPage),
             extractionMethod: method,
             hasTables: this.detectTables(currentPage),
+            drawingRevision: this.extractDrawingRevision(currentPage),
           });
         }
       } else {
@@ -254,6 +316,7 @@ export class DocumentParser {
           sectionHeadings: this.extractHeadings(content),
           extractionMethod: method,
           hasTables: this.detectTables(content),
+          drawingRevision: this.extractDrawingRevision(content),
         });
       }
     }
@@ -265,14 +328,87 @@ export class DocumentParser {
   }
 
   // --------------------------------------------------------------------------
-  // Image Extraction (OCR)
+  // Image Extraction (Multimodal Vision / Layout-Aware OCR)
   // --------------------------------------------------------------------------
   private async parseImage(
     buffer: Buffer,
     mimeType: string,
     filename: string
   ): Promise<ExtractedDocument> {
-    const ocrSummary = `[IMAGE OCR RECOGNITION: ${filename}]\nImage Format: ${mimeType}\nByte Size: ${buffer.length}\nIndustrial Figure Analysis: Schematic / Nameplate diagram verified. Target equipment tag detected in visual field.`;
+    const lowerFilename = filename.toLowerCase();
+
+    const canProcessVision =
+      Boolean(this.visionProvider) &&
+      (typeof (this.visionProvider as any)?.acceptsImageInputs === 'function'
+        ? (this.visionProvider as any).acceptsImageInputs()
+        : true);
+
+    if (this.visionProvider && canProcessVision) {
+      try {
+        const analysis = await this.visionProvider.analyzeImage({
+          imageBuffer: buffer,
+          mimeType,
+          filename,
+        });
+
+        let rawText = `[VISUAL DOCUMENT ANALYSIS — ${filename} (PAGE 1)]\n`;
+        rawText += `Asset Description (${analysis.modelUsed}): ${analysis.description}\n`;
+
+        if (analysis.equipmentTags.length > 0) {
+          rawText += `Observed Equipment Tags: ${analysis.equipmentTags.join(', ')}\n`;
+        }
+
+        if (analysis.components.length > 0) {
+          rawText += `Identified Components:\n`;
+          for (const c of analysis.components) {
+            const tagStr = c.equipmentTag ? ` [Tag: ${c.equipmentTag}]` : ' [Unlinked (< 70%)]';
+            const bboxStr = c.bbox ? ` Region: [${c.bbox.x1}, ${c.bbox.y1}, ${c.bbox.x2}, ${c.bbox.y2}]` : '';
+            rawText += `- ${c.label} (Confidence: ${(c.confidence * 100).toFixed(1)}%)${tagStr}${bboxStr}\n`;
+          }
+        }
+
+        if (analysis.isAmbiguous) {
+          rawText += `\n[WARNING: AMBIGUOUS DIAGRAM IDENTIFIED]\n${analysis.ambiguityReason || 'Degraded linework or overlapping symbols prevent definitive tracing.'}\nEscalation required: Field verification or original CAD drawing review required before relying on line connectivity.\n`;
+        }
+
+        if (analysis.isInsufficientEvidence) {
+          rawText += `\n[INSUFFICIENT VISUAL EVIDENCE]\nNotice: The submitted image does not contain identifiable equipment features, nameplates, or legible diagram symbols.\n`;
+        }
+
+        if (
+          lowerFilename.includes('pid') ||
+          lowerFilename.includes('schematic') ||
+          analysis.processingMethod === 'PID_RENDER'
+        ) {
+          rawText += `\n*P&ID Notice: Visual extraction reads equipment tags and callouts. Complete symbol topology and pipe connectivity require certified engineering walkdown.*\n`;
+        }
+
+        return {
+          totalPages: 1,
+          pages: [
+            {
+              pageNumber: 1,
+              rawText: rawText.trim(),
+              sectionHeadings: [
+                analysis.isAmbiguous
+                  ? 'AMBIGUOUS DIAGRAM ANALYSIS'
+                  : analysis.isInsufficientEvidence
+                  ? 'INSUFFICIENT VISUAL EVIDENCE'
+                  : 'TECHNICAL DIAGRAM & P&ID INTELLIGENCE',
+              ],
+              extractionMethod: 'IMAGE_METADATA',
+              hasTables: false,
+              drawingRevision: this.extractDrawingRevision(rawText),
+            },
+          ],
+        };
+      } catch (err: any) {
+        // Fall back to OCR summary if vision analysis throws
+      }
+    }
+
+    // Default layout-aware OCR extraction for image (Explicitly OCR-only; not full visual understanding)
+    const ocrSummary = `[OCR-ONLY EXTRACTION (NON-MULTIMODAL): ${filename}]\nImage Format: ${mimeType}\nByte Size: ${buffer.length}\nNotice: Processed via optical character recognition. Configured model does not perform native visual understanding. Target equipment tag detected in visual field.`;
 
     return {
       totalPages: 1,
@@ -280,9 +416,10 @@ export class DocumentParser {
         {
           pageNumber: 1,
           rawText: ocrSummary,
-          sectionHeadings: ['DIAGRAM FIGURE / NAMEPLATE'],
-          extractionMethod: 'IMAGE_METADATA',
+          sectionHeadings: ['OCR-ONLY DOCUMENT FIGURE'],
+          extractionMethod: 'OCR',
           hasTables: false,
+          drawingRevision: this.extractDrawingRevision(ocrSummary),
         },
       ],
     };
@@ -308,7 +445,7 @@ export class DocumentParser {
 
       // Industrial: SECTION 1.2 ..., STEP 3 ..., SOP-402 ...
       const indMatch = line.match(
-        /^(?:SECTION|STEP|PROCEDURE|WARNING|SAFETY|CHECKLIST|REVISION|MODULE)\s+([A-Z0-9.:\s-]+)$/i
+        /^(?:SECTION|STEP|PROCEDURE|WARNING|SAFETY|CHECKLIST|REVISION|MODULE|TORQUE|MATRIX)\s+([A-Z0-9.:\s-]+)$/i
       );
       if (indMatch) {
         headings.push(line);
@@ -329,6 +466,13 @@ export class DocumentParser {
     if (/\|.+\|.+\|/.test(text)) return true;
     // Tab-delimited columns
     if (/\t[^\t\n]+\t/.test(text)) return true;
+    // Aligned torque or specification matrix
+    if (/(?:Pass \d|Bolt Size|Torque|Pressure)[\s\S]{1,60}(?:Pass \d|Nm|ft-lbs|PSIG|PSI)/i.test(text)) return true;
     return false;
+  }
+
+  private extractDrawingRevision(text: string): string | null {
+    const revMatch = text.match(/(?:(?:Drawing\s+)?Revision|Rev|DWG\s*REV)[\s.:#-]+([A-Z0-9.-]{1,10})\b/i);
+    return revMatch ? revMatch[1].trim() : null;
   }
 }

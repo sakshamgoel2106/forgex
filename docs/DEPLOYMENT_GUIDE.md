@@ -1,9 +1,9 @@
-# ForgeX AI — Deployment Guide: SaaS and Private Enterprise Modes
+# ForgeX AI — Production Deployment & Environment Guide
 
 ForgeX AI supports two first-class deployment paradigms sharing identical domain business logic, authorization rules, and API contracts:
 
-1. **Multi-Tenant Cloud SaaS**: Hosted managed cloud infrastructure, Supabase Auth, cloud object storage, managed Qdrant, explicit cloud inference, tenant rate limits, and usage quotas.
-2. **Private Enterprise / Air-Gapped On-Premises**: Self-contained internal infrastructure, Keycloak OIDC/SAML authentication, MinIO, Redis, local Qdrant, local document worker, and air-gapped Ollama inference.
+1. **Multi-Tenant Cloud SaaS**: Managed cloud infrastructure, Supabase Auth, cloud object storage (AWS S3), managed Qdrant Cloud, explicit cloud inference, tenant rate limits, and usage quotas.
+2. **Private Enterprise / Air-Gapped On-Premises**: Self-contained internal infrastructure, Keycloak OIDC/SAML authentication, MinIO, Redis/BullMQ, local Qdrant, local document worker, and air-gapped Ollama inference.
 
 ---
 
@@ -19,84 +19,176 @@ ForgeX AI supports two first-class deployment paradigms sharing identical domain
 | **Async Queues** | AWS ElastiCache / Redis Cloud | Redis 7 Container with BullMQ |
 | **Inference Provider** | Explicit Cloud AI (`Azure OpenAI` / `OpenAI`) | Air-Gapped Local Ollama (`llama3.2`, `llava`) |
 | **Fallback Policy** | Fails closed on provider error | **Strictly no cloud fallback**; fails closed |
-| **External Egress** | Allowed for cloud API endpoints | **Strictly disabled** (`AIR_GAPPED_MODE=true`) |
-| **Telemetry** | Optional sanitized telemetry | **Disabled** (`TELEMETRY_ENABLED=false`) |
+| **External Egress** | Allowed for configured cloud API endpoints | **Strictly disabled** (`AIR_GAPPED_MODE=true`) |
+| **Telemetry** | Optional sanitized metrics | **Disabled** (`TELEMETRY_ENABLED=false`) |
 
 ---
 
-## 2. Enterprise Private Deployment (Docker Compose)
+## 2. Hardware, Storage, & Network Requirements
 
-### 2.1 Packaged Topology
-The Enterprise release packages all 9 required microservices in `infra/docker-compose.yml`:
-1. `postgres`: PostgreSQL 16 storing relational entities, RBAC, document records, and audit events.
-2. `redis`: Redis 7 broker powering asynchronous BullMQ workers.
-3. `qdrant`: Vector database with payload filtering on tenant and asset tags.
-4. `minio`: S3-compatible document repository for technical manuals and schematics.
-5. `ollama`: Air-gapped local inference engine.
-6. `keycloak`: Self-hosted enterprise OIDC/SAML identity provider.
-7. `worker`: Python/FastAPI layout parsing, OCR, and multimodal extraction service.
-8. `api`: Core Node.js/Express ForgeX AI application backend.
-9. `web`: Graphite industrial web application served by Nginx.
+### 2.1 Hardware Sizing Recommendations
 
-### 2.2 Quickstart (Enterprise Mode)
+| Component | Minimum (Evaluation / Lab) | Recommended Production (100–500 Users) | High Throughput / Multi-Plant |
+| :--- | :--- | :--- | :--- |
+| **CPU** | 8 vCPUs (x86_64 or ARM64) | 16 vCPUs | 32+ vCPUs |
+| **System RAM** | 16 GB | 32 GB | 64+ GB |
+| **GPU / VRAM** | CPU-only (Ollama quantized) | 1x NVIDIA A10G / L4 (24 GB VRAM) | 2x NVIDIA A100 / H100 (80 GB VRAM) |
+| **Disk Storage** | 100 GB NVMe SSD | 500 GB NVMe SSD (RAID-10) | 2+ TB High IOPS SSD / SAN |
+| **Network** | 1 Gbps NIC | 10 Gbps NIC | 10 Gbps Redundant Bonded |
+
+### 2.2 Network & Port Allocations
+
+| Port | Service | Direction | Enterprise Mode | SaaS Mode |
+| :--- | :--- | :--- | :--- | :--- |
+| `80 / 443` | Web (Nginx SPA + Reverse Proxy) | Inbound | Client Web Traffic | Client Web Traffic |
+| `4000` | ForgeX Node.js API | Internal / Pod | Core REST & WebSocket | Core REST & WebSocket |
+| `5432` | PostgreSQL 16 | Internal | Relational Store | Cloud RDS / Aurora |
+| `6379` | Redis 7 | Internal | BullMQ Job Broker | Managed ElastiCache |
+| `6333` | Qdrant Vector Engine | Internal | Local Vector DB | Qdrant Cloud |
+| `9000` | MinIO API | Internal | Local Object Storage | AWS S3 Endpoint |
+| `9001` | MinIO Console | Internal | Storage Admin UI | AWS Console |
+| `8000` | Python Document Worker | Internal | Layout & OCR Extraction | Worker Cluster |
+| `8080` | Keycloak Identity Provider | Internal | Enterprise SSO | Supabase Auth (HTTPS) |
+| `11434` | Ollama Inference Server | Internal | Air-Gapped LLM & VLM | N/A (Cloud AI) |
+
+---
+
+## 3. Local Development Quickstart
+
+To run ForgeX AI locally in developer mode:
+
 ```bash
-# 1. Copy enterprise environment configuration
-cp infra/env/.env.enterprise.example infra/.env
+# 1. Install workspace dependencies
+pnpm install
 
-# 2. Start the complete stack
+# 2. Configure local environment variables
+cp .env.example apps/api/.env
+
+# 3. Start local development servers (Vite Web + Node.js API with hot reload)
+pnpm dev
+```
+
+In `NODE_ENV=development` with no `DATABASE_URL` configured, ForgeX automatically defaults to the high-fidelity `InMemoryDataStore`, enabling fast feature development and tests without requiring running database containers.
+
+---
+
+## 4. Enterprise Private Installation (Docker Compose)
+
+The Enterprise release packages all 9 required microservices in `infra/docker-compose.yml`.
+
+### 4.1 Step-by-Step Installation
+
+```bash
+# 1. Clone repository and navigate to root
+cd /opt/forgex-ai
+
+# 2. Generate and configure enterprise environment variables
+cp .env.example infra/.env
+# Edit infra/.env to set your secure passwords, secrets, and domain bindings:
+# - POSTGRES_PASSWORD
+# - KEYCLOAK_ADMIN_PASSWORD
+# - JWT_SECRET
+# - S3_SECRET_ACCESS_KEY
+
+# 3. Pull or build container images and launch the stack
 docker compose -f infra/docker-compose.yml up -d
 
-# 3. Pull required local models into Ollama
-docker exec -it forgex-ollama ollama pull llama3.2
-docker exec -it forgex-ollama ollama pull llava
-docker exec -it forgex-ollama ollama pull nomic-embed-text
-
-# 4. Verify system readiness
-curl -f http://localhost:4000/api/v1/health
+# 4. Verify that all 9 containers are running and healthy
+docker compose -f infra/docker-compose.yml ps
 ```
 
-### 2.3 Air-Gapped Egress Controls
-In strictly air-gapped nuclear, petrochemical, or defense installations:
-- Set `internal: true` in `infra/docker-compose.yml` under `forgex_internal` network to disable internet gateway routing.
-- The ForgeX API checks `AIR_GAPPED_MODE=true` and refuses to bind or query external endpoints. Any call to cloud AI providers throws an immediate `Enterprise Air-Gap Policy` exception.
+### 4.2 Required Local Model Downloads
 
----
+Once the `ollama` container is healthy, pull the required models into the persistent Ollama storage volume:
 
-## 3. Cloud SaaS Deployment
-
-### 3.1 Setup Procedure
 ```bash
-# 1. Copy SaaS configuration
-cp infra/env/.env.saas.example .env
+# Dense technical text generation and reasoning
+docker exec -it forgex-ollama ollama pull llama3.2
 
-# 2. Configure credentials in .env:
-# - SUPABASE_PROJECT_URL & SUPABASE_JWT_SECRET
-# - DATABASE_URL (AWS RDS / Aurora)
-# - S3_ACCESS_KEY_ID & S3_SECRET_ACCESS_KEY
-# - QDRANT_URL & QDRANT_API_KEY
-# - CLOUD_AI_API_KEY (Azure / OpenAI)
+# Vision-language model for P&ID schematics, engineering diagrams, and component visual grounding
+docker exec -it forgex-ollama ollama pull llava
 
-# 3. Run database migrations
-pnpm --filter @forgex/api run start:migrate
-
-# 4. Launch API service
-pnpm --filter @forgex/api run start
+# Dense text embeddings for technical chunk indexing
+docker exec -it forgex-ollama ollama pull nomic-embed-text
 ```
 
-### 3.2 Explicit Inference Configuration
-Cloud inference in SaaS mode is **only** enabled when `INFERENCE_PROVIDER=saas` or `cloud` is explicitly supplied alongside a validated `CLOUD_AI_API_KEY`. If unconfigured, the application falls back safely to deterministic local processing without leaking customer data to third-party endpoints.
+### 4.3 Database Migration & Initialization
 
-### 3.3 Multi-Tenant Rate Limiting & Quotas
-- **Burst Limiter**: Default `120 req/min` for general endpoints and `30 calls/min` for AI inference endpoints (`/copilot`, `/visual`, `/maintenance/diagnose`).
-- **Monthly Tenant Quotas**: Default `50,000 queries/month` and `100 GB` storage per tenant.
-- Reaching thresholds returns `429 Too Many Requests` with `Retry-After` headers.
+Database migrations execute automatically on container startup if `DATABASE_URL` is configured. To manually run or dry-run migrations:
+
+```bash
+# Execute standalone migration runner inside the API container
+docker exec -it forgex-api pnpm run db:migrate
+```
+
+### 4.4 Air-Gapped Egress Controls
+
+In strictly air-gapped industrial, nuclear, or defense environments:
+- Set `internal: true` in `infra/docker-compose.yml` under `forgex_internal` network to disable internet gateway routing.
+- Set `AIR_GAPPED_MODE=true` in `infra/.env`. The ForgeX API strictly forbids external network egress and refuses to initialize third-party cloud SDKs. If an external model is requested, the system immediately rejects the operation with an explicit security fault without leaking data.
 
 ---
 
-## 4. Model Selection & Configuration
+## 5. Cloud SaaS Deployment
 
-| Use Case | Enterprise Model (Ollama) | Cloud SaaS Model |
+### 5.1 Infrastructure Prerequisites
+1. **Managed PostgreSQL**: AWS Aurora Serverless v2 or Supabase Managed PostgreSQL (v16+).
+2. **Managed Vector DB**: Qdrant Cloud cluster with API key authentication.
+3. **Object Storage**: AWS S3 Bucket (or Cloudflare R2) with configured IAM policies.
+4. **Identity**: Supabase Project with Auth enabled (JWT secret and project URL).
+5. **Inference**: Azure OpenAI Service or OpenAI API key.
+
+### 5.2 Deployment Procedure
+
+```bash
+# 1. Configure production environment
+cp .env.example .env
+# Set DEPLOYMENT_MODE=saas, AUTH_PROVIDER=supabase, and cloud credentials
+
+# 2. Execute database schema migrations
+pnpm --filter @forgex/api run db:migrate
+
+# 3. Build optimized production artifacts
+pnpm --filter @forgex/web run build
+pnpm --filter @forgex/api run build
+
+# 4. Start the API application
+NODE_ENV=production pnpm --filter @forgex/api start
+```
+
+### 5.3 SaaS Rate Limiting & Tenant Quotas
+- **General API Limiter**: 120 requests/min per IP/token.
+- **AI Inference Burst Limiter**: 30 queries/min per organization (`/copilot`, `/visual`, `/maintenance/diagnose`).
+- **Monthly Usage Quotas**: Enforced via `TENANT_MONTHLY_QUERY_QUOTA` (default: 50,000 queries) and `TENANT_MAX_STORAGE_GB` (default: 100 GB).
+
+---
+
+## 6. Reliability, Recovery, & Operational Maintenance
+
+### 6.1 Health Verification Probes
+- **Liveness Probe**: `GET /health/live` (or `/livez`) -> Returns `200 OK` if the process is responsive.
+- **Readiness Probe**: `GET /health/ready` (or `/readyz`) -> Returns `200 OK` once primary database connections and vector stores are ready.
+- **Subsystem Deep Diagnostic**: `GET /api/v1/health` -> Returns status across PostgreSQL, Redis, Qdrant, MinIO/S3, Ollama/Cloud AI, and Document Worker.
+- **Prometheus Metrics**: `GET /api/v1/metrics` -> Structured operational metrics without PII or sensitive data.
+
+### 6.2 Disaster Recovery Runbook
+
+```bash
+# Automated full stack snapshot (PostgreSQL, MinIO data, Qdrant vectors + SHA256 manifest)
+./scripts/backup.sh /var/backups/forgex
+
+# Automated restoration from snapshot directory
+./scripts/restore.sh /var/backups/forgex/forgex_backup_YYYYMMDDTHHMMSSZ
+```
+
+---
+
+## 7. Troubleshooting Matrix
+
+| Symptom | Probable Cause | Action |
 | :--- | :--- | :--- |
-| **Technical Text RAG** | `llama3.2:latest` / `qwen2.5:14b` | `gpt-4o-industrial` / `claude-3-5-sonnet` |
-| **P&ID & Diagram Vision** | `llava:latest` / `qwen2.5-vl` | `gpt-4o-industrial` |
-| **Dense Text Embeddings** | `nomic-embed-text:latest` | `text-embedding-3-large` |
+| **`503 Service Unavailable` on `/readyz`** | Database or Qdrant connection offline during startup | Inspect `docker logs forgex-postgres` or `forgex-qdrant`; verify host ports and credentials. |
+| **`Enterprise Air-Gap Policy` Exception** | Request attempted to invoke cloud AI while `AIR_GAPPED_MODE=true` | Confirm model is available in Ollama (`docker exec forgex-ollama ollama list`). |
+| **`429 Too Many Requests`** | Tenant query quota or rate limit exceeded | Check `GET /api/v1/metrics`; adjust `TENANT_MONTHLY_QUERY_QUOTA` in `.env` if necessary. |
+| **`401 Unauthorized` / `Invalid Token`** | Clock skew or mismatched `JWT_SECRET` / Supabase secret | Verify server NTP synchronization and JWT secret in environment configuration. |
+| **Worker processing timeout** | High resolution technical drawing or scanned PDF OCR overload | Check `docker logs forgex-worker`; scale worker replicas or allocate additional CPU threads. |

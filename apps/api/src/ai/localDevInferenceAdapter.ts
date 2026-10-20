@@ -34,13 +34,14 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
     const genericWords = new Set([
       'what', 'the', 'how', 'when', 'where', 'why', 'who', 'and', 'for', 'are', 'is', 'say', 'about',
       'delta', 'minimum', 'maximum', 'normal', 'status', 'level', 'rate', 'system', 'operational', 'spec',
-      'notes', 'vendor', 'appendix'
+      'notes', 'vendor', 'appendix', 'pump', 'boiler', 'reactor', 'tank', 'compressor', 'turbine', 'motor'
     ]);
 
+    const assetTagLower = request.assetContext?.assetTag?.toLowerCase();
     const domainTokens = query
       .toLowerCase()
       .split(/[\s,.;:!?()"-]+/)
-      .filter((t) => t.length > 2 && !genericWords.has(t));
+      .filter((t) => t.length > 2 && !genericWords.has(t) && !/^\d+$/.test(t) && t !== assetTagLower && !t.startsWith('pump-') && !t.startsWith('p-') && !t.startsWith('reactor-') && !t.startsWith('boiler-'));
 
     const hasRelevantEvidence =
       authorizedEvidence &&
@@ -61,7 +62,42 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
         return true;
       });
 
+    const isGeneralKnowledge =
+      request.plantContext?.code === 'GENERAL' ||
+      /\b(bernoulli|pascal|ohm|cavitation|affinity laws|carnot|thermodynamics|newton|reynolds number|pump curve|mechanical seal|4-20ma|pid controller|torque|viscosity|friction factor|hydraulic|pneumatic)\b/i.test(query);
+
     if (!authorizedEvidence || authorizedEvidence.length === 0 || !hasRelevantEvidence) {
+      if (
+        isGeneralKnowledge &&
+        !request.assetContext &&
+        !/\b([A-Z0-9]+-[0-9]+-[A-Z0-9]+|[A-Z]+-[0-9]+)\b/i.test(query)
+      ) {
+        let generalAnswer = `### [GENERAL ENGINEERING PRINCIPLE — GENERAL KNOWLEDGE]\n`;
+        if (/bernoulli/i.test(query)) {
+          generalAnswer += `Bernoulli's principle states that within a steady, incompressible, and inviscid fluid flow, an increase in the speed of the fluid occurs simultaneously with a decrease in static pressure or fluid potential energy (P + 0.5*rho*v^2 + rho*g*h = constant).\n\nIn industrial piping and pump systems, this relationship governs pressure differentials across venturis, orifice plates, and impeller suction eyes, directly explaining why fluid acceleration causes local pressure drops that can lead to cavitation if static pressure drops below fluid vapor pressure.`;
+        } else if (/pascal/i.test(query)) {
+          generalAnswer += `Pascal's Law states that pressure applied to an enclosed, incompressible fluid is transmitted undiminished in all directions throughout the fluid and to the walls of its container (P = F / A).\n\nIn hydraulic machinery, this enables force multiplication across cylinders of varying surface areas (F2 = F1 * A2 / A1).`;
+        } else if (/ohm/i.test(query)) {
+          generalAnswer += `Ohm's Law states that current through a conductor between two points is directly proportional to voltage across the points and inversely proportional to resistance (V = I * R).\n\nIn industrial circuits, sensor loops (4-20mA), and electric motor windings, it determines voltage drop, power dissipation, and current draw.`;
+        } else if (/cavitation/i.test(query)) {
+          generalAnswer += `Cavitation in centrifugal pumps occurs when static pressure at the impeller suction eye drops below fluid vapor pressure, forming vapor cavities that violently implode upon entering higher pressure zones. This causes localized shockwaves, acoustic pinging (sounding like gravel in the pump), surface pitting, and seal degradation.\n\nPrevention requires maintaining adequate Net Positive Suction Head margin (NPSHa > NPSHr).`;
+        } else if (/mechanical seal/i.test(query)) {
+          generalAnswer += `A mechanical seal prevents process fluid leakage along a rotating shaft using two flat faces—one stationary and one rotating—held in contact by spring or bellows pressure and fluid pressure.\n\nAPI piping plans (such as Plan 11, 32, 53A, 54) provide flush, barrier, or quench fluids to cool and lubricate the seal faces.`;
+        } else {
+          generalAnswer += `Scientific and engineering fundamentals govern industrial machinery operations. Physical laws (thermodynamics, fluid mechanics, structural mechanics, electrical theory) dictate the operational envelopes of mechanical assets.\n\nFor general operations: always adhere to fundamental engineering principles, baseline fluid/thermal dynamics, and standard equipment maintenance frameworks.`;
+        }
+        generalAnswer += `\n\n### Operational Advisory\nNote: This is general scientific/engineering knowledge. For machine-specific operating parameters, verified equipment documentation must be consulted.`;
+
+        return {
+          answerText: generalAnswer,
+          confidence: 'HIGH',
+          isInsufficientEvidence: false,
+          conflictDetected: false,
+          usedEvidenceChunkIds: [],
+          modelUsed: this.modelName,
+        };
+      }
+
       return {
         answerText:
           'Insufficient evidence in authorized plant documentation to answer this question safely. Please consult senior engineering or verify documentation access for your plant.',
@@ -111,11 +147,11 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       const hasConflictKeywords =
         /conflict/i.test(textConcat) ||
         /discrepan/i.test(textConcat) ||
-        (/25\s*psi/i.test(textConcat) && /10\s*psi/i.test(textConcat)) ||
+        (/25(?:\.0)?\s*psi/i.test(textConcat) && /10(?:\.0)?\s*psi/i.test(textConcat)) ||
         (/torque.*185/i.test(textConcat) && /torque.*250/i.test(textConcat));
 
       const queryMentionsConflict =
-        /10\s*psi/i.test(query) ||
+        /10(?:\.0)?\s*psi/i.test(query) ||
         /bulletin/i.test(query) ||
         /acceptable/i.test(query) ||
         /conflict/i.test(query) ||
@@ -148,13 +184,42 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
 
     // Structure facts vs operational explanations
     answerBody += `### Sourced Operational Facts (Verified from ${topEvidence.documentNumber}, Page ${topEvidence.pageNumber})\n`;
-    answerBody += `- ${topEvidence.content.split('\n')[0] || topEvidence.content}\n`;
+    answerBody += `[VERIFIED MACHINE-SPECIFIC FACTS]\n`;
+    if (topEvidence.content.includes('Authorized Maintenance History') || topEvidence.content.includes('Governed Machine Knowledge Base')) {
+      const histLines = topEvidence.content.split('\n').filter((l) => l.trim().length > 0);
+      answerBody += histLines.map((l) => `- ${l}`).join('\n') + '\n';
+    } else {
+      answerBody += `- ${topEvidence.content.split('\n')[0] || topEvidence.content}\n`;
+    }
 
     if (sanitizedEvidence[1]) {
       answerBody += `- Supplementary Reference (${sanitizedEvidence[1].documentNumber}, Page ${sanitizedEvidence[1].pageNumber}): ${sanitizedEvidence[1].content.split('\n')[0]}\n`;
     }
 
+    if (topEvidence.content.includes('TECHNICIAN OBSERVATIONS') || topEvidence.content.includes('Authorized Maintenance History')) {
+      answerBody += `\n### [HISTORICAL TECHNICIAN OBSERVATIONS & HYPOTHESES]\n`;
+      const obsLines = topEvidence.content
+        .split('\n')
+        .filter((l) => l.includes('TECHNICIAN OBSERVATIONS') || l.includes('Suspected Root Cause'));
+      if (obsLines.length > 0) {
+        answerBody += obsLines.map((l) => `- ${l}`).join('\n') + '\n';
+      } else {
+        answerBody += `- Historical field logs indicate observed symptoms subject to unconfirmed technician hypotheses.\n`;
+      }
+    }
+
+    if (conflictDetected || topEvidence.content.includes('UNKNOWNS')) {
+      answerBody += `\n### [UNKNOWN OR CONFLICTING DETAILS]\n`;
+      if (conflictDetected) {
+        answerBody += `- ${conflictDetails}\n`;
+      }
+      if (topEvidence.content.includes('UNKNOWNS')) {
+        answerBody += `- Unresolved historical anomalies remain pending root cause confirmation.\n`;
+      }
+    }
+
     answerBody += `\n### Operational Guidance\n`;
+    answerBody += `### [APPROVED OPERATIONAL GUIDANCE]\n`;
     answerBody += `Follow exact Lockout/Tagout and calibration sequence as approved in active revision. Verify calibrated instruments before advancing steps.`;
 
     const confidence = conflictDetected ? 'UNCERTAIN' : 'HIGH';

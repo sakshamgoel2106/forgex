@@ -53,7 +53,7 @@ fi
 
 # 3. Qdrant Vector Collection Snapshot
 echo "[3/3] Creating Qdrant vector index snapshots..."
-curl -s -X POST "${QDRANT_HOST}/collections/forgex_knowledge_chunks/snapshots" > "${TARGET_DIR}/vector/qdrant_snapshot_result.json" || true
+curl -s -X POST "${QDRANT_HOST}/collections/${QDRANT_COLLECTION:-forgex_knowledge}/snapshots" > "${TARGET_DIR}/vector/qdrant_snapshot_result.json" || true
 echo "      Qdrant snapshot request issued."
 
 # 4. Generate Manifest with Checksums
