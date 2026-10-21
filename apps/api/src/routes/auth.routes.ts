@@ -148,7 +148,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
    */
   router.post('/login', async (req: Request, res: Response): Promise<void> => {
     try {
-      const { email } = req.body;
+      const { email, password } = req.body;
 
       if (!email || typeof email !== 'string') {
         res.status(400).json({
@@ -163,15 +163,43 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
 
       const normalizedEmail = email.trim().toLowerCase();
 
+      // Check seed dev password if provided
+      const DEV_PASSWORDS: Record<string, string> = {
+        'admin@forgex.industrial': 'Admin@1234',
+        'tech@forgex.industrial': 'Tech@1234',
+        'worker@forgex.industrial': 'Worker@1234',
+        'engineer@forgex.industrial': 'Engineer@1234',
+      };
+
+      if (password && DEV_PASSWORDS[normalizedEmail] && password !== DEV_PASSWORDS[normalizedEmail]) {
+        res.status(401).json({
+          success: false,
+          error: {
+            code: 'FORGEX_AUTH_INVALID_CREDENTIALS',
+            message: 'Invalid credentials. Password verification failed.',
+          },
+        });
+        return;
+      }
+
       // Find user in dataStore
       let user: any = null;
-      // In local dev, engineer@forgex.industrial is always available
       if (normalizedEmail === 'engineer@forgex.industrial') {
         user = await dataStore.getUserByExternalAuthId('user-dev-eng-1');
+      } else if (normalizedEmail === 'admin@forgex.industrial') {
+        user = await dataStore.getUserByExternalAuthId('user-dev-admin-1');
+      } else if (normalizedEmail === 'tech@forgex.industrial') {
+        user = await dataStore.getUserByExternalAuthId('user-dev-tech-1');
+      } else if (normalizedEmail === 'worker@forgex.industrial') {
+        user = await dataStore.getUserByExternalAuthId('user-dev-worker-1');
       }
 
       if (!user) {
-        // Query users by email or listing
+        user = await dataStore.getUserByEmail(normalizedEmail);
+      }
+
+      if (!user) {
+        // Fallback: Query users across organizations
         const allOrgs = await dataStore.getOrganizationBySlug('apex-energy-tx');
         if (allOrgs) {
           const members = await dataStore.listOrganizationMembers(allOrgs.id);
@@ -230,6 +258,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
           membership: primaryMembership,
           memberships: activeMemberships,
           token,
+          permissions: ORG_ROLE_PERMISSIONS[primaryMembership.role] || [],
         },
       });
     } catch (err: any) {
@@ -355,6 +384,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
           organization,
           membership,
           token,
+          permissions: ORG_ROLE_PERMISSIONS[membership.role] || [],
         },
       });
     } catch (err: any) {

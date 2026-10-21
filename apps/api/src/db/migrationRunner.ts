@@ -12,6 +12,9 @@ export async function runMigrations(pool: pg.Pool): Promise<string[]> {
   const appliedMigrations: string[] = [];
 
   try {
+    await client.query('CREATE SCHEMA IF NOT EXISTS forgex;');
+    await client.query('SET search_path TO forgex, public;');
+
     // Ensure migrations ledger exists
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -20,7 +23,36 @@ export async function runMigrations(pool: pg.Pool): Promise<string[]> {
       );
     `);
 
-    const migrationsDir = path.resolve(__dirname, 'migrations');
+    // Ensure WORKER is permitted in organization_memberships_role_check
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.constraint_column_usage 
+          WHERE table_name = 'organization_memberships' AND constraint_name = 'organization_memberships_role_check'
+        ) THEN
+          ALTER TABLE organization_memberships DROP CONSTRAINT organization_memberships_role_check;
+        END IF;
+        ALTER TABLE organization_memberships ADD CONSTRAINT organization_memberships_role_check 
+        CHECK (role IN (
+          'ORGANIZATION_OWNER',
+          'ORGANIZATION_ADMIN',
+          'PLANT_MANAGER',
+          'ENGINEER',
+          'TECHNICIAN',
+          'VIEWER',
+          'WORKER',
+          'ENGINEER_TECHNICIAN'
+        ));
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
+
+    let migrationsDir = path.resolve(__dirname, 'migrations');
+    if (!fs.existsSync(migrationsDir)) {
+      migrationsDir = path.resolve(__dirname, '../../src/db/migrations');
+    }
     if (!fs.existsSync(migrationsDir)) {
       logger.warn({ migrationsDir }, 'Migrations directory not found');
       return [];

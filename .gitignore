@@ -43,3 +43,4 @@ Thumbs.db
 
 # Docker volumes / local data mounts
 infra/data/
+apps/api/data/storage/

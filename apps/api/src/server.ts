@@ -27,14 +27,10 @@ async function startServer() {
   const embeddingAdapter = createEmbeddingAdapter();
   const vectorStore = createVectorStoreAdapter();
 
-  // 3. Bootstrap initial data only if explicitly requested (disabled by default for clean registration)
-  if (process.env.BOOTSTRAP_DEMO_DATA === 'true') {
-    bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore).catch((err) => {
-      logger.error({ err }, 'Bootstrap seeding encountered an error');
-    });
-  } else {
-    logger.info('Clean start enabled: Demo data bootstrap skipped');
-  }
+  // 3. Ensure baseline demo organization and plant equipment are initialized
+  bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore).catch((err) => {
+    logger.warn({ err: err?.message }, 'Initial bootstrap data seeding notice');
+  });
 
   // 4. Construct Express Application
   const app = createApp({

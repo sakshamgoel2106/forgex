@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './lib/AuthContext';
 import { AppShell } from './components/layout/AppShell';
 import type { NavModule } from './components/layout/Sidebar';
+import { ShieldAlert, ArrowRight } from 'lucide-react';
 
 import { OverviewView } from './components/views/OverviewView';
 import { AssetDirectoryView } from './components/views/AssetDirectoryView';
@@ -23,16 +24,81 @@ import { WorkerWorkspaceView } from './components/views/WorkerWorkspaceView';
 import { ReportsAnalyticsView } from './components/views/ReportsAnalyticsView';
 import { NotificationsFeedView } from './components/views/NotificationsFeedView';
 
+export function getDefaultModuleForRole(role?: string): NavModule {
+  switch (role) {
+    case 'ORGANIZATION_OWNER':
+    case 'ORGANIZATION_ADMIN':
+    case 'PLANT_MANAGER':
+      return 'overview';
+    case 'TECHNICIAN':
+      return 'tech';
+    case 'WORKER':
+      return 'worker';
+    case 'ENGINEER':
+    case 'ENGINEER_TECHNICIAN':
+      return 'overview';
+    default:
+      return 'overview';
+  }
+}
+
+const RBACFallbackBanner: React.FC<{
+  moduleName: string;
+  role: string;
+  onRedirect: (mod: NavModule) => void;
+}> = ({ moduleName, role, onRedirect }) => {
+  const fallbackMod = getDefaultModuleForRole(role);
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#0B0F17] text-[#E2E8F0] min-h-[500px]">
+      <div className="max-w-md w-full bg-[#141B26] border border-[#243145] rounded-xl p-6 shadow-2xl text-center">
+        <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto mb-4">
+          <ShieldAlert className="w-6 h-6" />
+        </div>
+        <div className="inline-block px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-400 font-mono text-[11px] font-semibold mb-2 uppercase tracking-wider border border-amber-500/30">
+          Security Access Control · Restricted
+        </div>
+        <h2 className="text-base font-bold text-white mb-2 font-mono">
+          {moduleName.toUpperCase()} ACCESS RESTRICTED
+        </h2>
+        <p className="text-xs text-zinc-400 mb-6 leading-relaxed font-sans">
+          Your current industrial role <strong className="text-amber-400 font-mono">[{role}]</strong> does not hold sufficient permission bitmasks for this module.
+          Shop-floor operations, technician queues, and plant governance are strictly segmented.
+        </p>
+        <button
+          onClick={() => onRedirect(fallbackMod)}
+          className="w-full py-2.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-mono font-semibold text-xs rounded-lg transition shadow-md flex items-center justify-center gap-2"
+        >
+          <span>Return to Authorized Workspace ({fallbackMod.toUpperCase()})</span>
+          <ArrowRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const AppContent: React.FC = () => {
-  const { user, token, isLoading, isOwnerOrAdmin } = useAuth();
+  const { user, membership, token, isLoading, isOwnerOrAdmin } = useAuth();
   const [activeModule, setActiveModule] = useState<NavModule>('overview');
+
+  const role = membership?.role || 'VIEWER';
+
+  // Role-aware automatic initial routing
+  useEffect(() => {
+    if (membership?.role) {
+      if (membership.role === 'WORKER' && activeModule === 'overview') {
+        setActiveModule('worker');
+      } else if (membership.role === 'TECHNICIAN' && activeModule === 'overview') {
+        setActiveModule('tech');
+      }
+    }
+  }, [membership?.role]);
 
   if (isLoading) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[#F5F6F7] text-[#1A202C]">
+      <div className="flex h-screen w-screen items-center justify-center bg-[#0B0F17] text-[#E2E8F0]">
         <div className="flex flex-col items-center gap-3">
           <img src="/forgex_icon.png" alt="ForgeX AI" className="w-10 h-10 animate-bounce" />
-          <span className="text-xs font-mono font-bold tracking-wider text-gray-600">
+          <span className="text-xs font-mono font-bold tracking-wider text-gray-400">
             AUTHENTICATING FORGEX SESSION...
           </span>
         </div>
@@ -41,17 +107,34 @@ const AppContent: React.FC = () => {
   }
 
   if (!token && !user) {
-    return <LoginView onSuccess={() => setActiveModule('overview')} />;
+    return (
+      <LoginView
+        onSuccess={(loggedRole) => {
+          const target = getDefaultModuleForRole(loggedRole || membership?.role);
+          setActiveModule(target);
+        }}
+      />
+    );
   }
 
   const renderActiveView = () => {
     switch (activeModule) {
       case 'overview':
+        if (role === 'WORKER') {
+          return <RBACFallbackBanner moduleName="Plant Overview" role={role} onRedirect={setActiveModule} />;
+        }
         return <OverviewView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
       case 'assets':
         return <AssetDirectoryView />;
       case 'engineering-assets':
-        return isOwnerOrAdmin ? <EngineeringAssetCenterView /> : <OverviewView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
+        if (role === 'WORKER') {
+          return <RBACFallbackBanner moduleName="Engineering Asset Center" role={role} onRedirect={setActiveModule} />;
+        }
+        return isOwnerOrAdmin || role === 'ENGINEER' || role === 'PLANT_MANAGER' ? (
+          <EngineeringAssetCenterView />
+        ) : (
+          <RBACFallbackBanner moduleName="Engineering Asset Center" role={role} onRedirect={setActiveModule} />
+        );
       case 'machine-recovery':
         return <MachineRecoveryView onNavigateToCopilot={(_tag) => setActiveModule('copilot')} />;
       case 'knowledge-hub':
@@ -92,9 +175,17 @@ const AppContent: React.FC = () => {
       case 'notifications':
         return <NotificationsFeedView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
       case 'team':
-        return isOwnerOrAdmin ? <TeamManagementView /> : <OverviewView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
+        return isOwnerOrAdmin ? (
+          <TeamManagementView />
+        ) : (
+          <RBACFallbackBanner moduleName="Team & Access Control" role={role} onRedirect={setActiveModule} />
+        );
       case 'audit':
-        return <AuditLedgerView />;
+        return isOwnerOrAdmin || role === 'PLANT_MANAGER' ? (
+          <AuditLedgerView />
+        ) : (
+          <RBACFallbackBanner moduleName="Security & Audit Ledger" role={role} onRedirect={setActiveModule} />
+        );
       case 'settings':
         return <SettingsView />;
       default:

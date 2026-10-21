@@ -46,6 +46,69 @@ export async function bootstrapInitialData(
       logger.info({ membershipId: membership.id }, 'Bootstrapped admin membership');
     }
 
+    // 3b. Bootstrap Admin Persona
+    let adminUser = await dataStore.getUserByExternalAuthId('user-dev-admin-1');
+    if (!adminUser) {
+      adminUser = await dataStore.createUser({
+        externalAuthId: 'user-dev-admin-1',
+        email: 'admin@forgex.industrial',
+        fullName: 'Industrial Operations Admin',
+      });
+      logger.info({ userId: adminUser.id }, 'Bootstrapped admin user');
+    }
+    let adminMembership = await dataStore.getMembership(adminUser.id, org.id);
+    if (!adminMembership) {
+      adminMembership = await dataStore.createMembership({
+        organizationId: org.id,
+        userId: adminUser.id,
+        role: 'ORGANIZATION_ADMIN',
+        status: 'ACTIVE',
+      });
+      logger.info({ membershipId: adminMembership.id }, 'Bootstrapped admin membership');
+    }
+
+    // 3c. Bootstrap Technician Persona
+    let techUser = await dataStore.getUserByExternalAuthId('user-dev-tech-1');
+    if (!techUser) {
+      techUser = await dataStore.createUser({
+        externalAuthId: 'user-dev-tech-1',
+        email: 'tech@forgex.industrial',
+        fullName: 'Field Maintenance Specialist',
+      });
+      logger.info({ userId: techUser.id }, 'Bootstrapped technician user');
+    }
+    let techMembership = await dataStore.getMembership(techUser.id, org.id);
+    if (!techMembership) {
+      techMembership = await dataStore.createMembership({
+        organizationId: org.id,
+        userId: techUser.id,
+        role: 'TECHNICIAN',
+        status: 'ACTIVE',
+      });
+      logger.info({ membershipId: techMembership.id }, 'Bootstrapped technician membership');
+    }
+
+    // 3d. Bootstrap Worker Persona
+    let workerUser = await dataStore.getUserByExternalAuthId('user-dev-worker-1');
+    if (!workerUser) {
+      workerUser = await dataStore.createUser({
+        externalAuthId: 'user-dev-worker-1',
+        email: 'worker@forgex.industrial',
+        fullName: 'Shop Floor Operator',
+      });
+      logger.info({ userId: workerUser.id }, 'Bootstrapped worker user');
+    }
+    let workerMembership = await dataStore.getMembership(workerUser.id, org.id);
+    if (!workerMembership) {
+      workerMembership = await dataStore.createMembership({
+        organizationId: org.id,
+        userId: workerUser.id,
+        role: 'WORKER',
+        status: 'ACTIVE',
+      });
+      logger.info({ membershipId: workerMembership.id }, 'Bootstrapped worker membership');
+    }
+
     // 4. Bootstrap Texas Plant
     let plant = await dataStore.getPlantById(org.id, 'PLANT-TX-04');
     if (!plant) {
@@ -199,6 +262,90 @@ export async function bootstrapInitialData(
         specializedMachineIds: [pump.id],
       });
       logger.info('Bootstrapped employee profile for Lead Engineer EMP-8801');
+    }
+
+    // Bootstrap Admin Badge & Profile
+    const salt = 'forgex_badge_salt_2026';
+    const existingAdminBadge = await dataStore.getEmployeeBadgeByUserId(org.id, adminUser.id);
+    if (!existingAdminBadge) {
+      const pinHash = crypto.createHash('sha256').update(`${salt}:9999`).digest('hex');
+      await dataStore.issueEmployeeBadge(org.id, {
+        userId: adminUser.id,
+        badgeCode: 'BADGE-ADMIN-01',
+        pinHash,
+      });
+      logger.info('Bootstrapped Admin badge BADGE-ADMIN-01 (PIN: 9999)');
+    }
+
+    // Bootstrap Technician Badge & Profile
+    const existingTechBadge = await dataStore.getEmployeeBadgeByUserId(org.id, techUser.id);
+    if (!existingTechBadge) {
+      const pinHash = crypto.createHash('sha256').update(`${salt}:5678`).digest('hex');
+      await dataStore.issueEmployeeBadge(org.id, {
+        userId: techUser.id,
+        badgeCode: 'BADGE-TECH-01',
+        pinHash,
+      });
+      logger.info('Bootstrapped Technician badge BADGE-TECH-01 (PIN: 5678)');
+    }
+
+    let techProfile = await dataStore.getEmployeeProfileByUserId(org.id, techUser.id);
+    if (!techProfile) {
+      techProfile = await dataStore.createEmployeeProfile(org.id, {
+        userId: techUser.id,
+        employeeNumber: 'TECH-4402',
+        fullName: techUser.fullName,
+        email: techUser.email,
+        role: 'TECHNICIAN',
+        department: 'Field Maintenance & Vibration Reliability',
+        assignedPlantIds: [plant.id],
+        accountStatus: 'ACTIVE',
+        availabilityStatus: 'AVAILABLE',
+        qualificationStatus: 'CERTIFIED',
+        verifiedSkills: [
+          'Centrifugal Slurry Pump Level 3',
+          'API 610 Heavy Duty',
+          'Vibration Analysis',
+          'OSHA 1910.147 LOTO',
+        ],
+        specializedMachineIds: [pump.id],
+      });
+      logger.info('Bootstrapped employee profile for Technician TECH-4402');
+    }
+
+    // Bootstrap Worker Badge (BADGE-4091 | PIN 1024) & Profile
+    const existingWorkerBadge = await dataStore.getEmployeeBadgeByUserId(org.id, workerUser.id);
+    if (!existingWorkerBadge) {
+      const pinHash = crypto.createHash('sha256').update(`${salt}:1024`).digest('hex');
+      await dataStore.issueEmployeeBadge(org.id, {
+        userId: workerUser.id,
+        badgeCode: 'BADGE-4091',
+        pinHash,
+      });
+      logger.info('Bootstrapped Worker badge BADGE-4091 (PIN: 1024)');
+    }
+
+    let workerProfile = await dataStore.getEmployeeProfileByUserId(org.id, workerUser.id);
+    if (!workerProfile) {
+      workerProfile = await dataStore.createEmployeeProfile(org.id, {
+        userId: workerUser.id,
+        employeeNumber: 'BADGE-4091',
+        fullName: workerUser.fullName,
+        email: workerUser.email,
+        role: 'WORKER',
+        department: 'Plant Production Operations',
+        assignedPlantIds: [plant.id],
+        accountStatus: 'ACTIVE',
+        availabilityStatus: 'AVAILABLE',
+        qualificationStatus: 'CERTIFIED',
+        verifiedSkills: [
+          'Lockout Tagout (LOTO)',
+          'Emergency Valve Isolation',
+          'SOP Digital Execution',
+        ],
+        specializedMachineIds: [],
+      });
+      logger.info('Bootstrapped employee profile for Worker BADGE-4091');
     }
 
     // Bootstrap Machine Specialist Mapping for PUMP-204-B

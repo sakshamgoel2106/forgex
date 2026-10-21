@@ -174,7 +174,14 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   const aiLimiter = RateLimiterService.aiInferenceLimiter();
 
   // Auth and Onboarding Routes (Public & Semi-public endpoints)
-  app.use('/api/v1/auth', createAuthRouter(dataStore, authAdapter));
+  const authRouter = createAuthRouter(dataStore, authAdapter);
+  app.use('/api/v1/auth', authRouter);
+
+  // Industrial Badge Login alias (unauthenticated shop-floor terminal endpoint)
+  app.post('/api/v1/badges/login', (req, res, next) => {
+    req.url = '/badge-login';
+    authRouter(req, res, next);
+  });
 
   // Protected Organization & Team Management Routes
   app.use('/api/v1/org', authenticate, createOrgRouter(dataStore));

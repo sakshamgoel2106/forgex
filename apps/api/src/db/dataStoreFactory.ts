@@ -32,8 +32,13 @@ export async function createDataStore(cfg: EnvConfig): Promise<DataStoreInitResu
         connectionTimeoutMillis: 5000,
       });
 
+      pool.on('connect', (client) => {
+        client.query('SET search_path TO forgex, public');
+      });
+
       // Verify PostgreSQL connectivity
       const client = await pool.connect();
+      await client.query('SET search_path TO forgex, public');
       client.release();
       logger.info('Connected to PostgreSQL database');
 

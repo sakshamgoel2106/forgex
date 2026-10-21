@@ -240,6 +240,7 @@ export interface IDataStore {
   createUser(dto: CreateUserDTO): Promise<User>;
   getUserById(id: string): Promise<User | null>;
   getUserByExternalAuthId(externalAuthId: string): Promise<User | null>;
+  getUserByEmail(email: string): Promise<User | null>;
   updateUser(userId: string, updates: Partial<User>): Promise<User | null>;
   listUserSessions(userId: string): Promise<UserSession[]>;
   revokeUserSession(userId: string, sessionId: string): Promise<boolean>;

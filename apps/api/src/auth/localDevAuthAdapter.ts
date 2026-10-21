@@ -9,13 +9,40 @@ export class LocalDevAuthAdapter implements IAuthAdapter {
   }
 
   public async verifyToken(token: string): Promise<AuthUser> {
-    if (token === 'local_dev_token') {
+    if (token === 'local_dev_token' || token === 'local_dev_token_engineer') {
       return {
         id: 'user-dev-eng-1',
         email: 'engineer@forgex.industrial',
         emailVerified: true,
         fullName: 'Lead Plant Engineer',
+        metadata: { role: 'ORGANIZATION_OWNER' },
+      };
+    }
+    if (token === 'local_dev_token_admin') {
+      return {
+        id: 'user-dev-admin-1',
+        email: 'admin@forgex.industrial',
+        emailVerified: true,
+        fullName: 'Industrial Operations Admin',
         metadata: { role: 'ORGANIZATION_ADMIN' },
+      };
+    }
+    if (token === 'local_dev_token_tech') {
+      return {
+        id: 'user-dev-tech-1',
+        email: 'tech@forgex.industrial',
+        emailVerified: true,
+        fullName: 'Field Maintenance Specialist',
+        metadata: { role: 'TECHNICIAN' },
+      };
+    }
+    if (token === 'local_dev_token_worker') {
+      return {
+        id: 'user-dev-worker-1',
+        email: 'worker@forgex.industrial',
+        emailVerified: true,
+        fullName: 'Shop Floor Operator',
+        metadata: { role: 'WORKER' },
       };
     }
 

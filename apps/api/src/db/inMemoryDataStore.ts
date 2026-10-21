@@ -276,6 +276,13 @@ export class InMemoryDataStore implements IDataStore {
     return null;
   }
 
+  public async getUserByEmail(email: string): Promise<User | null> {
+    for (const user of this.users.values()) {
+      if (user.email.toLowerCase() === email.toLowerCase()) return user;
+    }
+    return null;
+  }
+
   private userSessions: Map<string, UserSession[]> = new Map();
 
   public async updateUser(userId: string, updates: Partial<User>): Promise<User | null> {

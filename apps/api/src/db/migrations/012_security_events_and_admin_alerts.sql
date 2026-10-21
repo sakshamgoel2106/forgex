@@ -3,8 +3,8 @@
 
 CREATE TABLE IF NOT EXISTS security_events (
   id VARCHAR(36) PRIMARY KEY,
-  organization_id VARCHAR(36) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  actor_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   actor_email VARCHAR(255),
   actor_role VARCHAR(64),
   category VARCHAR(64) NOT NULL,
@@ -17,10 +17,10 @@ CREATE TABLE IF NOT EXISTS security_events (
   correlation_id VARCHAR(128),
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   review_status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
-  assigned_reviewer_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+  assigned_reviewer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   review_notes TEXT,
   resolved_at TIMESTAMP WITH TIME ZONE,
-  resolved_by_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+  resolved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   is_benign_inquiry BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -32,13 +32,13 @@ CREATE INDEX IF NOT EXISTS idx_security_events_org_category ON security_events(o
 
 CREATE TABLE IF NOT EXISTS security_alerts (
   id VARCHAR(36) PRIMARY KEY,
-  organization_id VARCHAR(36) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   alert_type VARCHAR(64) NOT NULL,
   severity VARCHAR(32) NOT NULL DEFAULT 'MEDIUM',
   status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
   title VARCHAR(255) NOT NULL,
   summary TEXT NOT NULL,
-  actor_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   actor_email VARCHAR(255),
   actor_role VARCHAR(64),
   resource_category VARCHAR(64) NOT NULL,
@@ -47,11 +47,11 @@ CREATE TABLE IF NOT EXISTS security_alerts (
   first_seen_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   correlated_event_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-  assigned_reviewer_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+  assigned_reviewer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   review_notes TEXT,
   resolution_outcome VARCHAR(64),
   resolved_at TIMESTAMP WITH TIME ZONE,
-  resolved_by_user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+  resolved_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

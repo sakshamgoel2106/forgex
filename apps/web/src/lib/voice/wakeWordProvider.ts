@@ -297,17 +297,18 @@ export function createWakeWordProvider(
   }
 
   // Resolve from environment if available
+  const proc = typeof globalThis !== 'undefined' ? (globalThis as any).process : undefined;
   if (!accessKey) {
-    if (typeof process !== 'undefined' && process.env?.PICOVOICE_ACCESS_KEY) {
-      accessKey = process.env.PICOVOICE_ACCESS_KEY;
+    if (proc?.env?.PICOVOICE_ACCESS_KEY) {
+      accessKey = proc.env.PICOVOICE_ACCESS_KEY;
     } else if (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PICOVOICE_ACCESS_KEY) {
       accessKey = (import.meta as any).env.VITE_PICOVOICE_ACCESS_KEY;
     }
   }
 
   if (!engine) {
-    if (typeof process !== 'undefined' && process.env?.VOICE_WAKE_WORD_ENGINE) {
-      engine = process.env.VOICE_WAKE_WORD_ENGINE;
+    if (proc?.env?.VOICE_WAKE_WORD_ENGINE) {
+      engine = proc.env.VOICE_WAKE_WORD_ENGINE;
     } else if (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_VOICE_WAKE_WORD_ENGINE) {
       engine = (import.meta as any).env.VITE_VOICE_WAKE_WORD_ENGINE;
     }

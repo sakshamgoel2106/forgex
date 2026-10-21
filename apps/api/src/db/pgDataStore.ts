@@ -1,4 +1,5 @@
 import pg from 'pg';
+import crypto from 'node:crypto';
 import type {
   Organization,
   User,
@@ -235,6 +236,24 @@ export class PgDataStore implements IDataStore {
       `SELECT id, external_auth_id, email, full_name, created_at, updated_at
        FROM users WHERE external_auth_id = $1`,
       [externalAuthId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      externalAuthId: row.external_auth_id,
+      email: row.email,
+      fullName: row.full_name,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getUserByEmail(email: string): Promise<User | null> {
+    const res = await this.pool.query(
+      `SELECT id, external_auth_id, email, full_name, created_at, updated_at
+       FROM users WHERE LOWER(email) = LOWER($1)`,
+      [email]
     );
     if (res.rows.length === 0) return null;
     const row = res.rows[0];
@@ -4039,15 +4058,17 @@ export class PgDataStore implements IDataStore {
     organizationId: string,
     dto: CreateEmployeeProfileDTO
   ): Promise<EmployeeProfile> {
+    const id = crypto.randomUUID();
     const res = await this.pool.query(
       `INSERT INTO employee_profiles (
-         organization_id, user_id, employee_number, department,
+         id, organization_id, user_id, employee_number, department,
          assigned_plant_ids, account_status, availability_status, qualification_status,
          verified_skills, specialized_machine_ids
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
+        id,
         organizationId,
         dto.userId,
         dto.employeeNumber,
@@ -4261,13 +4282,14 @@ export class PgDataStore implements IDataStore {
       computedStatus = 'UNASSIGNED';
     }
 
+    const id = crypto.randomUUID();
     const res = await this.pool.query(
       `INSERT INTO machine_specialist_mappings (
-         organization_id, machine_id, plant_id, primary_specialist_user_id,
+         id, organization_id, machine_id, plant_id, primary_specialist_user_id,
          backup_specialist_user_ids, required_certifications, assignment_status,
          escalation_timeout_minutes, escalation_role, assigned_by_user_id, assigned_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
        ON CONFLICT (organization_id, machine_id)
        DO UPDATE SET
          plant_id = EXCLUDED.plant_id,
@@ -4282,6 +4304,7 @@ export class PgDataStore implements IDataStore {
          updated_at = NOW()
        RETURNING *`,
       [
+        id,
         organizationId,
         dto.machineId,
         dto.plantId,
@@ -4395,16 +4418,18 @@ export class PgDataStore implements IDataStore {
       timestamp: new Date().toISOString(),
     };
 
+    const id = crypto.randomUUID();
     const res = await this.pool.query(
       `INSERT INTO specialist_tickets (
-         ticket_number, organization_id, plant_id, machine_id, machine_asset_tag,
+         id, ticket_number, organization_id, plant_id, machine_id, machine_asset_tag,
          reported_by_user_id, original_question, diagnostic_details, escalation_reason,
          evidence_check_result, severity, assigned_specialist_user_id, assignment_status,
          status, history
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
+        id,
         ticketNumber,
         organizationId,
         dto.plantId,

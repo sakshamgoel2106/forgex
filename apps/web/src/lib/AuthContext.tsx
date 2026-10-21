@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import type { User, Organization, OrganizationMembership, OrgPermission } from '@forgex/shared-types';
+import type { User, Organization, OrganizationMembership, OrgPermission, OrgRole } from '@forgex/shared-types';
 
 export interface AuthContextType {
   user: User | null;
@@ -9,8 +9,8 @@ export interface AuthContextType {
   permissions: OrgPermission[];
   token: string | null;
   isLoading: boolean;
-  login: (email: string, password?: string) => Promise<boolean>;
-  loginWithBadge: (badgeCode: string, pin: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password?: string) => Promise<{ success: boolean; error?: string; role?: OrgRole }>;
+  loginWithBadge: (badgeCode: string, pin: string) => Promise<{ success: boolean; error?: string; role?: OrgRole }>;
   registerOrg: (data: {
     organizationName: string;
     organizationSlug: string;
@@ -98,7 +98,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [token, fetchCurrentUser]);
 
-  const login = async (email: string, password?: string): Promise<boolean> => {
+  const login = async (email: string, password?: string): Promise<{ success: boolean; error?: string; role?: OrgRole }> => {
     try {
       setIsLoading(true);
       const res = await fetch('/api/v1/auth/login', {
@@ -115,22 +115,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (json.data.organization?.id) {
           localStorage.setItem(ORG_ID_KEY, json.data.organization.id);
         }
+        if (json.data.user) setUser(json.data.user);
+        if (json.data.membership) setMembership(json.data.membership);
+        if (json.data.memberships) setMemberships(json.data.memberships);
+        if (json.data.permissions) setPermissions(json.data.permissions);
+        if (json.data.organization) setOrganization(json.data.organization);
+
         await fetchCurrentUser(receivedToken, json.data.organization?.id);
-        return true;
+        return { success: true, role: json.data.membership?.role };
       }
-      return false;
-    } catch (err) {
+      return { success: false, error: json.error?.message || 'Invalid credentials or inactive membership.' };
+    } catch (err: any) {
       console.error('Login error:', err);
-      return false;
+      return { success: false, error: err?.message || 'Network connection failed.' };
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loginWithBadge = async (badgeCode: string, pin: string): Promise<{ success: boolean; error?: string }> => {
+  const loginWithBadge = async (badgeCode: string, pin: string): Promise<{ success: boolean; error?: string; role?: OrgRole }> => {
     try {
       setIsLoading(true);
-      const res = await fetch('/api/v1/auth/badge-login', {
+      const res = await fetch('/api/v1/badges/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ badgeCode, pin }),
@@ -144,13 +150,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (json.data.organization?.id) {
           localStorage.setItem(ORG_ID_KEY, json.data.organization.id);
         }
+        if (json.data.user) setUser(json.data.user);
+        if (json.data.membership) setMembership(json.data.membership);
+        if (json.data.memberships) setMemberships(json.data.memberships || [json.data.membership]);
+        if (json.data.permissions) setPermissions(json.data.permissions);
+        if (json.data.organization) setOrganization(json.data.organization);
+
         await fetchCurrentUser(receivedToken, json.data.organization?.id);
-        return { success: true };
+        return { success: true, role: json.data.membership?.role };
       }
-      return { success: false, error: json.error?.message || 'Badge authentication failed.' };
+      return { success: false, error: json.error?.message || 'Invalid badge identifier or PIN code.' };
     } catch (err: any) {
       console.error('Badge login error:', err);
-      return { success: false, error: err?.message || 'Network error during badge login.' };
+      return { success: false, error: err?.message || 'Network error during badge authentication.' };
     } finally {
       setIsLoading(false);
     }
