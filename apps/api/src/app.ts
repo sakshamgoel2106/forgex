@@ -28,6 +28,8 @@ import { createMaintenanceRecordRouter } from './routes/maintenanceHistory.route
 import { createRecoveryRouter } from './routes/recovery.routes.js';
 import { createGuidanceRouter } from './routes/guidance.routes.js';
 import { MachineRecoveryService } from './services/machineRecovery.service.js';
+import { createRcaRouter } from './routes/rca.routes.js';
+import { RcaService } from './services/rca.service.js';
 import {
   createEmployeeRouter,
   createTicketRouter,
@@ -69,6 +71,7 @@ export interface AppDependencies {
   visualEngine?: VisualIntelligenceEngine;
   maintenanceEngine?: MaintenanceWorkflowEngine;
   recoveryService?: MachineRecoveryService;
+  rcaService?: RcaService;
   speechProvider?: ISpeechToTextProvider & ITextToSpeechProvider;
 }
 
@@ -114,6 +117,10 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   const recoveryService =
     deps.recoveryService ??
     new MachineRecoveryService(dataStore, securityService);
+
+  const rcaService =
+    deps.rcaService ??
+    new RcaService(dataStore, embeddingAdapter, vectorStore, generationProvider);
 
   const speechDeploymentMode =
     config.DEPLOYMENT_MODE === 'enterprise'
@@ -233,8 +240,9 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   app.use('/api/v1/badges', authenticate, createBadgeRouter(dataStore));
   app.use('/api/v1/engineering', authenticate, createEngineeringRouter(dataStore, storageAdapter));
   app.use('/api/v1/maintenance-records', authenticate, createMaintenanceRecordRouter(dataStore));
-  app.use('/api/v1/recovery', authenticate, createRecoveryRouter(dataStore, recoveryService, storageAdapter));
+  app.use('/api/v1/recovery', authenticate, createRecoveryRouter(dataStore, recoveryService, storageAdapter, embeddingAdapter, vectorStore));
   app.use('/api/v1/guidance', authenticate, createGuidanceRouter(dataStore));
+  app.use('/api/v1/rca', authenticate, createRcaRouter(dataStore, embeddingAdapter, vectorStore, generationProvider, rcaService));
 
 
 

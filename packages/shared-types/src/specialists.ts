@@ -129,6 +129,24 @@ export interface SpecialistTicket {
   history: TicketHistoryItem[];
   createdAt: string;
   updatedAt: string;
+  // Rich Industrial Ticket Payload Fields
+  createdAtFormatted?: string;
+  plantName?: string;
+  reportedByName?: string;
+  reportedByRole?: string;
+  assetTag?: string;
+  assetName?: string;
+  machineStatus?: string;
+  faultCode?: string;
+  symptomDescription?: string;
+  topRootCause?: string;
+  probability?: number;
+  recommendedFix?: string;
+  investigationProgress?: string;
+  specialistDiscipline?: string;
+  priority?: string;
+  lotoApplied?: boolean;
+  technicianNotes?: string;
 }
 
 export interface TicketOversightSummary {

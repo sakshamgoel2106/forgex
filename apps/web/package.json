@@ -26,7 +26,8 @@
     "recharts": "^3.10.1",
     "tailwind-merge": "^2.6.0",
     "three": "^0.186.1",
-    "vaul": "^1.1.2"
+    "vaul": "^1.1.2",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.1",

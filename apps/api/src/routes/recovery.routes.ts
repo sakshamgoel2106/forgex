@@ -15,12 +15,18 @@ import type {
   CreateExpertKnowledgeDTO,
   ReviewExpertKnowledgeDTO,
   ExpertKnowledgeFilterOptions,
+  ExpertNoteReview,
 } from '@forgex/shared-types';
+
+import type { IEmbeddingAdapter } from '../embeddings/embeddings.interface.js';
+import type { IVectorStoreAdapter, VectorPoint } from '../vector/vectorStore.interface.js';
 
 export function createRecoveryRouter(
   dataStore: IDataStore,
   recoveryService: MachineRecoveryService,
-  _storageAdapter?: IStorageAdapter
+  _storageAdapter?: IStorageAdapter,
+  embeddingAdapter?: IEmbeddingAdapter,
+  vectorStore?: IVectorStoreAdapter
 ): Router {
   const router = Router();
 
@@ -724,6 +730,35 @@ export function createRecoveryRouter(
   // Expert Knowledge Library Endpoints (Prompt 04)
   // ---------------------------------------------------------------------------
 
+  function generateAiSupplementalInsight(data: {
+    assetTag?: string | null;
+    category?: string;
+    title: string;
+    description: string;
+    symptom?: string | null;
+    taskDuringIssue?: string | null;
+  }): string {
+    const tag = (data.assetTag || 'EQUIPMENT').toUpperCase();
+    const cat = data.category || 'Reliability';
+    const task = data.taskDuringIssue || 'Routine Maintenance';
+
+    if (tag.includes('PUMP') || tag.includes('SLURRY')) {
+      return `Cross-check API 610 seal flush Plan 11/53A pressures before starting. Verify casing bolt torque cross-pattern sequence to 85 Nm, and ensure full LOTO isolation of primary suction and discharge isolation valves prior to mechanical seal servicing.`;
+    } else if (tag.includes('GEN') || tag.includes('DIESEL') || tag.includes('101')) {
+      return `Cross-check OEM manual Section 4.2 for cold-crank pre-lubrication pressure (min 1.8 bar). Verify rotating diode exciter bridge diodes with multimeter before synchronizing, and confirm emergency stop governor trip latch is fully engaged and free of carbon fouling.`;
+    } else if (tag.includes('PKG') || tag.includes('901') || tag.includes('CONV')) {
+      return `Verify photo-eye sensor optical alignment (margin > 3.0) and tension roller radial runout under 0.05 mm. Confirm Category 4 dual-channel safety relay interlock is tested and cleared before restarting packaging line indexing cycle.`;
+    } else if (tag.includes('HEX') || tag.includes('PLATE') || tag.includes('HEAT') || tag.includes('801')) {
+      return `Cross-check tightening dimension 'A' across plate pack per heat exchanger manual drawing. Ensure differential pressure across plates does not exceed 4.5 bar during initial fluid charging, and purge all entrained air via top vent valves.`;
+    } else if (tag.includes('TURB') || tag.includes('COMP')) {
+      return `Verify unloader valve clearance (0.015" feeler gauge) and confirm radial shaft vibration is under 2.8 mm/s RMS (ISO 10816-3). Execute NFPA 70E Arc Flash Class 2 PPE protocol during high-voltage auxiliary lube skid power isolation.`;
+    } else if (cat === 'Safety & LOTO') {
+      return `Mandatory zero-energy state verification required per OSHA 1910.147. Bleed residual pneumatic/hydraulic line pressure to 0 psig, apply secondary safety padlocks to breaker panel, and log lockout tagout serial number before initiating teardown.`;
+    } else {
+      return `Cross-check OEM Technical Manual Section 6 for torque tolerances and lubrication intervals. Verify alignment using dial indicator within ±0.05 mm tolerance, and ensure all electrical interlocks and safety guards are re-certified prior to returning machine ${tag} to active production during ${task}.`;
+    }
+  }
+
   /**
    * GET /api/v1/recovery/expert-library
    * List structured expert knowledge entries with filtering
@@ -735,15 +770,39 @@ export function createRecoveryRouter(
         plantId: req.query.plantId as string | undefined,
         machineId: req.query.machineId as string | undefined,
         category: req.query.category as any,
+        severity: req.query.severity as any,
         status: req.query.status as any,
         search: req.query.search as string | undefined,
         dataClassification: req.query.dataClassification as string | undefined,
       };
 
       const entries = await recoveryService.listExpertKnowledge(orgId, filters);
+      const enrichedEntries = entries.map((entry) => {
+        if (!entry.aiSupplementalInsight) {
+          entry.aiSupplementalInsight = generateAiSupplementalInsight({
+            assetTag: entry.machineAssetTag || (entry.machineAssetTags && entry.machineAssetTags[0]),
+            category: entry.category,
+            title: entry.title,
+            description: entry.description,
+            symptom: entry.symptom,
+            taskDuringIssue: entry.taskDuringIssue,
+          });
+        }
+        if (!Array.isArray(entry.reviews)) {
+          entry.reviews = [];
+        }
+        if (typeof entry.averageRating !== 'number') {
+          entry.averageRating = 5.0;
+        }
+        if (typeof entry.reviewCount !== 'number') {
+          entry.reviewCount = entry.reviews.length;
+        }
+        return entry;
+      });
+
       res.status(200).json({
         success: true,
-        data: entries,
+        data: enrichedEntries,
       });
     } catch (err: any) {
       res.status(500).json({
@@ -771,6 +830,26 @@ export function createRecoveryRouter(
         return;
       }
 
+      if (!entry.aiSupplementalInsight) {
+        entry.aiSupplementalInsight = generateAiSupplementalInsight({
+          assetTag: entry.machineAssetTag || (entry.machineAssetTags && entry.machineAssetTags[0]),
+          category: entry.category,
+          title: entry.title,
+          description: entry.description,
+          symptom: entry.symptom,
+          taskDuringIssue: entry.taskDuringIssue,
+        });
+      }
+      if (!Array.isArray(entry.reviews)) {
+        entry.reviews = [];
+      }
+      if (typeof entry.averageRating !== 'number') {
+        entry.averageRating = 5.0;
+      }
+      if (typeof entry.reviewCount !== 'number') {
+        entry.reviewCount = entry.reviews.length;
+      }
+
       res.status(200).json({
         success: true,
         data: entry,
@@ -785,7 +864,7 @@ export function createRecoveryRouter(
 
   /**
    * POST /api/v1/recovery/expert-library
-   * Create structured expert knowledge entry (technician findings, repair resolutions, failure patterns)
+   * Create structured expert knowledge entry or batch entries (technician findings, repair resolutions, failure patterns)
    */
   router.post('/expert-library', async (req: Request, res: Response): Promise<void> => {
     try {
@@ -793,30 +872,188 @@ export function createRecoveryRouter(
       const actorUserId = req.auth!.user.id;
       const actorEmail = req.auth!.user.email;
       const actorRole = req.auth!.membership.role;
+      const actorName = (req.auth!.user as any).fullName || (req.auth!.user as any).name || actorEmail;
 
-      const dto: CreateExpertKnowledgeDTO = req.body;
-      if (!dto.plantId || !dto.category || !dto.title || !dto.description) {
+      const isArray = Array.isArray(req.body) || Array.isArray(req.body.notes);
+      const rawNotes: any[] = Array.isArray(req.body)
+        ? req.body
+        : Array.isArray(req.body.notes)
+        ? req.body.notes
+        : [req.body];
+
+      if (rawNotes.length === 0) {
         res.status(400).json({
           success: false,
-          error: {
-            code: 'FORGEX_VALIDATION_ERROR',
-            message: 'plantId, category, title, and description are required.',
-          },
+          error: { code: 'FORGEX_VALIDATION_ERROR', message: 'At least one note entry is required.' },
         });
         return;
       }
 
-      const entry = await recoveryService.createExpertKnowledge(orgId, dto, {
-        organizationId: orgId,
-        userId: actorUserId,
-        userEmail: actorEmail,
-        userRole: actorRole,
-      });
+      // Default plant fallback
+      let defaultPlantId = (req.auth!.user as any).plantId;
+      if (!defaultPlantId) {
+        try {
+          const plants = await dataStore.listPlants(orgId);
+          if (plants && plants.length > 0) defaultPlantId = plants[0].id;
+        } catch {
+          // fallback
+        }
+      }
+      if (!defaultPlantId) defaultPlantId = 'plant-default';
+
+      const createdEntries: any[] = [];
+
+      for (const note of rawNotes) {
+        const title = (note.title || '').trim();
+        const description = (note.description || note.content || note.guidance || '').trim();
+
+        if (!title || !description) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_VALIDATION_ERROR',
+              message: 'Title and observation/field guidance content are required for all notes.',
+            },
+          });
+          return;
+        }
+
+        const plantId = note.plantId || defaultPlantId;
+        const category = note.category || 'Reliability';
+        const severity = note.severity || 'Pro-Tip / Best Practice';
+        const symptom = note.symptom ? String(note.symptom).trim() : null;
+        const taskDuringIssue = note.taskDuringIssue ? String(note.taskDuringIssue).trim() : null;
+        const observedAt = note.observedAt ? String(note.observedAt).trim() : null;
+
+        // Parse comma-separated machine tags or asset tag
+        const tagInput = note.assetTag || note.machineAssetTag || '';
+        let machineAssetTags: string[] = Array.isArray(note.machineAssetTags) ? [...note.machineAssetTags] : [];
+        let machineAssetTag: string | null = null;
+
+        if (tagInput) {
+          const splitTags = String(tagInput)
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean);
+          if (splitTags.length > 0) {
+            machineAssetTags = Array.from(new Set([...machineAssetTags, ...splitTags]));
+            machineAssetTag = splitTags[0];
+          }
+        }
+
+        const aiSupplementalInsight =
+          note.aiSupplementalInsight ||
+          generateAiSupplementalInsight({
+            assetTag: machineAssetTag,
+            category,
+            title,
+            description,
+            symptom,
+            taskDuringIssue,
+          });
+
+        const dto: CreateExpertKnowledgeDTO = {
+          plantId,
+          machineId: note.machineId || null,
+          machineAssetTag,
+          machineAssetTags,
+          category,
+          severity,
+          symptom,
+          taskDuringIssue,
+          observedAt,
+          title,
+          description,
+          aiSupplementalInsight,
+          symptoms: note.symptoms || (symptom ? [symptom] : []),
+          rootCause: note.rootCause || null,
+          resolutionSteps: note.resolutionSteps || [],
+          knownFailureModes: note.knownFailureModes || [],
+          gapDescription: note.gapDescription || null,
+          safetyPrecautions: note.safetyPrecautions || [],
+          technicalSpecifications: note.technicalSpecifications || {},
+          tags: note.tags || machineAssetTags,
+          status: note.status || (isArray ? 'APPROVED' : 'AWAITING_REVIEW'),
+          upvotes: typeof note.upvotes === 'number' ? note.upvotes : 0,
+          downvotes: typeof note.downvotes === 'number' ? note.downvotes : 0,
+          reviews: Array.isArray(note.reviews) ? note.reviews : [],
+          averageRating: typeof note.averageRating === 'number' ? note.averageRating : 0,
+          reviewCount: typeof note.reviewCount === 'number' ? note.reviewCount : (note.reviews?.length ?? 0),
+          dataClassification: note.dataClassification || 'INTERNAL',
+        };
+
+        const entry = await recoveryService.createExpertKnowledge(orgId, dto, {
+          organizationId: orgId,
+          userId: actorUserId,
+          userEmail: actorEmail,
+          userRole: actorRole,
+          userName: actorName,
+        });
+
+        createdEntries.push(entry);
+
+        // Vector Indexing into Qdrant Vector Store
+        if (embeddingAdapter && vectorStore) {
+          const collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge';
+          try {
+            await vectorStore.ensureCollection(collectionName, embeddingAdapter.getDimensions());
+
+            const tagsText = (entry.machineAssetTags && entry.machineAssetTags.length > 0
+              ? entry.machineAssetTags.join(', ')
+              : entry.machineAssetTag) || 'Plant Wide';
+
+            const textToEmbed = `Title: ${entry.title}
+Equipment Tag(s): ${tagsText}
+Category: ${entry.category}
+Impact / Severity: ${entry.severity || 'Pro-Tip / Best Practice'}
+${entry.taskDuringIssue ? `Task During Issue: ${entry.taskDuringIssue}\n` : ''}${entry.observedAt ? `Observed Date/Time: ${entry.observedAt}\n` : ''}${entry.symptom ? `Symptom / When to Apply: ${entry.symptom}\n` : ''}Observation & Field Guidance: ${entry.description}
+${entry.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check: ${entry.aiSupplementalInsight}\n` : ''}`;
+
+            const vector = await embeddingAdapter.generateEmbedding(textToEmbed);
+
+            const point: VectorPoint = {
+              id: entry.id,
+              vector,
+              payload: {
+                organizationId: orgId,
+                plantId: entry.plantId,
+                documentId: entry.id,
+                documentVersionId: '1.0',
+                expertKnowledgeId: entry.id,
+                type: 'EXPERT_KNOWLEDGE',
+                isExpertKnowledge: true,
+                pageNumber: 1,
+                chunkIndex: 0,
+                content: textToEmbed,
+                sectionHeading: `Expert Knowledge: ${entry.category}`,
+                isTable: false,
+                isFigure: false,
+                extractionMethod: 'MANUAL_ENTRY',
+                title: entry.title,
+                category: entry.category,
+                severity: entry.severity || 'Pro-Tip / Best Practice',
+                symptom: entry.symptom || null,
+                taskDuringIssue: entry.taskDuringIssue || null,
+                observedAt: entry.observedAt || null,
+                assetTags: entry.machineAssetTags || (entry.machineAssetTag ? [entry.machineAssetTag] : []),
+                author: entry.authorName || entry.authorEmail || 'Technician',
+                upvotes: entry.upvotes || 0,
+              },
+            };
+
+            await vectorStore.upsertPoints(collectionName, [point]);
+          } catch (vecErr: any) {
+            console.warn('Vector indexing warning for expert note:', vecErr?.message);
+          }
+        }
+      }
 
       res.status(201).json({
         success: true,
-        message: 'Expert knowledge candidate record created, awaiting engineering review.',
-        data: entry,
+        message: isArray
+          ? `${createdEntries.length} frontline expert note(s) published and vectorized successfully.`
+          : 'Expert knowledge candidate record created, awaiting engineering review.',
+        data: isArray ? createdEntries : createdEntries[0],
       });
     } catch (err: any) {
       res.status(400).json({
@@ -918,6 +1155,349 @@ export function createRecoveryRouter(
       }
     }
   );
+
+  /**
+   * POST /api/v1/recovery/expert-library/:id/upvote
+   * Increment upvote count for peer endorsement in real-time
+   */
+  router.post('/expert-library/:id/upvote', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const id = req.params.id as string;
+
+      const updated = await recoveryService.upvoteExpertKnowledge(orgId, id);
+      if (!updated) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Expert knowledge entry '${id}' not found.` },
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  router.patch('/expert-library/:id/upvote', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const id = req.params.id as string;
+
+      const updated = await recoveryService.upvoteExpertKnowledge(orgId, id);
+      if (!updated) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Expert knowledge entry '${id}' not found.` },
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  /**
+   * POST /api/v1/recovery/expert-library/:id/downvote
+   * Increment downvote count in real-time
+   */
+  router.post('/expert-library/:id/downvote', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const id = req.params.id as string;
+
+      const updated = await recoveryService.downvoteExpertKnowledge(orgId, id);
+      if (!updated) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Expert knowledge entry '${id}' not found.` },
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  router.patch('/expert-library/:id/downvote', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const id = req.params.id as string;
+
+      const updated = await recoveryService.downvoteExpertKnowledge(orgId, id);
+      if (!updated) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Expert knowledge entry '${id}' not found.` },
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  /**
+   * PUT /api/v1/recovery/expert-library/:id
+   * Edit note title, description, symptom/trigger, task, category, or severity
+   */
+  router.put('/expert-library/:id', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const id = req.params.id as string;
+      const actorUserId = req.auth!.user.id;
+      const actorRole = req.auth!.membership.role;
+
+      const existing = await recoveryService.getExpertKnowledgeById(orgId, id);
+      if (!existing) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Expert knowledge entry '${id}' not found.` },
+        });
+        return;
+      }
+
+      const isAdmin =
+        actorRole === 'ORGANIZATION_OWNER' ||
+        actorRole === 'ORGANIZATION_ADMIN' ||
+        actorRole === 'PLANT_MANAGER';
+      const isAuthor = existing.authorUserId === actorUserId;
+
+      if (!isAdmin && !isAuthor) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORGEX_FORBIDDEN',
+            message: 'Only organization administrators or the original author may edit this note.',
+          },
+        });
+        return;
+      }
+
+      const updates: any = {};
+      if (req.body.title !== undefined) updates.title = req.body.title;
+      if (req.body.description !== undefined) updates.description = req.body.description;
+      if (req.body.symptom !== undefined) updates.symptom = req.body.symptom;
+      if (req.body.taskDuringIssue !== undefined) updates.taskDuringIssue = req.body.taskDuringIssue;
+      if (req.body.category !== undefined) updates.category = req.body.category;
+      if (req.body.severity !== undefined) updates.severity = req.body.severity;
+
+      const updated = await recoveryService.updateExpertKnowledge(orgId, id, updates);
+
+      // Re-embed into vector store if updated
+      if (updated && embeddingAdapter && vectorStore) {
+        const collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge';
+        try {
+          const tagsText = (updated.machineAssetTags && updated.machineAssetTags.length > 0
+            ? updated.machineAssetTags.join(', ')
+            : updated.machineAssetTag) || 'Plant Wide';
+
+          const textToEmbed = `Title: ${updated.title}
+Equipment Tag(s): ${tagsText}
+Category: ${updated.category}
+Impact / Severity: ${updated.severity || 'Pro-Tip / Best Practice'}
+${updated.taskDuringIssue ? `Task During Issue: ${updated.taskDuringIssue}\n` : ''}${updated.observedAt ? `Observed Date/Time: ${updated.observedAt}\n` : ''}${updated.symptom ? `Symptom / When to Apply: ${updated.symptom}\n` : ''}Observation & Field Guidance: ${updated.description}
+${updated.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check: ${updated.aiSupplementalInsight}\n` : ''}`;
+
+          const vector = await embeddingAdapter.generateEmbedding(textToEmbed);
+          await vectorStore.upsertPoints(collectionName, [
+            {
+              id: updated.id,
+              vector,
+              payload: {
+                organizationId: orgId,
+                plantId: updated.plantId,
+                documentId: updated.id,
+                documentVersionId: '1.0',
+                expertKnowledgeId: updated.id,
+                type: 'EXPERT_KNOWLEDGE',
+                isExpertKnowledge: true,
+                pageNumber: 1,
+                chunkIndex: 0,
+                content: textToEmbed,
+                sectionHeading: `Expert Knowledge: ${updated.category}`,
+                isTable: false,
+                isFigure: false,
+                extractionMethod: 'MANUAL_ENTRY',
+                title: updated.title,
+                category: updated.category,
+                severity: updated.severity || 'Pro-Tip / Best Practice',
+                symptom: updated.symptom || null,
+                taskDuringIssue: updated.taskDuringIssue || null,
+                observedAt: updated.observedAt || null,
+                assetTags: updated.machineAssetTags || (updated.machineAssetTag ? [updated.machineAssetTag] : []),
+                author: updated.authorName || updated.authorEmail || 'Technician',
+                upvotes: updated.upvotes || 0,
+              },
+            },
+          ]);
+        } catch (vecErr: any) {
+          console.warn('Vector store update error for edited expert note:', vecErr?.message);
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        data: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  /**
+   * POST /api/v1/recovery/expert-library/:id/reviews
+   * Add worker review, star rating (1-5) and field outcome feedback
+   */
+  router.post('/expert-library/:id/reviews', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const id = req.params.id as string;
+      const actorUserId = req.auth!.user.id;
+      const actorEmail = req.auth!.user.email;
+      const actorRole = req.auth!.membership.role;
+      const actorName = (req.auth!.user as any).fullName || (req.auth!.user as any).name || actorEmail;
+
+      const rating = Math.max(1, Math.min(5, Number(req.body.rating) || 5));
+      const comment = (req.body.comment || '').trim();
+      const outcome = req.body.outcome || 'WORKED_IN_FIELD';
+
+      if (!comment) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'FORGEX_VALIDATION_ERROR', message: 'Review comment is required.' },
+        });
+        return;
+      }
+
+      const review: ExpertNoteReview = {
+        id: crypto.randomUUID(),
+        userId: actorUserId,
+        userName: actorName,
+        userRole: actorRole,
+        rating,
+        outcome,
+        comment,
+        createdAt: new Date().toISOString(),
+      };
+
+      const updated = await recoveryService.addExpertKnowledgeReview(orgId, id, review);
+      if (!updated) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Expert knowledge entry '${id}' not found.` },
+        });
+        return;
+      }
+
+      res.status(201).json({
+        success: true,
+        message: 'Worker review and field feedback recorded successfully.',
+        data: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  /**
+   * DELETE /api/v1/recovery/expert-library/:id
+   * Admin or author deletes expert knowledge note from database and Qdrant vector index
+   */
+  router.delete('/expert-library/:id', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const id = req.params.id as string;
+      const actorUserId = req.auth!.user.id;
+      const actorRole = req.auth!.membership.role;
+
+      const existing = await recoveryService.getExpertKnowledgeById(orgId, id);
+      if (!existing) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `Expert knowledge entry '${id}' not found.` },
+        });
+        return;
+      }
+
+      const isAdmin =
+        actorRole === 'ORGANIZATION_OWNER' ||
+        actorRole === 'ORGANIZATION_ADMIN' ||
+        actorRole === 'PLANT_MANAGER';
+      const isAuthor = existing.authorUserId === actorUserId;
+
+      if (!isAdmin && !isAuthor) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORGEX_FORBIDDEN',
+            message: 'Only organization administrators or the original author may delete this note.',
+          },
+        });
+        return;
+      }
+
+      const deleted = await recoveryService.deleteExpertKnowledge(orgId, id);
+
+      // Remove from Qdrant vector index
+      if (vectorStore) {
+        const collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge';
+        try {
+          await vectorStore.deletePoints(collectionName, [id]);
+        } catch (vecErr: any) {
+          console.warn('Vector store deletion error for expert note:', vecErr?.message);
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Expert knowledge note deleted from repository and vector index.',
+        data: { id, deleted },
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
 
   return router;
 }

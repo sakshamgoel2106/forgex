@@ -57,7 +57,7 @@ export class DocumentParser {
     buffer: Buffer,
     mimeType: string,
     filename: string,
-    metadata?: DocumentParseMetadata
+    _metadata?: DocumentParseMetadata
   ): Promise<ExtractedDocument> {
     if (!buffer || buffer.length === 0) {
       throw new Error(
@@ -125,7 +125,7 @@ export class DocumentParser {
   // --------------------------------------------------------------------------
   // 3D Model / CAD Asset Parsing (GLB, GLTF, OBJ, STL)
   // --------------------------------------------------------------------------
-  private parse3DModel(
+  protected parse3DModel(
     buffer: Buffer,
     ext: string,
     filename: string,

@@ -250,12 +250,26 @@ export interface IngestEvidenceResponse {
 // -----------------------------------------------------------------------------
 
 export type ExpertKnowledgeCategory =
+  | 'Reliability'
+  | 'Tooling Hack'
+  | 'Safety & LOTO'
+  | 'Troubleshooting Trick'
+  | 'Startup / Shutdown'
+  | 'Preventive Maintenance'
   | 'TECHNICIAN_FINDING'
   | 'ENGINEERING_REVIEW'
   | 'REPAIR_RESOLUTION'
   | 'FAILURE_PATTERN'
   | 'TROUBLESHOOTING_GUIDE'
-  | 'KNOWLEDGE_GAP';
+  | 'KNOWLEDGE_GAP'
+  | string;
+
+export type ExpertKnowledgeSeverity =
+  | 'Pro-Tip / Best Practice'
+  | 'Critical Machine Warning'
+  | 'Safety Hazard'
+  | 'Time-Saver Hack'
+  | string;
 
 export type ExpertKnowledgeStatus =
   | 'DRAFT'
@@ -265,15 +279,40 @@ export type ExpertKnowledgeStatus =
   | 'REVOKED'
   | 'SUPERSEDED';
 
+export type ReviewOutcome = 'WORKED_IN_FIELD' | 'NEEDS_MODIFICATION' | 'GENERAL_COMMENT';
+
+export interface ExpertNoteReview {
+  id: string;
+  userId: string;
+  userName?: string | null;
+  userRole?: string | null;
+  rating: number; // 1 to 5
+  outcome?: ReviewOutcome;
+  comment: string;
+  createdAt: string;
+}
+
+export interface AddExpertNoteReviewDTO {
+  rating: number;
+  outcome?: ReviewOutcome;
+  comment: string;
+}
+
 export interface ExpertKnowledgeEntry {
   id: string;
   organizationId: string;
   plantId: string;
   machineId?: string | null;
   machineAssetTag?: string | null;
+  machineAssetTags?: string[];
   category: ExpertKnowledgeCategory;
+  severity?: ExpertKnowledgeSeverity | string;
+  symptom?: string | null;
+  taskDuringIssue?: string | null;
+  observedAt?: string | null;
   title: string;
   description: string;
+  aiSupplementalInsight?: string | null;
   symptoms?: string[];
   rootCause?: string | null;
   resolutionSteps?: string[];
@@ -283,9 +322,15 @@ export interface ExpertKnowledgeEntry {
   technicalSpecifications?: Record<string, string | number>;
   tags: string[];
   status: ExpertKnowledgeStatus;
+  upvotes: number;
+  downvotes?: number;
+  reviews?: ExpertNoteReview[];
+  averageRating?: number;
+  reviewCount?: number;
   authorUserId: string;
   authorEmail?: string | null;
   authorRole?: string | null;
+  authorName?: string | null;
   reviewedByUserId?: string | null;
   reviewedByEmail?: string | null;
   reviewedAt?: string | null;
@@ -299,12 +344,18 @@ export interface ExpertKnowledgeEntry {
 }
 
 export interface CreateExpertKnowledgeDTO {
-  plantId: string;
+  plantId?: string;
   machineId?: string | null;
   machineAssetTag?: string | null;
+  machineAssetTags?: string[];
   category: ExpertKnowledgeCategory;
+  severity?: ExpertKnowledgeSeverity | string;
+  symptom?: string | null;
+  taskDuringIssue?: string | null;
+  observedAt?: string | null;
   title: string;
   description: string;
+  aiSupplementalInsight?: string | null;
   symptoms?: string[];
   rootCause?: string | null;
   resolutionSteps?: string[];
@@ -313,7 +364,17 @@ export interface CreateExpertKnowledgeDTO {
   safetyPrecautions?: string[];
   technicalSpecifications?: Record<string, string | number>;
   tags?: string[];
+  status?: ExpertKnowledgeStatus;
+  upvotes?: number;
+  downvotes?: number;
+  reviews?: ExpertNoteReview[];
+  averageRating?: number;
+  reviewCount?: number;
   dataClassification?: 'PUBLIC' | 'INTERNAL' | 'CONFIDENTIAL' | 'RESTRICTED';
+}
+
+export interface BulkCreateExpertKnowledgeDTO {
+  notes: CreateExpertKnowledgeDTO[];
 }
 
 export interface ReviewExpertKnowledgeDTO {
@@ -327,6 +388,7 @@ export interface ExpertKnowledgeFilterOptions {
   plantId?: string;
   machineId?: string;
   category?: ExpertKnowledgeCategory;
+  severity?: ExpertKnowledgeSeverity | string;
   status?: ExpertKnowledgeStatus;
   search?: string;
   dataClassification?: string;

@@ -21,6 +21,7 @@ import {
   AlertCircle,
   X,
   Clock,
+  ShieldCheck,
 } from 'lucide-react';
 import { StatusBadge, type StatusTone } from '../ui/StatusBadge';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
@@ -969,48 +970,109 @@ export const SopExecutionView: React.FC<{
             ) : (
               filteredCases.map((c) => {
                 const isSelected = activeCase ? c.id === activeCase.id : false;
+                const formattedDt =
+                  c.createdAtFormatted ||
+                  (c.createdAt
+                    ? new Date(c.createdAt).toLocaleString('en-US', {
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true,
+                      })
+                    : '22 Oct 2026, 09:25 PM');
+                const hasLoto =
+                  Boolean(c.lotoApplied) ||
+                  String(c.description || '').includes('LOTO: YES') ||
+                  String(c.symptomDescription || '').includes('LOTO: Energy Isolated') ||
+                  String(c.description || '').includes('Energy Isolated');
+                const topCause = c.topRootCause || c.diagnosticHypothesis?.primaryHypothesis;
+                const prob = c.probability ?? (c.diagnosticHypothesis?.confidence === 'HIGH' ? 90 : c.diagnosticHypothesis?.confidence === 'MEDIUM' ? 70 : undefined);
+
                 return (
                   <div
                     key={c.id}
                     onClick={() => setActiveCaseId(c.id)}
-                    className={`p-3 rounded-lg border text-xs font-mono cursor-pointer transition ${
+                    className={`p-3.5 rounded-lg border text-xs font-mono cursor-pointer transition space-y-2.5 ${
                       isSelected
                         ? 'bg-blue-50/50 border-[#2563EB] text-[#1A202C] shadow-sm ring-1 ring-[#2563EB]/20'
                         : 'bg-white border-[#E2E8F0] hover:border-[#CBD5E1] text-[#1A202C] shadow-xs'
                     }`}
                   >
-                    <div className="flex justify-between items-center text-[10px] text-[#64748B] mb-1">
-                      <div className="flex items-center gap-1.5">
+                    {/* Top Bar: Case ID, Exact Date & Time, Priority */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
                         <span className="font-bold text-[#2563EB]">{c.caseNumber}</span>
-                        <span className="text-gray-300">·</span>
-                        <span className="bg-gray-100 text-gray-800 px-1 py-0.2 rounded font-semibold">
-                          {c.assetId}
+                        <span className="text-[10px] text-gray-500 font-mono flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-gray-400 shrink-0" />
+                          {formattedDt}
                         </span>
                       </div>
-                      <StatusBadge label={c.status} tone={getStatusTone(c.status)} />
-                    </div>
-
-                    <div className="font-bold text-[#1A202C] line-clamp-1 leading-snug">
-                      {c.title}
-                    </div>
-
-                    <div className="text-[11px] text-[#64748B] mt-1 line-clamp-2 font-sans leading-normal">
-                      {c.symptomDescription}
-                    </div>
-
-                    <div className="mt-2 pt-1.5 border-t border-gray-100 flex items-center justify-between text-[10px] text-[#64748B]">
-                      <span>Tech: {c.assignedTechnicianName || 'Unassigned'}</span>
                       <span
-                        className={`font-bold px-1.5 py-0.2 rounded ${
+                        className={`font-bold px-1.5 py-0.5 rounded text-[10px] border shrink-0 ${
                           c.severity === 'CRITICAL'
-                            ? 'bg-rose-50 text-rose-700'
+                            ? 'bg-rose-50 text-rose-700 border-rose-200'
                             : c.severity === 'HIGH'
-                            ? 'bg-amber-50 text-amber-700'
-                            : 'bg-blue-50 text-blue-700'
+                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                            : 'bg-blue-50 text-blue-700 border-blue-200'
                         }`}
                       >
                         {c.severity}
                       </span>
+                    </div>
+
+                    {/* Machine Tag & Name + Fault Code */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="bg-gray-100 text-gray-900 border border-gray-200 px-1.5 py-0.5 rounded font-bold font-mono text-[10px]">
+                        {c.assetTag || c.assetId}
+                      </span>
+                      <span className="text-gray-700 font-semibold text-xs truncate max-w-[190px]" title={c.assetName || c.title}>
+                        {c.assetName || c.title}
+                      </span>
+                      {c.faultCode && (
+                        <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                          {c.faultCode}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Reported Symptom / Issue */}
+                    <div className="text-[11px] text-[#475569] font-sans line-clamp-2 leading-relaxed bg-gray-50/70 p-2 rounded border border-gray-100">
+                      <span className="text-[9px] font-bold font-mono text-gray-400 uppercase block mb-0.5">Symptom / Field Issue</span>
+                      {c.symptomDescription || c.description || c.title}
+                    </div>
+
+                    {/* Suspected Root Cause (if present) */}
+                    {topCause && (
+                      <div className="text-[11px] text-blue-900 bg-blue-50/70 border border-blue-100 rounded p-1.5 leading-snug">
+                        <span className="text-[9px] font-bold font-mono uppercase text-blue-600 block">Suspected Root Cause</span>
+                        <span className="font-semibold">{topCause}</span>
+                        {prob && (
+                          <span className="ml-1 text-[10px] font-mono font-bold text-blue-700">({prob}%)</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Footer: LOTO Status, Specialist / Assigned Tech, Status */}
+                    <div className="flex items-center justify-between text-[10px] font-mono pt-1.5 border-t border-gray-100 text-gray-600">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {hasLoto ? (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-red-100/70 text-red-800 font-bold text-[9px] border border-red-200">
+                            <ShieldAlert className="w-2.5 h-2.5 text-red-600" />
+                            LOTO APPLIED
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold text-[9px] border border-emerald-200">
+                            <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" />
+                            LIVE / ISOLATED
+                          </span>
+                        )}
+                        <span className="text-gray-500 truncate max-w-[110px]" title={c.specialistDiscipline || c.assignedTechnicianName || 'Specialist'}>
+                          {c.specialistDiscipline || c.assignedTechnicianName || 'Specialist'}
+                        </span>
+                      </div>
+                      <StatusBadge label={c.status} tone={getStatusTone(c.status)} />
                     </div>
                   </div>
                 );
@@ -1032,8 +1094,13 @@ export const SopExecutionView: React.FC<{
                     </span>
                     <span className="text-gray-300">·</span>
                     <span className="font-mono text-xs font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded">
-                      ASSET: {activeCase.assetId}
+                      ASSET: {activeCase.assetTag || activeCase.assetId}
                     </span>
+                    {activeCase.faultCode && (
+                      <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                        FAULT: {activeCase.faultCode}
+                      </span>
+                    )}
                     <StatusBadge label={activeCase.status} tone={getStatusTone(activeCase.status)} />
                     <span
                       className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
@@ -1044,6 +1111,15 @@ export const SopExecutionView: React.FC<{
                     >
                       PRIORITY: {activeCase.severity}
                     </span>
+                    {activeCase.lotoApplied ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 text-xs font-mono font-bold">
+                        <ShieldAlert className="w-3.5 h-3.5" /> LOTO APPLIED
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-mono font-bold">
+                        <ShieldCheck className="w-3.5 h-3.5" /> LOTO VERIFIED
+                      </span>
+                    )}
                   </div>
                   <h1 className="text-base font-bold text-[#1A202C] leading-snug">
                     {activeCase.title}
@@ -1111,8 +1187,17 @@ export const SopExecutionView: React.FC<{
 
                 <div className="flex items-center gap-1">
                   <Clock className="w-3.5 h-3.5 text-gray-400" />
-                  <span>Created: {new Date(activeCase.createdAt).toLocaleDateString()}</span>
+                  <span>
+                    Created: <strong className="text-gray-800">{activeCase.createdAtFormatted || (activeCase.createdAt ? new Date(activeCase.createdAt).toLocaleString() : '22 Oct 2026, 09:25 PM')}</strong>
+                  </span>
                 </div>
+
+                {activeCase.plantName && (
+                  <>
+                    <span className="text-gray-300">·</span>
+                    <span>Plant: <strong className="text-gray-800">{activeCase.plantName}</strong></span>
+                  </>
+                )}
 
                 {activeCase.resolvedAt && (
                   <>

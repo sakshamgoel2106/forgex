@@ -24,6 +24,7 @@ import type {
   SubmitTaskEvidenceDTO,
   ReviewTaskSubmissionDTO,
   ExpertKnowledgeEntry,
+  ExpertNoteReview,
   CreateExpertKnowledgeDTO,
   ReviewExpertKnowledgeDTO,
   ExpertKnowledgeFilterOptions,
@@ -38,6 +39,7 @@ export interface RecoveryActorContext {
   userId: string;
   userEmail?: string;
   userRole?: string;
+  userName?: string;
   assignedPlantIds?: string[];
 }
 
@@ -787,6 +789,7 @@ export class MachineRecoveryService {
       authorUserId: context.userId,
       authorEmail: context.userEmail,
       authorRole: context.userRole,
+      authorName: context.userName || context.userEmail,
     });
   }
 
@@ -825,5 +828,42 @@ export class MachineRecoveryService {
     context: RecoveryActorContext
   ): Promise<ExpertKnowledgeEntry | null> {
     return this.dataStore.revokeExpertKnowledgeEntry(organizationId, id, reason, context.userId);
+  }
+
+  public async upvoteExpertKnowledge(
+    organizationId: string,
+    id: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    return this.dataStore.upvoteExpertKnowledgeEntry(organizationId, id);
+  }
+
+  public async downvoteExpertKnowledge(
+    organizationId: string,
+    id: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    return this.dataStore.downvoteExpertKnowledgeEntry(organizationId, id);
+  }
+
+  public async updateExpertKnowledge(
+    organizationId: string,
+    id: string,
+    updates: Partial<ExpertKnowledgeEntry>
+  ): Promise<ExpertKnowledgeEntry | null> {
+    return this.dataStore.updateExpertKnowledgeEntry(organizationId, id, updates);
+  }
+
+  public async addExpertKnowledgeReview(
+    organizationId: string,
+    id: string,
+    review: ExpertNoteReview
+  ): Promise<ExpertKnowledgeEntry | null> {
+    return this.dataStore.addExpertKnowledgeReview(organizationId, id, review);
+  }
+
+  public async deleteExpertKnowledge(
+    organizationId: string,
+    id: string
+  ): Promise<boolean> {
+    return this.dataStore.deleteExpertKnowledgeEntry(organizationId, id);
   }
 }

@@ -21,6 +21,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
+import { getMachineFiles, attachFileToMachine } from '../../lib/machineStorage';
 
 interface PidEngineeringViewerModalProps {
   isOpen: boolean;
@@ -33,6 +34,7 @@ interface PidEngineeringViewerModalProps {
   onOpen3dComponent?: (componentId: string) => void;
   onOpenManual?: (pageNumber: number) => void;
   onMappingVerified?: () => void;
+  onMachineUpdated?: (updated: Machine) => void;
 }
 
 export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps> = ({
@@ -46,6 +48,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   onOpen3dComponent,
   onOpenManual,
   onMappingVerified,
+  onMachineUpdated,
 }) => {
   const { token, isOwnerOrAdmin, membership } = useAuth();
   const isEngineer = isOwnerOrAdmin || membership?.role === 'ENGINEER' || membership?.role === 'PLANT_MANAGER';
@@ -57,6 +60,8 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   const [isFullScreen, setIsFullScreen] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const viewportRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Data & Drawings State
   const [drawingsList, setDrawingsList] = useState<EngineeringDrawing[]>([]);
@@ -99,6 +104,42 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
     const fetchDrawings = async () => {
       try {
+        const stored = getMachineFiles(machine);
+        const localPidUrl = stored.pAndIdUrl || stored.pidUrl;
+        if (localPidUrl) {
+          const fileName = stored.pidFile?.name || stored.pAndIdFile?.name || `${machine.assetTag}-schematic.svg`;
+          const ext = fileName.split('.').pop()?.toUpperCase() || 'SVG';
+          const localDrawing: EngineeringDrawing = {
+            id: `local-pid-${machine.id}`,
+            organizationId: machine.organizationId,
+            plantId: machine.plantId || 'default',
+            machineId: machine.id,
+            uniqueDrawingNumber: `PID-${machine.assetTag}`,
+            drawingTitle: fileName,
+            drawingType: 'PID',
+            discipline: 'Process',
+            revision: '1.0',
+            source: 'CLIENT_UPLOAD',
+            storageKey: `local/${machine.id}/pid`,
+            fileUrl: localPidUrl,
+            originalFileName: fileName,
+            fileFormat: (ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'SVG') as any,
+            fileSizeBytes: stored.pidFile?.size || stored.pAndIdFile?.size || 0,
+            fileHashSha256: 'local',
+            status: 'APPROVED',
+            dataClassification: machine.dataClassification || 'CONFIDENTIAL',
+            equipmentTags: ['P-204-IMP', 'P-204-SEAL', 'M-204-DRV', 'PT-204', 'FT-204'],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          if (isMounted) {
+            setDrawingsList([localDrawing]);
+            setDrawingRecord(localDrawing);
+            setIsLoadingMetadata(false);
+          }
+          return;
+        }
+
         const headers: Record<string, string> = {};
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -408,6 +449,56 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     }
   };
 
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !machine) return;
+    setIsUploading(true);
+    try {
+      const attached = await attachFileToMachine(machine.id, machine.assetTag, 'pid', file);
+      const url = attached.url;
+      const updatedMachine: Machine = {
+        ...machine,
+        hasPidDiagram: true,
+        pidFile: { name: file.name, size: file.size, type: file.type },
+        pidUrl: url,
+        pAndIdFile: { name: file.name, size: file.size, type: file.type },
+        pAndIdUrl: url,
+      };
+      onMachineUpdated?.(updatedMachine);
+      const ext = file.name.split('.').pop()?.toUpperCase() || 'SVG';
+      const localDrawing: EngineeringDrawing = {
+        id: `local-pid-${machine.id}`,
+        organizationId: machine.organizationId,
+        plantId: machine.plantId || 'default',
+        machineId: machine.id,
+        uniqueDrawingNumber: `PID-${machine.assetTag}`,
+        drawingTitle: file.name,
+        drawingType: 'PID',
+        discipline: 'Process',
+        revision: '1.0',
+        source: 'CLIENT_UPLOAD',
+        storageKey: `local/${machine.id}/pid`,
+        fileUrl: url,
+        originalFileName: file.name,
+        fileFormat: (ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'SVG') as any,
+        fileSizeBytes: file.size,
+        fileHashSha256: 'local',
+        status: 'APPROVED',
+        dataClassification: machine.dataClassification || 'CONFIDENTIAL',
+        equipmentTags: ['P-204-IMP', 'P-204-SEAL', 'M-204-DRV', 'PT-204', 'FT-204'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setDrawingsList([localDrawing]);
+      setDrawingRecord(localDrawing);
+    } catch (err) {
+      console.error('Failed to attach P&ID drawing:', err);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   if (!isOpen || !machine) return null;
 
   const equipmentTags = drawingRecord?.equipmentTags || [];
@@ -510,6 +601,18 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
               {isFullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             </button>
 
+            {/* Upload or Replace Button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-[#2563EB] border border-blue-200 rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+              title="Upload or Replace P&ID Diagram"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>{isUploading ? 'Uploading...' : drawingRecord ? 'Replace Drawing' : 'Attach Drawing'}</span>
+            </button>
+
             {/* Close Modal Button */}
             <button
               onClick={onClose}
@@ -521,6 +624,14 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
             </button>
           </div>
         </div>
+
+        <input
+          type="file"
+          ref={fileInputRef}
+          accept=".pdf,.svg,.png,.jpg,.jpeg,.dwg"
+          style={{ display: 'none' }}
+          onChange={handleUploadFile}
+        />
 
         {/* Modal Main Body */}
         {isLoadingMetadata ? (
@@ -566,15 +677,15 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
             </div>
 
             <div className="flex items-center gap-3 pt-2">
-              {isEngineer && (
-                <button
-                  onClick={() => alert(`Upload official revision-controlled P&ID for ${machine.assetTag} in Engineering Asset Center.`)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition"
-                >
-                  <Upload className="w-4 h-4" />
-                  Attach Revision-Controlled P&ID
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold transition shadow-sm cursor-pointer disabled:opacity-50"
+              >
+                <Upload className="w-4 h-4" />
+                <span>{isUploading ? 'Attaching Diagram...' : 'Upload P&ID Diagram (SVG / PDF / PNG)'}</span>
+              </button>
               <button
                 onClick={onClose}
                 className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-[#CBD5E1] text-[#1A202C] text-xs font-medium transition shadow-sm"
