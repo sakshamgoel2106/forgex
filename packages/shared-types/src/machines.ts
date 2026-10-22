@@ -41,8 +41,14 @@ export interface Machine {
   hasModel3d: boolean;
   model3dStorageKey?: string | null;
   model3dFormat?: 'glb' | 'gltf' | 'step' | 'stp' | 'iges' | 'igs' | 'stl' | 'obj' | string | null;
+  model3dFile?: { name: string; size: number; type?: string } | null;
+  model3dUrl?: string | null;
   hasPidDiagram: boolean;
   pidStorageKey?: string | null;
+  pAndIdFile?: { name: string; size: number; type?: string } | null;
+  pAndIdUrl?: string | null;
+  pidFile?: { name: string; size: number; type?: string } | null;
+  pidUrl?: string | null;
   qrCodeData: string; // Opaque machine routing reference, non-sensitive
   provenance?: string | null;
   revision: number;

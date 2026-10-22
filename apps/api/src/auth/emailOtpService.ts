@@ -188,7 +188,9 @@ export class EmailOtpService {
     } else if (config.NODE_ENV !== 'test' && config.SMTP_HOST && config.SMTP_USER && config.SMTP_PASS) {
       try {
         const isSecure = config.SMTP_PORT === 465;
-        const nodemailerModule = (await import('nodemailer').catch(() => null)) as any;
+        const nodemailerPkg = 'nodemailer';
+        // @ts-ignore
+        const nodemailerModule = (await import(/* @vite-ignore */ nodemailerPkg).catch(() => null)) as any;
         const nodemailer = nodemailerModule?.default || nodemailerModule;
         if (!nodemailer) {
           throw new Error('Nodemailer package is not installed for SMTP transport.');

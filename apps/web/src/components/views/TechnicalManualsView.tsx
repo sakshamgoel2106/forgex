@@ -36,7 +36,6 @@ import { StatusBadge } from '../ui/StatusBadge';
 import { apiFetch } from '../../lib/api';
 import { useAuth } from '../../lib/AuthContext';
 import { usePlant } from '../../lib/PlantContext';
-import { useToast } from '../../lib/ToastContext';
 import { RealThreeDViewerModal } from './RealThreeDViewerModal';
 import { PidEngineeringViewerModal } from './PidEngineeringViewerModal';
 

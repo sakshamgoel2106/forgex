@@ -541,12 +541,67 @@ export function createMachineRouter(dataStore: IDataStore): Router {
   );
 
   /**
+   * POST /api/v1/machines/bulk-delete
+   * Delete multiple machines in batch
+   */
+  router.post(
+    '/bulk-delete',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER']),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const orgId = req.auth!.organization.id;
+        const actorUserId = req.auth!.user.id;
+        const { machineIds } = req.body;
+
+        if (!Array.isArray(machineIds) || machineIds.length === 0) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_VALIDATION_ERROR', message: 'machineIds array is required.' },
+          });
+          return;
+        }
+
+        const deletedIds: string[] = [];
+        for (const id of machineIds) {
+          if (typeof id === 'string') {
+            const ok = await dataStore.deleteMachine(orgId, id);
+            if (ok) {
+              deletedIds.push(id);
+              await dataStore.recordAuditEvent({
+                organizationId: orgId,
+                actorUserId,
+                action: 'MACHINE_DELETED',
+                resourceType: 'MACHINE',
+                resourceId: id,
+                metadata: { bulk: true },
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent'],
+              });
+            }
+          }
+        }
+
+        res.status(200).json({
+          success: true,
+          message: `Successfully removed ${deletedIds.length} machine(s).`,
+          data: { deletedCount: deletedIds.length, deletedIds },
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_DELETE_FAILED', message: err?.message || 'Failed to bulk delete machines' },
+        });
+      }
+    }
+  );
+
+  /**
    * DELETE /api/v1/machines/:id
    * Admin deletes a machine record
    */
   router.delete(
     '/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;

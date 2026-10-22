@@ -79,11 +79,12 @@ export interface EngineeringModel3D {
   fileHashSha256: string;
   storageKey: string;
   convertedStorageKey?: string; // Derived GLB storage key for web viewer
+  fileUrl?: string;             // Direct or pre-signed URL to GLB/3D asset
   modelRevision: string;        // e.g., "1.0", "Rev C"
   status: EngineeringAssetStatus;
   dataClassification: DataClassification;
   licenseUsageRights?: string;
-  uploadedByUserId: string;
+  uploadedByUserId?: string;
   reviewedByUserId?: string;
   reviewedAt?: string;
   reviewNotes?: string;
@@ -152,6 +153,7 @@ export interface EngineeringDrawing {
   effectiveDate?: string;
   source: string;
   storageKey: string;
+  fileUrl?: string;
   originalFileName: string;
   fileFormat: 'PDF' | 'PNG' | 'JPG' | 'SVG' | 'CAD' | 'DXF';
   fileSizeBytes: number;
@@ -159,7 +161,7 @@ export interface EngineeringDrawing {
   status: EngineeringAssetStatus;
   dataClassification: DataClassification;
   equipmentTags: string[];
-  uploadedByUserId: string;
+  uploadedByUserId?: string;
   reviewedByUserId?: string;
   reviewedAt?: string;
   reviewNotes?: string;
