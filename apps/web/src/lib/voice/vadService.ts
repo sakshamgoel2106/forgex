@@ -9,8 +9,21 @@
  * 5. Complete MediaStream track release on unmount, cancel, or error
  */
 
-import { MicVAD } from '@ricky0123/vad-web';
 import { releaseAllAudioTracks } from './audioCapture';
+
+let cachedMicVAD: any = null;
+async function getMicVADClass(): Promise<any> {
+  if (cachedMicVAD !== null) return cachedMicVAD;
+  try {
+    const vadModule: any = await import('@ricky0123/vad-web');
+    cachedMicVAD = vadModule?.MicVAD || vadModule?.default?.MicVAD || vadModule?.default || null;
+    return cachedMicVAD;
+  } catch (err) {
+    console.warn('Silero MicVAD module dynamic load skipped, using fallback:', err);
+    cachedMicVAD = null;
+    return null;
+  }
+}
 
 export interface VADConfig {
   silenceTimeoutMs?: number; // Default 1000ms
@@ -139,8 +152,9 @@ export class VADService {
 
   private async initSileroVAD(): Promise<void> {
     try {
-      if (typeof MicVAD !== 'undefined' && this.mediaStream) {
-        this.sileroVad = await MicVAD.new({
+      const MicVADClass = await getMicVADClass();
+      if (MicVADClass && typeof MicVADClass.new === 'function' && this.mediaStream) {
+        this.sileroVad = await MicVADClass.new({
           getStream: async () => this.mediaStream!,
           positiveSpeechThreshold: 0.5,
           negativeSpeechThreshold: 0.35,

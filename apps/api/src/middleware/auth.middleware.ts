@@ -280,6 +280,8 @@ export function requireRole(allowedRoles: OrgRole[]) {
 
         const action = url.includes('/download')
           ? 'BLOCKED_DOCUMENT_DOWNLOAD'
+          : url.includes('/upload')
+          ? 'BLOCKED_DOCUMENT_UPLOAD'
           : isExport
           ? 'BLOCKED_DATA_EXPORT'
           : isDoc

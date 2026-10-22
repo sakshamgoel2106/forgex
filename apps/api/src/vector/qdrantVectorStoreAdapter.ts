@@ -9,7 +9,7 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
   private fallbackAdapter = new InMemoryVectorStoreAdapter();
 
   constructor(
-    private endpoint = process.env.QDRANT_ENDPOINT || 'http://localhost:6333',
+    private endpoint = process.env.QDRANT_ENDPOINT || process.env.QDRANT_URL || 'http://localhost:6333',
     private apiKey = process.env.QDRANT_API_KEY
   ) {}
 

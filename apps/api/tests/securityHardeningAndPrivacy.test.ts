@@ -45,11 +45,13 @@ describe('Phase 5: Security Hardening & Enterprise Privacy Verification', () => 
   // Users
   let userAlphaAdmin: User;
   let userAlphaTech: User;
+  let userBetaAdmin: User;
   let userBetaTech: User;
 
   // Auth Tokens
   let tokenAlphaAdmin: string;
   let tokenAlphaTech: string;
+  let tokenBetaAdmin: string;
   let tokenBetaTech: string;
 
   // Documents
@@ -121,6 +123,12 @@ describe('Phase 5: Security Hardening & Enterprise Privacy Verification', () => 
       fullName: 'Tom Alpha',
     });
 
+    userBetaAdmin = await dataStore.createUser({
+      externalAuthId: 'ext_beta_admin',
+      email: 'admin@beta-refining.com',
+      fullName: 'Admin Beta',
+    });
+
     userBetaTech = await dataStore.createUser({
       externalAuthId: 'ext_beta_tech',
       email: 'tech@beta-refining.com',
@@ -142,6 +150,12 @@ describe('Phase 5: Security Hardening & Enterprise Privacy Verification', () => 
 
     await dataStore.createMembership({
       organizationId: orgBeta.id,
+      userId: userBetaAdmin.id,
+      role: 'ORGANIZATION_ADMIN',
+    });
+
+    await dataStore.createMembership({
+      organizationId: orgBeta.id,
       userId: userBetaTech.id,
       role: 'ENGINEER_TECHNICIAN',
     });
@@ -154,6 +168,11 @@ describe('Phase 5: Security Hardening & Enterprise Privacy Verification', () => 
 
     tokenAlphaTech = LocalDevAuthAdapter.generateDevToken(
       { id: userAlphaTech.externalAuthId, email: userAlphaTech.email, emailVerified: true },
+      jwtSecret
+    );
+
+    tokenBetaAdmin = LocalDevAuthAdapter.generateDevToken(
+      { id: userBetaAdmin.externalAuthId, email: userBetaAdmin.email, emailVerified: true },
       jwtSecret
     );
 
@@ -325,14 +344,14 @@ describe('Phase 5: Security Hardening & Enterprise Privacy Verification', () => 
       // User Beta attempts to read Document Alpha
       const getRes = await request(app)
         .get(`/api/v1/documents/${docAlpha.id}`)
-        .set('Authorization', `Bearer ${tokenBetaTech}`);
+        .set('Authorization', `Bearer ${tokenBetaAdmin}`);
 
       expect(getRes.status).toBe(404);
 
       // User Beta attempts to download Document Alpha
       const downloadRes = await request(app)
         .get(`/api/v1/documents/${docAlpha.id}/download`)
-        .set('Authorization', `Bearer ${tokenBetaTech}`);
+        .set('Authorization', `Bearer ${tokenBetaAdmin}`);
 
       expect(downloadRes.status).toBe(404);
     });
@@ -341,7 +360,7 @@ describe('Phase 5: Security Hardening & Enterprise Privacy Verification', () => 
       // User Alpha requests their own document, but attempts to access Beta pages via query param versionId
       const res = await request(app)
         .get(`/api/v1/documents/${docAlpha.id}/pages?versionId=${versionBeta.id}`)
-        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+        .set('Authorization', `Bearer ${tokenAlphaAdmin}`);
 
       expect(res.status).toBe(404);
       expect(res.body.error).toContain('does not belong to this document');
@@ -351,7 +370,7 @@ describe('Phase 5: Security Hardening & Enterprise Privacy Verification', () => 
       // User Alpha attempts to download Alpha doc with Beta version ID
       const res = await request(app)
         .get(`/api/v1/documents/${docAlpha.id}/download?versionId=${versionBeta.id}`)
-        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+        .set('Authorization', `Bearer ${tokenAlphaAdmin}`);
 
       expect(res.status).toBe(404);
     });

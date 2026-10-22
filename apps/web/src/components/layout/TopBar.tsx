@@ -25,6 +25,7 @@ import {
 } from '../ui/dropdown-menu';
 import type { NavModule } from './Sidebar';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
 
 interface TopBarProps {
   activeModule: NavModule;
@@ -73,6 +74,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   sidebarCollapsed,
 }) => {
   const { user, organization, membership, memberships, logout, switchOrganization } = useAuth();
+  const { plants } = usePlant();
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
 
   const userName = user?.fullName || 'John Doe';
@@ -182,7 +184,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                   </span>
                   <span className="text-gray-300">|</span>
                   <span className="text-gray-600 truncate max-w-[110px]">
-                    {plantSite === 'RIVERSIDE' ? 'Riverside Plant' : plantSite === 'GULF' ? 'Gulf Coast' : 'Stuttgart Werk 2'}
+                    {plants.find(
+                      (p) => (p.code || p.id).toUpperCase() === plantSite.toUpperCase() || p.key === plantSite
+                    )?.name || (plantSite === 'RIVERSIDE' ? 'Riverside Plant' : plantSite === 'GULF' ? 'Gulf Coast' : plantSite === 'MIDWEST' ? 'Midwest Cracker' : plantSite)}
                   </span>
                 </div>
                 <ChevronDown className="w-3 h-3 text-gray-400 ml-0.5 shrink-0" />
@@ -192,25 +196,26 @@ export const TopBar: React.FC<TopBarProps> = ({
               <DropdownMenuLabel className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
                 Industrial Complexes
               </DropdownMenuLabel>
-              {[
-                { key: 'RIVERSIDE', label: 'Riverside Plant', sub: 'Plant 1 · North Area' },
-                { key: 'GULF', label: 'Gulf Coast Refinery', sub: 'Unit 4B' },
-                { key: 'MIDWEST', label: 'Midwest Cracker', sub: 'Train 2' },
-              ].map((p) => (
-                <DropdownMenuItem
-                  key={p.key}
-                  onClick={() => onPlantChange(p.key)}
-                  className="text-xs cursor-pointer focus:bg-gray-50 flex items-center justify-between py-2"
-                >
-                  <div>
-                    <div className="font-medium text-gray-800">{p.label}</div>
-                    <div className="text-[10px] text-gray-400">{p.sub}</div>
-                  </div>
-                  {plantSite === p.key && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] ml-2" />
-                  )}
-                </DropdownMenuItem>
-              ))}
+              {plants.map((p) => {
+                const pKey = p.key || p.code || p.id;
+                const pLabel = p.label || p.name;
+                const isSelected = plantSite.toUpperCase() === pKey.toUpperCase();
+                return (
+                  <DropdownMenuItem
+                    key={pKey}
+                    onClick={() => onPlantChange(pKey)}
+                    className="text-xs cursor-pointer focus:bg-gray-50 flex items-center justify-between py-2"
+                  >
+                    <div>
+                      <div className="font-medium text-gray-800">{pLabel}</div>
+                      {p.sub && <div className="text-[10px] text-gray-400">{p.sub}</div>}
+                    </div>
+                    {isSelected && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] ml-2" />
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
             </DropdownMenuContent>
           </DropdownMenu>
 

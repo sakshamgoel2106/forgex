@@ -8,12 +8,7 @@ const ORG_ID_KEY = 'forgex_active_org_id';
 
 export function getAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
-  const token = localStorage.getItem(TOKEN_KEY);
-  if (token === 'local_dev_token') {
-    localStorage.removeItem(TOKEN_KEY);
-    return null;
-  }
-  return token || null;
+  return localStorage.getItem(TOKEN_KEY) || null;
 }
 
 export function getActiveOrgId(): string | null {

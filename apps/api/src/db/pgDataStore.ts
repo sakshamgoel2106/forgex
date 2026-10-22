@@ -1078,7 +1078,7 @@ export class PgDataStore implements IDataStore {
          ORDER BY created_at DESC
          LIMIT 1
        ) j ON true
-       WHERE d.id = $1 AND d.organization_id = $2`,
+       WHERE (d.id::text = $1 OR d.document_number = $1) AND d.organization_id = $2`,
       [documentId, organizationId]
     );
     if (res.rows.length === 0) return null;
@@ -1168,7 +1168,7 @@ export class PgDataStore implements IDataStore {
 
   public async deleteDocument(organizationId: string, documentId: string): Promise<boolean> {
     const res = await this.pool.query(
-      `DELETE FROM documents WHERE id = $1 AND organization_id = $2 RETURNING id`,
+      `DELETE FROM documents WHERE (id::text = $1 OR document_number = $1) AND organization_id = $2 RETURNING id`,
       [documentId, organizationId]
     );
     return res.rows.length > 0;

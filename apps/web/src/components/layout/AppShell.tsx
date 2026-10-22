@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { usePlant } from '../../lib/PlantContext';
 import { Sidebar, type NavModule } from './Sidebar';
 import { TopBar } from './TopBar';
 import { GlobalSearchModal } from './GlobalSearchModal';
@@ -26,7 +27,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     return false;
   });
 
-  const [plantSite, setPlantSite] = useState<string>('RIVERSIDE');
+  const { plantSite, setPlantSite } = usePlant();
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);

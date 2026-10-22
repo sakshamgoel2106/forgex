@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './lib/AuthContext';
+import { PlantProvider } from './lib/PlantContext';
 import { AppShell } from './components/layout/AppShell';
 import type { NavModule } from './components/layout/Sidebar';
 import { ShieldAlert, ArrowRight } from 'lucide-react';
@@ -106,7 +107,7 @@ const AppContent: React.FC = () => {
     );
   }
 
-  if (!token && !user) {
+  if (!token || !user) {
     return (
       <LoginView
         onSuccess={(loggedRole) => {
@@ -203,7 +204,9 @@ const AppContent: React.FC = () => {
 export const App: React.FC = () => {
   return (
     <AuthProvider>
-      <AppContent />
+      <PlantProvider>
+        <AppContent />
+      </PlantProvider>
     </AuthProvider>
   );
 };

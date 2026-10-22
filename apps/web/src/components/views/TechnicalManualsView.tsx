@@ -17,10 +17,27 @@ import {
   CheckCircle2,
   Clock,
   Trash2,
+  Boxes,
+  Copy,
+  Check,
+  Files,
+  Activity,
+  FileSpreadsheet,
+  AlertCircle,
 } from 'lucide-react';
-import type { DocumentType, DocumentStatus, ExtractionMethod } from '@forgex/shared-types';
+import type {
+  DocumentType,
+  DocumentStatus,
+  ExtractionMethod,
+  Machine,
+  ComponentMapping,
+} from '@forgex/shared-types';
 import { StatusBadge } from '../ui/StatusBadge';
 import { apiFetch } from '../../lib/api';
+import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
+import { RealThreeDViewerModal } from './RealThreeDViewerModal';
+import { PidEngineeringViewerModal } from './PidEngineeringViewerModal';
 
 export interface DocumentPagePreview {
   pageNumber: number;
@@ -63,219 +80,256 @@ export interface HubDocument {
   versionId?: string;
 }
 
-const INITIAL_DOCUMENTS: HubDocument[] = [
-  {
-    id: 'doc-001',
-    documentNumber: 'SOP-MECH-401',
-    title: 'Emergency Centrifugal Pump LOTO & Seal Overhaul Procedure',
-    category: 'SOP',
-    revision: 'REV-C',
-    status: 'INDEXED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 2457600,
-    mimeType: 'text/markdown',
-    checksum: 'sha256:8f4b52c009d1...39e14a',
-    totalPages: 3,
-    totalChunks: 6,
-    assetTags: ['PUMP-204-B', 'VALVE-101'],
-    retryCount: 0,
-    progressPercent: 100,
-    currentStep: 'Vector indexing completed successfully',
-    updatedAt: '2026-10-18 09:30 UTC',
-    pages: [
-      {
-        pageNumber: 1,
-        rawText: `# SOP-MECH-401: Emergency Centrifugal Pump LOTO Procedure
-Revision: REV-C
-Asset Tag: PUMP-204-B
+export interface BulkFileQueueItem {
+  id: string;
+  file: File;
+  docNumber: string;
+  title: string;
+  category: DocumentType;
+  status: 'READY' | 'UPLOADING' | 'INDEXED' | 'FAILED';
+  errorMessage?: string;
+}
 
-## SECTION 1: MANDATORY SAFETY & HAZARD MITIGATION
-Before commencing mechanical overhaul on Centrifugal Pump PUMP-204-B, all suction and discharge isolation valves (V-101 and V-102) must be mechanically locked out and tagged according to OSHA Standard 1910.147.
-
-| Step | Hazard Identified | Engineering Control | Required PPE |
-| :--- | :--- | :--- | :--- |
-| 1.1 | High-Pressure Hydrocarbon (450 PSI) | Double Block & Bleed | Chemical Splash Goggles, Nitrile Gloves |
-| 1.2 | Electrical Energy 480V 3-Phase | Breaker Padlock & Zero-Energy Test | Category 2 Arc Flash Suit |`,
-        sectionHeadings: ['SECTION 1: MANDATORY SAFETY & HAZARD MITIGATION'],
-        extractionMethod: 'MARKDOWN_AST',
-        hasTables: true,
-      },
-      {
-        pageNumber: 2,
-        rawText: `## SECTION 2: CASING DRAIN & VENT PROCEDURE
-1. Connect grounded copper bonding clamp to casing test nipple.
-2. Slowly open casing drain valve VD-04 into slop manifold until pressure gauge PI-204 reads 0.0 PSIG.
-3. Loosen gland follower bolts in cross-pattern to prevent binding of carbon seal rings.`,
-        sectionHeadings: ['SECTION 2: CASING DRAIN & VENT PROCEDURE'],
-        extractionMethod: 'MARKDOWN_AST',
-        hasTables: false,
-      },
-      {
-        pageNumber: 3,
-        rawText: `## SECTION 3: SHAFT RUNOUT & IMPELLER CLEARANCE
-1. Position magnetic-base dial indicator tip against pump drive shaft.
-2. Rotate shaft by hand through 360 degrees. Total Indicator Reading (TIR) must not exceed +/- 0.002 inches.
-3. Torque casing bolts to 185 ft-lbs in star sequence.`,
-        sectionHeadings: ['SECTION 3: SHAFT RUNOUT & IMPELLER CLEARANCE'],
-        extractionMethod: 'MARKDOWN_AST',
-        hasTables: false,
-      },
-    ],
-    chunks: [
-      {
-        chunkIndex: 0,
-        qdrantPointId: 'b7552fed-d23f-4490-948a-6a2afe519039',
-        pageNumber: 1,
-        sectionHeading: 'SECTION 1: MANDATORY SAFETY & HAZARD MITIGATION',
-        content: 'Emergency Centrifugal Pump LOTO Procedure. Isolation valves V-101 and V-102 must be locked out per OSHA 1910.147.',
-        isTable: true,
-      },
-      {
-        chunkIndex: 1,
-        qdrantPointId: 'cbd251e8-4257-4fe6-a011-b0565b449ea3',
-        pageNumber: 2,
-        sectionHeading: 'SECTION 2: CASING DRAIN & VENT PROCEDURE',
-        content: 'Connect grounded copper bonding clamp to casing test nipple. Loosen gland follower bolts in cross-pattern.',
-        isTable: false,
-      },
-    ],
-  },
-  {
-    id: 'doc-002',
-    documentNumber: 'OEM-MAN-883',
-    title: 'Flowserve Mark 3 ANSI Chemical Process Pump Operations Manual',
-    category: 'OEM_MANUAL',
-    revision: 'REV-2',
-    status: 'INDEXED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 8493021,
-    mimeType: 'application/pdf',
-    checksum: 'sha256:e3b0c44298fc...1c49aa',
-    totalPages: 4,
-    totalChunks: 12,
-    assetTags: ['PUMP-204-B'],
-    retryCount: 0,
-    progressPercent: 100,
-    currentStep: 'Vector indexing completed',
-    updatedAt: '2026-10-14 14:15 UTC',
-    pages: [
-      {
-        pageNumber: 1,
-        rawText: `FLOWSERVE MARK 3 ANSI B73.1 PROCESS PUMP
-Installation, Operation and Maintenance Instructions
-Flowserve Pump Division — Industrial Machinery`,
-        sectionHeadings: ['FLOWSERVE MARK 3 ANSI B73.1 PROCESS PUMP'],
-        extractionMethod: 'NATIVE_TEXT',
-        hasTables: false,
-      },
-    ],
-    chunks: [
-      {
-        chunkIndex: 0,
-        qdrantPointId: '3e45c6c2-0d4c-436a-b3e2-60941b439bc5',
-        pageNumber: 1,
-        sectionHeading: 'FLOWSERVE MARK 3 ANSI B73.1 PROCESS PUMP',
-        content: 'Installation, Operation and Maintenance Instructions for Flowserve Mark 3 ANSI Chemical Process Pump.',
-        isTable: false,
-      },
-    ],
-  },
-  {
-    id: 'doc-003',
-    documentNumber: 'PID-DWG-4010',
-    title: 'Crude Distillation Unit 1 Piping & Instrumentation Diagram (Scanned)',
-    category: 'SCHEMATIC_PID',
-    revision: 'REV-8',
-    status: 'INDEXED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 5218390,
-    mimeType: 'application/pdf',
-    checksum: 'sha256:119ca4930128...fa2210',
-    totalPages: 1,
-    totalChunks: 2,
-    assetTags: ['CDU-LINE-01'],
-    retryCount: 0,
-    progressPercent: 100,
-    currentStep: 'OCR & layout extraction completed',
-    updatedAt: '2026-10-16 11:20 UTC',
-    pages: [
-      {
-        pageNumber: 1,
-        rawText: `[OCR EXTRACTED — SCANNED MANUAL: PID-DWG-4010.pdf (PAGE 1)]
-SECTION: OPTICAL CHARACTER RECOGNITION SUMMARY
-Extracted alphanumeric industrial identifiers:
-LINE-4-CDU-CRUDE-HC-400-A1A PUMP-204-A PUMP-204-B V-101 V-102 PI-204 FT-101
-Operational Notice: Scanned documentation processed via layout-aware OCR engine. Note: CAD symbology is indexed as visual bounding vectors; native CAD parsing not claimed in Phase 3.`,
-        sectionHeadings: ['OPTICAL CHARACTER RECOGNITION SUMMARY'],
-        extractionMethod: 'OCR',
-        hasTables: false,
-      },
-    ],
-    chunks: [
-      {
-        chunkIndex: 0,
-        qdrantPointId: 'afb28f49-9e85-4aa4-9137-3d0233e1becd',
-        pageNumber: 1,
-        sectionHeading: 'OPTICAL CHARACTER RECOGNITION SUMMARY',
-        content: 'LINE-4-CDU-CRUDE-HC-400-A1A PUMP-204-A PUMP-204-B V-101 V-102 PI-204 FT-101',
-        isTable: false,
-      },
-    ],
-  },
-  {
-    id: 'doc-004',
-    documentNumber: 'ELEC-WIR-209',
-    title: 'Variable Frequency Drive (VFD) 4160V High Voltage Feed Wiring Diagram',
-    category: 'WIRING_DIAGRAM',
-    revision: 'REV-1',
-    status: 'FAILED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 1492039,
-    mimeType: 'application/pdf',
-    checksum: 'sha256:99dabb014492...ff0123',
-    totalPages: 0,
-    totalChunks: 0,
-    assetTags: ['VFD-DRV-04'],
-    errorMessage: 'Embedding generation failed: Provider service inference timeout after 30000ms.',
-    retryCount: 1,
-    progressPercent: 40,
-    currentStep: 'Failed during embedding vectorization step',
-    updatedAt: '2026-10-18 10:15 UTC',
-    pages: [],
-    chunks: [],
-  },
+const ALLOWED_EXTENSIONS = [
+  'pdf',
+  'docx',
+  'txt',
+  'md',
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'glb',
+  'gltf',
+  'obj',
+  'stl',
+  'stp',
+  'step',
+  'skp',
+  'fbx',
+  'usd',
+  'usdz',
+  'iges',
+  'igs',
+  'ply',
+  '3mf',
 ];
 
+const CAD_EXTENSIONS = [
+  'glb',
+  'gltf',
+  'obj',
+  'stl',
+  'stp',
+  'step',
+  'skp',
+  'fbx',
+  'usd',
+  'usdz',
+  'iges',
+  'igs',
+  'ply',
+  '3mf',
+];
+
+function deriveDocMetadataFromFilename(filename: string): {
+  docNumber: string;
+  title: string;
+  category: DocumentType;
+} {
+  const lastDot = filename.lastIndexOf('.');
+  const baseName = lastDot > 0 ? filename.substring(0, lastDot) : filename;
+  const ext = (lastDot > 0 ? filename.substring(lastDot + 1) : '').toLowerCase();
+  const upper = baseName.toUpperCase();
+
+  // 1. Detect Category
+  let category: DocumentType = 'SOP';
+  if (CAD_EXTENSIONS.includes(ext) || upper.includes('CAD') || upper.includes('3D') || upper.includes('MODEL')) {
+    category = '3D_MODEL';
+  } else if (
+    upper.includes('PID') ||
+    upper.includes('P&ID') ||
+    upper.includes('SCHEMATIC') ||
+    upper.includes('DIAGRAM') ||
+    upper.includes('DWG') ||
+    upper.includes('DRAWING')
+  ) {
+    category = 'PID_DIAGRAM';
+  } else if (
+    upper.includes('MANUAL') ||
+    upper.includes('OEM') ||
+    upper.includes('GUIDE') ||
+    upper.includes('HANDBOOK') ||
+    upper.includes('SPEC')
+  ) {
+    category = 'OEM_MANUAL';
+  } else {
+    category = 'SOP';
+  }
+
+  // 2. Document Number
+  let cleanDocNum = baseName
+    .replace(/[_\s]+/g, '-')
+    .replace(/[^a-zA-Z0-9-]/g, '')
+    .toUpperCase();
+  if (cleanDocNum.length > 32) {
+    cleanDocNum = cleanDocNum.substring(0, 32);
+  }
+  if (!cleanDocNum) {
+    cleanDocNum = `DOC-${Date.now().toString(36).toUpperCase()}`;
+  }
+
+  // 3. Title
+  let cleanTitle = baseName
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  cleanTitle = cleanTitle
+    .split(' ')
+    .map((w) => (w.length > 0 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : ''))
+    .join(' ');
+  if (!cleanTitle) {
+    cleanTitle = filename;
+  }
+
+  return {
+    docNumber: cleanDocNum,
+    title: cleanTitle,
+    category,
+  };
+}
+
+function getFormatBadgeColor(ext: string): { bg: string; text: string; label: string } {
+  const e = ext.toLowerCase();
+  if (CAD_EXTENSIONS.includes(e)) {
+    return { bg: 'bg-purple-50 text-purple-700 border-purple-200', text: 'text-purple-700', label: e.toUpperCase() };
+  }
+  if (e === 'pdf') {
+    return { bg: 'bg-rose-50 text-rose-700 border-rose-200', text: 'text-rose-700', label: 'PDF' };
+  }
+  if (e === 'docx') {
+    return { bg: 'bg-blue-50 text-blue-700 border-blue-200', text: 'text-blue-700', label: 'DOCX' };
+  }
+  if (e === 'png' || e === 'jpg' || e === 'jpeg' || e === 'webp') {
+    return { bg: 'bg-amber-50 text-amber-700 border-amber-200', text: 'text-amber-700', label: e.toUpperCase() };
+  }
+  return { bg: 'bg-slate-50 text-slate-700 border-slate-200', text: 'text-slate-700', label: e.toUpperCase() || 'FILE' };
+}
+
 export const TechnicalManualsView: React.FC = () => {
-  const [documents, setDocuments] = useState<HubDocument[]>(INITIAL_DOCUMENTS);
+  const { isOwnerOrAdmin, membership } = useAuth();
+  const { activePlant, plants: plantOptions } = usePlant();
+  const isAdmin = Boolean(
+    isOwnerOrAdmin ||
+    membership?.role === 'ORGANIZATION_ADMIN' ||
+    membership?.role === 'ORGANIZATION_OWNER'
+  );
+
+  const [documents, setDocuments] = useState<HubDocument[]>([]);
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
-  const [selectedDoc, setSelectedDoc] = useState<HubDocument | null>(INITIAL_DOCUMENTS[0]);
+  const [selectedDoc, setSelectedDoc] = useState<HubDocument | null>(null);
+  const [isSidePanelOpen, setIsSidePanelOpen] = useState<boolean>(false);
+  const [activeSideTab, setActiveSideTab] = useState<'METADATA' | 'EXTRACTED_TEXT' | 'PIPELINE'>('METADATA');
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
+  const [copiedText, setCopiedText] = useState<boolean>(false);
 
-  // Upload Modal State
+  // Ingestion Modal State
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [ingestMode, setIngestMode] = useState<'SINGLE' | 'BULK'>('SINGLE');
+
+  // Single Upload Form State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadForm, setUploadForm] = useState({
     documentNumber: '',
     title: '',
     category: 'SOP' as DocumentType,
     revision: 'REV-A',
-    plantCode: 'PLANT-TX-04',
+    plantCode: '',
     assetTags: '',
   });
+
+  // Bulk Upload State
+  const [bulkFiles, setBulkFiles] = useState<BulkFileQueueItem[]>([]);
+  const [bulkDefaults, setBulkDefaults] = useState({
+    plantCode: '',
+    defaultCategory: 'SOP' as DocumentType,
+    defaultRevision: 'REV-A',
+    defaultAssetTags: '',
+  });
+  const [bulkSummary, setBulkSummary] = useState<{ total: number; succeeded: number; failed: number } | null>(null);
+
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStepMessage, setUploadStepMessage] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // 3D & P&ID Viewer Modals State
+  const [is3dViewerOpen, setIs3dViewerOpen] = useState<boolean>(false);
+  const [isPidViewerOpen, setIsPidViewerOpen] = useState<boolean>(false);
+  const [viewerMachine, setViewerMachine] = useState<Machine | null>(null);
+  const [viewerMappings, setViewerMappings] = useState<ComponentMapping[]>([]);
+  const [activePidTag, setActivePidTag] = useState<string | null>(null);
+
+  // Filter out any stale dummy or unmapped plants
+  const validPlantOptions = React.useMemo(() => {
+    const list = plantOptions.filter(
+      (p) => !['RIVERSIDE', 'GULF', 'MIDWEST', 'ALL'].includes((p.code || p.id || '').toUpperCase())
+    );
+    if (list.length > 0) return list;
+    return [
+      {
+        id: 'PLANT-TX-04',
+        code: 'PLANT-TX-04',
+        name: 'Texas Petrochemical Refinery Train 4',
+      },
+    ];
+  }, [plantOptions]);
+
+  // Initialize target plant when plantOptions or activePlant change
+  const currentPlantDefault = React.useMemo(() => {
+    const matched = validPlantOptions.find(
+      (p) =>
+        p.id === activePlant ||
+        p.code?.toUpperCase() === activePlant?.toUpperCase()
+    );
+    if (matched) return matched.code || matched.id;
+    return validPlantOptions[0]?.code || validPlantOptions[0]?.id || 'PLANT-TX-04';
+  }, [activePlant, validPlantOptions]);
+
+  useEffect(() => {
+    const isLegacy = (code: string) => !code || ['RIVERSIDE', 'GULF', 'MIDWEST', 'ALL'].includes(code.toUpperCase());
+    if (isLegacy(uploadForm.plantCode) && currentPlantDefault) {
+      setUploadForm((prev) => ({ ...prev, plantCode: currentPlantDefault }));
+    }
+    if (isLegacy(bulkDefaults.plantCode) && currentPlantDefault) {
+      setBulkDefaults((prev) => ({ ...prev, plantCode: currentPlantDefault }));
+    }
+  }, [currentPlantDefault, uploadForm.plantCode, bulkDefaults.plantCode]);
+
+  // Load machines for viewer association
+  const fetchMachines = async () => {
+    try {
+      const res = await apiFetch('/api/v1/machines');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          setMachines(json.data);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   // Fetch real document list from backend
   const fetchDocuments = async (selectDocId?: string) => {
+    setIsLoading(true);
     try {
       const res = await apiFetch('/api/v1/documents');
       const json = await res.json();
-      if (res.ok && json.success && Array.isArray(json.data) && json.data.length > 0) {
+      if (res.ok && json.success && Array.isArray(json.data)) {
         const mapped: HubDocument[] = json.data.map((d: any) => {
           const v = d.latestVersion || {};
           const j = d.latestJob || {};
@@ -286,7 +340,7 @@ export const TechnicalManualsView: React.FC = () => {
             category: d.category || d.type || 'SOP',
             revision: v.revision || d.revision || 'REV-A',
             status: v.status || d.status || 'INDEXED',
-            plantCode: d.plantCode || d.plantId || 'PLANT-TX-04',
+            plantCode: d.plantCode || d.plantId || currentPlantDefault,
             fileSizeBytes: v.fileSizeBytes || d.fileSizeBytes || 0,
             mimeType: v.mimeType || d.mimeType || 'application/pdf',
             checksum: v.checksumSha256 || d.checksumSha256 || 'sha256:verified',
@@ -306,19 +360,39 @@ export const TechnicalManualsView: React.FC = () => {
 
         setDocuments(mapped);
 
-        const target = selectDocId
-          ? mapped.find((m) => m.id === selectDocId) || mapped[0]
-          : selectedDoc
-          ? mapped.find((m) => m.id === selectedDoc.id) || mapped[0]
-          : mapped[0];
-
-        setSelectedDoc(target);
-        if (target) {
-          loadPagesForDoc(target.id);
+        if (mapped.length === 0) {
+          setSelectedDoc(null);
+          setIsSidePanelOpen(false);
+        } else {
+          if (selectDocId && isAdmin) {
+            const target = mapped.find((m) => m.id === selectDocId);
+            if (target) {
+              setSelectedDoc(target);
+              setIsSidePanelOpen(true);
+              loadPagesForDoc(target.id);
+            }
+          } else if (selectedDoc) {
+            const target = mapped.find((m) => m.id === selectedDoc.id);
+            if (target) {
+              setSelectedDoc(target);
+            } else {
+              setSelectedDoc(null);
+              setIsSidePanelOpen(false);
+            }
+          }
         }
+      } else {
+        setDocuments([]);
+        setSelectedDoc(null);
+        setIsSidePanelOpen(false);
       }
     } catch (err) {
       console.error('Failed to load documents from backend', err);
+      setDocuments([]);
+      setSelectedDoc(null);
+      setIsSidePanelOpen(false);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -349,7 +423,109 @@ export const TechnicalManualsView: React.FC = () => {
   // Initial load
   useEffect(() => {
     fetchDocuments();
+    fetchMachines();
   }, []);
+
+  // Periodic background refresh while any documents are in queued or processing state
+  useEffect(() => {
+    const hasActiveJobs = documents.some(
+      (d) => d.status === 'QUEUED' || d.status === 'PROCESSING'
+    );
+    if (!hasActiveJobs) return;
+
+    const timer = setInterval(() => {
+      fetchDocuments();
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [documents]);
+
+  // Launch 3D CAD Viewer
+  const handleOpen3dViewer = async (doc: HubDocument) => {
+    const assetTag = doc.assetTags[0] || doc.documentNumber;
+    const targetMachine =
+      machines.find((m) => m.assetTag === assetTag || m.id === assetTag) ||
+      ({
+        id: doc.id,
+        organizationId: '',
+        plantId: doc.plantCode,
+        assetTag,
+        name: doc.title,
+        machineType: 'CAD 3D Model Assembly',
+        area: 'Industrial Plant Asset',
+        operationalState: 'OPERATIONAL',
+        criticality: 'MEDIUM',
+        dataClassification: 'INTERNAL',
+        authorizedAccessScope: 'PLANT',
+        verificationState: 'VERIFIED',
+        documentationReadiness: 'READY',
+        technicalSpecs: {},
+        hasModel3d: true,
+        hasPidDiagram: false,
+        qrCodeData: `FORGEX-ASSET:${assetTag}`,
+        revision: doc.revision || 'REV-A',
+        createdAt: doc.updatedAt,
+        updatedAt: doc.updatedAt,
+      } as unknown as Machine);
+
+    setViewerMachine(targetMachine);
+    try {
+      const mRes = await apiFetch(`/api/v1/machines/${targetMachine.id}/mappings`);
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        setViewerMappings(mData.data || []);
+      } else {
+        setViewerMappings([]);
+      }
+    } catch {
+      setViewerMappings([]);
+    }
+    setIs3dViewerOpen(true);
+  };
+
+  // Launch P&ID Schematic Viewer
+  const handleOpenPidViewer = async (doc: HubDocument) => {
+    const assetTag = doc.assetTags[0] || doc.documentNumber;
+    const targetMachine =
+      machines.find((m) => m.assetTag === assetTag || m.id === assetTag) ||
+      ({
+        id: doc.id,
+        organizationId: '',
+        plantId: doc.plantCode,
+        assetTag,
+        name: doc.title,
+        machineType: 'P&ID Schematic System',
+        area: 'Process Automation Skid',
+        operationalState: 'OPERATIONAL',
+        criticality: 'MEDIUM',
+        dataClassification: 'INTERNAL',
+        authorizedAccessScope: 'PLANT',
+        verificationState: 'VERIFIED',
+        documentationReadiness: 'READY',
+        technicalSpecs: {},
+        hasModel3d: false,
+        hasPidDiagram: true,
+        qrCodeData: `FORGEX-ASSET:${assetTag}`,
+        revision: doc.revision || 'REV-A',
+        createdAt: doc.updatedAt,
+        updatedAt: doc.updatedAt,
+      } as unknown as Machine);
+
+    setViewerMachine(targetMachine);
+    setActivePidTag(assetTag);
+    try {
+      const mRes = await apiFetch(`/api/v1/machines/${targetMachine.id}/mappings`);
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        setViewerMappings(mData.data || []);
+      } else {
+        setViewerMappings([]);
+      }
+    } catch {
+      setViewerMappings([]);
+    }
+    setIsPidViewerOpen(true);
+  };
 
   // Filtered documents
   const filteredDocs = documents.filter((doc) => {
@@ -359,13 +535,22 @@ export const TechnicalManualsView: React.FC = () => {
       doc.assetTags.some((tag) => tag.toLowerCase().includes(search.toLowerCase()));
 
     const matchesCategory =
-      selectedCategory === 'ALL' || doc.category === selectedCategory;
+      selectedCategory === 'ALL' ||
+      doc.category === selectedCategory ||
+      (selectedCategory === 'PID_DIAGRAM' && (doc.category === 'SCHEMATIC_PID' || (doc.category as string) === 'PID_DIAGRAM'));
 
     const matchesStatus =
       selectedStatus === 'ALL' || doc.status === selectedStatus;
 
     return matchesSearch && matchesCategory && matchesStatus;
   });
+
+  // KPI Metrics Calculation
+  const totalCount = documents.length;
+  const indexedCount = documents.filter((d) => d.status === 'INDEXED').length;
+  const processingCount = documents.filter((d) => d.status === 'PROCESSING' || d.status === 'QUEUED').length;
+  const failedCount = documents.filter((d) => d.status === 'FAILED').length;
+  const totalChunksCount = documents.reduce((acc, d) => acc + (d.totalChunks || 0), 0);
 
   // Handle retry with real backend API
   const handleRetry = async (docId: string) => {
@@ -425,112 +610,310 @@ export const TechnicalManualsView: React.FC = () => {
       const res = await apiFetch(`/api/v1/documents/${docId}`, {
         method: 'DELETE',
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || 'Delete failed');
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.success === false) {
+        throw new Error(json.error || `Delete failed with HTTP ${res.status}`);
       }
 
-      setDocuments((prev) => prev.filter((d) => d.id !== docId));
       if (selectedDoc?.id === docId) {
-        const remaining = documents.filter((d) => d.id !== docId);
-        setSelectedDoc(remaining[0] || null);
-        if (remaining[0]) {
-          loadPagesForDoc(remaining[0].id);
-        }
+        setSelectedDoc(null);
+        setIsSidePanelOpen(false);
       }
+
+      await fetchDocuments();
     } catch (err: any) {
       alert(`Delete failed: ${err?.message}`);
     }
   };
 
-  // Handle real upload submission
-  const handleUploadSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!uploadFile) {
-      setUploadError('Please select a file to ingest.');
+  const handleOpenUploadModal = (initialMode: 'SINGLE' | 'BULK' = 'SINGLE') => {
+    setUploadError(null);
+    setBulkSummary(null);
+    setUploadFile(null);
+    setBulkFiles([]);
+    setIngestMode(initialMode);
+    setUploadForm({
+      documentNumber: '',
+      title: '',
+      category: 'SOP',
+      revision: 'REV-A',
+      plantCode: currentPlantDefault,
+      assetTags: '',
+    });
+    setBulkDefaults({
+      plantCode: currentPlantDefault,
+      defaultCategory: 'SOP',
+      defaultRevision: 'REV-A',
+      defaultAssetTags: '',
+    });
+    setIsUploadModalOpen(true);
+  };
+
+  // Handle file selection in Single mode
+  const handleSingleFileSelected = (file: File | null) => {
+    setUploadFile(file);
+    setUploadError(null);
+    if (!file) return;
+
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      setUploadError(
+        `Unsupported file type ".${ext}". Supported: PDF, DOCX, TXT, MD, Images, CAD/3D (${CAD_EXTENSIONS.join(', ')}).`
+      );
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      setUploadError(`File size ${(file.size / (1024 * 1024)).toFixed(1)}MB exceeds maximum allowed 50MB.`);
       return;
     }
 
-    if (!uploadForm.documentNumber || !uploadForm.title) {
-      setUploadError('Document Number and Title are required.');
+    const derived = deriveDocMetadataFromFilename(file.name);
+    setUploadForm((prev) => ({
+      ...prev,
+      documentNumber: prev.documentNumber ? prev.documentNumber : derived.docNumber,
+      title: prev.title ? prev.title : derived.title,
+      category: derived.category,
+    }));
+  };
+
+  // Handle file selection in Bulk mode
+  const handleBulkFilesSelected = (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setUploadError(null);
+    setBulkSummary(null);
+
+    const existingCount = bulkFiles.length;
+    const newFiles = Array.from(fileList);
+
+    if (existingCount + newFiles.length > 20) {
+      setUploadError(`Maximum 20 documents can be uploaded in a single batch. You currently have ${existingCount} items.`);
+      return;
+    }
+
+    const newItems: BulkFileQueueItem[] = [];
+    const rejectedNames: string[] = [];
+
+    newFiles.forEach((file) => {
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      if (!ALLOWED_EXTENSIONS.includes(ext) || file.size > 50 * 1024 * 1024) {
+        rejectedNames.push(file.name);
+        return;
+      }
+
+      const derived = deriveDocMetadataFromFilename(file.name);
+      newItems.push({
+        id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
+        file,
+        docNumber: derived.docNumber,
+        title: derived.title,
+        category: derived.category,
+        status: 'READY',
+      });
+    });
+
+    if (rejectedNames.length > 0) {
+      setUploadError(`Skipped ${rejectedNames.length} invalid or oversized file(s): ${rejectedNames.join(', ')}`);
+    }
+
+    setBulkFiles((prev) => [...prev, ...newItems]);
+  };
+
+  // Remove file from bulk queue
+  const handleRemoveBulkFile = (id: string) => {
+    setBulkFiles((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  // Update specific file metadata in bulk queue
+  const handleUpdateBulkFile = (id: string, updates: Partial<BulkFileQueueItem>) => {
+    setBulkFiles((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
+    );
+  };
+
+  // Handle Single File Upload Submission
+  const handleSingleUploadSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUploadError(null);
+
+    if (!uploadFile) {
+      setUploadError('Please select a technical document or CAD asset to ingest.');
+      return;
+    }
+
+    const docNum = uploadForm.documentNumber.trim().toUpperCase();
+    const title = uploadForm.title.trim();
+    const plantId = uploadForm.plantCode.trim() || currentPlantDefault;
+    const category = uploadForm.category || 'SOP';
+    const revision = (uploadForm.revision || 'REV-A').trim().toUpperCase();
+    const assetTags = uploadForm.assetTags.trim();
+
+    if (!docNum || !title) {
+      setUploadError('Document Number and Technical Title are required.');
       return;
     }
 
     setIsUploading(true);
-    setUploadError(null);
-    setUploadProgress(15);
-    setUploadStepMessage('Uploading file and verifying magic-byte integrity...');
 
     try {
       const formData = new FormData();
       formData.append('file', uploadFile);
-      formData.append('documentNumber', uploadForm.documentNumber.toUpperCase());
-      formData.append('title', uploadForm.title);
-      formData.append('category', uploadForm.category);
-      formData.append('revision', uploadForm.revision || 'REV-A');
-      formData.append('plantId', uploadForm.plantCode || 'PLANT-TX-04');
-      formData.append('assetTags', uploadForm.assetTags || '');
+      formData.append('documentNumber', docNum);
+      formData.append('title', title);
+      formData.append('category', category);
+      formData.append('revision', revision);
+      formData.append('plantId', plantId);
+      formData.append('assetTags', assetTags);
 
       const res = await apiFetch('/api/v1/documents/upload', {
         method: 'POST',
         body: formData,
       });
 
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || `Upload failed with HTTP ${res.status}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || (json && json.success === false)) {
+        let msg = '';
+        if (res.status === 401) {
+          msg = 'Authentication session expired or missing token. Please re-login to ingest documents.';
+        } else if (res.status === 403) {
+          msg = 'Access denied: Only organization administrators or owners are authorized to ingest documents.';
+        } else if (typeof json.error === 'string') {
+          msg = json.error;
+        } else if (json.error?.message) {
+          msg = json.error.message;
+        } else if (json.message) {
+          msg = json.message;
+        } else {
+          msg = `Upload failed with HTTP ${res.status}`;
+        }
+        throw new Error(msg);
       }
 
-      setUploadProgress(40);
-      setUploadStepMessage('Document stored. Dispatched to background ingestion queue...');
-
-      const uploadedDoc = json.data.document;
-
-      // Poll until indexing completes or fails
-      let attempts = 0;
-      const maxAttempts = 35;
-      const pollInterval = setInterval(async () => {
-        attempts++;
-        try {
-          const checkRes = await apiFetch(`/api/v1/documents/${uploadedDoc.id}`);
-          const checkJson = await checkRes.json();
-          if (checkRes.ok && checkJson.success) {
-            const current = checkJson.data;
-            const status = current.latestVersion?.status || current.status;
-            const progress = current.latestJob?.progressPercent ?? (status === 'INDEXED' ? 100 : 60);
-            const step = current.latestJob?.currentStep || (status === 'INDEXED' ? 'Vector indexing completed successfully' : 'Processing document...');
-
-            setUploadProgress(progress);
-            setUploadStepMessage(step);
-
-            if (status === 'INDEXED' || status === 'FAILED' || attempts >= maxAttempts) {
-              clearInterval(pollInterval);
-              setIsUploading(false);
-
-              if (status === 'FAILED') {
-                setUploadError(current.latestVersion?.errorMessage || current.latestJob?.errorMessage || 'Document processing failed.');
-              } else {
-                setIsUploadModalOpen(false);
-                setUploadFile(null);
-                setUploadForm({
-                  documentNumber: '',
-                  title: '',
-                  category: 'SOP',
-                  revision: 'REV-A',
-                  plantCode: uploadForm.plantCode,
-                  assetTags: '',
-                });
-                await fetchDocuments(uploadedDoc.id);
-              }
-            }
-          }
-        } catch (pollErr) {
-          console.error('Polling error', pollErr);
-        }
-      }, 800);
+      setIsUploading(false);
+      setIsUploadModalOpen(false);
+      setUploadFile(null);
+      await fetchDocuments();
     } catch (err: any) {
       setIsUploading(false);
-      setUploadError(err?.message || 'Network error occurred during upload.');
+      let errorMsg = err?.message || 'Network error occurred during upload.';
+      if (errorMsg === 'Failed to fetch') {
+        errorMsg = 'Network connection failed while uploading. Please check your connection or sign in again.';
+      }
+      setUploadError(errorMsg);
+    }
+  };
+
+  // Handle Bulk Batch Upload Submission
+  const handleBulkUploadSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUploadError(null);
+    setBulkSummary(null);
+
+    if (bulkFiles.length === 0) {
+      setUploadError('Please add at least one document to the bulk ingestion batch.');
+      return;
+    }
+
+    const plantId = bulkDefaults.plantCode.trim() || currentPlantDefault;
+    if (!plantId) {
+      setUploadError('A valid Target Plant is required for bulk ingestion.');
+      return;
+    }
+
+    setIsUploading(true);
+
+    // Update statuses to UPLOADING
+    setBulkFiles((prev) => prev.map((f) => ({ ...f, status: 'UPLOADING', errorMessage: undefined })));
+
+    try {
+      const formData = new FormData();
+      formData.append('plantId', plantId);
+      formData.append('defaultCategory', bulkDefaults.defaultCategory);
+      formData.append('defaultRevision', (bulkDefaults.defaultRevision || 'REV-A').trim().toUpperCase());
+      formData.append('defaultAssetTags', bulkDefaults.defaultAssetTags.trim());
+
+      // Append files
+      bulkFiles.forEach((item) => {
+        formData.append('files', item.file);
+      });
+
+      // Prepare metadata overrides map: filename -> { documentNumber, title, category }
+      const overrides: Record<string, { documentNumber?: string; title?: string; category?: DocumentType }> = {};
+      bulkFiles.forEach((item) => {
+        overrides[item.file.name] = {
+          documentNumber: item.docNumber.trim().toUpperCase() || undefined,
+          title: item.title.trim() || undefined,
+          category: item.category,
+        };
+      });
+      formData.append('metadataOverrides', JSON.stringify(overrides));
+
+      const res = await apiFetch('/api/v1/documents/bulk-upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || (json && json.success === false)) {
+        let msg = '';
+        if (res.status === 401) {
+          msg = 'Authentication session expired or missing token. Please re-login to ingest documents.';
+        } else if (res.status === 403) {
+          msg = 'Access denied: Only organization administrators or owners are authorized to ingest documents.';
+        } else if (typeof json.error === 'string') {
+          msg = json.error;
+        } else if (json.error?.message) {
+          msg = json.error.message;
+        } else if (json.message) {
+          msg = json.message;
+        } else {
+          msg = `Bulk upload failed with HTTP ${res.status}`;
+        }
+        throw new Error(msg);
+      }
+
+      const uploadedList = json.data?.uploaded || [];
+      const failedList = json.data?.failed || [];
+
+      // Update per-item status in UI
+      setBulkFiles((prev) =>
+        prev.map((item) => {
+          const failure = failedList.find((f: any) => f.originalFilename === item.file.name);
+          if (failure) {
+            return { ...item, status: 'FAILED', errorMessage: failure.error };
+          }
+          const success = uploadedList.find((u: any) => u.originalFilename === item.file.name);
+          if (success) {
+            return { ...item, status: 'INDEXED' };
+          }
+          return item;
+        })
+      );
+
+      setBulkSummary({
+        total: bulkFiles.length,
+        succeeded: uploadedList.length,
+        failed: failedList.length,
+      });
+
+      await fetchDocuments();
+
+      // If all succeeded, auto-close after 1.5s
+      if (failedList.length === 0) {
+        setTimeout(() => {
+          setIsUploadModalOpen(false);
+          setBulkFiles([]);
+          setBulkSummary(null);
+        }, 1500);
+      }
+    } catch (err: any) {
+      let errorMsg = err?.message || 'Network error occurred during bulk ingestion.';
+      if (errorMsg === 'Failed to fetch') {
+        errorMsg = 'Network connection failed during bulk upload. Please check your connection or sign in again.';
+      }
+      setUploadError(errorMsg);
+      setBulkFiles((prev) => prev.map((f) => ({ ...f, status: 'FAILED', errorMessage: errorMsg })));
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -539,13 +922,40 @@ export const TechnicalManualsView: React.FC = () => {
     try {
       const res = await apiFetch(`/api/v1/documents/${doc.id}/download`);
       if (!res.ok) {
-        throw new Error(`Download failed with status ${res.status}`);
+        let errMsg = `Download failed with status ${res.status}`;
+        try {
+          const json = await res.json();
+          if (json.error) errMsg = json.error;
+        } catch {
+          // not json
+        }
+        throw new Error(errMsg);
       }
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${doc.documentNumber}_${doc.revision}.pdf`;
+      let ext = 'pdf';
+      const mt = doc.mimeType?.toLowerCase() || '';
+      if (mt.includes('gltf-binary') || mt.includes('glb')) ext = 'glb';
+      else if (mt.includes('gltf')) ext = 'gltf';
+      else if (mt.includes('obj')) ext = 'obj';
+      else if (mt.includes('stl')) ext = 'stl';
+      else if (mt.includes('step') || mt.includes('stp')) ext = 'step';
+      else if (mt.includes('sketchup') || mt.includes('skp')) ext = 'skp';
+      else if (mt.includes('fbx')) ext = 'fbx';
+      else if (mt.includes('usdz')) ext = 'usdz';
+      else if (mt.includes('usd')) ext = 'usd';
+      else if (mt.includes('iges') || mt.includes('igs')) ext = 'iges';
+      else if (mt.includes('ply')) ext = 'ply';
+      else if (mt.includes('3mf')) ext = '3mf';
+      else if (mt.includes('openxml')) ext = 'docx';
+      else if (mt.includes('markdown')) ext = 'md';
+      else if (mt.includes('text')) ext = 'txt';
+      else if (mt.includes('png')) ext = 'png';
+      else if (mt.includes('jpeg') || mt.includes('jpg')) ext = 'jpg';
+      else if (mt.includes('webp')) ext = 'webp';
+      a.download = `${doc.documentNumber}_${doc.revision || 'v1'}.${ext}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -555,13 +965,82 @@ export const TechnicalManualsView: React.FC = () => {
     }
   };
 
+  const copyPageText = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2000);
+  };
+
   const currentPage = selectedDoc?.pages?.[currentPageIndex] || null;
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7] text-[#1A202C] font-sans">
-      {/* Top Action Bar */}
-      <div className="p-4 border-b border-[#E2E8F0] bg-white flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3 flex-1 min-w-[320px]">
+      {/* KPI Stats Overview Header */}
+      <div className="p-4 bg-white border-b border-[#E2E8F0] grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl flex items-center justify-between">
+          <div>
+            <div className="text-[10px] font-sans font-semibold text-[#64748B] uppercase tracking-wider">
+              Total Cataloged
+            </div>
+            <div className="text-xl font-bold font-mono text-[#1A202C] mt-0.5">{totalCount}</div>
+            <div className="text-[10px] text-[#64748B] mt-0.5">Documents & Schematics</div>
+          </div>
+          <FileText className="w-7 h-7 text-[#2563EB]/40" />
+        </div>
+
+        <div className="p-3 bg-emerald-50/50 border border-emerald-100 rounded-xl flex items-center justify-between">
+          <div>
+            <div className="text-[10px] font-sans font-semibold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Live in Qdrant
+            </div>
+            <div className="text-xl font-bold font-mono text-emerald-900 mt-0.5">{indexedCount}</div>
+            <div className="text-[10px] text-emerald-700 mt-0.5">{totalChunksCount} Vector Chunks Live</div>
+          </div>
+          <Database className="w-7 h-7 text-emerald-600/40" />
+        </div>
+
+        <div className="p-3 bg-blue-50/50 border border-blue-100 rounded-xl flex items-center justify-between">
+          <div>
+            <div className="text-[10px] font-sans font-semibold text-blue-800 uppercase tracking-wider flex items-center gap-1">
+              {processingCount > 0 && <RotateCw className="w-2.5 h-2.5 text-blue-600 animate-spin" />}
+              Processing Queue
+            </div>
+            <div className="text-xl font-bold font-mono text-blue-900 mt-0.5">{processingCount}</div>
+            <div className="text-[10px] text-blue-700 mt-0.5">Active Ingestion Pipelines</div>
+          </div>
+          <Activity className="w-7 h-7 text-blue-600/40" />
+        </div>
+
+        <div
+          onClick={() => {
+            if (failedCount > 0) {
+              setSelectedStatus(selectedStatus === 'FAILED' ? 'ALL' : 'FAILED');
+            }
+          }}
+          className={`p-3 border rounded-xl flex items-center justify-between transition ${
+            failedCount > 0
+              ? 'bg-rose-50/60 border-rose-200 cursor-pointer hover:bg-rose-100/50'
+              : 'bg-[#F8FAFC] border-[#E2E8F0]'
+          }`}
+        >
+          <div>
+            <div className="text-[10px] font-sans font-semibold text-rose-800 uppercase tracking-wider flex items-center gap-1">
+              <AlertCircle className="w-3 h-3 text-rose-600" />
+              Failed Ingestions
+            </div>
+            <div className="text-xl font-bold font-mono text-rose-900 mt-0.5">{failedCount}</div>
+            <div className="text-[10px] text-rose-700 mt-0.5">
+              {failedCount > 0 ? 'Click to filter & retry' : 'Zero failures detected'}
+            </div>
+          </div>
+          <AlertTriangle className="w-7 h-7 text-rose-500/40" />
+        </div>
+      </div>
+
+      {/* Action and Filter Bar */}
+      <div className="px-4 py-3 border-b border-[#E2E8F0] bg-white flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 flex-1 min-w-[320px]">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 text-[#64748B] absolute left-3 top-2.5" />
             <input
@@ -569,12 +1048,20 @@ export const TechnicalManualsView: React.FC = () => {
               placeholder="Search by Document #, Title, or Asset Tag..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-white border border-[#CBD5E1] rounded-lg text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
+              className="w-full pl-9 pr-8 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
             />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2.5 top-2 text-[#94A3B8] hover:text-[#1A202C]"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           {/* Classification Filter */}
-          <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] rounded-lg px-3 py-1.5 shadow-sm">
+          <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 shadow-sm">
             <Filter className="w-3.5 h-3.5 text-[#64748B]" />
             <select
               value={selectedCategory}
@@ -583,14 +1070,14 @@ export const TechnicalManualsView: React.FC = () => {
             >
               <option value="ALL">All Categories</option>
               <option value="SOP">SOPs</option>
+              <option value="PID_DIAGRAM">P&ID Diagrams</option>
+              <option value="3D_MODEL">3D Models / CAD</option>
               <option value="OEM_MANUAL">OEM Manuals</option>
-              <option value="SCHEMATIC_PID">P&IDs</option>
-              <option value="WIRING_DIAGRAM">Wiring Diagrams</option>
             </select>
           </div>
 
           {/* Status Filter */}
-          <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] rounded-lg px-3 py-1.5 shadow-sm">
+          <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 shadow-sm">
             <Clock className="w-3.5 h-3.5 text-[#64748B]" />
             <select
               value={selectedStatus}
@@ -604,23 +1091,47 @@ export const TechnicalManualsView: React.FC = () => {
               <option value="QUEUED">Queued</option>
             </select>
           </div>
+
+          {(selectedCategory !== 'ALL' || selectedStatus !== 'ALL' || search) && (
+            <button
+              onClick={() => {
+                setSelectedCategory('ALL');
+                setSelectedStatus('ALL');
+                setSearch('');
+              }}
+              className="text-xs text-[#64748B] hover:text-[#1A202C] underline px-1"
+            >
+              Reset
+            </button>
+          )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsUploadModalOpen(true)}
-            className="px-4 py-2 rounded-lg bg-[#151C24] hover:bg-black text-white text-xs font-semibold flex items-center gap-2 shadow-sm transition"
-          >
-            <UploadCloud className="w-4 h-4" />
-            Ingest Document
-          </button>
-        </div>
+        {/* Ingest Action Buttons */}
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleOpenUploadModal('BULK')}
+              className="px-3.5 py-1.5 rounded-lg bg-white border border-[#CBD5E1] hover:bg-slate-50 text-[#1A202C] text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+              title="Upload up to 20 documents simultaneously"
+            >
+              <Files className="w-3.5 h-3.5 text-[#2563EB]" />
+              <span>Bulk Ingest</span>
+            </button>
+            <button
+              onClick={() => handleOpenUploadModal('SINGLE')}
+              className="px-3.5 py-1.5 rounded-lg bg-[#151C24] hover:bg-black text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              <span>Ingest Document</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Split Layout: Document List + Detail Inspector */}
       <div className="flex-1 flex overflow-hidden">
         {/* Document Table */}
-        <div className="flex-1 flex flex-col overflow-hidden border-r border-[#E2E8F0] bg-white">
+        <div className="flex-1 flex flex-col overflow-hidden bg-white">
           <div className="flex-1 overflow-y-auto">
             <table className="w-full text-left border-collapse text-xs font-sans">
               <thead>
@@ -628,100 +1139,192 @@ export const TechnicalManualsView: React.FC = () => {
                   <th className="py-2.5 px-4 font-semibold">DOCUMENT #</th>
                   <th className="py-2.5 px-4 font-semibold">TITLE</th>
                   <th className="py-2.5 px-4 font-semibold">CLASS</th>
+                  <th className="py-2.5 px-4 font-semibold">PLANT</th>
                   <th className="py-2.5 px-4 font-semibold">REV</th>
                   <th className="py-2.5 px-4 font-semibold">ASSET TAG</th>
-                  <th className="py-2.5 px-4 font-semibold">VECTORS</th>
                   <th className="py-2.5 px-4 font-semibold">STATUS</th>
                   <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E2E8F0]">
-                {filteredDocs.map((doc) => {
-                  const isSelected = selectedDoc?.id === doc.id;
-                  const isFailed = doc.status === 'FAILED';
-                  const isProcessing = doc.status === 'PROCESSING';
-
-                  return (
-                    <tr
-                      key={doc.id}
-                      onClick={() => {
-                        setSelectedDoc(doc);
-                        setCurrentPageIndex(0);
-                        if (!doc.pages || doc.pages.length === 0) {
-                          loadPagesForDoc(doc.id);
-                        }
-                      }}
-                      className={`cursor-pointer transition ${
-                        isSelected
-                          ? 'bg-blue-50/70 border-l-2 border-l-[#2563EB] text-[#1A202C] font-medium'
-                          : 'hover:bg-[#F8FAFC] text-[#1A202C]'
-                      }`}
-                    >
-                      <td className="py-3 px-4 font-mono font-semibold text-[#2563EB] flex items-center gap-2">
-                        <FileText className="w-3.5 h-3.5 text-[#64748B]" />
-                        {doc.documentNumber}
-                      </td>
-                      <td className="py-3 px-4 font-medium max-w-xs truncate text-[#1A202C]">
-                        {doc.title}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-[11px] text-[#64748B]">
-                        {doc.category}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-[#64748B]">{doc.revision}</td>
-                      <td className="py-3 px-4 font-mono text-[#2563EB]">
-                        {doc.assetTags[0] || '—'}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-[#64748B]">
-                        {doc.totalChunks > 0 ? `${doc.totalChunks} chunks` : '—'}
-                      </td>
-                      <td className="py-3 px-4">
-                        {isFailed ? (
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                            Failed
-                          </span>
-                        ) : isProcessing ? (
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                            Processing ({doc.progressPercent}%)
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Indexed
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                          {isFailed && (
-                            <button
-                              onClick={() => handleRetry(doc.id)}
-                              title="Retry processing"
-                              className="p-1 rounded bg-[#F1F5F9] hover:bg-[#E2E8F0] text-amber-700 transition"
-                            >
-                              <RotateCw className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={8} className="py-16 text-center text-[#64748B]">
+                      <RotateCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#2563EB]" />
+                      <span className="text-xs font-medium">Loading document catalog from database...</span>
+                    </td>
+                  </tr>
+                ) : filteredDocs.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-16 text-center text-[#64748B]">
+                      <FileText className="w-8 h-8 mx-auto mb-2 text-[#94A3B8]" />
+                      <div className="font-semibold text-sm text-[#1A202C]">No technical documents found</div>
+                      <p className="text-xs text-[#64748B] mt-1 max-w-sm mx-auto">
+                        No indexed procedures, manuals, or diagrams match your current filter. Ingest your first industrial document or bulk batch to begin.
+                      </p>
+                      {isAdmin && (
+                        <div className="mt-3 flex items-center justify-center gap-2">
                           <button
-                            onClick={() => handleDeleteDoc(doc.id)}
-                            title="Delete document"
-                            className="p-1 rounded bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#64748B] hover:text-rose-600 transition"
+                            onClick={() => handleOpenUploadModal('SINGLE')}
+                            className="px-3 py-1.5 bg-[#151C24] hover:bg-black text-white text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 shadow-sm transition"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <UploadCloud className="w-3.5 h-3.5" /> Ingest Document
+                          </button>
+                          <button
+                            onClick={() => handleOpenUploadModal('BULK')}
+                            className="px-3 py-1.5 bg-white border border-[#CBD5E1] hover:bg-slate-50 text-[#1A202C] text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 shadow-sm transition"
+                          >
+                            <Files className="w-3.5 h-3.5 text-[#2563EB]" /> Bulk Batch Ingestion
                           </button>
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                      )}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredDocs.map((doc) => {
+                    const isSelected = isSidePanelOpen && selectedDoc?.id === doc.id;
+                    const isFailed = doc.status === 'FAILED';
+                    const isProcessing = doc.status === 'PROCESSING' || doc.status === 'QUEUED';
+                    const is3D = doc.category === '3D_MODEL' || CAD_EXTENSIONS.some((e) => doc.mimeType?.includes(e));
+                    const isPID = doc.category === 'PID_DIAGRAM' || (doc.category as string) === 'SCHEMATIC_PID';
+
+                    return (
+                      <tr
+                        key={doc.id}
+                        onClick={() => {
+                          setSelectedDoc(doc);
+                          setIsSidePanelOpen(true);
+                          setCurrentPageIndex(0);
+                          if (!doc.pages || doc.pages.length === 0) {
+                            loadPagesForDoc(doc.id);
+                          }
+                        }}
+                        className={`transition cursor-pointer ${
+                          isSelected
+                            ? 'bg-blue-50/70 border-l-2 border-l-[#2563EB] text-[#1A202C] font-medium'
+                            : 'hover:bg-[#F8FAFC] text-[#1A202C]'
+                        }`}
+                      >
+                        <td className="py-3 px-4 font-mono font-semibold text-[#2563EB] flex items-center gap-2">
+                          {is3D ? (
+                            <Boxes className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                          ) : isPID ? (
+                            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          ) : (
+                            <FileText className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
+                          )}
+                          <span className="truncate max-w-[150px]">{doc.documentNumber}</span>
+                        </td>
+                        <td className="py-3 px-4 font-medium max-w-xs truncate text-[#1A202C]">
+                          {doc.title}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                              is3D
+                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                : isPID
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : doc.category === 'OEM_MANUAL'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-blue-50 text-blue-700 border-blue-200'
+                            }`}
+                          >
+                            {doc.category}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 font-mono text-[11px] text-[#64748B]">
+                          {doc.plantCode}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-[#64748B]">{doc.revision}</td>
+                        <td className="py-3 px-4 font-mono text-[#2563EB]">
+                          {doc.assetTags[0] || '—'}
+                        </td>
+                        <td className="py-3 px-4">
+                          {isFailed ? (
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                              Failed
+                            </span>
+                          ) : isProcessing ? (
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                              Processing ({doc.progressPercent}%)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Indexed ({doc.totalChunks} pts)
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            {/* 3D CAD Launcher Button */}
+                            {is3D && (
+                              <button
+                                onClick={() => handleOpen3dViewer(doc)}
+                                title="Open in 3D CAD Viewer"
+                                className="px-2 py-1 rounded bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-[10px] font-semibold flex items-center gap-1 transition"
+                              >
+                                <Boxes className="w-3 h-3" /> 3D
+                              </button>
+                            )}
+
+                            {/* P&ID Schematic Launcher Button */}
+                            {isPID && (
+                              <button
+                                onClick={() => handleOpenPidViewer(doc)}
+                                title="Open in P&ID Schematic Viewer"
+                                className="px-2 py-1 rounded bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 text-[10px] font-semibold flex items-center gap-1 transition"
+                              >
+                                <FileSpreadsheet className="w-3 h-3" /> P&ID
+                              </button>
+                            )}
+
+                            {/* Download Original Payload */}
+                            <button
+                              onClick={() => handleDownloadOriginal(doc)}
+                              title="Download original document file"
+                              className="p-1 rounded bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#64748B] hover:text-[#1A202C] transition"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Retry Action */}
+                            {isFailed && isAdmin && (
+                              <button
+                                onClick={() => handleRetry(doc.id)}
+                                title="Retry processing"
+                                className="p-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 transition"
+                              >
+                                <RotateCw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {/* Delete Action (Admins only) */}
+                            {isAdmin && (
+                              <button
+                                onClick={() => handleDeleteDoc(doc.id)}
+                                title="Delete document & vectors"
+                                className="p-1 rounded bg-[#F1F5F9] hover:bg-rose-50 text-[#64748B] hover:text-rose-600 transition"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
 
           {/* Bottom Summary Bar */}
           <div className="p-3 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between text-xs font-sans text-[#64748B]">
-            <span>{filteredDocs.length} Total Documents Cataloged</span>
+            <span>{filteredDocs.length} Documents Cataloged</span>
             <div className="flex items-center gap-4">
               <span className="flex items-center gap-1 text-[#0F766E] font-medium">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Tenant Isolated
@@ -734,164 +1337,329 @@ export const TechnicalManualsView: React.FC = () => {
         </div>
 
         {/* Right Detail Inspector & Page Navigator */}
-        {selectedDoc ? (
-          <div className="w-[480px] bg-white flex flex-col justify-between overflow-y-auto border-l border-[#E2E8F0]">
-            {/* Failure Alert Banner */}
-            {selectedDoc.status === 'FAILED' && (
-              <div className="p-3 bg-rose-50 border-b border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <div className="font-bold text-rose-900">Processing Failure Detected</div>
-                  <div className="text-[11px] text-rose-700 mt-0.5">
-                    {selectedDoc.errorMessage || 'An error occurred during vector generation.'}
-                  </div>
-                  <button
-                    onClick={() => handleRetry(selectedDoc.id)}
-                    className="mt-2 px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-sans text-[11px] font-bold flex items-center gap-1.5 transition shadow-sm"
-                  >
-                    <RotateCw className="w-3 h-3" /> Retry Ingestion
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="p-4 space-y-4">
-              {/* Header */}
-              <div className="flex items-start justify-between pb-3 border-b border-[#E2E8F0]">
-                <div>
-                  <span className="text-[10px] font-sans text-amber-700 font-semibold uppercase tracking-wider">
-                    Industrial Knowledge Record
-                  </span>
-                  <h3 className="text-base font-bold text-[#1A202C] font-mono mt-0.5">
-                    {selectedDoc.documentNumber}
-                  </h3>
-                  <p className="text-xs text-[#64748B] mt-0.5">{selectedDoc.title}</p>
-                </div>
-                <StatusBadge
-                  label={selectedDoc.status}
-                  tone={selectedDoc.status === 'FAILED' ? 'critical' : 'healthy'}
-                />
-              </div>
-
-              {/* Version & Storage Integrity Metadata */}
-              <div className="grid grid-cols-3 gap-2 text-xs font-sans">
-                <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
-                  <div className="text-[10px] text-[#64748B] font-semibold">REVISION</div>
-                  <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.revision}</div>
-                </div>
-                <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
-                  <div className="text-[10px] text-[#64748B] font-semibold">PAGES</div>
-                  <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.totalPages}</div>
-                </div>
-                <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
-                  <div className="text-[10px] text-[#64748B] font-semibold">VECTORS</div>
-                  <div className="text-[#2563EB] font-bold mt-0.5 font-mono">{selectedDoc.totalChunks}</div>
-                </div>
-              </div>
-
-              {/* Integrity SHA-256 Proof */}
-              <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] space-y-1 font-sans text-xs">
-                <div className="flex items-center justify-between text-[10px] text-[#64748B] font-semibold">
-                  <span>SHA-256 PROVENANCE CHECKSUM</span>
-                  <span className="text-[#0F766E] flex items-center gap-1 font-bold">
-                    <ShieldCheck className="w-3 h-3" /> VERIFIED
-                  </span>
-                </div>
-                <div className="text-[11px] text-[#1A202C] font-mono break-all bg-white p-2 rounded border border-[#CBD5E1]">
-                  {selectedDoc.checksum}
-                </div>
-              </div>
-
-              {/* Page Inspector with Navigation */}
-              {selectedDoc.pages && selectedDoc.pages.length > 0 ? (
-                <div className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] space-y-3">
-                  <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-sans font-bold text-[#1A202C]">
-                        Page {currentPage?.pageNumber} of {selectedDoc.totalPages}
-                      </span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#F1F5F9] text-[#64748B] border border-[#CBD5E1]">
-                        {currentPage?.extractionMethod}
-                      </span>
-                      {currentPage?.hasTables && (
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                          Table Detected
-                        </span>
-                      )}
+        {isSidePanelOpen && selectedDoc && (
+          <div className="w-[490px] shrink-0 bg-white flex flex-col justify-between overflow-y-auto border-l border-[#E2E8F0] shadow-xl animate-in slide-in-from-right duration-200">
+            <div>
+              {/* Failure Alert Banner */}
+              {selectedDoc.status === 'FAILED' && (
+                <div className="p-3 bg-rose-50 border-b border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div className="font-bold text-rose-900">Processing Failure Detected</div>
+                    <div className="text-[11px] text-rose-700 mt-0.5 font-mono break-all">
+                      {selectedDoc.errorMessage || 'An error occurred during vector generation.'}
                     </div>
-
-                    <div className="flex items-center gap-1">
+                    {isAdmin && (
                       <button
-                        onClick={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
-                        disabled={currentPageIndex === 0}
-                        className="p-1 rounded bg-white hover:bg-slate-100 disabled:opacity-30 text-[#1A202C] border border-[#CBD5E1] transition shadow-sm"
+                        onClick={() => handleRetry(selectedDoc.id)}
+                        className="mt-2 px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white font-sans text-[11px] font-bold flex items-center gap-1.5 transition shadow-sm"
                       >
-                        <ChevronLeft className="w-4 h-4" />
+                        <RotateCw className="w-3 h-3" /> Retry Ingestion Pipeline
                       </button>
-                      <button
-                        onClick={() =>
-                          setCurrentPageIndex((prev) =>
-                            Math.min(selectedDoc.pages.length - 1, prev + 1)
-                          )
-                        }
-                        disabled={currentPageIndex >= selectedDoc.pages.length - 1}
-                        className="p-1 rounded bg-white hover:bg-slate-100 disabled:opacity-30 text-[#1A202C] border border-[#CBD5E1] transition shadow-sm"
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
+                    )}
                   </div>
-
-                  {/* Section Headings on this page */}
-                  {currentPage?.sectionHeadings && currentPage.sectionHeadings.length > 0 && (
-                    <div>
-                      <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
-                        Preserved Headings:
-                      </span>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {currentPage.sectionHeadings.map((h: string, i: number) => (
-                          <span
-                            key={i}
-                            className="text-[11px] font-sans px-2 py-0.5 rounded bg-white text-[#1A202C] border border-[#CBD5E1]"
-                          >
-                            {h}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Raw Text Terminal Viewer */}
-                  <div>
-                    <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
-                      Extracted Text Content:
-                    </span>
-                    <pre className="mt-1 p-2.5 rounded bg-white border border-[#CBD5E1] text-[11px] font-mono text-[#1A202C] whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed shadow-sm">
-                      {currentPage?.rawText}
-                    </pre>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-center text-xs font-sans text-[#64748B]">
-                  No extracted pages available. Document status: {selectedDoc.status}.
                 </div>
               )}
 
-              {/* Associated Plant Asset */}
-              <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between text-xs">
-                <div>
-                  <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
-                    Linked Plant & Asset
+              {/* Inspector Header */}
+              <div className="p-4 border-b border-[#E2E8F0] flex items-start justify-between bg-[#F8FAFC]">
+                <div className="flex-1 pr-2">
+                  <span className="text-[10px] font-sans text-amber-700 font-semibold uppercase tracking-wider">
+                    Industrial Knowledge Record
                   </span>
-                  <div className="font-mono text-xs font-bold text-[#2563EB] mt-0.5">
-                    {selectedDoc.plantCode} / {selectedDoc.assetTags.join(', ') || 'General Asset'}
+                  <h3 className="text-base font-bold text-[#1A202C] font-mono mt-0.5 break-all">
+                    {selectedDoc.documentNumber}
+                  </h3>
+                  <p className="text-xs text-[#64748B] mt-0.5 leading-relaxed">{selectedDoc.title}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <StatusBadge
+                    label={selectedDoc.status}
+                    tone={selectedDoc.status === 'FAILED' ? 'critical' : 'healthy'}
+                  />
+                  <button
+                    onClick={() => {
+                      setIsSidePanelOpen(false);
+                      setSelectedDoc(null);
+                    }}
+                    className="p-1 rounded text-[#64748B] hover:text-[#1A202C] hover:bg-[#F1F5F9] transition"
+                    title="Close details"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Inspector Tabs */}
+              <div className="flex border-b border-[#E2E8F0] bg-white text-xs font-semibold text-[#64748B]">
+                <button
+                  onClick={() => setActiveSideTab('METADATA')}
+                  className={`flex-1 py-2 text-center border-b-2 transition ${
+                    activeSideTab === 'METADATA'
+                      ? 'border-[#2563EB] text-[#2563EB]'
+                      : 'border-transparent hover:text-[#1A202C]'
+                  }`}
+                >
+                  Overview & Integrity
+                </button>
+                <button
+                  onClick={() => setActiveSideTab('EXTRACTED_TEXT')}
+                  className={`flex-1 py-2 text-center border-b-2 transition ${
+                    activeSideTab === 'EXTRACTED_TEXT'
+                      ? 'border-[#2563EB] text-[#2563EB]'
+                      : 'border-transparent hover:text-[#1A202C]'
+                  }`}
+                >
+                  Extracted Pages ({selectedDoc.pages?.length || selectedDoc.totalPages || 0})
+                </button>
+                <button
+                  onClick={() => setActiveSideTab('PIPELINE')}
+                  className={`flex-1 py-2 text-center border-b-2 transition ${
+                    activeSideTab === 'PIPELINE'
+                      ? 'border-[#2563EB] text-[#2563EB]'
+                      : 'border-transparent hover:text-[#1A202C]'
+                  }`}
+                >
+                  Vector Diagnostics
+                </button>
+              </div>
+
+              {/* Tab 1: Overview & Provenance */}
+              {activeSideTab === 'METADATA' && (
+                <div className="p-4 space-y-4">
+                  {/* Quick Action CAD / P&ID Launchers */}
+                  {(selectedDoc.category === '3D_MODEL' || CAD_EXTENSIONS.some((e) => selectedDoc.mimeType?.includes(e))) && (
+                    <div className="p-3 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                          <Boxes className="w-4 h-4 text-purple-700" /> Genuine 3D CAD Asset
+                        </div>
+                        <div className="text-[11px] text-purple-700 mt-0.5">
+                          Interactive WebGL inspection with mesh hierarchy
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleOpen3dViewer(selectedDoc)}
+                        className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-sm transition"
+                      >
+                        Launch 3D Viewer
+                      </button>
+                    </div>
+                  )}
+
+                  {(selectedDoc.category === 'PID_DIAGRAM' || (selectedDoc.category as string) === 'SCHEMATIC_PID') && (
+                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                          <FileSpreadsheet className="w-4 h-4 text-amber-700" /> Engineering P&ID Schematic
+                        </div>
+                        <div className="text-[11px] text-amber-700 mt-0.5">
+                          Interactive component tags & vector alignment
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleOpenPidViewer(selectedDoc)}
+                        className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold shadow-sm transition"
+                      >
+                        Launch P&ID Viewer
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Metadata Grid */}
+                  <div className="grid grid-cols-2 gap-2.5 text-xs font-sans">
+                    <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                      <div className="text-[10px] text-[#64748B] font-semibold">REVISION</div>
+                      <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.revision}</div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                      <div className="text-[10px] text-[#64748B] font-semibold">TOTAL PAGES</div>
+                      <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.totalPages}</div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                      <div className="text-[10px] text-[#64748B] font-semibold">FACILITY / PLANT</div>
+                      <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.plantCode}</div>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                      <div className="text-[10px] text-[#64748B] font-semibold">PAYLOAD SIZE</div>
+                      <div className="text-[#1A202C] font-bold mt-0.5 font-mono">
+                        {(selectedDoc.fileSizeBytes / (1024 * 1024)).toFixed(2)} MB
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Integrity SHA-256 Proof */}
+                  <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] space-y-1 font-sans text-xs">
+                    <div className="flex items-center justify-between text-[10px] text-[#64748B] font-semibold">
+                      <span>SHA-256 PROVENANCE CHECKSUM</span>
+                      <span className="text-[#0F766E] flex items-center gap-1 font-bold">
+                        <ShieldCheck className="w-3 h-3" /> VERIFIED
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-[#1A202C] font-mono break-all bg-white p-2 rounded border border-[#CBD5E1]">
+                      {selectedDoc.checksum}
+                    </div>
+                  </div>
+
+                  {/* Associated Plant Asset */}
+                  <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between text-xs">
+                    <div>
+                      <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
+                        Associated Asset Tags
+                      </span>
+                      <div className="font-mono text-xs font-bold text-[#2563EB] mt-0.5">
+                        {selectedDoc.assetTags.join(', ') || 'General Facility Asset'}
+                      </div>
+                    </div>
+                    <Cpu className="w-4 h-4 text-[#64748B]" />
                   </div>
                 </div>
-                <Cpu className="w-4 h-4 text-[#64748B]" />
-              </div>
+              )}
+
+              {/* Tab 2: Extracted Pages */}
+              {activeSideTab === 'EXTRACTED_TEXT' && (
+                <div className="p-4 space-y-3">
+                  {selectedDoc.pages && selectedDoc.pages.length > 0 ? (
+                    <div className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] space-y-3">
+                      <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-sans font-bold text-[#1A202C]">
+                            Page {currentPage?.pageNumber} of {selectedDoc.pages.length}
+                          </span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#F1F5F9] text-[#64748B] border border-[#CBD5E1]">
+                            {currentPage?.extractionMethod}
+                          </span>
+                          {currentPage?.hasTables && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                              Table Detected
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setCurrentPageIndex((prev) => Math.max(0, prev - 1))}
+                            disabled={currentPageIndex === 0}
+                            className="p-1 rounded bg-white hover:bg-slate-100 disabled:opacity-30 text-[#1A202C] border border-[#CBD5E1] transition shadow-sm"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() =>
+                              setCurrentPageIndex((prev) =>
+                                Math.min(selectedDoc.pages.length - 1, prev + 1)
+                              )
+                            }
+                            disabled={currentPageIndex >= selectedDoc.pages.length - 1}
+                            className="p-1 rounded bg-white hover:bg-slate-100 disabled:opacity-30 text-[#1A202C] border border-[#CBD5E1] transition shadow-sm"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Section Headings on this page */}
+                      {currentPage?.sectionHeadings && currentPage.sectionHeadings.length > 0 && (
+                        <div>
+                          <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
+                            Preserved Section Headings:
+                          </span>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {currentPage.sectionHeadings.map((h: string, i: number) => (
+                              <span
+                                key={i}
+                                className="text-[11px] font-sans px-2 py-0.5 rounded bg-white text-[#1A202C] border border-[#CBD5E1]"
+                              >
+                                {h}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Raw Text Viewer with Copy Button */}
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">
+                            Extracted Text:
+                          </span>
+                          <button
+                            onClick={() => copyPageText(currentPage?.rawText || '')}
+                            className="text-[10px] text-[#2563EB] hover:underline flex items-center gap-1"
+                          >
+                            {copiedText ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-600" /> Copied
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" /> Copy Text
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <pre className="mt-1 p-2.5 rounded bg-white border border-[#CBD5E1] text-[11px] font-mono text-[#1A202C] whitespace-pre-wrap max-h-64 overflow-y-auto leading-relaxed shadow-sm">
+                          {currentPage?.rawText || '(Empty content on page)'}
+                        </pre>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-8 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-center text-xs font-sans text-[#64748B] space-y-2">
+                      <FileText className="w-8 h-8 text-[#94A3B8] mx-auto" />
+                      <div>No extracted page content cached for this document.</div>
+                      <button
+                        onClick={() => loadPagesForDoc(selectedDoc.id)}
+                        className="px-3 py-1 bg-white border border-[#CBD5E1] rounded text-[#1A202C] text-xs font-medium hover:bg-slate-50 transition"
+                      >
+                        Fetch Extracted Content
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 3: Pipeline Diagnostics */}
+              {activeSideTab === 'PIPELINE' && (
+                <div className="p-4 space-y-3 font-sans text-xs">
+                  <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-semibold text-[#64748B]">Qdrant Vector Points</span>
+                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        {selectedDoc.totalChunks} Chunks Indexed
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-semibold text-[#64748B]">Ingestion Retries</span>
+                      <span className="font-mono text-[#1A202C]">{selectedDoc.retryCount}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-semibold text-[#64748B]">Current Pipeline Step</span>
+                      <span className="font-mono text-[11px] text-[#2563EB]">{selectedDoc.currentStep || 'Complete'}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-1.5">
+                    <div className="text-[10px] uppercase font-semibold text-[#64748B]">Security & Isolation</div>
+                    <div className="text-[11px] text-[#1A202C] space-y-1">
+                      <div className="flex items-center gap-1.5 text-emerald-700">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>Payload magic bytes verified against spoofing</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-emerald-700">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>Strict organization-isolated vector namespace</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-emerald-700">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        <span>Role-Based Access Control enforced on S3 proxy</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Footer Action */}
+            {/* Side Panel Footer Action */}
             <div className="p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]">
               <button
                 onClick={() => handleDownloadOriginal(selectedDoc)}
@@ -902,24 +1670,27 @@ export const TechnicalManualsView: React.FC = () => {
               </button>
             </div>
           </div>
-        ) : (
-          <div className="w-[480px] bg-[#F8FAFC] flex items-center justify-center text-xs font-sans text-[#64748B]">
-            Select a document to inspect dossier and page provenance.
-          </div>
         )}
       </div>
 
-      {/* Upload & Ingestion Modal */}
+      {/* Ingestion Modal (Single + Bulk Modes) */}
       {isUploadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg bg-white border border-[#E2E8F0] rounded-xl shadow-2xl overflow-hidden flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-2xl bg-white border border-[#E2E8F0] rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
             {/* Modal Header */}
-            <div className="px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between bg-[#F8FAFC]">
-              <div className="flex items-center gap-2">
-                <UploadCloud className="w-5 h-5 text-[#2563EB]" />
-                <h3 className="text-sm font-bold font-sans text-[#1A202C]">
-                  Ingest Industrial Technical Document
-                </h3>
+            <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center justify-between bg-[#F8FAFC]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-[#151C24] text-white flex items-center justify-center">
+                  <UploadCloud className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold font-sans text-[#1A202C]">
+                    Ingest Industrial Technical Documents
+                  </h3>
+                  <p className="text-[11px] text-[#64748B]">
+                    Automated OCR, section chunking & Qdrant vector indexing
+                  </p>
+                </div>
               </div>
               <button
                 onClick={() => !isUploading && setIsUploadModalOpen(false)}
@@ -930,157 +1701,420 @@ export const TechnicalManualsView: React.FC = () => {
               </button>
             </div>
 
-            {/* Modal Body */}
-            <form onSubmit={handleUploadSubmit} className="p-5 space-y-4 font-sans text-xs">
+            {/* Mode Switcher Tabs */}
+            <div className="flex border-b border-[#E2E8F0] bg-[#F1F5F9]/60 px-5 pt-2 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  setIngestMode('SINGLE');
+                  setUploadError(null);
+                }}
+                disabled={isUploading}
+                className={`py-2 px-4 rounded-t-lg transition flex items-center gap-1.5 ${
+                  ingestMode === 'SINGLE'
+                    ? 'bg-white text-[#2563EB] border-t border-l border-r border-[#CBD5E1] shadow-sm'
+                    : 'text-[#64748B] hover:text-[#1A202C]'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Single Document</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIngestMode('BULK');
+                  setUploadError(null);
+                }}
+                disabled={isUploading}
+                className={`py-2 px-4 rounded-t-lg transition flex items-center gap-1.5 ${
+                  ingestMode === 'BULK'
+                    ? 'bg-white text-[#2563EB] border-t border-l border-r border-[#CBD5E1] shadow-sm'
+                    : 'text-[#64748B] hover:text-[#1A202C]'
+                }`}
+              >
+                <Files className="w-3.5 h-3.5" />
+                <span>Bulk Batch Ingestion (Up to 20 Files)</span>
+                {bulkFiles.length > 0 && (
+                  <span className="ml-1 px-1.5 py-0.2 rounded-full bg-[#2563EB] text-white text-[10px]">
+                    {bulkFiles.length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Modal Body Container */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4 font-sans text-xs">
               {uploadError && (
-                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 text-rose-600" />
-                  {uploadError}
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 text-rose-600 mt-0.5" />
+                  <div className="flex-1 leading-relaxed">{uploadError}</div>
                 </div>
               )}
 
-              {/* Drag & Drop File Zone */}
-              <div>
-                <label className="text-[11px] font-sans text-[#64748B] font-semibold uppercase">
-                  Document File (PDF, DOCX, TXT, MD, PNG, JPG, WebP)
-                </label>
-                <div className="mt-1 border-2 border-dashed border-[#CBD5E1] hover:border-[#2563EB] rounded-lg p-5 text-center bg-[#F8FAFC] transition cursor-pointer relative">
-                  <input
-                    type="file"
-                    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    disabled={isUploading}
-                  />
-                  <div className="flex flex-col items-center">
-                    <FileCode className="w-8 h-8 text-[#2563EB] mb-2" />
-                    {uploadFile ? (
-                      <div className="text-xs font-mono text-emerald-700 font-semibold">
-                        Selected: {uploadFile.name} ({(uploadFile.size / 1024).toFixed(1)} KB)
+              {bulkSummary && (
+                <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Bulk Ingestion Complete: {bulkSummary.succeeded} of {bulkSummary.total} documents queued successfully
+                  </div>
+                  {bulkSummary.failed > 0 && (
+                    <div className="text-rose-700 text-[11px]">
+                      {bulkSummary.failed} file(s) failed validation or storage dispatch.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* MODE 1: SINGLE DOCUMENT INGESTION */}
+              {ingestMode === 'SINGLE' ? (
+                <form id="single-upload-form" onSubmit={handleSingleUploadSubmit} className="space-y-4">
+                  {/* Single File Dropzone */}
+                  <div>
+                    <label className="text-[11px] font-sans text-[#64748B] font-semibold uppercase flex items-center justify-between">
+                      <span>DOCUMENT FILE</span>
+                      <span className="text-[10px] text-[#2563EB] font-normal">
+                        PDF, DOCX, TXT, MD, IMAGES, 3D CAD
+                      </span>
+                    </label>
+                    <div className="mt-1 border-2 border-dashed border-[#CBD5E1] hover:border-[#2563EB] rounded-lg p-5 text-center bg-[#F8FAFC] transition cursor-pointer relative">
+                      <input
+                        type="file"
+                        accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.glb,.gltf,.obj,.stl,.stp,.step,.skp,.fbx,.usd,.usdz,.iges,.igs,.ply,.3mf"
+                        onChange={(e) => handleSingleFileSelected(e.target.files?.[0] || null)}
+                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                        disabled={isUploading}
+                      />
+                      <div className="flex flex-col items-center">
+                        <FileCode className="w-8 h-8 text-[#2563EB] mb-2" />
+                        {uploadFile ? (
+                          <div className="space-y-1">
+                            <div className="text-xs font-mono text-emerald-700 font-semibold flex items-center justify-center gap-1.5">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                              {uploadFile.name}
+                            </div>
+                            <div className="text-[11px] text-[#64748B]">
+                              Size: {(uploadFile.size / 1024).toFixed(1)} KB • Click or drop another to replace
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-xs font-sans text-[#1A202C] font-medium">
+                              Click to select or drag & drop industrial manual or 3D asset
+                            </div>
+                            <div className="text-[10px] font-sans text-[#64748B] mt-1">
+                              Magic bytes verified. Max file size: 50MB
+                            </div>
+                          </>
+                        )}
                       </div>
-                    ) : (
-                      <>
-                        <div className="text-xs font-sans text-[#1A202C] font-medium">
-                          Click to select or drag & drop industrial manual
-                        </div>
-                        <div className="text-[10px] font-sans text-[#64748B] mt-1">
-                          Magic bytes verified. Max file size: 50MB
-                        </div>
-                      </>
-                    )}
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Form Grid */}
-              <div className="grid grid-cols-2 gap-3 text-xs font-sans">
-                <div>
-                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">DOCUMENT NUMBER *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. SOP-TURB-01"
-                    value={uploadForm.documentNumber}
-                    onChange={(e) =>
-                      setUploadForm({ ...uploadForm, documentNumber: e.target.value })
-                    }
-                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                    disabled={isUploading}
-                  />
-                </div>
+                  {/* Single Form Grid */}
+                  <div className="grid grid-cols-2 gap-3 text-xs font-sans">
+                    <div>
+                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">DOCUMENT NUMBER *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. SOP-TURB-01"
+                        value={uploadForm.documentNumber}
+                        onChange={(e) =>
+                          setUploadForm({ ...uploadForm, documentNumber: e.target.value })
+                        }
+                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono"
+                        disabled={isUploading}
+                      />
+                    </div>
 
-                <div>
-                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">CLASSIFICATION</label>
-                  <select
-                    value={uploadForm.category}
-                    onChange={(e) =>
-                      setUploadForm({ ...uploadForm, category: e.target.value as DocumentType })
-                    }
-                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] cursor-pointer"
-                    disabled={isUploading}
-                  >
-                    <option value="SOP">SOP (Standard Operating Procedure)</option>
-                    <option value="OEM_MANUAL">OEM Technical Manual</option>
-                    <option value="SCHEMATIC_PID">P&ID Diagram</option>
-                    <option value="WIRING_DIAGRAM">Wiring Schematic</option>
-                    <option value="FAULT_CODE_INDEX">Fault Code Index</option>
-                    <option value="SAFETY_DATA_SHEET">Safety Data Sheet (SDS)</option>
-                  </select>
-                </div>
+                    <div>
+                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">CLASSIFICATION</label>
+                      <select
+                        value={uploadForm.category}
+                        onChange={(e) =>
+                          setUploadForm({ ...uploadForm, category: e.target.value as DocumentType })
+                        }
+                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] cursor-pointer"
+                        disabled={isUploading}
+                      >
+                        <option value="SOP">SOP (Standard Operating Procedure)</option>
+                        <option value="PID_DIAGRAM">P&ID Diagram</option>
+                        <option value="3D_MODEL">3D Model / CAD</option>
+                        <option value="OEM_MANUAL">OEM Technical Manual</option>
+                      </select>
+                    </div>
 
-                <div className="col-span-2">
-                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">TECHNICAL TITLE *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Emergency Lubrication Oil Pump Replacement"
-                    value={uploadForm.title}
-                    onChange={(e) => setUploadForm({ ...uploadForm, title: e.target.value })}
-                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                    disabled={isUploading}
-                  />
-                </div>
+                    <div className="col-span-2">
+                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">TECHNICAL TITLE *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Emergency Lubrication Oil Pump Replacement"
+                        value={uploadForm.title}
+                        onChange={(e) => setUploadForm({ ...uploadForm, title: e.target.value })}
+                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+                        disabled={isUploading}
+                      />
+                    </div>
 
-                <div>
-                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">TARGET PLANT</label>
-                  <input
-                    type="text"
-                    value={uploadForm.plantCode}
-                    onChange={(e) =>
-                      setUploadForm({ ...uploadForm, plantCode: e.target.value })
-                    }
-                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                    disabled={isUploading}
-                  />
-                </div>
+                    <div>
+                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">TARGET PLANT *</label>
+                      <select
+                        required
+                        value={uploadForm.plantCode}
+                        onChange={(e) => setUploadForm({ ...uploadForm, plantCode: e.target.value })}
+                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] cursor-pointer"
+                        disabled={isUploading}
+                      >
+                        {validPlantOptions.map((p) => {
+                          const val = p.code || p.id;
+                          const label = p.name ? (p.name.includes(val) ? p.name : `${p.name} (${val})`) : val;
+                          return (
+                            <option key={val} value={val}>
+                              {label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
 
-                <div>
-                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">REVISION</label>
-                  <input
-                    type="text"
-                    value={uploadForm.revision}
-                    onChange={(e) =>
-                      setUploadForm({ ...uploadForm, revision: e.target.value })
-                    }
-                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                    disabled={isUploading}
-                  />
-                </div>
+                    <div>
+                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">REVISION</label>
+                      <input
+                        type="text"
+                        value={uploadForm.revision}
+                        onChange={(e) =>
+                          setUploadForm({ ...uploadForm, revision: e.target.value })
+                        }
+                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono"
+                        disabled={isUploading}
+                      />
+                    </div>
 
-                <div className="col-span-2">
-                  <label className="text-[#64748B] font-semibold uppercase text-[10px]">ASSOCIATED ASSET TAGS</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. PUMP-204-B, VALVE-101 (comma-separated)"
-                    value={uploadForm.assetTags}
-                    onChange={(e) =>
-                      setUploadForm({ ...uploadForm, assetTags: e.target.value })
-                    }
-                    className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                    disabled={isUploading}
-                  />
-                </div>
-              </div>
-
-              {/* Progress Indicator when uploading */}
-              {isUploading && (
-                <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
-                  <div className="flex items-center justify-between text-xs font-sans">
-                    <span className="text-[#2563EB] flex items-center gap-2 font-medium">
-                      <RotateCw className="w-3.5 h-3.5 animate-spin" /> {uploadStepMessage}
-                    </span>
-                    <span className="text-[#1A202C] font-bold">{uploadProgress}%</span>
+                    <div className="col-span-2">
+                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">ASSOCIATED ASSET TAGS</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. PUMP-204-B, VALVE-101 (comma-separated)"
+                        value={uploadForm.assetTags}
+                        onChange={(e) =>
+                          setUploadForm({ ...uploadForm, assetTags: e.target.value })
+                        }
+                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+                        disabled={isUploading}
+                      />
+                    </div>
                   </div>
-                  <div className="w-full h-1.5 bg-[#E2E8F0] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#2563EB] transition-all duration-300 rounded-full"
-                      style={{ width: `${uploadProgress}%` }}
+                </form>
+              ) : (
+                /* MODE 2: BULK BATCH INGESTION */
+                <form id="bulk-upload-form" onSubmit={handleBulkUploadSubmit} className="space-y-4">
+                  {/* Bulk Dropzone */}
+                  <div className="border-2 border-dashed border-[#CBD5E1] hover:border-[#2563EB] rounded-lg p-5 text-center bg-[#F8FAFC] transition cursor-pointer relative">
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp,.glb,.gltf,.obj,.stl,.stp,.step,.skp,.fbx,.usd,.usdz,.iges,.igs,.ply,.3mf"
+                      onChange={(e) => handleBulkFilesSelected(e.target.files)}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                      disabled={isUploading}
                     />
+                    <div className="flex flex-col items-center">
+                      <Files className="w-8 h-8 text-[#2563EB] mb-2" />
+                      <div className="text-xs font-sans text-[#1A202C] font-semibold">
+                        Click or drag & drop multiple technical manuals, P&IDs, or 3D files
+                      </div>
+                      <div className="text-[10px] text-[#64748B] mt-1">
+                        Batch limit: Up to 20 files per submission • Max 50MB per file
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
 
-              {/* Submit Buttons */}
-              <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-end gap-2">
+                  {/* Batch Defaults */}
+                  <div className="p-3 bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg grid grid-cols-2 md:grid-cols-4 gap-2.5">
+                    <div>
+                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">TARGET PLANT *</label>
+                      <select
+                        required
+                        value={bulkDefaults.plantCode}
+                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, plantCode: e.target.value })}
+                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+                        disabled={isUploading}
+                      >
+                        {validPlantOptions.map((p) => {
+                          const val = p.code || p.id;
+                          const label = p.name ? (p.name.includes(val) ? p.name : `${p.name} (${val})`) : val;
+                          return (
+                            <option key={val} value={val}>
+                              {label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT CLASS</label>
+                      <select
+                        value={bulkDefaults.defaultCategory}
+                        onChange={(e) =>
+                          setBulkDefaults({ ...bulkDefaults, defaultCategory: e.target.value as DocumentType })
+                        }
+                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+                        disabled={isUploading}
+                      >
+                        <option value="SOP">SOP</option>
+                        <option value="PID_DIAGRAM">P&ID Diagram</option>
+                        <option value="3D_MODEL">3D Model / CAD</option>
+                        <option value="OEM_MANUAL">OEM Manual</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT REVISION</label>
+                      <input
+                        type="text"
+                        value={bulkDefaults.defaultRevision}
+                        onChange={(e) =>
+                          setBulkDefaults({ ...bulkDefaults, defaultRevision: e.target.value })
+                        }
+                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono"
+                        disabled={isUploading}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT ASSET TAGS</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. TURBINE-01"
+                        value={bulkDefaults.defaultAssetTags}
+                        onChange={(e) =>
+                          setBulkDefaults({ ...bulkDefaults, defaultAssetTags: e.target.value })
+                        }
+                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+                        disabled={isUploading}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Batch Queue Table */}
+                  {bulkFiles.length > 0 ? (
+                    <div className="border border-[#E2E8F0] rounded-lg overflow-hidden">
+                      <div className="bg-[#F8FAFC] px-3 py-2 border-b border-[#E2E8F0] flex items-center justify-between text-[11px] font-semibold text-[#64748B]">
+                        <span>BATCH QUEUE ({bulkFiles.length} Documents)</span>
+                        <button
+                          type="button"
+                          onClick={() => setBulkFiles([])}
+                          disabled={isUploading}
+                          className="text-rose-600 hover:text-rose-800 text-[10px]"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+
+                      <div className="max-h-60 overflow-y-auto divide-y divide-[#E2E8F0]">
+                        {bulkFiles.map((item) => {
+                          const ext = (item.file.name.split('.').pop() || '').toLowerCase();
+                          const badge = getFormatBadgeColor(ext);
+
+                          return (
+                            <div key={item.id} className="p-2.5 flex items-center gap-2 hover:bg-slate-50 transition">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border shrink-0 ${badge.bg}`}>
+                                {badge.label}
+                              </span>
+
+                              <div className="flex-1 grid grid-cols-12 gap-2 items-center">
+                                <div className="col-span-3">
+                                  <input
+                                    type="text"
+                                    value={item.docNumber}
+                                    placeholder="Doc #"
+                                    onChange={(e) => handleUpdateBulkFile(item.id, { docNumber: e.target.value })}
+                                    className="w-full px-2 py-1 rounded bg-white border border-[#CBD5E1] text-[11px] font-mono text-[#1A202C]"
+                                    disabled={isUploading}
+                                  />
+                                </div>
+                                <div className="col-span-5">
+                                  <input
+                                    type="text"
+                                    value={item.title}
+                                    placeholder="Title"
+                                    onChange={(e) => handleUpdateBulkFile(item.id, { title: e.target.value })}
+                                    className="w-full px-2 py-1 rounded bg-white border border-[#CBD5E1] text-[11px] text-[#1A202C]"
+                                    disabled={isUploading}
+                                  />
+                                </div>
+                                <div className="col-span-4">
+                                  <select
+                                    value={item.category}
+                                    onChange={(e) =>
+                                      handleUpdateBulkFile(item.id, { category: e.target.value as DocumentType })
+                                    }
+                                    className="w-full px-1.5 py-1 rounded bg-white border border-[#CBD5E1] text-[10px] text-[#1A202C]"
+                                    disabled={isUploading}
+                                  >
+                                    <option value="SOP">SOP</option>
+                                    <option value="PID_DIAGRAM">P&ID</option>
+                                    <option value="3D_MODEL">3D CAD</option>
+                                    <option value="OEM_MANUAL">OEM Manual</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div className="w-20 text-right font-mono text-[10px] text-[#64748B] shrink-0">
+                                {(item.file.size / 1024).toFixed(0)} KB
+                              </div>
+
+                              <div className="w-6 shrink-0 text-center">
+                                {item.status === 'UPLOADING' && (
+                                  <RotateCw className="w-3.5 h-3.5 text-[#2563EB] animate-spin inline" />
+                                )}
+                                {item.status === 'INDEXED' && (
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-600 inline" />
+                                )}
+                                {item.status === 'FAILED' && (
+                                  <span title={item.errorMessage || 'Failed'}>
+                                    <AlertTriangle className="w-4 h-4 text-rose-600 inline" />
+                                  </span>
+                                )}
+                                {item.status === 'READY' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveBulkFile(item.id)}
+                                    disabled={isUploading}
+                                    className="text-[#94A3B8] hover:text-rose-600 p-0.5 rounded"
+                                    title="Remove from batch"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-center text-xs text-[#64748B]">
+                      No documents added yet. Select multiple files above to build your batch queue.
+                    </div>
+                  )}
+                </form>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
+              <div className="text-[11px] text-[#64748B]">
+                {ingestMode === 'SINGLE'
+                  ? uploadFile
+                    ? `Selected: ${uploadFile.name}`
+                    : 'Awaiting file selection'
+                  : `${bulkFiles.length} file(s) in bulk queue`}
+              </div>
+
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsUploadModalOpen(false)}
@@ -1089,18 +2123,71 @@ export const TechnicalManualsView: React.FC = () => {
                 >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={isUploading}
-                  className="px-4 py-1.5 rounded-lg bg-[#151C24] hover:bg-black disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-2 transition shadow-sm"
-                >
-                  <UploadCloud className="w-4 h-4" />
-                  {isUploading ? 'Ingesting...' : 'Start Ingestion Job'}
-                </button>
+
+                {ingestMode === 'SINGLE' ? (
+                  <button
+                    type="submit"
+                    form="single-upload-form"
+                    disabled={isUploading || !uploadFile}
+                    className="px-4 py-1.5 rounded-lg bg-[#151C24] hover:bg-black disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-sm"
+                  >
+                    {isUploading ? (
+                      <>
+                        <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Ingesting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UploadCloud className="w-4 h-4" />
+                        <span>Start Ingestion Job</span>
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    form="bulk-upload-form"
+                    disabled={isUploading || bulkFiles.length === 0}
+                    className="px-4 py-1.5 rounded-lg bg-[#151C24] hover:bg-black disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-sm"
+                  >
+                    {isUploading ? (
+                      <>
+                        <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Uploading Batch...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Files className="w-4 h-4" />
+                        <span>Ingest {bulkFiles.length} Documents</span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
-            </form>
+            </div>
           </div>
         </div>
+      )}
+
+      {/* Real 3D CAD Engineering Viewer Modal */}
+      {is3dViewerOpen && (
+        <RealThreeDViewerModal
+          isOpen={is3dViewerOpen}
+          onClose={() => setIs3dViewerOpen(false)}
+          machine={viewerMachine}
+          mappings={viewerMappings}
+        />
+      )}
+
+      {/* Real Engineering P&ID Viewer Modal */}
+      {isPidViewerOpen && (
+        <PidEngineeringViewerModal
+          isOpen={isPidViewerOpen}
+          onClose={() => setIsPidViewerOpen(false)}
+          machine={viewerMachine}
+          mappings={viewerMappings}
+          activeTag={activePidTag}
+        />
       )}
     </div>
   );

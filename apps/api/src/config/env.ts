@@ -32,7 +32,7 @@ const envSchema = z.object({
   KEYCLOAK_REALM_URL: z.string().optional().default(''),
   KEYCLOAK_CLIENT_ID: z.string().optional().default(''),
   JWT_SECRET: z.string().min(16).default('super_secret_forgex_jwt_key_at_least_32_characters_long_min_change_me'),
-  JWT_EXPIRES_IN: z.string().default('15m'),
+  JWT_EXPIRES_IN: z.string().default('24h'),
 
   // Database & Storage
   DATABASE_URL: z.string().default('postgresql://forgex_admin:forgex_dev_secret_2026@localhost:5432/forgex_db'),

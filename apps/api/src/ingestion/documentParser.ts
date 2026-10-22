@@ -16,6 +16,14 @@ export interface ExtractedDocument {
   category?: DocumentType;
 }
 
+export interface DocumentParseMetadata {
+  documentNumber?: string;
+  title?: string;
+  category?: DocumentType | string;
+  assetTags?: string[];
+  checksumSha256?: string;
+}
+
 export class DocumentParser {
   constructor(private visionProvider?: IVisionProcessingProvider) {}
 
@@ -25,9 +33,31 @@ export class DocumentParser {
   public async parse(
     buffer: Buffer,
     mimeType: string,
-    filename: string
+    filename: string,
+    metadata?: DocumentParseMetadata
   ): Promise<ExtractedDocument> {
     const ext = (filename.split('.').pop() || '').toLowerCase();
+
+    // 3D Model / CAD Assets (.glb, .gltf, .obj, .stl, .stp, .step, .skp, .fbx, .usd, .usdz, .iges, .igs, .ply, .3mf)
+    const cadExtensions = [
+      'glb',
+      'gltf',
+      'obj',
+      'stl',
+      'stp',
+      'step',
+      'skp',
+      'fbx',
+      'usd',
+      'usdz',
+      'iges',
+      'igs',
+      'ply',
+      '3mf',
+    ];
+    if (mimeType.startsWith('model/') || cadExtensions.includes(ext)) {
+      return this.parse3DModel(buffer, ext, filename, metadata);
+    }
 
     if (mimeType === 'application/pdf' || ext === 'pdf') {
       return this.parsePdf(buffer, filename);
@@ -56,6 +86,39 @@ export class DocumentParser {
     throw new Error(
       `Unsupported file format: '${mimeType}' (${filename}) is not supported for industrial document processing.`
     );
+  }
+
+  // --------------------------------------------------------------------------
+  // 3D Model / CAD Asset Parsing (GLB, GLTF, OBJ, STL)
+  // --------------------------------------------------------------------------
+  private parse3DModel(
+    buffer: Buffer,
+    ext: string,
+    filename: string,
+    metadata?: DocumentParseMetadata
+  ): ExtractedDocument {
+    const format = ext.toUpperCase();
+    const sizeKb = (buffer.length / 1024).toFixed(1);
+    const docNum = metadata?.documentNumber || 'CAD-3D-ASSET';
+    const docTitle = metadata?.title || filename;
+    const tags = metadata?.assetTags && metadata.assetTags.length > 0 ? metadata.assetTags.join(', ') : 'INDUSTRIAL_EQUIPMENT';
+    const sha = metadata?.checksumSha256 ? `\nSHA-256 Checksum: ${metadata.checksumSha256}` : '';
+
+    const rawText = `[3D Model / Industrial CAD Asset]\nAsset Title: ${docTitle}\nDocument Number: ${docNum}\nClassification: 3D_MODEL (Industrial 3D CAD Asset)\nFormat: .${format} Model File\nFilename: ${filename}\nFile Size: ${sizeKb} KB\nAssociated Asset Tags: ${tags}${sha}\n\nDescription: Official 3D CAD model asset for interactive digital twin inspection, exploded component visualization, spatial alignment, and maintenance reference. Engineers and technicians can inspect this 3D model when performing diagnostics, teardown, or reassembly on machines with asset tags: ${tags}.`;
+
+    return {
+      totalPages: 1,
+      category: '3D_MODEL' as DocumentType,
+      pages: [
+        {
+          pageNumber: 1,
+          rawText,
+          sectionHeadings: ['3D CAD Model Specification', `Asset: ${docTitle}`, `Tags: ${tags}`],
+          extractionMethod: 'IMAGE_METADATA',
+          hasTables: false,
+        },
+      ],
+    };
   }
 
   // --------------------------------------------------------------------------

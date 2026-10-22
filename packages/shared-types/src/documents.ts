@@ -13,6 +13,8 @@ export type DocumentStatus =
 
 export type DocumentType =
   | 'SOP'
+  | 'PID_DIAGRAM'
+  | '3D_MODEL'
   | 'OEM_MANUAL'
   | 'SCHEMATIC_PID'
   | 'WIRING_DIAGRAM'

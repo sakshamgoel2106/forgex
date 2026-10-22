@@ -255,7 +255,7 @@ Lubrication oil viscosity requirement: ISO VG 46 synthetic turbine oil.`;
 
       const uploadRes = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .attach('file', Buffer.from(textManual, 'utf-8'), 'SOP-MECH-401_RevC.md')
         .field('documentNumber', 'SOP-MECH-401')
         .field('title', 'Emergency Centrifugal Pump LOTO Procedure')
@@ -270,7 +270,7 @@ Lubrication oil viscosity requirement: ISO VG 46 synthetic turbine oil.`;
       const docId = uploadRes.body.data.document.id;
       const pagesRes = await request(app)
         .get(`/api/v1/documents/${docId}/pages`)
-        .set('Authorization', `Bearer ${tokenEngA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(pagesRes.status).toBe(200);
       expect(pagesRes.body.data.length).toBeGreaterThanOrEqual(2);
@@ -381,7 +381,7 @@ All torque sequences must follow star crisscross pattern.`;
 
       const uploadRes = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .attach('file', Buffer.from(tableManual, 'utf-8'), 'SOP-TORQ-501.md')
         .field('documentNumber', 'SOP-TORQ-501')
         .field('title', 'Critical Flange & Gland Torque Matrix')
@@ -396,7 +396,7 @@ All torque sequences must follow star crisscross pattern.`;
       const docId = uploadRes.body.data.document.id;
       const pagesRes = await request(app)
         .get(`/api/v1/documents/${docId}/pages`)
-        .set('Authorization', `Bearer ${tokenEngA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(pagesRes.status).toBe(200);
       expect(pagesRes.body.data[0].hasTables).toBe(true);
@@ -537,7 +537,7 @@ SECTION 1: Normal operational seal oil differential pressure is 25 psi across in
 
       await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .attach('file', Buffer.from(docRevA, 'utf-8'), 'SOP-SEAL-100_RevA.md')
         .field('documentNumber', 'SOP-SEAL-100')
         .field('title', 'Seal Oil Pressure Guidelines Rev A')
@@ -554,7 +554,7 @@ SECTION 1: Discrepancy service bulletin indicates 10 psi differential pressure w
 
       await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .attach('file', Buffer.from(docRevB, 'utf-8'), 'BULLETIN-SEAL-100_RevB.md')
         .field('documentNumber', 'BULLETIN-SEAL-100')
         .field('title', 'Historical Seal Oil Bulletin Rev B')
@@ -714,7 +714,7 @@ SECTION 2: Standard operating pressure is 50.0 PSI.`;
 
       const uploadRes = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .attach('file', Buffer.from(maliciousDoc, 'utf-8'), 'SOP-SAFETY-MAL.md')
         .field('documentNumber', 'SOP-SAFETY-MAL')
         .field('title', 'Standard Maintenance Guide with Injection')
@@ -792,7 +792,7 @@ SECTION 2: Standard operating pressure is 50.0 PSI.`;
 
       const res = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .attach('file', invalidBuffer, 'firmware_payload.bin')
         .field('documentNumber', 'FIRMWARE-01')
         .field('title', 'Unsupported Firmware Binary')

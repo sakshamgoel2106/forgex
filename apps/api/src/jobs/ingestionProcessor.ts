@@ -69,7 +69,18 @@ export class IngestionProcessor {
         40,
         'Parsing layout, headings, tables, and applying OCR if scanned'
       );
-      const extracted = await this.parser.parse(buffer, version.mimeType, version.filename);
+      const extracted = await this.parser.parse(
+        buffer,
+        version.mimeType,
+        version.filename,
+        {
+          documentNumber: document.documentNumber,
+          title: document.title,
+          category: document.category,
+          assetTags: document.assetTags,
+          checksumSha256: version.checksumSha256,
+        }
+      );
 
       // 5. Save Document Pages with provenance (idempotent overwrite)
       await this.dataStore.updateProcessingJobProgress(
@@ -136,6 +147,10 @@ export class IngestionProcessor {
           isTable: chunk.isTable,
           isFigure: chunk.isFigure,
           extractionMethod: chunk.extractionMethod,
+          documentNumber: document.documentNumber,
+          title: document.title,
+          category: document.category,
+          assetTags: document.assetTags || [],
         },
       }));
 

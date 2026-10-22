@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import type { Request, Response } from 'express';
 import type { DocumentType } from '@forgex/shared-types';
 import type { IDataStore } from '../db/dataStore.interface.js';
@@ -27,6 +28,52 @@ export class DocumentController {
 
       if (!organizationId) {
         res.status(401).json({ success: false, error: 'Unauthorized: Missing tenant context' });
+        return;
+      }
+
+      // 0. Enforce strict Admin-Only ingestion policy at controller level
+      const userRole = req.auth?.membership.role;
+      if (userRole !== 'ORGANIZATION_OWNER' && userRole !== 'ORGANIZATION_ADMIN') {
+        const securityService = req.app?.locals?.securityService;
+        if (securityService) {
+          await securityService.recordSecurityEvent({
+            organizationId,
+            actorUserId: userId || 'unknown',
+            actorEmail: req.auth?.user.email || 'unknown',
+            actorRole: userRole || 'UNKNOWN',
+            category: 'CONFIDENTIAL_DOCUMENT_ACCESS',
+            action: 'BLOCKED_DOCUMENT_UPLOAD',
+            resourceCategory: 'DOCUMENT',
+            resourceId: null,
+            decision: 'DENIED',
+            policyReasonCode: 'ROLE_INSUFFICIENT_PRIVILEGES',
+            severity: 'HIGH',
+            isBenignInquiry: false,
+            metadata: {
+              path: req.originalUrl || req.url,
+              requiredRoles: ['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER'],
+              attemptedRole: userRole,
+            },
+          });
+        }
+        await this.dataStore.recordAuditEvent({
+          organizationId,
+          actorUserId: userId || 'unknown',
+          action: 'BLOCKED_DOCUMENT_UPLOAD',
+          resourceType: 'DOCUMENT',
+          resourceId: 'upload_endpoint',
+          metadata: {
+            reason: 'INSUFFICIENT_PRIVILEGES',
+            role: userRole,
+          },
+        });
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORGEX_RBAC_FORBIDDEN',
+            message: `Insufficient privileges: Ingestion requires ORGANIZATION_ADMIN or ORGANIZATION_OWNER role. Current role is '${userRole}'.`,
+          },
+        });
         return;
       }
 
@@ -71,14 +118,28 @@ export class DocumentController {
         return;
       }
 
-      // Verify plant belongs to this organization
-      const plant = await this.dataStore.getPlantById(organizationId, plantId);
+      // Verify plant belongs to this organization (never implicitly auto-create plants)
+      let plant = await this.dataStore.getPlantById(organizationId, plantId);
       if (!plant) {
-        res.status(400).json({
-          success: false,
-          error: `Plant '${plantId}' does not belong to this organization or does not exist.`,
-        });
-        return;
+        const existingPlants = await this.dataStore.listPlants(organizationId);
+        const match = existingPlants.find(
+          (p) =>
+            p.id === plantId ||
+            p.code?.toLowerCase() === plantId.toLowerCase() ||
+            p.name?.toLowerCase().includes(plantId.toLowerCase())
+        );
+        if (match) {
+          plant = match;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_INVALID_PLANT',
+              message: 'Invalid plant: Target plant does not exist or does not belong to the authenticated organization.',
+            },
+          });
+          return;
+        }
       }
 
       // Parse asset tags
@@ -167,6 +228,333 @@ export class DocumentController {
       });
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to upload document');
+      res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  };
+
+  /**
+   * POST /api/v1/documents/bulk-upload
+   * Multi-file ingestion with magic-bytes validation, metadata inheritance/overrides, and batch queue dispatch
+   */
+  public bulkUpload = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth?.organization.id;
+      const userId = req.auth?.user.id;
+
+      if (!organizationId) {
+        res.status(401).json({ success: false, error: 'Unauthorized: Missing tenant context' });
+        return;
+      }
+
+      // 0. Enforce strict Admin-Only ingestion policy
+      const userRole = req.auth?.membership.role;
+      if (userRole !== 'ORGANIZATION_OWNER' && userRole !== 'ORGANIZATION_ADMIN') {
+        const securityService = req.app?.locals?.securityService;
+        if (securityService) {
+          await securityService.recordSecurityEvent({
+            organizationId,
+            actorUserId: userId || 'unknown',
+            actorEmail: req.auth?.user.email || 'unknown',
+            actorRole: userRole || 'UNKNOWN',
+            category: 'CONFIDENTIAL_DOCUMENT_ACCESS',
+            action: 'BLOCKED_DOCUMENT_UPLOAD',
+            resourceCategory: 'DOCUMENT',
+            resourceId: null,
+            decision: 'DENIED',
+            policyReasonCode: 'ROLE_INSUFFICIENT_PRIVILEGES',
+            severity: 'HIGH',
+            isBenignInquiry: false,
+            metadata: {
+              path: req.originalUrl || req.url,
+              requiredRoles: ['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER'],
+              attemptedRole: userRole,
+            },
+          });
+        }
+        await this.dataStore.recordAuditEvent({
+          organizationId,
+          actorUserId: userId || 'unknown',
+          action: 'BLOCKED_DOCUMENT_UPLOAD',
+          resourceType: 'DOCUMENT',
+          resourceId: 'bulk_upload_endpoint',
+          metadata: {
+            reason: 'INSUFFICIENT_PRIVILEGES',
+            role: userRole,
+          },
+        });
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORGEX_RBAC_FORBIDDEN',
+            message: `Insufficient privileges: Ingestion requires ORGANIZATION_ADMIN or ORGANIZATION_OWNER role. Current role is '${userRole}'.`,
+          },
+        });
+        return;
+      }
+
+      // Extract files from multer array, fields, or single file fallback
+      let files: Express.Multer.File[] = [];
+      if (Array.isArray(req.files)) {
+        files = req.files;
+      } else if (req.files && typeof req.files === 'object') {
+        for (const key of Object.keys(req.files)) {
+          const list = (req.files as any)[key];
+          if (Array.isArray(list)) {
+            files.push(...list);
+          }
+        }
+      } else if (req.file) {
+        files = [req.file];
+      }
+
+      if (!files || files.length === 0) {
+        res.status(400).json({ success: false, error: 'Bulk upload failed: No files provided.' });
+        return;
+      }
+
+      // 1. Validate Target Plant
+      const {
+        plantId,
+        defaultCategory = 'SOP',
+        defaultRevision = 'REV-A',
+        defaultAssetTags = '',
+        metadataOverrides,
+      } = req.body;
+
+      if (!plantId) {
+        res.status(400).json({
+          success: false,
+          error: 'Missing required metadata: plantId is mandatory for bulk ingestion.',
+        });
+        return;
+      }
+
+      let plant = await this.dataStore.getPlantById(organizationId, plantId);
+      if (!plant) {
+        const existingPlants = await this.dataStore.listPlants(organizationId);
+        const match = existingPlants.find(
+          (p) =>
+            p.id === plantId ||
+            p.code?.toLowerCase() === plantId.toLowerCase() ||
+            p.name?.toLowerCase().includes(plantId.toLowerCase())
+        );
+        if (match) {
+          plant = match;
+        } else {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_INVALID_PLANT',
+              message: 'Invalid plant: Target plant does not exist or does not belong to the authenticated organization.',
+            },
+          });
+          return;
+        }
+      }
+
+      // Parse metadata overrides if supplied as JSON
+      let fileMetadataMap: Record<
+        string,
+        { documentNumber?: string; title?: string; category?: DocumentType; revision?: string; assetTags?: string[] }
+      > = {};
+      if (metadataOverrides) {
+        try {
+          fileMetadataMap =
+            typeof metadataOverrides === 'string'
+              ? JSON.parse(metadataOverrides)
+              : metadataOverrides;
+        } catch {
+          // ignore parsing error, fallback to defaults
+        }
+      }
+
+      // Parse default asset tags
+      let parsedDefaultTags: string[] = [];
+      if (Array.isArray(defaultAssetTags)) {
+        parsedDefaultTags = defaultAssetTags;
+      } else if (typeof defaultAssetTags === 'string' && defaultAssetTags.trim()) {
+        try {
+          parsedDefaultTags = JSON.parse(defaultAssetTags);
+        } catch {
+          parsedDefaultTags = defaultAssetTags.split(',').map((t) => t.trim()).filter(Boolean);
+        }
+      }
+
+      const uploadedResults: any[] = [];
+      const failedResults: any[] = [];
+
+      // Process each file in the batch
+      for (const file of files) {
+        try {
+          // Validate file magic bytes
+          const validatedFile = validateUpload({
+            buffer: file.buffer,
+            originalname: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype,
+          });
+
+          // Derive metadata for this file
+          const overrides =
+            fileMetadataMap[file.originalname] || fileMetadataMap[file.filename] || {};
+          const baseName = path.parse(file.originalname).name;
+
+          // Auto-derive category from extension if not overridden
+          let resolvedCategory: DocumentType =
+            overrides.category || (defaultCategory as DocumentType);
+          const ext = validatedFile.extension.toLowerCase();
+          if (!overrides.category) {
+            if (
+              [
+                'glb',
+                'gltf',
+                'step',
+                'stp',
+                'obj',
+                'stl',
+                '3mf',
+                'fbx',
+                'iges',
+                'igs',
+                'ply',
+                'usdz',
+                'usd',
+              ].includes(ext)
+            ) {
+              resolvedCategory = '3D_MODEL';
+            } else if (
+              file.originalname.toLowerCase().includes('pid') ||
+              file.originalname.toLowerCase().includes('schematic')
+            ) {
+              resolvedCategory = 'PID_DIAGRAM';
+            } else if (file.originalname.toLowerCase().includes('sop')) {
+              resolvedCategory = 'SOP';
+            } else if (file.originalname.toLowerCase().includes('oem')) {
+              resolvedCategory = 'OEM_MANUAL';
+            }
+          }
+
+          const resolvedDocNumber = (
+            overrides.documentNumber ||
+            baseName.replace(/[^a-zA-Z0-9_-]/g, '-').toUpperCase()
+          ).trim();
+
+          const resolvedTitle =
+            overrides.title ||
+            baseName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+
+          const resolvedRevision = (overrides.revision || defaultRevision || 'REV-A').trim();
+          const resolvedTags = overrides.assetTags || parsedDefaultTags;
+
+          // Find or create document
+          let document = await this.dataStore.getDocumentByNumber(
+            organizationId,
+            resolvedDocNumber
+          );
+          let versionNumber = 1;
+
+          if (!document) {
+            document = await this.dataStore.createDocument({
+              organizationId,
+              plantId: plant.id,
+              documentNumber: resolvedDocNumber,
+              title: resolvedTitle,
+              category: resolvedCategory,
+              assetTags: resolvedTags,
+              createdByUserId: userId,
+            });
+          } else {
+            const existingVersions = await this.dataStore.listDocumentVersions(document.id);
+            versionNumber = existingVersions.length + 1;
+          }
+
+          // Generate server-controlled storage key
+          const randomToken = crypto.randomBytes(6).toString('hex');
+          const storageKey = `org_${organizationId}/plant_${plant.id}/${document.id}/v${versionNumber}_${Date.now()}_${randomToken}.${validatedFile.extension}`;
+
+          // Put file into storage
+          const putResult = await this.storageAdapter.putObject(
+            storageKey,
+            file.buffer,
+            validatedFile.detectedMimeType
+          );
+
+          // Create document version
+          const version = await this.dataStore.createDocumentVersion({
+            documentId: document.id,
+            versionNumber,
+            revision: resolvedRevision,
+            filename: sanitizeFilename(file.originalname),
+            mimeType: validatedFile.detectedMimeType,
+            fileSizeBytes: putResult.sizeBytes,
+            checksumSha256: putResult.checksumSha256,
+            storageKey: putResult.storageKey,
+            status: 'QUEUED',
+          });
+
+          // Enqueue ingestion job
+          const job = await this.ingestionQueue.enqueue(organizationId, version.id);
+
+          // Record audit event
+          await this.dataStore.recordAuditEvent({
+            organizationId,
+            actorUserId: userId,
+            action: 'DOCUMENT_UPLOADED',
+            resourceType: 'DOCUMENT',
+            resourceId: document.id,
+            metadata: {
+              versionId: version.id,
+              versionNumber,
+              filename: version.filename,
+              mimeType: version.mimeType,
+              sizeBytes: version.fileSizeBytes,
+              sha256: version.checksumSha256,
+              batch: true,
+            },
+          });
+
+          uploadedResults.push({
+            document,
+            version,
+            job,
+            filename: file.originalname,
+          });
+        } catch (fileErr: any) {
+          failedResults.push({
+            filename: file.originalname,
+            error: fileErr?.message || 'Ingestion validation or storage failed',
+          });
+        }
+      }
+
+      const total = files.length;
+      const succeeded = uploadedResults.length;
+      const failed = failedResults.length;
+
+      if (succeeded === 0) {
+        res.status(400).json({
+          success: false,
+          error: 'Bulk upload failed: None of the provided files could be processed.',
+          data: { uploaded: [], failed: failedResults },
+          summary: { total, succeeded: 0, failed },
+        });
+        return;
+      }
+
+      res.status(201).json({
+        success: true,
+        data: {
+          uploaded: uploadedResults,
+          failed: failedResults,
+        },
+        summary: {
+          total,
+          succeeded,
+          failed,
+        },
+      });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'Failed during bulk upload');
       res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
     }
   };
@@ -332,14 +720,25 @@ export class DocumentController {
         return;
       }
 
-      const document = await this.dataStore.getDocumentById(organizationId, documentId);
-      if (!document || !document.latestVersion) {
+      let document = await this.dataStore.getDocumentById(organizationId, documentId);
+      if (!document) {
+        document = await this.dataStore.getDocumentByNumber(organizationId, documentId);
+      }
+
+      if (!document) {
         res.status(404).json({ success: false, error: 'Document not found' });
         return;
       }
 
       const requestedVersionId = typeof req.query.versionId === 'string' ? req.query.versionId : undefined;
       let targetVersion = document.latestVersion;
+
+      if (!targetVersion) {
+        const versions = await this.dataStore.listDocumentVersions(document.id);
+        if (versions && versions.length > 0) {
+          targetVersion = versions[0];
+        }
+      }
 
       if (requestedVersionId) {
         const specificVersion = await this.dataStore.getDocumentVersionById(requestedVersionId);
@@ -350,7 +749,39 @@ export class DocumentController {
         targetVersion = specificVersion;
       }
 
-      const buffer = await this.storageAdapter.getObject(targetVersion.storageKey);
+      if (!targetVersion) {
+        res.status(404).json({ success: false, error: 'Document version payload not found' });
+        return;
+      }
+
+      let buffer: Buffer;
+      try {
+        buffer = await this.storageAdapter.getObject(targetVersion.storageKey);
+      } catch (storageErr: any) {
+        logger.warn(
+          { err: storageErr?.message, key: targetVersion.storageKey },
+          'Stored payload not found directly on disk, attempting page text reconstruction'
+        );
+        const pages = await this.dataStore.listDocumentPages(targetVersion.id);
+        if (pages && pages.length > 0) {
+          const combined = pages
+            .sort((a, b) => a.pageNumber - b.pageNumber)
+            .map((p) => `=== ${document.documentNumber} - PAGE ${p.pageNumber} ===\n${p.rawText}`)
+            .join('\n\n');
+          buffer = Buffer.from(combined, 'utf-8');
+          try {
+            await this.storageAdapter.putObject(targetVersion.storageKey, buffer, targetVersion.mimeType || 'text/plain');
+          } catch {
+            // non-fatal write fallback
+          }
+        } else {
+          res.status(404).json({
+            success: false,
+            error: `File payload missing from storage: ${targetVersion.filename || targetVersion.storageKey}`,
+          });
+          return;
+        }
+      }
 
       await this.dataStore.recordAuditEvent({
         organizationId,
@@ -365,11 +796,10 @@ export class DocumentController {
         },
       });
 
+      const filename = targetVersion.filename || `${document.documentNumber}_${targetVersion.revision}.pdf`;
       res.setHeader('Content-Type', targetVersion.mimeType || 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `inline; filename="${targetVersion.filename || 'document.pdf'}"`
-      );
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', buffer.length.toString());
       res.status(200).send(buffer);
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to download document');
@@ -394,7 +824,11 @@ export class DocumentController {
         return;
       }
 
-      const document = await this.dataStore.getDocumentById(organizationId, documentId);
+      let document = await this.dataStore.getDocumentById(organizationId, documentId);
+      if (!document) {
+        document = await this.dataStore.getDocumentByNumber(organizationId, documentId);
+      }
+
       if (!document) {
         res.status(404).json({ success: false, error: 'Document not found' });
         return;
@@ -446,7 +880,11 @@ export class DocumentController {
         return;
       }
 
-      const document = await this.dataStore.getDocumentById(organizationId, documentId);
+      let document = await this.dataStore.getDocumentById(organizationId, documentId);
+      if (!document) {
+        document = await this.dataStore.getDocumentByNumber(organizationId, documentId);
+      }
+
       if (!document) {
         res.status(404).json({ success: false, error: 'Document not found' });
         return;
@@ -467,6 +905,13 @@ export class DocumentController {
               documentVersionId: v.id,
               organizationId,
             });
+            await this.vectorStore.deleteByFilter(
+              process.env.QDRANT_COLLECTION || 'forgex_industrial_knowledge',
+              {
+                documentVersionId: v.id,
+                organizationId,
+              }
+            );
           } catch (vErr: any) {
             logger.warn({ err: vErr?.message, versionId: v.id }, 'Failed to delete vectors during document purge');
           }
@@ -489,7 +934,8 @@ export class DocumentController {
 
       res.status(200).json({
         success: true,
-        data: { deleted },
+        message: 'Document deleted successfully',
+        data: { deleted, documentId: document.id },
       });
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to delete document');
