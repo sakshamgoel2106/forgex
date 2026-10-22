@@ -10,13 +10,26 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  optimizeDeps: {
+    exclude: ['@ricky0123/vad-web', 'onnxruntime-web'],
+  },
   server: {
     port: 5173,
     host: true,
     proxy: {
-      '/healthz': 'http://localhost:4000',
-      '/readyz': 'http://localhost:4000',
-      '/api': 'http://localhost:4000',
+      '/healthz': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+      '/readyz': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+      '/api': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
 });

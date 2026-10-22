@@ -35,12 +35,14 @@ describe('ForgeX AI — Multimodal Industrial Document Intelligence', () => {
   let orgA: any;
   let orgB: any;
   let userEngA: any;
+  let userAdminA: any;
   let userAdminB: any;
   let plantA: any;
   let plantB: any;
   let assetPumpA: any;
 
   let tokenEngA: string;
+  let tokenAdminA: string;
   let tokenAdminB: string;
 
   const jwtSecret = 'test_jwt_secret_for_multimodal_intelligence';
@@ -101,6 +103,18 @@ describe('ForgeX AI — Multimodal Industrial Document Intelligence', () => {
       slug: 'apex-petro-a',
     });
 
+    userAdminA = await dataStore.createUser({
+      externalAuthId: 'ext_admin_a',
+      email: 'admin@apex-petro.com',
+      fullName: 'Plant Director A',
+    });
+
+    await dataStore.createMembership({
+      organizationId: orgA.id,
+      userId: userAdminA.id,
+      role: 'ORGANIZATION_ADMIN',
+    });
+
     userEngA = await dataStore.createUser({
       externalAuthId: 'ext_eng_a',
       email: 'engineer@apex-petro.com',
@@ -132,6 +146,10 @@ describe('ForgeX AI — Multimodal Industrial Document Intelligence', () => {
 
     tokenEngA = LocalDevAuthAdapter.generateDevToken(
       { id: userEngA.externalAuthId, email: userEngA.email, emailVerified: true },
+      jwtSecret
+    );
+    tokenAdminA = LocalDevAuthAdapter.generateDevToken(
+      { id: userAdminA.externalAuthId, email: userAdminA.email, emailVerified: true },
       jwtSecret
     );
 
@@ -184,7 +202,7 @@ Lubrication oil viscosity requirement: ISO VG 46 synthetic turbine oil.`;
 
       const uploadRes = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .attach('file', Buffer.from(textManual, 'utf-8'), 'SOP-MECH-401_RevC.md')
         .field('documentNumber', 'SOP-MECH-401')
         .field('title', 'Emergency Centrifugal Pump LOTO Procedure')
@@ -199,7 +217,7 @@ Lubrication oil viscosity requirement: ISO VG 46 synthetic turbine oil.`;
       const docId = uploadRes.body.data.document.id;
       const pagesRes = await request(app)
         .get(`/api/v1/documents/${docId}/pages`)
-        .set('Authorization', `Bearer ${tokenEngA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(pagesRes.status).toBe(200);
       expect(pagesRes.body.data.length).toBeGreaterThanOrEqual(2);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './lib/AuthContext';
 import { ToastProvider } from './lib/ToastContext';
+import { PlantProvider } from './lib/PlantContext';
 import { AppShell } from './components/layout/AppShell';
 import type { NavModule } from './components/layout/Sidebar';
 import { ShieldAlert, ArrowRight } from 'lucide-react';
@@ -118,7 +119,7 @@ const AppContent: React.FC = () => {
     );
   }
 
-  if (!token && !user) {
+  if (!token || !user) {
     return (
       <LoginView
         onSuccess={(loggedRole) => {
@@ -221,7 +222,9 @@ export const App: React.FC = () => {
   return (
     <ToastProvider>
       <AuthProvider>
-        <AppContent />
+        <PlantProvider>
+          <AppContent />
+        </PlantProvider>
       </AuthProvider>
     </ToastProvider>
   );

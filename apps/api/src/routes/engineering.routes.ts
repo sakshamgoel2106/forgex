@@ -1506,11 +1506,11 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
    */
   router.get('/storage-proxy', async (req: Request, res: Response): Promise<void> => {
     try {
-      const key = (req.query.key as string) || '';
+      const rawKey = (req.query.key as string) || '';
       const expires = req.query.expires as string | undefined;
       const signature = req.query.signature as string | undefined;
 
-      if (!key) {
+      if (!rawKey || typeof rawKey !== 'string') {
         res.status(400).json({
           success: false,
           error: { code: 'FORGEX_STORAGE_BAD_REQUEST', message: 'Storage key is required.' },
@@ -1518,8 +1518,30 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         return;
       }
 
-      // 1. Path traversal prevention: reject keys containing '..', null bytes, or absolute paths
-      if (key.includes('..') || key.includes('\0') || path.isAbsolute(key)) {
+      // 1. Path traversal & malformed key prevention: reject '..', null bytes, encoded traversals, absolute paths
+      let decodedKey = rawKey;
+      try {
+        decodedKey = decodeURIComponent(rawKey);
+      } catch {
+        res.status(400).json({
+          success: false,
+          error: { code: 'FORGEX_STORAGE_TRAVERSAL_DETECTED', message: 'Security Violation: Malformed storage key encoding.' },
+        });
+        return;
+      }
+
+      if (
+        rawKey.includes('..') ||
+        rawKey.includes('\0') ||
+        decodedKey.includes('..') ||
+        decodedKey.includes('\0') ||
+        path.isAbsolute(rawKey) ||
+        path.isAbsolute(decodedKey) ||
+        rawKey.startsWith('/') ||
+        decodedKey.startsWith('/') ||
+        rawKey.startsWith('\\') ||
+        decodedKey.startsWith('\\')
+      ) {
         res.status(400).json({
           success: false,
           error: { code: 'FORGEX_STORAGE_TRAVERSAL_DETECTED', message: 'Security Violation: Path traversal detected.' },
@@ -1527,10 +1549,24 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         return;
       }
 
-      // 2. Validate Authorization or Cryptographic Signature
-      let isAuthorized = false;
+      // Posix normalization
+      const normalizedKey = path.posix.normalize(decodedKey.replace(/\\/g, '/')).replace(/^\/+/, '');
+      if (
+        normalizedKey.startsWith('../') ||
+        normalizedKey.includes('/../') ||
+        normalizedKey === '..' ||
+        normalizedKey.includes('\0')
+      ) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'FORGEX_STORAGE_TRAVERSAL_DETECTED', message: 'Security Violation: Path traversal detected.' },
+        });
+        return;
+      }
 
-      // Check if signed URL token is present
+      // 2. Validate Authorization: Cryptographic Signature or Authenticated Session
+      let isSignedUrlAuthorized = false;
+
       if (expires && signature) {
         const expiresTime = parseInt(expires, 10);
         if (isNaN(expiresTime) || Date.now() > expiresTime) {
@@ -1541,16 +1577,23 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
           return;
         }
 
-        const expectedSig = crypto
+        const expectedSigRaw = crypto
           .createHmac('sha256', config.JWT_SECRET)
-          .update(`${key}:${expires}`)
+          .update(`${rawKey}:${expires}`)
+          .digest('hex');
+
+        const expectedSigNorm = crypto
+          .createHmac('sha256', config.JWT_SECRET)
+          .update(`${normalizedKey}:${expires}`)
           .digest('hex');
 
         if (
-          signature.length === expectedSig.length &&
-          crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expectedSig, 'hex'))
+          (signature.length === expectedSigRaw.length &&
+            crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expectedSigRaw, 'hex'))) ||
+          (signature.length === expectedSigNorm.length &&
+            crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expectedSigNorm, 'hex')))
         ) {
-          isAuthorized = true;
+          isSignedUrlAuthorized = true;
         } else {
           res.status(401).json({
             success: false,
@@ -1561,17 +1604,16 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
       }
 
       // If not validated by signature, check authenticated session
-      if (!isAuthorized && req.auth) {
-        // Enforce strict tenant boundary: key must belong to authenticated user's organization
-        const expectedPrefix = `org_${req.auth.organization.id}/`;
-        if (!key.startsWith(expectedPrefix) && !key.startsWith('public/')) {
-          res.status(403).json({
-            success: false,
-            error: { code: 'FORGEX_CROSS_TENANT_FORBIDDEN', message: 'Access denied: Storage object belongs to another tenant or invalid scope.' },
-          });
-          return;
-        }
+      if (!isSignedUrlAuthorized && !req.auth) {
+        res.status(401).json({
+          success: false,
+          error: { code: 'FORGEX_AUTH_UNAUTHORIZED', message: 'Valid authentication or signed URL required.' },
+        });
+        return;
+      }
 
+      // 3. Enforce Role and Tenant Isolation when authenticated context is present
+      if (req.auth) {
         const role = req.auth.membership.role;
         const canDownload = [
           'ORGANIZATION_OWNER',
@@ -1589,15 +1631,114 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
           });
           return;
         }
-        isAuthorized = true;
-      }
 
-      if (!isAuthorized) {
-        res.status(401).json({
-          success: false,
-          error: { code: 'FORGEX_AUTH_UNAUTHORIZED', message: 'Valid authentication or signed URL required.' },
-        });
-        return;
+        const authOrgId = req.auth.organization.id;
+
+        // Tenant namespace validation
+        let belongsToTenant =
+          normalizedKey.startsWith(`org_${authOrgId}/`) ||
+          normalizedKey.startsWith(`${authOrgId}/`) ||
+          normalizedKey.startsWith(`visual/${authOrgId}/`) ||
+          normalizedKey.startsWith(`tenants/${authOrgId}/`) ||
+          normalizedKey.startsWith(`orgs/${authOrgId}/`);
+
+        if (!belongsToTenant) {
+          // Verify against registered models, drawings, or documents for this tenant
+          const models = await dataStore.listEngineeringModels3D(authOrgId);
+          const matchModel = models.find(
+            (m) => m.storageKey === normalizedKey || m.convertedStorageKey === normalizedKey
+          );
+          if (matchModel) {
+            belongsToTenant = true;
+          } else {
+            const drawings = await dataStore.listEngineeringDrawings(authOrgId);
+            const matchDrawing = drawings.find((d) => d.storageKey === normalizedKey);
+            if (matchDrawing) {
+              belongsToTenant = true;
+            }
+          }
+        }
+
+        if (!belongsToTenant) {
+          // Log security event for blocked cross-tenant storage access attempt
+          await dataStore.recordAuditEvent({
+            organizationId: authOrgId,
+            actorUserId: req.auth.user.id,
+            action: 'STORAGE_PROXY_ACCESS_DENIED',
+            resourceType: 'STORAGE_OBJECT',
+            resourceId: normalizedKey,
+            metadata: {
+              reason: 'CROSS_TENANT_OR_UNAUTHORIZED_NAMESPACE',
+            },
+          });
+
+          const securityService = req.app?.locals?.securityService;
+          if (securityService) {
+            await securityService.recordSecurityEvent({
+              organizationId: authOrgId,
+              actorUserId: req.auth.user.id,
+              actorEmail: req.auth.user.email,
+              actorRole: req.auth.membership.role,
+              category: 'CROSS_TENANT_ACCESS',
+              action: 'STORAGE_PROXY_ACCESS_BLOCKED',
+              resourceCategory: 'DOCUMENT',
+              resourceId: normalizedKey,
+              decision: 'DENIED',
+              policyReasonCode: 'TENANT_NAMESPACE_VIOLATION',
+              severity: 'HIGH',
+              isBenignInquiry: false,
+              metadata: {
+                requestedKey: normalizedKey,
+              },
+            });
+          }
+
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORGEX_RBAC_FORBIDDEN',
+              message: 'Access denied: Storage object is outside tenant namespace or unauthorized.',
+            },
+          });
+          return;
+        }
+
+        // 4. Plant-level authorization check
+        const plantMatch = normalizedKey.match(/plant_([a-zA-Z0-9_-]+)/);
+        if (plantMatch) {
+          const keyPlantId = plantMatch[1];
+          if (role !== 'ORGANIZATION_OWNER' && role !== 'ORGANIZATION_ADMIN') {
+            const assignedPlants = req.auth.membership.assignedPlantIds ?? [];
+            if (assignedPlants.length > 0 && !assignedPlants.includes(keyPlantId)) {
+              res.status(403).json({
+                success: false,
+                error: {
+                  code: 'FORGEX_PLANT_ACCESS_DENIED',
+                  message: `Access denied: User is not assigned to plant '${keyPlantId}'.`,
+                },
+              });
+              return;
+            }
+          }
+
+          const plant = await dataStore.getPlantById(authOrgId, keyPlantId);
+          if (!plant) {
+            const orgPlants = await dataStore.listPlants(authOrgId);
+            const hasPlant = orgPlants.some(
+              (p) => p.id === keyPlantId || p.code?.toLowerCase() === keyPlantId.toLowerCase()
+            );
+            if (!hasPlant) {
+              res.status(403).json({
+                success: false,
+                error: {
+                  code: 'FORGEX_PLANT_ACCESS_DENIED',
+                  message: 'Access denied: Target plant does not belong to the authenticated organization.',
+                },
+              });
+              return;
+            }
+          }
+        }
       }
 
       if (!storageAdapter) {
@@ -1610,7 +1751,7 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
 
       let dataBuffer: Buffer;
       try {
-        dataBuffer = await storageAdapter.getObject(key);
+        dataBuffer = await storageAdapter.getObject(normalizedKey);
       } catch (err: any) {
         res.status(404).json({
           success: false,
@@ -1620,7 +1761,7 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
       }
 
       // Safe Content-Type detection
-      const ext = path.extname(key).toLowerCase();
+      const ext = path.extname(normalizedKey).toLowerCase();
       let contentType = 'application/octet-stream';
       if (ext === '.pdf') contentType = 'application/pdf';
       else if (ext === '.svg') {
@@ -1636,7 +1777,7 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
       else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
       else if (ext === '.step' || ext === '.stp') contentType = 'application/step';
 
-      const filename = path.basename(key);
+      const filename = path.basename(normalizedKey);
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
       res.setHeader('X-Content-Type-Options', 'nosniff');

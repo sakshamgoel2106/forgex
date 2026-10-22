@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { IStorageAdapter, StoragePutResult } from './storage.interface.js';
@@ -7,7 +8,19 @@ export class LocalStorageAdapter implements IStorageAdapter {
   private baseDir: string;
 
   constructor(baseDir?: string) {
-    this.baseDir = path.resolve(baseDir ?? path.join(process.cwd(), 'data', 'storage'));
+    if (baseDir) {
+      this.baseDir = path.resolve(baseDir);
+    } else if (process.env.STORAGE_LOCAL_DIR) {
+      this.baseDir = path.resolve(process.env.STORAGE_LOCAL_DIR);
+    } else {
+      const apiStorage = path.resolve(process.cwd(), 'apps', 'api', 'data', 'storage');
+      const directStorage = path.resolve(process.cwd(), 'data', 'storage');
+      if (fsSync.existsSync(apiStorage)) {
+        this.baseDir = apiStorage;
+      } else {
+        this.baseDir = directStorage;
+      }
+    }
   }
 
   private resolveSafePath(key: string): string {
@@ -25,25 +38,40 @@ export class LocalStorageAdapter implements IStorageAdapter {
   }
 
   public async putObject(key: string, data: Buffer, _contentType: string): Promise<StoragePutResult> {
-    const filePath = this.resolveSafePath(key);
+    const cleanKey = key.replace(/^[/\\]+/, '');
+    const filePath = this.resolveSafePath(cleanKey);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, data);
 
     const checksumSha256 = crypto.createHash('sha256').update(data).digest('hex');
 
     return {
-      storageKey: key,
+      storageKey: cleanKey,
       sizeBytes: data.length,
       checksumSha256,
     };
   }
 
   public async getObject(key: string): Promise<Buffer> {
-    const filePath = this.resolveSafePath(key);
+    const cleanKey = key.replace(/^[/\\]+/, '');
+    const filePath = this.resolveSafePath(cleanKey);
     try {
       return await fs.readFile(filePath);
     } catch (err: any) {
       if (err.code === 'ENOENT') {
+        const altPaths = [
+          path.resolve(process.cwd(), 'apps', 'api', 'data', 'storage', cleanKey),
+          path.resolve(process.cwd(), 'data', 'storage', cleanKey),
+          path.resolve(this.baseDir, '..', '..', 'data', 'storage', cleanKey),
+          path.resolve(this.baseDir, '..', 'data', 'storage', cleanKey),
+        ];
+        for (const altPath of altPaths) {
+          try {
+            return await fs.readFile(altPath);
+          } catch {
+            // continue checking alternate locations
+          }
+        }
         throw new Error(`Storage object not found: '${key}'`);
       }
       throw err;
@@ -51,12 +79,27 @@ export class LocalStorageAdapter implements IStorageAdapter {
   }
 
   public async deleteObject(key: string): Promise<void> {
-    const filePath = this.resolveSafePath(key);
+    const cleanKey = key.replace(/^[/\\]+/, '');
+    const filePath = this.resolveSafePath(cleanKey);
     try {
       await fs.unlink(filePath);
     } catch (err: any) {
       if (err.code !== 'ENOENT') {
         throw err;
+      }
+    }
+
+    const altPaths = [
+      path.resolve(process.cwd(), 'apps', 'api', 'data', 'storage', cleanKey),
+      path.resolve(process.cwd(), 'data', 'storage', cleanKey),
+    ];
+    for (const altPath of altPaths) {
+      if (altPath !== filePath) {
+        try {
+          await fs.unlink(altPath);
+        } catch {
+          // ignore
+        }
       }
     }
   }

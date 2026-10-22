@@ -1375,9 +1375,22 @@ export const CopilotWorkspaceView: React.FC = () => {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => {
-                if (inspectedCitation) {
-                  window.open(`/api/v1/documents/${inspectedCitation.documentId}/download`, '_blank');
+              onClick={async () => {
+                if (!inspectedCitation) return;
+                try {
+                  const res = await apiFetch(`/api/v1/documents/${inspectedCitation.documentId}/download`);
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                  const blob = await res.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${inspectedCitation.documentNumber || 'manual'}_Page-${inspectedCitation.pageNumber}.pdf`;
+                  document.body.appendChild(a);
+                  a.click();
+                  window.URL.revokeObjectURL(url);
+                  document.body.removeChild(a);
+                } catch (err: any) {
+                  alert(`Could not download manual payload: ${err?.message}`);
                 }
               }}
             >

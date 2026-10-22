@@ -113,12 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [permissions, setPermissions] = useState<OrgPermission[]>([]);
   const [token, setToken] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem(TOKEN_KEY);
-      if (stored === 'local_dev_token') {
-        localStorage.removeItem(TOKEN_KEY);
-        return null;
-      }
-      return stored || null;
+      return localStorage.getItem(TOKEN_KEY) || null;
     }
     return null;
   });

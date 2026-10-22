@@ -160,8 +160,69 @@ export function validateUpload(file: {
     };
   }
 
+  // 3D Models & Industrial CAD Formats:
+  // GLB, GLTF, OBJ, STL, STEP, STP, SKP, FBX, USD, USDZ, IGES, IGS, PLY, 3MF
+  const cadFormats: Record<string, string> = {
+    glb: 'model/gltf-binary',
+    gltf: 'model/gltf+json',
+    obj: 'model/obj',
+    stl: 'model/stl',
+    step: 'model/step',
+    stp: 'model/step',
+    skp: 'model/vnd.sketchup.skp',
+    fbx: 'model/fbx',
+    usd: 'model/vnd.usd',
+    usdz: 'model/vnd.usdz+zip',
+    iges: 'model/iges',
+    igs: 'model/iges',
+    ply: 'model/ply',
+    '3mf': 'model/3mf',
+  };
+
+  // 3D Model: GLB (glTF binary, magic: 0x67 0x6C 0x54 0x46 -> "glTF")
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x67 &&
+    buffer[1] === 0x6c &&
+    buffer[2] === 0x54 &&
+    buffer[3] === 0x46
+  ) {
+    return {
+      detectedMimeType: 'model/gltf-binary',
+      sanitizedFilename: sanitizeFilename(file.originalname),
+      extension: 'glb',
+    };
+  }
+
+  // 3D Model & CAD extensions validation
+  if (cadFormats[ext]) {
+    if (ext === 'stl' && buffer.length < 84) {
+      const preview = buffer.toString('utf-8', 0, Math.min(buffer.length, 50)).trim().toLowerCase();
+      if (!preview.startsWith('solid')) {
+        throw new Error('Upload validation failed: Truncated or invalid STL 3D model.');
+      }
+    }
+
+    return {
+      detectedMimeType: cadFormats[ext],
+      sanitizedFilename: sanitizeFilename(file.originalname),
+      extension: ext,
+    };
+  }
+
+  // 3D Model by MIME-type fallback
+  for (const [cadExt, mime] of Object.entries(cadFormats)) {
+    if (file.mimetype === mime) {
+      return {
+        detectedMimeType: mime,
+        sanitizedFilename: sanitizeFilename(file.originalname),
+        extension: cadExt,
+      };
+    }
+  }
+
   throw new Error(
-    `Upload validation failed: Unsupported or malformed file content. Magic bytes do not match allowed formats (PDF, DOCX, TXT, MD, PNG, JPG, WebP).`
+    `Upload validation failed: Unsupported or malformed file content. Magic bytes do not match allowed formats (PDF, DOCX, TXT, MD, PNG, JPG, WebP, CAD/3D: GLB, GLTF, OBJ, STL, STEP, STP, SKP, FBX, IGES, IGS, USD, USDZ, PLY, 3MF).`
   );
 }
 

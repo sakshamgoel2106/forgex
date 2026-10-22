@@ -25,56 +25,79 @@ export function createDocumentRouter(
     },
   });
 
-  // Upload: Organization Admin & Owner
+  const bulkUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 50 * 1024 * 1024, // 50MB maximum
+      files: 20,
+    },
+  });
+
+  // Knowledge Hub Role Policy:
+  // Administrative ingestion, raw manual retrieval, extracted page inspection,
+  // reprocessing retries, and document lifecycle deletion are strictly restricted
+  // to ORGANIZATION_OWNER and ORGANIZATION_ADMIN.
+  const ADMIN_ROLES = ['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER'] as const;
+
+  // Ingestion: Strictly restricted to Organization Admin & Owner
+  // Multer parses the multipart payload first so the HTTP stream is safely consumed before role checks
   router.post(
     '/upload',
-    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
     upload.single('file'),
+    requireRole([...ADMIN_ROLES]),
     controller.upload
+  );
+
+  // Bulk Ingestion: Admin & Owner only
+  router.post(
+    '/bulk-upload',
+    bulkUpload.any(),
+    requireRole([...ADMIN_ROLES]),
+    controller.bulkUpload
   );
 
   // Read: Strictly restricted to authorized administrators (Workers, Techs, Engineers denied direct document access)
   router.get(
     '/',
-    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
+    requireRole([...ADMIN_ROLES]),
     controller.list
   );
 
   router.get(
     '/:id',
-    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
+    requireRole([...ADMIN_ROLES]),
     controller.getById
   );
 
   router.get(
     '/:id/pages',
-    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
+    requireRole([...ADMIN_ROLES]),
     controller.getPages
   );
 
   router.get(
     '/:id/versions',
-    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
+    requireRole([...ADMIN_ROLES]),
     controller.getVersions
   );
 
   router.get(
     '/:id/download',
-    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
+    requireRole([...ADMIN_ROLES]),
     controller.download
   );
 
-  // Retry processing: Admin & Engineer/Technician
+  // Retry processing: Admin & Owner only
   router.post(
     '/:id/versions/:versionId/retry',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN']),
+    requireRole([...ADMIN_ROLES]),
     controller.retry
   );
 
-  // Delete: Organization Admin only
+  // Delete: Admin & Owner only
   router.delete(
     '/:id',
-    requireRole(['ORGANIZATION_ADMIN']),
+    requireRole([...ADMIN_ROLES]),
     controller.delete
   );
 

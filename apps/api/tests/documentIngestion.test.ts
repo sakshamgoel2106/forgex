@@ -162,7 +162,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
 
       const res = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('documentNumber', 'SOP-MECH-401')
         .field('title', 'Emergency Centrifugal Pump LOTO Procedure')
         .field('plantId', plantA.id)
@@ -183,7 +183,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
       // Verify Document and Version are INDEXED
       const docRes = await request(app)
         .get(`/api/v1/documents/${res.body.data.document.id}`)
-        .set('Authorization', `Bearer ${tokenEngineerA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(docRes.status).toBe(200);
       expect(docRes.body.data.latestVersion.status).toBe('INDEXED');
@@ -193,7 +193,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
       // Verify extracted pages and headings
       const pagesRes = await request(app)
         .get(`/api/v1/documents/${res.body.data.document.id}/pages`)
-        .set('Authorization', `Bearer ${tokenEngineerA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(pagesRes.status).toBe(200);
       expect(pagesRes.body.data.length).toBeGreaterThanOrEqual(1);
@@ -217,13 +217,104 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
       expect(searchResults[0].payload.content).toContain('PUMP-204-B');
     });
 
+    it('successfully uploads and ingests a 3D CAD model (.glb) with metadata and vector indexing', async () => {
+      // 12-byte minimal GLB header: magic 0x46546C67 ("glTF"), version 2, length 12
+      const glbHeader = Buffer.from([
+        0x67, 0x6c, 0x54, 0x46, // magic: glTF
+        0x02, 0x00, 0x00, 0x00, // version: 2
+        0x0c, 0x00, 0x00, 0x00, // length: 12
+      ]);
+
+      const res = await request(app)
+        .post('/api/v1/documents/upload')
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .field('documentNumber', 'CAD-PUMP-204-3D')
+        .field('title', 'Sulzer OH2 Pump Exploded CAD Model')
+        .field('plantId', plantA.id)
+        .field('category', '3D_MODEL')
+        .field('revision', 'REV-A')
+        .field('assetTags', 'PUMP-204-B,CAD-3D')
+        .attach('file', glbHeader, 'pump_assembly.glb');
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.document.category).toBe('3D_MODEL');
+
+      // Wait for queue processing to finish
+      await ingestionQueue.waitForAll();
+
+      // Verify Document and Version are INDEXED
+      const docRes = await request(app)
+        .get(`/api/v1/documents/${res.body.data.document.id}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`);
+
+      expect(docRes.status).toBe(200);
+      expect(docRes.body.data.latestVersion.status).toBe('INDEXED');
+      expect(docRes.body.data.latestVersion.totalPages).toBe(1);
+
+      // Verify vector search matches 3D model
+      const searchResults = await vectorStore.search(
+        'forgex_knowledge',
+        await embeddingAdapter.generateEmbedding('Sulzer OH2 CAD 3D model PUMP-204-B'),
+        { organizationId: orgA.id }
+      );
+
+      expect(searchResults.length).toBeGreaterThanOrEqual(1);
+      expect(searchResults[0].payload.documentNumber).toBe('CAD-PUMP-204-3D');
+      expect(searchResults[0].payload.category).toBe('3D_MODEL');
+    });
+
+    it('successfully uploads, ingests, and downloads expanded CAD formats (.step, .fbx, .3mf)', async () => {
+      // Mock STEP CAD format (ISO-10303-21 ASCII text)
+      const stepContent = Buffer.from(
+        'ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((\'Industrial Turbine Impeller STEP CAD\'),\'2;1\');\nFILE_NAME(\'impeller.step\',\'2026-10-21\',(\'Engineer\'),(\'ForgeX\'),\'STEP\',\'CAD\',\'\');\nFILE_SCHEMA((\'CONFIG_CONTROL_DESIGN\'));\nENDSEC;\nDATA;\n#10=APPLICATION_CONTEXT(\'mechanical design\');\nENDSEC;\nEND-ISO-10303-21;\n',
+        'utf-8'
+      );
+
+      const res = await request(app)
+        .post('/api/v1/documents/upload')
+        .set('Authorization', `Bearer ${tokenAdminA}`)
+        .field('documentNumber', 'CAD-TURB-IMP-01')
+        .field('title', 'Turbine Impeller STEP CAD Geometry')
+        .field('plantId', plantA.id)
+        .field('category', '3D_MODEL')
+        .field('revision', 'REV-B')
+        .field('assetTags', 'TURB-IMP-01,CAD-STEP')
+        .attach('file', stepContent, 'impeller.step');
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.document.documentNumber).toBe('CAD-TURB-IMP-01');
+
+      // Wait for queue processing to complete
+      await ingestionQueue.waitForAll();
+
+      // Verify Document and Version are INDEXED
+      const docRes = await request(app)
+        .get(`/api/v1/documents/${res.body.data.document.id}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`);
+
+      expect(docRes.status).toBe(200);
+      expect(docRes.body.data.latestVersion.status).toBe('INDEXED');
+      expect(docRes.body.data.latestVersion.mimeType).toBe('model/step');
+
+      // Verify Download returns exact file payload
+      const downloadRes = await request(app)
+        .get(`/api/v1/documents/${res.body.data.document.id}/download`)
+        .set('Authorization', `Bearer ${tokenAdminA}`);
+
+      expect(downloadRes.status).toBe(200);
+      expect(downloadRes.headers['content-type']).toContain('model/step');
+      expect(downloadRes.text).toContain('ISO-10303-21');
+    });
+
     it('rejects upload when magic bytes indicate an executable or script masquerading as a document', async () => {
       // Windows PE EXE header: 0x4D 0x5A ("MZ")
       const maliciousBuffer = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]);
 
       const res = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('documentNumber', 'SOP-CORRUPT-001')
         .field('title', 'Corrupt Document')
         .field('plantId', plantA.id)
@@ -240,7 +331,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
 
       const res = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('documentNumber', 'SOP-JUNK-002')
         .field('title', 'Junk Document')
         .field('plantId', plantA.id)
@@ -257,7 +348,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
 
       const res = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('title', 'Missing Doc Number')
         // missing documentNumber, plantId, category
         .attach('file', validText, 'sample.txt');
@@ -277,7 +368,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
 
       const res = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('documentNumber', 'OEM-SCAN-902')
         .field('title', 'Scanned Compressor K-301 Schematic Diagram')
         .field('plantId', plantA.id)
@@ -291,7 +382,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
 
       const pagesRes = await request(app)
         .get(`/api/v1/documents/${res.body.data.document.id}/pages`)
-        .set('Authorization', `Bearer ${tokenEngineerA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(pagesRes.status).toBe(200);
       expect(pagesRes.body.data.length).toBe(1);
@@ -312,7 +403,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
 
       const uploadRes = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('documentNumber', 'SOP-GAS-102')
         .field('title', 'Gas Turbine Ignition Sequence')
         .field('plantId', plantA.id)
@@ -332,7 +423,7 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
       // Trigger Retry
       const retryRes = await request(app)
         .post(`/api/v1/documents/${docId}/versions/${versionId}/retry`)
-        .set('Authorization', `Bearer ${tokenEngineerA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(retryRes.status).toBe(200);
       expect(retryRes.body.data.job.retryCount).toBe(1);
@@ -360,7 +451,7 @@ Ensure ground disconnect switch is closed.
 
       const uploadRes = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('documentNumber', 'SOP-FAIL-TEST')
         .field('title', 'Failure Simulation Manual')
         .field('plantId', plantA.id)
@@ -374,7 +465,7 @@ Ensure ground disconnect switch is closed.
 
       const docRes = await request(app)
         .get(`/api/v1/documents/${docId}`)
-        .set('Authorization', `Bearer ${tokenEngineerA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(docRes.status).toBe(200);
       expect(docRes.body.data.latestVersion.status).toBe('FAILED');
@@ -390,7 +481,7 @@ Ensure ground disconnect switch is closed.
       const docContent = `# SOP-ISOLATION-01: Proprietary Refinery Catalytic Cracking Manual`;
       const res = await request(app)
         .post('/api/v1/documents/upload')
-        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .set('Authorization', `Bearer ${tokenAdminA}`)
         .field('documentNumber', 'SOP-ISOLATION-01')
         .field('title', 'Proprietary Refining Manual')
         .field('plantId', plantA.id)
@@ -448,7 +539,7 @@ Ensure ground disconnect switch is closed.
       // Verify Org A document still exists intact
       const checkRes = await request(app)
         .get(`/api/v1/documents/${docOrgAId}`)
-        .set('Authorization', `Bearer ${tokenEngineerA}`);
+        .set('Authorization', `Bearer ${tokenAdminA}`);
 
       expect(checkRes.status).toBe(200);
     });
@@ -470,6 +561,20 @@ Ensure ground disconnect switch is closed.
         .set('Authorization', `Bearer ${tokenViewerA}`);
 
       expect(deleteRes.status).toBe(403);
+    });
+
+    it('Engineer role cannot upload Knowledge Hub documents (403 Forbidden)', async () => {
+      const uploadRes = await request(app)
+        .post('/api/v1/documents/upload')
+        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .field('documentNumber', 'SOP-ENG-DENIED')
+        .field('title', 'Engineer Denied Upload')
+        .field('plantId', plantA.id)
+        .field('category', 'SOP')
+        .attach('file', Buffer.from('Test', 'utf-8'), 'test.txt');
+
+      expect(uploadRes.status).toBe(403);
+      expect(uploadRes.body.error.code).toBe('FORGEX_RBAC_FORBIDDEN');
     });
   });
 });

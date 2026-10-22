@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS documents (
     document_number VARCHAR(64) NOT NULL,
     title VARCHAR(255) NOT NULL,
     category VARCHAR(64) NOT NULL CHECK (
-        category IN ('SOP', 'OEM_MANUAL', 'SCHEMATIC_PID', 'WIRING_DIAGRAM', 'FAULT_CODE_INDEX', 'SAFETY_DATA_SHEET')
+        category IN ('SOP', 'OEM_MANUAL', 'SCHEMATIC_PID', 'PID_DIAGRAM', '3D_MODEL', 'WIRING_DIAGRAM', 'FAULT_CODE_INDEX', 'SAFETY_DATA_SHEET')
     ),
     asset_tags TEXT[] NOT NULL DEFAULT '{}',
     created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,

@@ -1066,7 +1066,18 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   public async getDocumentById(organizationId: string, documentId: string): Promise<TechnicalDocument | null> {
-    const doc = this.documents.get(documentId);
+    let doc = this.documents.get(documentId);
+    if (!doc) {
+      for (const d of this.documents.values()) {
+        if (
+          d.organizationId === organizationId &&
+          (d.id === documentId || d.documentNumber.toLowerCase() === documentId.toLowerCase())
+        ) {
+          doc = d;
+          break;
+        }
+      }
+    }
     if (!doc || doc.organizationId !== organizationId) return null;
     return this.enrichDocument(doc);
   }
@@ -1102,12 +1113,24 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   public async deleteDocument(organizationId: string, documentId: string): Promise<boolean> {
-    const doc = this.documents.get(documentId);
+    let doc = this.documents.get(documentId);
+    if (!doc) {
+      for (const d of this.documents.values()) {
+        if (
+          d.organizationId === organizationId &&
+          (d.id === documentId || d.documentNumber.toLowerCase() === documentId.toLowerCase())
+        ) {
+          doc = d;
+          break;
+        }
+      }
+    }
     if (!doc || doc.organizationId !== organizationId) return false;
 
+    const actualId = doc.id;
     // Cascade delete versions, pages, chunks, and jobs
     for (const version of this.documentVersions.values()) {
-      if (version.documentId === documentId) {
+      if (version.documentId === actualId) {
         await this.deleteDocumentPages(version.id);
         await this.deleteKnowledgeChunks(version.id);
         for (const job of this.processingJobs.values()) {
@@ -1119,7 +1142,7 @@ export class InMemoryDataStore implements IDataStore {
       }
     }
 
-    this.documents.delete(documentId);
+    this.documents.delete(actualId);
     return true;
   }
 
