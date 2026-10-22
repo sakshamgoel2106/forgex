@@ -44,3 +44,11 @@ Thumbs.db
 # Docker volumes / local data mounts
 infra/data/
 apps/api/data/storage/
+apps/api/data/test_*/
+apps/api/data/test-*/
+
+# Test outputs
+test-results/
+playwright-report/
+blob-report/
+

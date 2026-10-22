@@ -27,10 +27,14 @@ async function startServer() {
   const embeddingAdapter = createEmbeddingAdapter();
   const vectorStore = createVectorStoreAdapter();
 
-  // 3. Ensure baseline demo organization and plant equipment are initialized
-  bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore).catch((err) => {
-    logger.warn({ err: err?.message }, 'Initial bootstrap data seeding notice');
-  });
+  // 3. Ensure baseline demo organization is initialized strictly when explicitly enabled
+  if (process.env.ALLOW_DEMO_BOOTSTRAP === 'true') {
+    bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore).catch((err) => {
+      logger.warn({ err: err?.message }, 'Initial bootstrap data seeding notice');
+    });
+  } else {
+    logger.info('Clean database mode active: automatic demo seeding is disabled.');
+  }
 
   // 4. Construct Express Application
   const app = createApp({

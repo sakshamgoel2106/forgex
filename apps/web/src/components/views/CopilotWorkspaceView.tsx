@@ -33,6 +33,7 @@ import { StatusBadge } from '../ui/StatusBadge';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
 import { apiFetch } from '../../lib/api';
+import { useAuth } from '../../lib/AuthContext';
 import { createWakeWordProvider, type IWakeWordProvider, type WakeWordStatus } from '../../lib/voice/wakeWordProvider';
 import { releaseAllAudioTracks } from '../../lib/voice/audioCapture';
 import { VADService } from '../../lib/voice/vadService';
@@ -56,12 +57,6 @@ interface PresetPrompt {
 
 const PRESET_QUERIES: PresetPrompt[] = [
   {
-    label: 'Pump Seal Pressure & Torque',
-    query: 'What is the gland bolt torque and seal oil pressure for PUMP-204-B?',
-    modeLabel: 'Machine-Specific',
-    assetId: 'PUMP-204-B',
-  },
-  {
     label: 'General Engineering Fundamentals',
     query: "Explain Bernoulli's principle and fluid flow conservation equations.",
     modeLabel: 'General Educational',
@@ -72,18 +67,24 @@ const PRESET_QUERIES: PresetPrompt[] = [
     modeLabel: 'Company-Specific',
   },
   {
-    label: 'LOTO Interlock Override (Safety Critical)',
-    query: 'How do I bypass lockout tagout or override the safety switch on PUMP-204-B?',
+    label: 'LOTO Isolation Protocols',
+    query: 'What is the required procedure to verify a Zero Energy State before mechanical overhaul?',
     modeLabel: 'Safety-Critical',
-    assetId: 'PUMP-204-B',
+  },
+  {
+    label: 'Vibration & Anomaly Analysis',
+    query: 'How do I perform diagnostic root cause analysis on abnormal equipment vibration?',
+    modeLabel: 'Diagnostic',
   },
 ];
 
 export const CopilotWorkspaceView: React.FC = () => {
+  const { user, organization } = useAuth();
+
   // Session & Context State
-  const [plantId, setPlantId] = useState('PLANT-TX-04');
-  const [selectedAssetId, setSelectedAssetId] = useState<string>('PUMP-204-B');
-  const [activeConversationId, setActiveConversationId] = useState<string | null>('conv-default-session');
+  const [plantId, setPlantId] = useState('');
+  const [selectedAssetId, setSelectedAssetId] = useState<string>('');
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
 
   // Dynamic Metadata State
   const [plants, setPlants] = useState<any[]>([]);
@@ -175,74 +176,9 @@ export const CopilotWorkspaceView: React.FC = () => {
   }, [inspectedCitation]);
 
 
-  // Conversations & Messages State
-  const [conversations, setConversations] = useState<Conversation[]>([
-    {
-      id: 'conv-default-session',
-      organizationId: 'org-apex',
-      plantId: 'PLANT-TX-04',
-      assetId: 'PUMP-204-B',
-      userId: 'user-eng-1',
-      title: 'Centrifugal Pump Differential Pressure & LOTO',
-      createdAt: new Date(Date.now() - 3600000).toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    {
-      id: 'conv-historical-1',
-      organizationId: 'org-apex',
-      plantId: 'PLANT-TX-04',
-      assetId: 'COMP-101-A',
-      userId: 'user-eng-1',
-      title: 'Wet Gas Compressor Startup Procedures',
-      createdAt: new Date(Date.now() - 86400000).toISOString(),
-      updatedAt: new Date(Date.now() - 86400000).toISOString(),
-    },
-  ]);
-
-  const [messages, setMessages] = useState<CopilotMessage[]>([
-    {
-      id: 'msg-initial-user',
-      conversationId: 'conv-default-session',
-      senderType: 'USER',
-      content: 'What is the gland bolt torque and seal oil pressure for PUMP-204-B?',
-      confidence: 'HIGH',
-      citations: [],
-      createdAt: new Date(Date.now() - 120000).toISOString(),
-    },
-    {
-      id: 'msg-initial-asst',
-      conversationId: 'conv-default-session',
-      senderType: 'ASSISTANT',
-      questionMode: 'MACHINE_SPECIFIC',
-      content: `### Sourced Operational Facts (Verified from SOP-MECH-401, Page 2)
-- Normal operational seal oil differential pressure for PUMP-204-B must be maintained at 25.0 PSI across inner mechanical seal faces.
-- If differential pressure drops below 15.0 PSI, trip interlock triggers immediately to prevent seal cavitation and thermal seizure.
-- Gland bolt torque specification is 185 ft-lbs in a crisscross star pattern. Lubrication oil viscosity requirement: ISO VG 46 synthetic turbine oil.
-
-### Operational Guidance
-Adhere strictly to active revision REV-C. Before commencing mechanical overhaul, isolate suction and discharge valves V-101 and V-102 per OSHA Standard 1910.147.`,
-      confidence: 'HIGH',
-      isInsufficientEvidence: false,
-      conflictDetected: false,
-      citations: [
-        {
-          id: 'cit-1',
-          documentId: 'bb98e4e3-449b-4e68-904c-4bd25e2eb56f',
-          documentNumber: 'SOP-MECH-401',
-          documentTitle: 'Emergency Centrifugal Pump LOTO & Seal Overhaul Procedure',
-          documentVersionId: '46935839-1eda-4814-8887-4ec75976d847',
-          revisionTag: 'REV-C',
-          pageNumber: 2,
-          chunkId: '00000000-0000-4000-8000-000000000002',
-          snippet:
-            'Normal operational seal oil differential pressure for PUMP-204-B must be maintained at 25.0 PSI across inner mechanical seal faces. If differential pressure drops below 15.0 PSI, trip interlock triggers immediately. Gland bolt torque specification is 185 ft-lbs in star pattern.',
-          confidenceScore: 0.98,
-          sectionHeading: 'SECTION 2: MECHANICAL SEAL OIL PRESSURE & TORQUE SPECIFICATIONS',
-        },
-      ],
-      createdAt: new Date(Date.now() - 110000).toISOString(),
-    },
-  ]);
+  // Conversations & Messages State (Live multi-tenant state - no mock data)
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [messages, setMessages] = useState<CopilotMessage[]>([]);
 
   // Input & Query State
   const [queryInput, setQueryInput] = useState('');
@@ -498,10 +434,10 @@ Adhere strictly to active revision REV-C. Before commencing mechanical overhaul,
           setConversations((prev) => [
             {
               id: data.conversationId,
-              organizationId: 'org-apex',
+              organizationId: organization?.id || '',
               plantId,
               assetId: selectedAssetId,
-              userId: 'user-eng-1',
+              userId: user?.id || '',
               title: text.length > 40 ? `${text.slice(0, 37)}...` : text,
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
@@ -820,27 +756,33 @@ Adhere strictly to active revision REV-C. Before commencing mechanical overhaul,
             <Clock className="w-3 h-3 text-[#64748B]" />
             Active Consultations
           </div>
-          {conversations.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => setActiveConversationId(c.id)}
-              className={`w-full text-left p-3 rounded-lg text-xs transition border flex flex-col gap-1 ${
-                activeConversationId === c.id
-                  ? 'bg-blue-50/70 border-blue-200 text-[#1A202C] shadow-sm'
-                  : 'bg-white border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B]'
-              }`}
-            >
-              <div className="flex items-center justify-between w-full">
-                <span className="font-mono text-[10px] text-[#2563EB] truncate font-bold">
-                  {c.assetId || 'PLANT-WIDE'}
-                </span>
-                <span className="text-[10px] font-mono text-[#64748B]">
-                  {new Date(c.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-              <span className="font-medium truncate text-xs text-[#1A202C]">{c.title}</span>
-            </button>
-          ))}
+          {conversations.length === 0 ? (
+            <div className="p-4 text-center text-xs text-[#94A3B8] border border-dashed border-[#E2E8F0] rounded-lg mt-2">
+              No previous consultations. Enter an inquiry or select a preset prompt to begin.
+            </div>
+          ) : (
+            conversations.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => setActiveConversationId(c.id)}
+                className={`w-full text-left p-3 rounded-lg text-xs transition border flex flex-col gap-1 ${
+                  activeConversationId === c.id
+                    ? 'bg-blue-50/70 border-blue-200 text-[#1A202C] shadow-sm'
+                    : 'bg-white border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B]'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="font-mono text-[10px] text-[#2563EB] truncate font-bold">
+                    {c.assetId || 'PLANT-WIDE'}
+                  </span>
+                  <span className="text-[10px] font-mono text-[#64748B]">
+                    {new Date(c.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                <span className="font-medium truncate text-xs text-[#1A202C]">{c.title}</span>
+              </button>
+            ))
+          )}
         </div>
 
         {/* Security & Deployment Footer */}

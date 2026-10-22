@@ -381,7 +381,7 @@ describe('ForgeX AI — Phase 2: Secure, Evidence-Based Universal AI Copilot Ver
     });
 
     // Save Vector Chunks
-    const collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge';
+    const collectionName = 'forgex_knowledge';
     await vectorStore.ensureCollection(collectionName, embeddingAdapter.getDimensions());
 
     // Chunk for standard manual
@@ -778,6 +778,8 @@ describe('ForgeX AI — Phase 2: Secure, Evidence-Based Universal AI Copilot Ver
   it('11. Maintenance-history inquiries distinguish confirmed causes from suspected causes and report empty records accurately', async () => {
     // 1. Seed durable maintenance history records for PUMP-101-A
     await dataStore.createMaintenanceRecord(orgAlpha.id, {
+      ticketId: 'TICK-TEST-101',
+      ticketNumber: 'TICK-TEST-101',
       machineId: machineVerified.id,
       machineAssetTag: machineVerified.assetTag,
       plantId: plantAlpha.id,
@@ -806,6 +808,8 @@ describe('ForgeX AI — Phase 2: Secure, Evidence-Based Universal AI Copilot Ver
     });
 
     await dataStore.createMaintenanceRecord(orgAlpha.id, {
+      ticketId: 'TICK-TEST-102',
+      ticketNumber: 'TICK-TEST-102',
       machineId: machineVerified.id,
       machineAssetTag: machineVerified.assetTag,
       plantId: plantAlpha.id,

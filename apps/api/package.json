@@ -10,10 +10,12 @@
     "dev": "tsx watch src/server.ts",
     "test": "vitest run",
     "db:migrate": "tsx src/db/runMigrationsCli.ts",
+    "seed:demo": "tsx src/db/seedDemoFactory.ts",
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@forgex/shared-types": "workspace:*",
+    "@types/nodemailer": "^8.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -21,6 +23,7 @@
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.13.0",
     "multer": "^2.4.0",
+    "nodemailer": "^10.1.7",
     "pdf-parse": "^2.4.5",
     "pg": "^8.13.1",
     "pino": "^9.6.0",

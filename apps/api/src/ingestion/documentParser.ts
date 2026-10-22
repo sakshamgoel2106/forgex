@@ -20,6 +20,29 @@ export class DocumentParser {
   constructor(private visionProvider?: IVisionProcessingProvider) {}
 
   /**
+   * Normalizes extracted document text without degrading engineering units,
+   * negative numbers, decimal values, tolerances, part numbers, or warnings.
+   */
+  public static normalizeIndustrialText(text: string): string {
+    if (!text) return '';
+
+    // Repair double-encoded UTF-8 latin1 mojibake (common in scanned and legacy PDFs: e.g. Â°C -> °C, Â± -> ±)
+    let cleaned = text.replace(/Â°/g, '°').replace(/Â±/g, '±');
+
+    // Replace non-breaking spaces and control characters (except newline, carriage return, tab)
+    cleaned = cleaned.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    cleaned = cleaned.replace(/\u00A0/g, ' ');
+
+    // Normalize multiple consecutive spaces within a line, preserving newlines
+    cleaned = cleaned.replace(/[ \t]+/g, ' ');
+
+    // Normalize excessive line breaks (keep maximum 2 newlines for paragraph separation)
+    cleaned = cleaned.replace(/\n\s*\n\s*\n+/g, '\n\n');
+
+    return cleaned.trim();
+  }
+
+  /**
    * Parses arbitrary uploaded buffer into structured pages with provenance
    */
   public async parse(
@@ -27,7 +50,37 @@ export class DocumentParser {
     mimeType: string,
     filename: string
   ): Promise<ExtractedDocument> {
+    if (!buffer || buffer.length === 0) {
+      throw new Error(
+        `Document parsing failed: File buffer is empty (0 bytes) for '${filename}'. Cannot process empty or corrupted document.`
+      );
+    }
+
     const ext = (filename.split('.').pop() || '').toLowerCase();
+
+    // 1. Explicit CAD and 3D Model Format Routing
+    const cadExtensions = [
+      'step', 'stp', 'stl', 'glb', 'gltf', 'dwg', 'dxf', 'obj', 'iges', 'igs', '3ds', 'sat', 'brep'
+    ];
+    const cadMimes = [
+      'application/step',
+      'application/sla',
+      'model/stl',
+      'model/step',
+      'model/gltf-binary',
+      'model/gltf+json',
+      'image/vnd.dwg',
+      'image/vnd.dxf',
+      'application/acad',
+      'application/x-dwg',
+      'application/x-dxf',
+    ];
+
+    if (cadExtensions.includes(ext) || cadMimes.includes(mimeType.toLowerCase())) {
+      throw new Error(
+        `UNSUPPORTED_FORMAT: CAD and 3D geometric models (.${ext}) require specialized CAD/geometric rendering pipelines and cannot be ingested as text documents for RAG indexing.`
+      );
+    }
 
     if (mimeType === 'application/pdf' || ext === 'pdf') {
       return this.parsePdf(buffer, filename);
@@ -62,6 +115,22 @@ export class DocumentParser {
   // PDF Extraction (Native Text + Scanned OCR Detection)
   // --------------------------------------------------------------------------
   private async parsePdf(buffer: Buffer, filename: string): Promise<ExtractedDocument> {
+    if (!buffer || buffer.length === 0) {
+      throw new Error(
+        `Document parsing failed: File buffer is empty (0 bytes) for '${filename}'.`
+      );
+    }
+
+    // Check PDF magic bytes (%PDF-)
+    const header = buffer.toString('latin1', 0, Math.min(buffer.length, 1024));
+    if (!header.includes('%PDF-')) {
+      throw new Error(
+        `Document parsing failed: Corrupted PDF file '${filename}'. Missing valid '%PDF' header.`
+      );
+    }
+
+    const isEncrypted = header.includes('/Encrypt');
+
     const pages: ExtractedPage[] = [];
 
     try {
@@ -96,43 +165,72 @@ export class DocumentParser {
             }
           }
 
+          let pageExtractionMethod: ExtractionMethod = 'NATIVE_TEXT';
+          if (!text) {
+            const rawFallback = this.fallbackRawPdfExtract(buffer, filename);
+            if (rawFallback.length > 0 && rawFallback[0].extractionMethod === 'NATIVE_TEXT') {
+              text = rawFallback[0].rawText;
+              pageExtractionMethod = 'NATIVE_TEXT';
+            }
+          }
+
           // Check if this page is a scanned PDF (minimal or zero extracted native text)
           const isScanned = text.replace(/\s+/g, '').length < 35;
 
           if (isScanned) {
             // Apply OCR pipeline
             const ocrText = this.performOcrOnScannedPdfPage(buffer, p, filename);
+            const normalizedOcr = DocumentParser.normalizeIndustrialText(ocrText);
             pages.push({
               pageNumber: p,
-              rawText: ocrText,
-              sectionHeadings: this.extractHeadings(ocrText),
+              rawText: normalizedOcr,
+              sectionHeadings: this.extractHeadings(normalizedOcr),
               extractionMethod: 'OCR',
-              hasTables: this.detectTables(ocrText),
-              drawingRevision: this.extractDrawingRevision(ocrText),
+              hasTables: this.detectTables(normalizedOcr),
+              drawingRevision: this.extractDrawingRevision(normalizedOcr),
             });
           } else {
+            const normalizedText = DocumentParser.normalizeIndustrialText(text);
             pages.push({
               pageNumber: p,
-              rawText: text,
-              sectionHeadings: this.extractHeadings(text),
-              extractionMethod: 'NATIVE_TEXT',
-              hasTables: this.detectTables(text),
-              drawingRevision: this.extractDrawingRevision(text),
+              rawText: normalizedText,
+              sectionHeadings: this.extractHeadings(normalizedText),
+              extractionMethod: pageExtractionMethod,
+              hasTables: this.detectTables(normalizedText),
+              drawingRevision: this.extractDrawingRevision(normalizedText),
             });
           }
         }
       }
-    } catch {
+    } catch (parseErr: any) {
+      if (isEncrypted || parseErr?.message?.toLowerCase().includes('password') || parseErr?.message?.toLowerCase().includes('encrypt')) {
+        throw new Error(
+          `Document parsing failed: PDF '${filename}' is encrypted or password-protected. Decryption key required.`
+        );
+      }
+
       // If pdf-parse throws on unusual formatting, inspect raw PDF streams
       const rawFallback = this.fallbackRawPdfExtract(buffer, filename);
-      pages.push(...rawFallback);
+      if (rawFallback.length > 0) {
+        pages.push(...rawFallback);
+      } else {
+        throw new Error(
+          `Document parsing failed: Corrupted PDF stream in '${filename}'. Could not extract text.`
+        );
+      }
     }
 
     if (pages.length === 0) {
+      if (isEncrypted) {
+        throw new Error(
+          `Document parsing failed: PDF '${filename}' is encrypted or password-protected. Decryption key required.`
+        );
+      }
       // Fallback scanned OCR page
+      const ocrFallback = this.performOcrOnScannedPdfPage(buffer, 1, filename);
       pages.push({
         pageNumber: 1,
-        rawText: this.performOcrOnScannedPdfPage(buffer, 1, filename),
+        rawText: DocumentParser.normalizeIndustrialText(ocrFallback),
         sectionHeadings: ['OCR SCANNED DOCUMENT'],
         extractionMethod: 'OCR',
         hasTables: false,
@@ -146,20 +244,25 @@ export class DocumentParser {
   }
 
   private fallbackRawPdfExtract(buffer: Buffer, filename: string): ExtractedPage[] {
-    const text = buffer.toString('latin1');
+    const text = buffer.toString('utf-8');
     const streamMatches = text.match(/BT[\s\S]*?ET/g) || [];
     let extracted = '';
 
     for (const block of streamMatches) {
-      const parts = block.match(/\((.*?)\)\s*Tj/g) || [];
-      for (const p of parts) {
-        const cleaned = p.replace(/^\(/, '').replace(/\)\s*Tj$/, '');
-        extracted += cleaned + ' ';
+      const tjMatch = block.match(/\(([\s\S]*)\)\s*Tj/);
+      if (tjMatch) {
+        extracted += tjMatch[1] + ' ';
+      } else {
+        const parts = block.match(/\((.*?)\)\s*Tj/g) || [];
+        for (const p of parts) {
+          const cleaned = p.replace(/^\(/, '').replace(/\)\s*Tj$/, '');
+          extracted += cleaned + ' ';
+        }
       }
       extracted += '\n';
     }
 
-    extracted = extracted.trim();
+    extracted = DocumentParser.normalizeIndustrialText(extracted);
     const isScanned = extracted.length < 35;
 
     return [
@@ -445,7 +548,7 @@ Escalation: Do not rely on automated linework or component associations without 
 
       // Industrial: SECTION 1.2 ..., STEP 3 ..., SOP-402 ...
       const indMatch = line.match(
-        /^(?:SECTION|STEP|PROCEDURE|WARNING|SAFETY|CHECKLIST|REVISION|MODULE|TORQUE|MATRIX)\s+([A-Z0-9.:\s-]+)$/i
+        /^(?:SECTION|STEP|PROCEDURE|WARNING|DANGER|CAUTION|NOTICE|SAFETY|CHECKLIST|REVISION|MODULE|TORQUE|MATRIX|SPECIFICATION|MAINTENANCE|INSPECTION|OPERATIONAL|LOCKOUT|TAGOUT|LOTO|SOP)\s+([A-Z0-9.:\s-]+)$/i
       );
       if (indMatch) {
         headings.push(line);

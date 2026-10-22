@@ -11,6 +11,7 @@ export interface ProcessDocumentOptions {
   jobId: string;
   documentVersionId: string;
   organizationId: string;
+  machineId?: string;
 }
 
 export class IngestionProcessor {
@@ -30,7 +31,7 @@ export class IngestionProcessor {
   }
 
   public async processJob(opts: ProcessDocumentOptions): Promise<void> {
-    const { jobId, documentVersionId, organizationId } = opts;
+    const { jobId, documentVersionId, organizationId, machineId } = opts;
 
     try {
       // 1. Mark Job as PROCESSING
@@ -59,23 +60,26 @@ export class IngestionProcessor {
       await this.dataStore.updateProcessingJobProgress(
         jobId,
         25,
-        'Retrieving binary payload from object storage'
+        'Retrieving binary payload from object storage',
+        'PROCESSING'
       );
       const buffer = await this.storageAdapter.getObject(version.storageKey);
 
       // 4. Parse document layout, page boundaries, headings, and OCR if scanned
       await this.dataStore.updateProcessingJobProgress(
         jobId,
-        40,
-        'Parsing layout, headings, tables, and applying OCR if scanned'
+        45,
+        'Parsing layout, headings, tables, and applying OCR if scanned',
+        'PROCESSING'
       );
       const extracted = await this.parser.parse(buffer, version.mimeType, version.filename);
 
-      // 5. Save Document Pages with provenance (idempotent overwrite)
+      // 5. Transition to EXTRACTED state: Save Document Pages with provenance (idempotent overwrite)
       await this.dataStore.updateProcessingJobProgress(
         jobId,
-        55,
-        `Saving ${extracted.pages.length} document pages with provenance`
+        60,
+        `Extracted ${extracted.pages.length} document pages with provenance`,
+        'EXTRACTED' as any
       );
       await this.dataStore.deleteDocumentPages(version.id);
       await this.dataStore.saveDocumentPages(
@@ -92,8 +96,9 @@ export class IngestionProcessor {
       // 6. Generate semantic chunks with deterministic IDs (idempotent)
       await this.dataStore.updateProcessingJobProgress(
         jobId,
-        70,
-        'Generating provenance-preserving semantic chunks'
+        75,
+        'Generating provenance-preserving semantic chunks',
+        'INDEXING' as any
       );
       const chunkDrafts = this.chunker.chunkPages(version.id, extracted.pages);
 
@@ -107,18 +112,25 @@ export class IngestionProcessor {
       // 7. Generate vector embeddings
       await this.dataStore.updateProcessingJobProgress(
         jobId,
-        80,
-        `Generating dense embeddings for ${chunkDrafts.length} chunks via ${this.embeddingAdapter.getModelName()}`
+        85,
+        `Generating dense embeddings for ${chunkDrafts.length} chunks via ${this.embeddingAdapter.getModelName()}`,
+        'INDEXING' as any
       );
       const chunkTexts = chunkDrafts.map((c) => c.content);
       const embeddings = await this.embeddingAdapter.generateEmbeddings(chunkTexts);
 
-      // 8. Index vectors into Vector Store with strict tenant authorization payload
+      // 8. Index vectors into Vector Store with strict tenant and machine authorization payload
       await this.dataStore.updateProcessingJobProgress(
         jobId,
-        90,
-        'Indexing chunks with authorized metadata into vector database'
+        92,
+        'Indexing chunks with authorized metadata into vector database',
+        'INDEXING' as any
       );
+
+      const resolvedMachineId =
+        machineId ||
+        (document as any).machineId ||
+        (document.assetTags && document.assetTags.length > 0 ? document.assetTags[0] : undefined);
 
       const vectorPoints: VectorPoint[] = chunkDrafts.map((chunk, idx) => ({
         id: chunk.qdrantPointId,
@@ -126,7 +138,10 @@ export class IngestionProcessor {
         payload: {
           organizationId: document.organizationId,
           plantId: document.plantId,
+          machineId: resolvedMachineId,
           documentId: document.id,
+          documentNumber: document.documentNumber,
+          documentTitle: document.title,
           documentVersionId: version.id,
           revision: version.revision,
           pageNumber: chunk.pageNumber,
@@ -190,6 +205,7 @@ export class IngestionProcessor {
       );
     } catch (err: any) {
       const errorMsg = err?.message || 'Unknown document processing error';
+      const isUnsupported = errorMsg.includes('UNSUPPORTED_FORMAT') || errorMsg.includes('Unsupported file format');
 
       // Keep extraction errors and retry information observable without leaking document contents into logs
       logger.error(
@@ -197,6 +213,7 @@ export class IngestionProcessor {
           jobId,
           documentVersionId,
           error: errorMsg,
+          isUnsupported,
         },
         'Document processing job failed'
       );
@@ -212,8 +229,8 @@ export class IngestionProcessor {
       await this.dataStore.updateProcessingJobProgress(
         jobId,
         0,
-        'Processing failed',
-        'FAILED',
+        isUnsupported ? 'Unsupported document format' : 'Processing failed',
+        isUnsupported ? ('UNSUPPORTED_FORMAT' as any) : 'FAILED',
         errorMsg
       );
     }

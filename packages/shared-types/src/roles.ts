@@ -6,6 +6,7 @@
 export type OrgRole =
   | 'ORGANIZATION_OWNER'
   | 'ORGANIZATION_ADMIN'
+  | 'SUPERVISOR'
   | 'PLANT_MANAGER'
   | 'ENGINEER'
   | 'TECHNICIAN'
@@ -19,6 +20,13 @@ export interface Organization {
   id: string;
   name: string;
   slug: string;
+  industry?: string;
+  country?: string;
+  timezone?: string;
+  website?: string;
+  companySize?: string;
+  measurementUnits?: 'metric' | 'imperial';
+  deploymentType?: 'saas' | 'enterprise';
   createdAt: string;
   updatedAt: string;
 }
@@ -26,6 +34,8 @@ export interface Organization {
 export interface UserPreferences {
   theme?: 'graphite' | 'dark' | 'light';
   language?: string;
+  timezone?: string;
+  measurementUnits?: 'metric' | 'imperial';
   emailNotifications?: boolean;
   smsAlerts?: boolean;
   safetyCriticalAlertsOnly?: boolean;
@@ -44,13 +54,57 @@ export interface User {
   externalAuthId: string; // Subject ID from Supabase Auth, Keycloak OIDC, or LocalDev
   email: string;
   fullName: string;
+  emailVerified?: boolean;
+  status?: 'ACTIVE' | 'SUSPENDED' | 'PENDING_VERIFICATION';
+  passwordHash?: string;
+  verificationTokenHash?: string;
+  verificationExpiresAt?: string;
   jobTitle?: string;
   department?: string;
   phone?: string;
   avatarUrl?: string;
+  googleId?: string;
+  googleEmail?: string;
+  authProvider?: 'local' | 'google' | 'supabase' | 'keycloak' | 'email_otp';
   preferences?: UserPreferences;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface EmailOtpRecord {
+  id: string;
+  email: string;
+  codeHash: string;
+  purpose: 'login' | 'register' | 'invitation' | 'password_reset';
+  attempts: number;
+  maxAttempts: number;
+  expiresAt: string;
+  usedAt?: string | null;
+  createdAt: string;
+}
+
+export interface EmployeeCredentialsSummary {
+  userId: string;
+  membershipId: string;
+  email: string;
+  fullName: string;
+  role: OrgRole;
+  status: MembershipStatus;
+  hasPassword: boolean;
+  authProvider: string;
+  googleLinked: boolean;
+  emailVerified: boolean;
+  activeSessionsCount: number;
+  createdAt: string;
+}
+
+export interface GoogleOAuthStateRecord {
+  state: string;
+  purpose: 'login' | 'register' | 'invitation';
+  redirectUri: string;
+  invitationToken?: string;
+  expiresAt: string;
+  createdAt: string;
 }
 
 export interface OrganizationMembership {
@@ -59,7 +113,8 @@ export interface OrganizationMembership {
   userId: string;
   role: OrgRole;
   status: MembershipStatus;
-  assignedPlantIds?: string[]; // Optional plant-scoping for plant managers, engineers, technicians
+  assignedPlantIds?: string[]; // Optional plant-scoping for plant managers, supervisors, engineers, technicians
+  assignedMachineIds?: string[];
   createdAt: string;
   updatedAt: string;
   user?: User; // Populated in membership queries
@@ -77,6 +132,14 @@ export interface OrganizationInvitation {
   expiresAt: string;
   status: InvitationStatus;
   assignedPlantIds?: string[];
+  assignedMachineIds?: string[];
+  qrTokenHash?: string;
+  qrExpiresAt?: string;
+  activationCodeHash?: string;
+  activationCodeAttempts?: number;
+  employeeId?: string;
+  department?: string;
+  designation?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -255,6 +318,37 @@ export const ORG_ROLE_PERMISSIONS: Record<OrgRole, OrgPermission[]> = {
     'guidance:manage',
     'guidance:read',
   ],
+  SUPERVISOR: [
+    'members:read',
+    'plants:read',
+    'plants:update',
+    'assets:read',
+    'assets:update',
+    'machines:create',
+    'machines:read',
+    'machines:update',
+    'machines:approve',
+    'tasks:create',
+    'tasks:read',
+    'tasks:submit',
+    'tasks:review',
+    'models3d:manage',
+    'pid:manage',
+    'engineering:read',
+    'evidence:retrieve',
+    'evidence:view_reference',
+    'tickets:create',
+    'tickets:read',
+    'specialists:read',
+    'employees:read',
+    'copilot:query',
+    'visual:inspect',
+    'maintenance:read',
+    'maintenance:create',
+    'maintenance:execute',
+    'maintenance:approve',
+    'guidance:read',
+  ],
   PLANT_MANAGER: [
     'members:read',
     'plants:read',
@@ -387,6 +481,7 @@ export function hasPermission(role: OrgRole, permission: OrgPermission): boolean
 const ROLE_HIERARCHY: Record<OrgRole, number> = {
   ORGANIZATION_OWNER: 100,
   ORGANIZATION_ADMIN: 80,
+  SUPERVISOR: 60,
   PLANT_MANAGER: 60,
   ENGINEER: 40,
   ENGINEER_TECHNICIAN: 40,
@@ -406,7 +501,7 @@ export function canManageRole(actorRole: OrgRole, targetRole: OrgRole): boolean 
     return true;
   }
   if (actorRole === 'ORGANIZATION_ADMIN') {
-    // Admins can manage anyone below ORGANIZATION_ADMIN (PLANT_MANAGER, ENGINEER, TECHNICIAN, VIEWER)
+    // Admins can manage anyone below ORGANIZATION_ADMIN (SUPERVISOR, PLANT_MANAGER, ENGINEER, TECHNICIAN, WORKER, VIEWER)
     return ROLE_HIERARCHY[targetRole] < ROLE_HIERARCHY.ORGANIZATION_ADMIN;
   }
   return false;

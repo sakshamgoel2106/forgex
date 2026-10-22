@@ -49,6 +49,12 @@ export function createAuthMiddleware(authAdapter: IAuthAdapter, dataStore: IData
       // 2. Resolve internal user record
       let user = await dataStore.getUserByExternalAuthId(authUser.id);
       if (!user) {
+        user = await dataStore.getUserById(authUser.id);
+      }
+      if (!user && authUser.email) {
+        user = await dataStore.getUserByEmail(authUser.email);
+      }
+      if (!user) {
         // Provision user record on first successful identity provider authentication
         user = await dataStore.createUser({
           externalAuthId: authUser.id,

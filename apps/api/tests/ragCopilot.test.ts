@@ -69,7 +69,8 @@ describe('Phase 4: Industrial RAG & AI Copilot Workflow', () => {
       embeddingAdapter,
       vectorStore,
       generationProvider,
-      rerankingProvider
+      rerankingProvider,
+      'forgex_knowledge'
     );
 
     app = createApp({

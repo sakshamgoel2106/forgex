@@ -46,11 +46,18 @@ export interface DiagnosticHypothesis {
   modelUsed: string;
 }
 
+export interface TechnicianPartUsed {
+  partNumber: string;
+  description: string;
+  quantity: number;
+}
+
 export interface TechnicianFindings {
   observations?: string;
   measuredValues?: Record<string, string | number>;
   correctiveActions?: string;
   resolutionSummary?: string;
+  partsUsed?: (string | TechnicianPartUsed)[];
 }
 
 export interface CaseApproval {
@@ -77,6 +84,8 @@ export interface MaintenanceCase {
   operatingConditions?: Record<string, any>;
   visualAssetIds: string[];
   supportingDocumentIds?: string[];
+  sourceTicketId?: string | null;
+  partsUsed?: (string | TechnicianPartUsed)[] | null;
   diagnosticHypothesis?: DiagnosticHypothesis | null;
   checklist: ChecklistStep[];
   findings?: TechnicianFindings | null;
@@ -90,6 +99,7 @@ export interface MaintenanceCase {
   updatedAt: string;
   resolvedAt?: string | null;
   closedAt?: string | null;
+  maintenanceRecordId?: string | null;
 }
 
 export interface CaseHistoryEntry {
@@ -104,7 +114,7 @@ export interface CaseHistoryEntry {
 }
 
 export interface CreateMaintenanceCaseRequest {
-  plantId: string;
+  plantId?: string;
   assetId: string;
   title: string;
   description?: string;
@@ -113,13 +123,22 @@ export interface CreateMaintenanceCaseRequest {
   operatingConditions?: Record<string, any>;
   visualAssetIds?: string[];
   supportingDocumentIds?: string[];
+  sourceTicketId?: string | null;
   assignedTechnicianUserId?: string;
   assignedTechnicianName?: string;
 }
 
 export interface AssignTechnicianRequest {
-  technicianUserId: string;
-  technicianName?: string;
+  technicianUserId?: string | null;
+  technicianName?: string | null;
+  expectedUpdatedAt?: string;
+  unassign?: boolean;
+  reason?: string;
+}
+
+export interface UnassignTechnicianRequest {
+  reason?: string;
+  expectedUpdatedAt?: string;
 }
 
 export interface UpdateChecklistStepRequest {
@@ -132,6 +151,7 @@ export interface RecordFindingsRequest {
   measuredValues?: Record<string, string | number>;
   correctiveActions?: string;
   resolutionSummary?: string;
+  partsUsed?: (string | TechnicianPartUsed)[];
 }
 
 export interface ApproveCaseRequest {
@@ -152,3 +172,17 @@ export interface ProvideFeedbackRequest {
   comment?: string;
   markCandidateForExpertKnowledge?: boolean;
 }
+
+export interface TransitionCaseStatusRequest {
+  status: MaintenanceCaseStatus;
+  reason?: string;
+  notes?: string;
+  expectedUpdatedAt?: string;
+}
+
+export interface ReopenCaseRequest {
+  reason: string;
+  targetStatus?: 'IN_PROGRESS' | 'REPORTED';
+  expectedUpdatedAt?: string;
+}
+

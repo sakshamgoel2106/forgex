@@ -10,7 +10,6 @@ import {
   GraduationCap,
   ShieldCheck,
   Settings,
-  Activity,
 } from 'lucide-react';
 
 export type ActiveNavModule =
@@ -28,7 +27,6 @@ export type ActiveNavModule =
 interface SidebarNavProps {
   activeModule: ActiveNavModule;
   onSelectModule: (module: ActiveNavModule) => void;
-  onOpenSystemModal: () => void;
 }
 
 interface NavItemConfig {
@@ -43,7 +41,6 @@ interface NavItemConfig {
 export const SidebarNav: React.FC<SidebarNavProps> = ({
   activeModule,
   onSelectModule,
-  onOpenSystemModal,
 }) => {
   const navItems: NavItemConfig[] = [
     // Operations Group
@@ -181,25 +178,6 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
             </div>
           );
         })}
-      </div>
-
-      {/* Subsystem Health Status Trigger */}
-      <div className="p-3 border-t border-graphite-800 bg-graphite-950/40">
-        <button
-          onClick={onOpenSystemModal}
-          className="w-full text-left p-2.5 rounded flex items-center justify-between border border-graphite-800 hover:bg-graphite-900 transition text-graphite-300 hover:text-graphite-100"
-        >
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-emerald-400 animate-pulse" />
-            <div>
-              <div className="text-xs font-mono font-medium">Stack Telemetry</div>
-              <div className="text-[10px] text-graphite-500 font-mono">Qdrant • Redis • Postgres</div>
-            </div>
-          </div>
-          <span className="text-[9px] font-mono text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
-            PROBE
-          </span>
-        </button>
       </div>
     </aside>
   );

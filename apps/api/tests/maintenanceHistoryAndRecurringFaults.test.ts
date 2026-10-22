@@ -855,4 +855,325 @@ describe('ForgeX AI — Maintenance History, Resolution Records, Recurring Fault
       }
     });
   });
+
+  // ==========================================================================
+  // 9. Prompt 12 Data Integrity, Validation, Idempotency & Cross-Tenant Guards
+  // ==========================================================================
+  describe('9. Prompt 12 Data Integrity, Validation, Idempotency & Cross-Tenant Guards', () => {
+    it('rejects cross-tenant machineId, ticketId, and plantId query parameters with 404', async () => {
+      // 1. Beta technician tries to filter by Alpha machineId
+      const crossMachineRes = await request(app)
+        .get(`/api/v1/maintenance-records?machineId=${machineExtruder.id}`)
+        .set('Authorization', `Bearer ${tokenBetaTech}`);
+
+      expect(crossMachineRes.status).toBe(404);
+      expect(crossMachineRes.body.error).toContain('Machine not found in this organization');
+
+      // 2. Beta technician tries to filter by Alpha plantId
+      const crossPlantRes = await request(app)
+        .get(`/api/v1/maintenance-records?plantId=${plantAlpha.id}`)
+        .set('Authorization', `Bearer ${tokenBetaTech}`);
+
+      expect(crossPlantRes.status).toBe(404);
+      expect(crossPlantRes.body.error).toContain('Plant not found in this organization');
+
+      // 3. Create a ticket in Alpha
+      const alphaTicket = await dataStore.createSpecialistTicket(orgAlpha.id, {
+        plantId: plantAlpha.id,
+        machineId: machineExtruder.id,
+        machineAssetTag: machineExtruder.assetTag,
+        componentId: null,
+        originalQuestion: 'Alpha motor fault inquiry',
+        reportedByUserId: userAlphaWorker.id,
+        reportedByUserName: userAlphaWorker.fullName,
+        severity: 'MEDIUM',
+      });
+
+      // Beta technician tries to filter by Alpha ticketId
+      const crossTicketRes = await request(app)
+        .get(`/api/v1/maintenance-records?ticketId=${alphaTicket.id}`)
+        .set('Authorization', `Bearer ${tokenBetaTech}`);
+
+      expect(crossTicketRes.status).toBe(404);
+      expect(crossTicketRes.body.error).toContain('Work order ticket not found in this organization');
+    });
+
+    it('validates allowlisted query enum parameters and date formats', async () => {
+      // Invalid rootCauseStatus
+      const invalidStatusRes = await request(app)
+        .get('/api/v1/maintenance-records?rootCauseStatus=INVALID_STATUS')
+        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+
+      expect(invalidStatusRes.status).toBe(400);
+      expect(invalidStatusRes.body.error).toContain('rootCauseStatus must be CONFIRMED, SUSPECTED, or UNKNOWN');
+
+      // Invalid verificationState
+      const invalidVerifyRes = await request(app)
+        .get('/api/v1/maintenance-records?verificationState=INVALID_VERIFY')
+        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+
+      expect(invalidVerifyRes.status).toBe(400);
+      expect(invalidVerifyRes.body.error).toContain('verificationState must be PASSED, FAILED, PENDING, or NOT_APPLICABLE');
+
+      // Invalid approvalStatus
+      const invalidApprovalRes = await request(app)
+        .get('/api/v1/maintenance-records?approvalStatus=INVALID_APPROVAL')
+        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+
+      expect(invalidApprovalRes.status).toBe(400);
+      expect(invalidApprovalRes.body.error).toContain('approvalStatus must be PENDING_APPROVAL, APPROVED, REJECTED, or NOT_REQUIRED');
+
+      // Invalid sortOrder
+      const invalidSortRes = await request(app)
+        .get('/api/v1/maintenance-records?sortOrder=RANDOM')
+        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+
+      expect(invalidSortRes.status).toBe(400);
+      expect(invalidSortRes.body.error).toContain('sortOrder must be asc or desc');
+
+      // Invalid dateFrom
+      const invalidDateRes = await request(app)
+        .get('/api/v1/maintenance-records?dateFrom=not-a-date')
+        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+
+      expect(invalidDateRes.status).toBe(400);
+      expect(invalidDateRes.body.error).toContain('dateFrom must be a valid ISO date string');
+    });
+
+    it('enforces pagination bounds, metadata, and deterministic sorting', async () => {
+      // Create 3 distinct records for Extruder
+      const t1 = await dataStore.createMaintenanceRecord(orgAlpha.id, {
+        plantId: plantAlpha.id,
+        machineId: machineExtruder.id,
+        machineAssetTag: machineExtruder.assetTag,
+        ticketId: 't-sort-1',
+        ticketNumber: 'TICK-SORT-1',
+        reportingUserId: userAlphaWorker.id,
+        resolvingTechnicianUserId: userAlphaTech.id,
+        resolvingTechnicianName: userAlphaTech.fullName,
+        faultCategory: 'BEARING_OVERHEATING',
+        problemStatement: 'Bearing temp high',
+        rootCause: 'Lubricant starved',
+        rootCauseStatus: 'CONFIRMED',
+        repairActions: ['Greased bearing'],
+        resolvedAt: '2026-01-10T10:00:00Z',
+      });
+
+      const t2 = await dataStore.createMaintenanceRecord(orgAlpha.id, {
+        plantId: plantAlpha.id,
+        machineId: machineExtruder.id,
+        machineAssetTag: machineExtruder.assetTag,
+        ticketId: 't-sort-2',
+        ticketNumber: 'TICK-SORT-2',
+        reportingUserId: userAlphaWorker.id,
+        resolvingTechnicianUserId: userAlphaTech.id,
+        resolvingTechnicianName: userAlphaTech.fullName,
+        faultCategory: 'BEARING_OVERHEATING',
+        problemStatement: 'Bearing vibration',
+        rootCause: 'Misalignment',
+        rootCauseStatus: 'CONFIRMED',
+        repairActions: ['Realigned coupling'],
+        resolvedAt: '2026-02-15T12:00:00Z',
+      });
+
+      const t3 = await dataStore.createMaintenanceRecord(orgAlpha.id, {
+        plantId: plantAlpha.id,
+        machineId: machineExtruder.id,
+        machineAssetTag: machineExtruder.assetTag,
+        ticketId: 't-sort-3',
+        ticketNumber: 'TICK-SORT-3',
+        reportingUserId: userAlphaWorker.id,
+        resolvingTechnicianUserId: userAlphaTech.id,
+        resolvingTechnicianName: userAlphaTech.fullName,
+        faultCategory: 'BEARING_OVERHEATING',
+        problemStatement: 'Severe bearing noise',
+        rootCause: 'Fatigue spall',
+        rootCauseStatus: 'CONFIRMED',
+        repairActions: ['Replaced bearing assembly'],
+        resolvedAt: '2026-03-20T14:00:00Z',
+      });
+
+      // 1. Paginated fetch: limit=2, offset=0
+      const page1Res = await request(app)
+        .get(`/api/v1/maintenance-records?machineId=${machineExtruder.id}&limit=2&offset=0&sortOrder=desc`)
+        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+
+      expect(page1Res.status).toBe(200);
+      expect(page1Res.body.success).toBe(true);
+      expect(page1Res.body.data.length).toBe(2);
+      expect(page1Res.body.pagination).toBeDefined();
+      expect(page1Res.body.pagination.limit).toBe(2);
+      expect(page1Res.body.pagination.offset).toBe(0);
+      expect(page1Res.body.pagination.total).toBeGreaterThanOrEqual(3);
+      expect(page1Res.body.pagination.hasMore).toBe(true);
+
+      // Latest first (t3 resolved in March, t2 resolved in Feb)
+      expect(page1Res.body.data[0].id).toBe(t3.id);
+      expect(page1Res.body.data[1].id).toBe(t2.id);
+
+      // 2. Ascending sort: Oldest first
+      const ascRes = await request(app)
+        .get(`/api/v1/maintenance-records?machineId=${machineExtruder.id}&sortOrder=asc&limit=3`)
+        .set('Authorization', `Bearer ${tokenAlphaTech}`);
+
+      expect(ascRes.status).toBe(200);
+      expect(ascRes.body.data[0].id).toBe(t1.id);
+    });
+
+    it('validates mandatory record creation fields and prevents cross-tenant entity linkage', async () => {
+      // 1. Missing required machineId
+      await expect(
+        dataStore.createMaintenanceRecord(orgAlpha.id, {
+          plantId: plantAlpha.id,
+          machineId: '',
+          machineAssetTag: 'UNKNOWN',
+          ticketId: 't-test-fail-1',
+          ticketNumber: 'TICK-FAIL-1',
+          reportingUserId: userAlphaWorker.id,
+          resolvingTechnicianUserId: userAlphaTech.id,
+          resolvingTechnicianName: userAlphaTech.fullName,
+          faultCategory: 'ELECTRICAL',
+          problemStatement: 'Short circuit',
+          rootCause: 'Damaged insulation',
+          repairActions: ['Replaced wire'],
+        })
+      ).rejects.toThrow('Validation Error: machineId is required');
+
+      // 2. Missing repairActions
+      await expect(
+        dataStore.createMaintenanceRecord(orgAlpha.id, {
+          plantId: plantAlpha.id,
+          machineId: machineExtruder.id,
+          machineAssetTag: machineExtruder.assetTag,
+          ticketId: 't-test-fail-2',
+          ticketNumber: 'TICK-FAIL-2',
+          reportingUserId: userAlphaWorker.id,
+          resolvingTechnicianUserId: userAlphaTech.id,
+          resolvingTechnicianName: userAlphaTech.fullName,
+          faultCategory: 'ELECTRICAL',
+          problemStatement: 'Short circuit',
+          rootCause: 'Damaged insulation',
+          repairActions: [],
+        })
+      ).rejects.toThrow('At least one repairAction is required');
+
+      // 3. Cross-tenant machine reference: Alpha org trying to link Beta machine
+      await expect(
+        dataStore.createMaintenanceRecord(orgAlpha.id, {
+          plantId: plantAlpha.id,
+          machineId: machineBetaPump.id,
+          machineAssetTag: machineBetaPump.assetTag,
+          ticketId: 't-test-fail-3',
+          ticketNumber: 'TICK-FAIL-3',
+          reportingUserId: userAlphaWorker.id,
+          resolvingTechnicianUserId: userAlphaTech.id,
+          resolvingTechnicianName: userAlphaTech.fullName,
+          faultCategory: 'MECHANICAL',
+          problemStatement: 'Pump seal leaking',
+          rootCause: 'Worn face',
+          repairActions: ['Replaced seal'],
+        })
+      ).rejects.toThrow('Cross-tenant security violation: Machine');
+    });
+
+    it('prevents duplicate maintenance records on repeated ticket resolution (idempotency)', async () => {
+      const ticket = await dataStore.createSpecialistTicket(orgAlpha.id, {
+        plantId: plantAlpha.id,
+        machineId: machineCompressor.id,
+        machineAssetTag: machineCompressor.assetTag,
+        componentId: null,
+        originalQuestion: 'Compressor thermal cut-out tripped',
+        reportedByUserId: userAlphaWorker.id,
+        reportedByUserName: userAlphaWorker.fullName,
+        severity: 'MEDIUM',
+      });
+
+      // First resolution
+      const res1 = await request(app)
+        .post(`/api/v1/tickets/${ticket.id}/resolve`)
+        .set('Authorization', `Bearer ${tokenAlphaTech}`)
+        .send({
+          faultCategory: 'THERMAL_OVERLOAD',
+          rootCause: 'Clogged oil cooler fins',
+          rootCauseStatus: 'CONFIRMED',
+          repairActions: ['Cleaned cooler fins with pressurized air'],
+          requiresRestartApproval: false,
+        });
+
+      expect(res1.status).toBe(200);
+      const initialRecordId = res1.body.data.record.id;
+      const initialRecordNumber = res1.body.data.record.recordNumber;
+
+      // Second identical resolution request (simulating network retry / double click)
+      const res2 = await request(app)
+        .post(`/api/v1/tickets/${ticket.id}/resolve`)
+        .set('Authorization', `Bearer ${tokenAlphaTech}`)
+        .send({
+          faultCategory: 'THERMAL_OVERLOAD',
+          rootCause: 'Clogged oil cooler fins',
+          rootCauseStatus: 'CONFIRMED',
+          repairActions: ['Cleaned cooler fins with pressurized air'],
+          requiresRestartApproval: false,
+        });
+
+      expect(res2.status).toBe(200);
+      // Must return identical record, NOT create a second duplicate record
+      expect(res2.body.data.record.id).toBe(initialRecordId);
+      expect(res2.body.data.record.recordNumber).toBe(initialRecordNumber);
+
+      // Verify that the machine has exactly ONE record for this ticket
+      const records = await dataStore.listMaintenanceRecords(orgAlpha.id, { ticketId: ticket.id });
+      expect(records).toHaveLength(1);
+    });
+
+    it('rejects update of immutable historical fields in PATCH /:id', async () => {
+      const ticket = await dataStore.createSpecialistTicket(orgAlpha.id, {
+        plantId: plantAlpha.id,
+        machineId: machineCompressor.id,
+        machineAssetTag: machineCompressor.assetTag,
+        componentId: null,
+        originalQuestion: 'Pressure valve fluttering',
+        reportedByUserId: userAlphaWorker.id,
+        reportedByUserName: userAlphaWorker.fullName,
+        severity: 'LOW',
+      });
+
+      const resolveRes = await dataStore.resolveSpecialistTicket(orgAlpha.id, ticket.id, {
+        resolvingTechnicianUserId: userAlphaTech.id,
+        resolvingTechnicianName: userAlphaTech.fullName,
+        faultCategory: 'PNEUMATIC_VALVE_LEAK',
+        rootCause: 'Diaphragm micro-perforation',
+        rootCauseStatus: 'CONFIRMED',
+        repairActions: ['Replaced valve diaphragm'],
+        requiresRestartApproval: false,
+      });
+
+      const recordId = resolveRes.record.id;
+      const originalRecordNumber = resolveRes.record.recordNumber;
+      const originalMachineId = resolveRes.record.machineId;
+
+      // Attempt to maliciously modify immutable fields
+      const patchRes = await request(app)
+        .patch(`/api/v1/maintenance-records/${recordId}`)
+        .set('Authorization', `Bearer ${tokenAlphaTech}`)
+        .send({
+          recordNumber: 'HACKED-RECORD-999',
+          machineId: machineBetaPump.id,
+          ticketNumber: 'HACKED-TICKET-999',
+          rootCauseStatus: 'SUSPECTED',
+          note: 'Technician re-evaluated root cause status',
+        });
+
+      expect(patchRes.status).toBe(200);
+      expect(patchRes.body.data.rootCauseStatus).toBe('SUSPECTED');
+      // Immutable fields must remain unchanged
+      expect(patchRes.body.data.recordNumber).toBe(originalRecordNumber);
+      expect(patchRes.body.data.machineId).toBe(originalMachineId);
+
+      const persisted = await dataStore.getMaintenanceRecordById(orgAlpha.id, recordId);
+      expect(persisted!.recordNumber).toBe(originalRecordNumber);
+      expect(persisted!.machineId).toBe(originalMachineId);
+    });
+  });
 });
+

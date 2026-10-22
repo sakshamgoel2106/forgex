@@ -28,41 +28,6 @@ interface AuditEntry {
   complianceState: 'VERIFIED_COMPLIANT' | 'ESCALATED';
 }
 
-const FALLBACK_AUDIT_DATA: AuditEntry[] = [
-  {
-    id: 'aud-901',
-    timestamp: '2026-10-18 08:34:11 UTC',
-    actor: 'T. Vance (PE-7089)',
-    role: 'PLANT_ENGINEER',
-    action: 'LOTO_SIGNOFF',
-    assetTag: 'PUMP-204-B',
-    citations: 'SOP-MTR-042 [Sec 1.2]',
-    hash: 'sha256:6e1082...a703',
-    complianceState: 'VERIFIED_COMPLIANT',
-  },
-  {
-    id: 'aud-902',
-    timestamp: '2026-10-18 08:29:40 UTC',
-    actor: 'T. Vance (PE-7089)',
-    role: 'PLANT_ENGINEER',
-    action: 'DIAGNOSTIC_QUERY',
-    assetTag: 'PUMP-204-B',
-    citations: 'SOP-MTR-042 [P.14], OEM-MAN-883 [P.52]',
-    hash: 'sha256:f1248c...88bc',
-    complianceState: 'VERIFIED_COMPLIANT',
-  },
-  {
-    id: 'aud-903',
-    timestamp: '2026-10-17 16:12:05 UTC',
-    actor: 'M. Chen (TECH-441)',
-    role: 'TECHNICIAN',
-    action: 'DEVIATION_RECORDED',
-    assetTag: 'HEX-302-C',
-    citations: 'SOP-HEX-019 [Sec 3.4]',
-    hash: 'sha256:4a009d...339f',
-    complianceState: 'ESCALATED',
-  },
-];
 
 export const AuditLedgerView: React.FC = () => {
   const { token, isOwnerOrAdmin } = useAuth();
@@ -83,7 +48,7 @@ export const AuditLedgerView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
 
   // Audit Ledger State
-  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>(FALLBACK_AUDIT_DATA);
+  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [exported, setExported] = useState(false);
 
   const fetchAlerts = useCallback(async () => {
@@ -97,7 +62,7 @@ export const AuditLedgerView: React.FC = () => {
         setAlerts(json.data);
       }
     } catch (err) {
-      console.warn('Could not fetch security alerts, using local state', err);
+      console.warn('Could not fetch security alerts', err);
     }
   }, [token]);
 
@@ -108,7 +73,7 @@ export const AuditLedgerView: React.FC = () => {
         headers: { Authorization: `Bearer ${token}` },
       });
       const json = await res.json();
-      if (res.ok && json.success && Array.isArray(json.data) && json.data.length > 0) {
+      if (res.ok && json.success && Array.isArray(json.data)) {
         const mapped: AuditEntry[] = json.data.map((e: any) => ({
           id: e.id,
           timestamp: e.createdAt ? new Date(e.createdAt).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : 'N/A',
@@ -123,7 +88,7 @@ export const AuditLedgerView: React.FC = () => {
         setAuditEntries(mapped);
       }
     } catch (err) {
-      console.warn('Could not fetch audit events, using defaults', err);
+      console.warn('Could not fetch audit events', err);
     }
   }, [token]);
 
@@ -234,7 +199,7 @@ export const AuditLedgerView: React.FC = () => {
   const openAlertsCount = alerts.filter((a) => a.status === 'OPEN' || a.status === 'INVESTIGATING').length;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7]">
+    <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 w-full overflow-hidden bg-[#F5F6F7]">
       {/* Sub-header Toolbar & Navigation */}
       <div className="p-3.5 border-b border-[#E2E8F0] bg-white flex flex-wrap items-center justify-between gap-3 text-xs font-sans">
         <div className="flex items-center gap-3">
@@ -452,34 +417,48 @@ export const AuditLedgerView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E2E8F0]">
-                {auditEntries.map((entry) => (
-                  <tr key={entry.id} className="hover:bg-[#F8FAFC] text-[#1A202C] transition">
-                    <td className="py-3 px-4 text-[11px] text-[#64748B] font-mono tabular-nums">
-                      {entry.timestamp}
-                    </td>
-                    <td className="py-3 px-4 font-medium text-[#1A202C]">
-                      {entry.actor}
-                    </td>
-                    <td className="py-3 px-4 text-[11px] text-amber-700 font-mono font-medium">
-                      {entry.action}
-                    </td>
-                    <td className="py-3 px-4 text-[#2563EB] font-bold font-mono">
-                      {entry.assetTag}
-                    </td>
-                    <td className="py-3 px-4 text-[11px] text-[#1A202C]">
-                      {entry.citations}
-                    </td>
-                    <td className="py-3 px-4 text-[10px] text-[#64748B] font-mono tabular-nums">
-                      {entry.hash}
-                    </td>
-                    <td className="py-3 px-4">
-                      <StatusBadge
-                        label={entry.complianceState}
-                        tone={entry.complianceState === 'VERIFIED_COMPLIANT' ? 'healthy' : 'warning'}
-                      />
+                {auditEntries.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-16 text-center text-slate-500">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                        <span className="font-semibold text-sm text-[#1A202C]">Audit Ledger Clean — No Events Recorded</span>
+                        <p className="text-xs text-[#64748B] max-w-sm">
+                          Team interactions, SOP executions, safety sign-offs, and compliance validations will be cryptographically logged here.
+                        </p>
+                      </div>
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  auditEntries.map((entry) => (
+                    <tr key={entry.id} className="hover:bg-[#F8FAFC] text-[#1A202C] transition">
+                      <td className="py-3 px-4 text-[11px] text-[#64748B] font-mono tabular-nums">
+                        {entry.timestamp}
+                      </td>
+                      <td className="py-3 px-4 font-medium text-[#1A202C]">
+                        {entry.actor}
+                      </td>
+                      <td className="py-3 px-4 text-[11px] text-amber-700 font-mono font-medium">
+                        {entry.action}
+                      </td>
+                      <td className="py-3 px-4 text-[#2563EB] font-bold font-mono">
+                        {entry.assetTag}
+                      </td>
+                      <td className="py-3 px-4 text-[11px] text-[#1A202C]">
+                        {entry.citations}
+                      </td>
+                      <td className="py-3 px-4 text-[10px] text-[#64748B] font-mono tabular-nums">
+                        {entry.hash}
+                      </td>
+                      <td className="py-3 px-4">
+                        <StatusBadge
+                          label={entry.complianceState}
+                          tone={entry.complianceState === 'VERIFIED_COMPLIANT' ? 'healthy' : 'warning'}
+                        />
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

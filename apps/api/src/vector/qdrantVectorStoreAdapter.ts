@@ -9,7 +9,7 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
   private fallbackAdapter = new InMemoryVectorStoreAdapter();
 
   constructor(
-    private endpoint = process.env.QDRANT_ENDPOINT || 'http://localhost:6333',
+    private endpoint = process.env.QDRANT_URL || process.env.QDRANT_ENDPOINT || 'http://localhost:6333',
     private apiKey = process.env.QDRANT_API_KEY
   ) {}
 
@@ -103,19 +103,26 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
   public async search(
     collectionName: string,
     vector: number[],
-    filter?: { organizationId?: string; plantId?: string; documentId?: string },
+    filter?: { organizationId?: string; plantId?: string; documentId?: string; machineId?: string },
     limit = 10
   ): Promise<VectorSearchResult[]> {
+    // Fail-Closed Tenant Isolation Enforcement: missing organization filter MUST throw
+    if (!filter?.organizationId) {
+      throw new Error('Tenant Isolation Violation: Vector search requires a validated organizationId filter.');
+    }
+
     try {
-      const mustClauses: any[] = [];
-      if (filter?.organizationId) {
-        mustClauses.push({ key: 'organizationId', match: { value: filter.organizationId } });
-      }
+      const mustClauses: any[] = [
+        { key: 'organizationId', match: { value: filter.organizationId } },
+      ];
       if (filter?.plantId) {
         mustClauses.push({ key: 'plantId', match: { value: filter.plantId } });
       }
       if (filter?.documentId) {
         mustClauses.push({ key: 'documentId', match: { value: filter.documentId } });
+      }
+      if (filter?.machineId) {
+        mustClauses.push({ key: 'machineId', match: { value: filter.machineId } });
       }
 
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };

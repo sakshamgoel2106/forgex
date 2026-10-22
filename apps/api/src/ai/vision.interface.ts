@@ -1,6 +1,6 @@
-import type { ComponentLabel, NormalizedBoundingBox } from '@forgex/shared-types';
+import type { ComponentLabel, NormalizedBoundingBox, StructuredIndustrialAnalysis } from '@forgex/shared-types';
 
-export type { NormalizedBoundingBox };
+export type { NormalizedBoundingBox, StructuredIndustrialAnalysis };
 
 export interface VisionAnalysisRequest {
   imageBuffer: Buffer | string; // Buffer or Base64 string
@@ -24,6 +24,7 @@ export interface VisionAnalysisResult {
   confidenceScore: number;
   modelUsed: string;
   processingMethod: string;
+  structuredAnalysis?: StructuredIndustrialAnalysis;
 }
 
 export interface IVisionProcessingProvider {

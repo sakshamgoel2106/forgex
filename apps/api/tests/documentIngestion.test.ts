@@ -203,8 +203,9 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
       );
 
       // Verify chunks indexed in Vector Store map back to document and page
+      const collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge';
       const searchResults = await vectorStore.search(
-        'forgex_knowledge',
+        collectionName,
         await embeddingAdapter.generateEmbedding('LOTO isolation valves lockout tagout'),
         { organizationId: orgA.id }
       );

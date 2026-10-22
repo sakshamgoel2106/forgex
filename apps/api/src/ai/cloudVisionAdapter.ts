@@ -52,6 +52,32 @@ export class CloudVisionAdapter implements IVisionProcessingProvider {
         confidenceScore: 0.95,
         modelUsed: this.modelName,
         processingMethod: this.getProcessingMethod(),
+        structuredAnalysis: {
+          visibleSummary: `Visual inspection of ${filename} completed under SaaS tenant envelope.`,
+          visibleObservations: [
+            {
+              id: 'cloud-obs-1',
+              observation: 'Identified process unit casing and baseplate mounting',
+              category: 'GENERAL_CONDITION',
+              locationDescription: 'Center frame',
+              severityHint: 'INFO',
+            },
+          ],
+          hypotheses: [
+            'Hypothesis: Equipment is in normal operating condition based on visual envelope.',
+          ],
+          recommendedVerificationSteps: [
+            'Perform standard scheduled physical walkdown.',
+          ],
+          safetyEscalationWarnings: [
+            'Follow standard facility Lockout/Tagout procedures during maintenance.',
+          ],
+          limitations: [
+            'Photographic analysis only: Internal condition and electrical continuity cannot be verified from image.',
+          ],
+          isRootCauseConfirmed: false,
+          requiresQualifiedTechnician: false,
+        },
       };
     } catch (err: any) {
       logger.error({ error: err?.message }, 'Cloud SaaS vision analysis failed');

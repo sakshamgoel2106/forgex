@@ -8,7 +8,6 @@ import {
   Radio,
   SunDim,
   TrendingUp,
-  UsersRound,
   Zap,
 } from "lucide-react";
 import { useState } from "react";
@@ -77,12 +76,6 @@ export const primaryNavigation: NavigationItem[] = [
     label: "Technical Manuals & Ingestion Hub",
     shortLabel: "Manuals",
     icon: GitBranch,
-  },
-  {
-    href: "/health",
-    label: "Telemetry & Subsystem Health",
-    shortLabel: "Health",
-    icon: UsersRound,
   },
 ];
 

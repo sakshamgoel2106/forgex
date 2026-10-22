@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import type { IDataStore, CreateMachineDTO, MachineFilterOptions } from '../db/dataStore.interface.js';
 import { requireRole } from '../middleware/auth.middleware.js';
 import type { OrgRole } from '@forgex/shared-types';
+import { HistoricalFaultService } from '../services/historicalFaultService.js';
 
 export function createMachineRouter(dataStore: IDataStore): Router {
   const router = Router();
@@ -630,6 +631,86 @@ export function createMachineRouter(dataStore: IDataStore): Router {
       res.status(200).json({ success: true, data: analysis });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  });
+
+  /**
+   * POST /api/v1/machines/:id/historical-faults/match
+   * Match, score, and rank historical faults and detect recurring issues
+   */
+  router.post('/:id/historical-faults/match', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const userRole = req.auth?.membership?.role;
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const { query, faultCategory, faultCode, componentId, limit, minScore, timeWindowDays } = req.body;
+
+      const machine = await dataStore.getMachineById(orgId, id);
+      if (!machine) {
+        res.status(404).json({ success: false, error: 'Machine not found in this organization' });
+        return;
+      }
+
+      const historicalFaultService = new HistoricalFaultService(dataStore);
+      const results = await historicalFaultService.matchHistoricalFaults(
+        orgId,
+        id,
+        {
+          query,
+          faultCategory,
+          faultCode,
+          componentId,
+          limit: limit ? Number(limit) : undefined,
+          minScore: minScore ? Number(minScore) : undefined,
+          timeWindowDays: timeWindowDays ? Number(timeWindowDays) : undefined,
+        },
+        userRole
+      );
+
+      res.status(200).json({ success: true, data: results });
+    } catch (err: any) {
+      const isNotFound = err?.message?.includes('not found');
+      res.status(isNotFound ? 404 : 500).json({ success: false, error: err?.message || 'Failed to retrieve historical faults' });
+    }
+  });
+
+  /**
+   * GET /api/v1/machines/:id/historical-faults
+   * Query historical faults with similarity scoring
+   */
+  router.get('/:id/historical-faults', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const userRole = req.auth?.membership?.role;
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const { query, faultCategory, faultCode, componentId, limit, minScore, timeWindowDays } = req.query;
+
+      const machine = await dataStore.getMachineById(orgId, id);
+      if (!machine) {
+        res.status(404).json({ success: false, error: 'Machine not found in this organization' });
+        return;
+      }
+
+      const historicalFaultService = new HistoricalFaultService(dataStore);
+      const results = await historicalFaultService.matchHistoricalFaults(
+        orgId,
+        id,
+        {
+          query: typeof query === 'string' ? query : undefined,
+          faultCategory: typeof faultCategory === 'string' ? faultCategory : undefined,
+          faultCode: typeof faultCode === 'string' ? faultCode : undefined,
+          componentId: typeof componentId === 'string' ? componentId : undefined,
+          limit: limit ? Number(limit) : undefined,
+          minScore: minScore ? Number(minScore) : undefined,
+          timeWindowDays: timeWindowDays ? Number(timeWindowDays) : undefined,
+        },
+        userRole
+      );
+
+      res.status(200).json({ success: true, data: results });
+    } catch (err: any) {
+      const isNotFound = err?.message?.includes('not found');
+      res.status(isNotFound ? 404 : 500).json({ success: false, error: err?.message || 'Failed to retrieve historical faults' });
     }
   });
 

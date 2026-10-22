@@ -13,7 +13,6 @@ import { TroubleshootingView } from "@/components/views/TroubleshootingView";
 import { SopExecutionView } from "@/components/views/SopExecutionView";
 import { TechnicalManualsView } from "@/components/views/TechnicalManualsView";
 import { AssetDirectoryView } from "@/components/views/AssetDirectoryView";
-import { SystemHealthView } from "@/components/views/SystemHealthView";
 import { SettingsView } from "@/components/views/SettingsView";
 
 function DashboardRoute() {
@@ -48,10 +47,6 @@ function DashboardRoute() {
       ) : pathname === "/assets" ? (
         <div className="h-full w-full overflow-hidden">
           <AssetDirectoryView />
-        </div>
-      ) : pathname === "/health" ? (
-        <div className="h-full w-full overflow-y-auto p-6 max-w-6xl mx-auto">
-          <SystemHealthView />
         </div>
       ) : pathname === "/settings" ? (
         <div className="h-full w-full overflow-y-auto p-6 max-w-6xl mx-auto">

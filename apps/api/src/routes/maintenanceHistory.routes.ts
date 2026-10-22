@@ -8,6 +8,7 @@ import type {
   MaintenanceVerificationState,
   ResolutionApprovalStatus,
 } from '@forgex/shared-types';
+import { HistoricalFaultService } from '../services/historicalFaultService.js';
 
 function getParam(param: string | string[] | undefined): string {
   return Array.isArray(param) ? (param[0] ?? '') : (param ?? '');
@@ -27,18 +28,143 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
         machineId,
         plantId,
         ticketId,
+        caseId,
         faultCategory,
         rootCauseStatus,
         verificationState,
         approvalStatus,
         requiresRestartApproval,
         restartApproved,
+        technicianUserId,
+        isRecurring,
+        dateFrom,
+        dateTo,
+        sortOrder,
+        limit,
+        offset,
       } = req.query;
 
-      const records = await dataStore.listMaintenanceRecords(organizationId, {
-        machineId: typeof machineId === 'string' ? machineId : undefined,
-        plantId: typeof plantId === 'string' ? plantId : undefined,
-        ticketId: typeof ticketId === 'string' ? ticketId : undefined,
+      // 1. Tenant ownership validation on entity references to prevent cross-tenant probing
+      if (typeof machineId === 'string' && machineId.trim()) {
+        const m = await dataStore.getMachineById(organizationId, machineId.trim());
+        if (!m) {
+          res.status(404).json({ success: false, error: 'Machine not found in this organization' });
+          return;
+        }
+      }
+
+      if (typeof ticketId === 'string' && ticketId.trim()) {
+        const t = await dataStore.getSpecialistTicketById(organizationId, ticketId.trim());
+        if (!t) {
+          res.status(404).json({ success: false, error: 'Work order ticket not found in this organization' });
+          return;
+        }
+      }
+
+      if (typeof caseId === 'string' && caseId.trim()) {
+        const c = await dataStore.getMaintenanceCaseById(organizationId, caseId.trim());
+        if (!c) {
+          res.status(404).json({ success: false, error: 'Work order case not found in this organization' });
+          return;
+        }
+      }
+
+      if (typeof plantId === 'string' && plantId.trim()) {
+        const p = await dataStore.getPlantById(organizationId, plantId.trim());
+        if (!p) {
+          res.status(404).json({ success: false, error: 'Plant not found in this organization' });
+          return;
+        }
+      }
+
+      // 2. Allowlisted Enum Validation
+      if (
+        rootCauseStatus &&
+        typeof rootCauseStatus === 'string' &&
+        !['CONFIRMED', 'SUSPECTED', 'UNKNOWN'].includes(rootCauseStatus)
+      ) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation Error: rootCauseStatus must be CONFIRMED, SUSPECTED, or UNKNOWN.',
+        });
+        return;
+      }
+
+      if (
+        verificationState &&
+        typeof verificationState === 'string' &&
+        !['PASSED', 'FAILED', 'PENDING', 'NOT_APPLICABLE'].includes(verificationState)
+      ) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation Error: verificationState must be PASSED, FAILED, PENDING, or NOT_APPLICABLE.',
+        });
+        return;
+      }
+
+      if (
+        approvalStatus &&
+        typeof approvalStatus === 'string' &&
+        !['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'NOT_REQUIRED'].includes(approvalStatus)
+      ) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation Error: approvalStatus must be PENDING_APPROVAL, APPROVED, REJECTED, or NOT_REQUIRED.',
+        });
+        return;
+      }
+
+      if (sortOrder && typeof sortOrder === 'string' && !['asc', 'desc'].includes(sortOrder.toLowerCase())) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation Error: sortOrder must be asc or desc.',
+        });
+        return;
+      }
+
+      // 3. Date Range Validation
+      if (dateFrom && typeof dateFrom === 'string' && isNaN(Date.parse(dateFrom))) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation Error: dateFrom must be a valid ISO date string.',
+        });
+        return;
+      }
+
+      if (dateTo && typeof dateTo === 'string' && isNaN(Date.parse(dateTo))) {
+        res.status(400).json({
+          success: false,
+          error: 'Validation Error: dateTo must be a valid ISO date string.',
+        });
+        return;
+      }
+
+      // 4. Pagination limits
+      let parsedLimit: number | undefined;
+      let parsedOffset: number | undefined;
+      if (limit !== undefined) {
+        const parsed = parseInt(String(limit), 10);
+        if (isNaN(parsed) || parsed < 1) {
+          res.status(400).json({ success: false, error: 'Validation Error: limit must be a positive integer.' });
+          return;
+        }
+        parsedLimit = Math.min(parsed, 100);
+      }
+
+      if (offset !== undefined) {
+        const parsed = parseInt(String(offset), 10);
+        if (isNaN(parsed) || parsed < 0) {
+          res.status(400).json({ success: false, error: 'Validation Error: offset must be a non-negative integer.' });
+          return;
+        }
+        parsedOffset = parsed;
+      }
+
+      const filterOptions = {
+        machineId: typeof machineId === 'string' ? machineId.trim() : undefined,
+        plantId: typeof plantId === 'string' ? plantId.trim() : undefined,
+        ticketId: typeof ticketId === 'string' ? ticketId.trim() : undefined,
+        caseId: typeof caseId === 'string' ? caseId.trim() : undefined,
         faultCategory: typeof faultCategory === 'string' ? faultCategory : undefined,
         rootCauseStatus: typeof rootCauseStatus === 'string' ? (rootCauseStatus as RootCauseStatus) : undefined,
         verificationState:
@@ -52,12 +178,77 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
         requiresRestartApproval:
           requiresRestartApproval !== undefined ? requiresRestartApproval === 'true' : undefined,
         restartApproved: restartApproved !== undefined ? restartApproved === 'true' : undefined,
-      });
+        technicianUserId: typeof technicianUserId === 'string' ? technicianUserId : undefined,
+        isRecurring: isRecurring !== undefined ? isRecurring === 'true' : undefined,
+        dateFrom: typeof dateFrom === 'string' ? dateFrom : undefined,
+        dateTo: typeof dateTo === 'string' ? dateTo : undefined,
+        sortOrder: typeof sortOrder === 'string' ? (sortOrder.toLowerCase() as 'asc' | 'desc') : undefined,
+        limit: parsedLimit,
+        offset: parsedOffset,
+      };
 
-      res.status(200).json({ success: true, data: records });
+      const [records, total] = await Promise.all([
+        dataStore.listMaintenanceRecords(organizationId, filterOptions),
+        dataStore.countMaintenanceRecords(organizationId, filterOptions),
+      ]);
+
+      res.status(200).json({
+        success: true,
+        data: records,
+        pagination: {
+          total,
+          limit: parsedLimit ?? total,
+          offset: parsedOffset ?? 0,
+          hasMore: (parsedOffset ?? 0) + records.length < total,
+        },
+      });
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to list maintenance records');
       res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * GET /api/v1/maintenance-records/similar
+   * Retrieve similar historical records with relevance matching
+   */
+  router.get('/similar', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const userRole = req.auth?.membership?.role;
+      const { machineId, query, faultCategory, faultCode, componentId, limit, minScore, timeWindowDays } = req.query;
+
+      if (!machineId || typeof machineId !== 'string') {
+        res.status(400).json({ success: false, error: 'Validation Error: machineId is required to retrieve similar historical faults.' });
+        return;
+      }
+
+      const machine = await dataStore.getMachineById(organizationId, machineId.trim());
+      if (!machine) {
+        res.status(404).json({ success: false, error: 'Machine not found in this organization' });
+        return;
+      }
+
+      const historicalFaultService = new HistoricalFaultService(dataStore);
+      const results = await historicalFaultService.matchHistoricalFaults(
+        organizationId,
+        machineId.trim(),
+        {
+          query: typeof query === 'string' ? query : undefined,
+          faultCategory: typeof faultCategory === 'string' ? faultCategory : undefined,
+          faultCode: typeof faultCode === 'string' ? faultCode : undefined,
+          componentId: typeof componentId === 'string' ? componentId : undefined,
+          limit: limit ? Number(limit) : undefined,
+          minScore: minScore ? Number(minScore) : undefined,
+          timeWindowDays: timeWindowDays ? Number(timeWindowDays) : undefined,
+        },
+        userRole
+      );
+
+      res.status(200).json({ success: true, data: results });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'Failed to retrieve similar maintenance records');
+      res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
     }
   });
 
@@ -118,6 +309,80 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
           approvalStatus,
           note,
         } = req.body;
+
+        // Validation for enum inputs
+        if (
+          rootCauseStatus &&
+          !['CONFIRMED', 'SUSPECTED', 'UNKNOWN'].includes(rootCauseStatus)
+        ) {
+          res.status(400).json({
+            success: false,
+            error: 'Validation Error: rootCauseStatus must be CONFIRMED, SUSPECTED, or UNKNOWN.',
+          });
+          return;
+        }
+
+        if (
+          verificationState &&
+          !['PASSED', 'FAILED', 'PENDING', 'NOT_APPLICABLE'].includes(verificationState)
+        ) {
+          res.status(400).json({
+            success: false,
+            error: 'Validation Error: verificationState must be PASSED, FAILED, PENDING, or NOT_APPLICABLE.',
+          });
+          return;
+        }
+
+        if (
+          approvalStatus &&
+          !['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'NOT_REQUIRED'].includes(approvalStatus)
+        ) {
+          res.status(400).json({
+            success: false,
+            error: 'Validation Error: approvalStatus must be PENDING_APPROVAL, APPROVED, REJECTED, or NOT_REQUIRED.',
+          });
+          return;
+        }
+
+        if (repairActions !== undefined && (!Array.isArray(repairActions) || repairActions.some((a) => typeof a !== 'string'))) {
+          res.status(400).json({
+            success: false,
+            error: 'Validation Error: repairActions must be an array of strings.',
+          });
+          return;
+        }
+
+        if (measurements !== undefined) {
+          if (!Array.isArray(measurements)) {
+            res.status(400).json({ success: false, error: 'Validation Error: measurements must be an array.' });
+            return;
+          }
+          for (const m of measurements) {
+            if (!m.parameterName || m.value === undefined || typeof m.value !== 'number' || !m.unit) {
+              res.status(400).json({
+                success: false,
+                error: 'Validation Error: Each measurement must include parameterName, numeric value, and unit.',
+              });
+              return;
+            }
+          }
+        }
+
+        if (partsReplaced !== undefined) {
+          if (!Array.isArray(partsReplaced)) {
+            res.status(400).json({ success: false, error: 'Validation Error: partsReplaced must be an array.' });
+            return;
+          }
+          for (const p of partsReplaced) {
+            if (!p.partNumber || typeof p.quantity !== 'number' || p.quantity < 1) {
+              res.status(400).json({
+                success: false,
+                error: 'Validation Error: Each replaced part must include partNumber and positive quantity.',
+              });
+              return;
+            }
+          }
+        }
 
         const updated = await dataStore.updateMaintenanceRecord(organizationId, id, {
           observedSymptoms,
@@ -187,10 +452,13 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
         const id = getParam(req.params.id);
         const { verificationState, verificationNotes } = req.body;
 
-        if (!verificationState || !['PASSED', 'FAILED', 'PENDING'].includes(verificationState)) {
+        if (
+          !verificationState ||
+          !['PASSED', 'FAILED', 'PENDING', 'NOT_APPLICABLE'].includes(verificationState)
+        ) {
           res.status(400).json({
             success: false,
-            error: 'Validation Error: verificationState must be PASSED, FAILED, or PENDING.',
+            error: 'Validation Error: verificationState must be PASSED, FAILED, PENDING, or NOT_APPLICABLE.',
           });
           return;
         }

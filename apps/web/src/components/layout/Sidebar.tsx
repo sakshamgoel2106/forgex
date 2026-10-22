@@ -7,7 +7,6 @@ import {
   ScanLine,
   HardHat,
   GraduationCap,
-  ShieldCheck,
   Settings,
   Users,
   Layers,
@@ -15,7 +14,6 @@ import {
   History,
   HelpCircle,
   BarChart3,
-  Bell,
   Wrench,
   UserCheck,
 } from 'lucide-react';
@@ -51,7 +49,6 @@ interface SidebarProps {
   onSelectModule: (module: NavModule) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
-  onOpenTelemetryModal?: () => void;
 }
 
 interface NavItemDef {
@@ -84,10 +81,8 @@ const NAV_ITEMS: NavItemDef[] = [
 
   // 4. GOVERNANCE
   { id: 'reports',            label: 'Reports & Analytics',  icon: BarChart3,       group: 'governance' },
-  { id: 'notifications',      label: 'Notifications',        icon: Bell,            group: 'governance' },
   { id: 'team',               label: 'Team & Access',        icon: Users,           group: 'governance', roles: ['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN'] },
-  { id: 'audit',              label: 'Security & Audit',     icon: ShieldCheck,     group: 'governance', roles: ['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER'] },
-  { id: 'settings',           label: 'Settings & Health',    icon: Settings,        group: 'governance' },
+  { id: 'settings',           label: 'Settings',             icon: Settings,        group: 'governance' },
 ];
 
 const GROUP_LABELS: Record<string, string> = {

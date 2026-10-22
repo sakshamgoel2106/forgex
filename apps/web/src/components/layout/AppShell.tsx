@@ -3,8 +3,6 @@ import { Sidebar, type NavModule } from './Sidebar';
 import { TopBar } from './TopBar';
 import { GlobalSearchModal } from './GlobalSearchModal';
 import { NotificationsDrawer } from './NotificationsDrawer';
-import { Modal } from '../ui/Modal';
-import { SystemHealthView } from '../views/SystemHealthView';
 import { Sheet, SheetContent } from '../ui/sheet';
 import { TooltipProvider } from '../ui/tooltip';
 
@@ -26,11 +24,10 @@ export const AppShell: React.FC<AppShellProps> = ({
     return false;
   });
 
-  const [plantSite, setPlantSite] = useState<string>('RIVERSIDE');
+  const [plantSite, setPlantSite] = useState<string>('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [healthModalOpen, setHealthModalOpen] = useState(false);
 
   const toggleCollapse = () => {
     setCollapsed((prev) => {
@@ -59,14 +56,13 @@ export const AppShell: React.FC<AppShellProps> = ({
           onOpenSearch={() => setSearchOpen(true)}
           onOpenNotifications={() => setNotificationsOpen(true)}
           onOpenMobileNav={() => setMobileNavOpen(true)}
-          onOpenHealthModal={() => setHealthModalOpen(true)}
           onNavigate={handleModuleSelect}
           onToggleSidebar={toggleCollapse}
           sidebarCollapsed={collapsed}
         />
 
         {/* Workspace Body: Left Sidebar + Main Content */}
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 overflow-hidden min-h-0 min-w-0 w-full">
           {/* Desktop Left Sidebar */}
           <div className="hidden md:flex h-full shrink-0">
             <Sidebar
@@ -74,7 +70,6 @@ export const AppShell: React.FC<AppShellProps> = ({
               onSelectModule={handleModuleSelect}
               collapsed={collapsed}
               onToggleCollapse={toggleCollapse}
-              onOpenTelemetryModal={() => setHealthModalOpen(true)}
             />
           </div>
 
@@ -91,17 +86,13 @@ export const AppShell: React.FC<AppShellProps> = ({
                 onSelectModule={handleModuleSelect}
                 collapsed={false}
                 onToggleCollapse={() => setMobileNavOpen(false)}
-                onOpenTelemetryModal={() => {
-                  setMobileNavOpen(false);
-                  setHealthModalOpen(true);
-                }}
               />
             </SheetContent>
           </Sheet>
 
           {/* Main workspace content area */}
           <main
-            className="flex-1 overflow-hidden relative flex flex-col"
+            className="flex-1 min-w-0 min-h-0 overflow-hidden relative flex flex-col w-full h-full"
             style={{ background: '#F0F2F5' }}
           >
             {children}
@@ -120,17 +111,6 @@ export const AppShell: React.FC<AppShellProps> = ({
           onClose={() => setNotificationsOpen(false)}
           onNavigate={(mod) => handleModuleSelect(mod as NavModule)}
         />
-
-        {/* System Health / Telemetry Modal */}
-        <Modal
-          isOpen={healthModalOpen}
-          onClose={() => setHealthModalOpen(false)}
-          title="System Health Details"
-          subtitle="Real-time operational status across all subsystem watchdogs"
-          maxWidth="xl"
-        >
-          <SystemHealthView />
-        </Modal>
       </div>
     </TooltipProvider>
   );

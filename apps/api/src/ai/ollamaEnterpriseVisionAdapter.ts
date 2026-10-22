@@ -36,19 +36,35 @@ export class OllamaEnterpriseVisionAdapter implements IVisionProcessingProvider 
         : imageBuffer.toString('base64');
 
     const prompt = `[SYSTEM INSTRUCTION: AIR-GAPPED INDUSTRIAL VISION ANALYZER]
-Analyze the provided industrial image/diagram (${filename}).
+Analyze the provided industrial photograph or diagram (${filename}).
 Specific Question/Context: ${query || 'Identify equipment, components, and condition.'}
-Task:
-1. Provide a concise technical description.
-2. Identify industrial equipment tags (e.g., P-101-A, V-204-D, FT-101).
-3. If this is a P&ID, read visible equipment tag labels. Do NOT claim complete pipe connectivity or full symbol topology.
-4. If image is blurry, corrupted or blank, state INSUFFICIENT_VISUAL_EVIDENCE.
-5. If linework or symbols are ambiguous, state AMBIGUOUS_DIAGRAM.
+
+CRITICAL INDUSTRIAL SAFETY & EVIDENCE RULES:
+1. Visible Observations: Report ONLY what is physically visible (e.g. fluid weepage, discoloration, corrosion, loose bolt, missing guard). Do NOT fabricate unseen elements.
+2. Hypotheses: Clearly label any potential mechanical or electrical explanations as HYPOTHESES. NEVER claim confirmed root cause from an image alone.
+3. Next Verification Steps: Recommend specific physical measurements or inspections (e.g. measure bearing temperature with calibrated IR pyrometer, check oil sampling, verify torque).
+4. Safety Escalation: If high-voltage, missing guards, active boiling fluid, or structural cracking is suspected, flag immediate safety escalation (Lockout/Tagout, do not touch energized components).
+5. Explicit Limitations: Explicitly state that internal temperature, pressure, fluid chemistry, and internal component health cannot be determined from a photograph.
+6. If the image is blurry, corrupted, blank, or dark, set isInsufficientEvidence: true.
 
 Respond in strict JSON:
 {
   "description": string,
   "equipmentTags": string[],
+  "visibleSummary": string,
+  "visibleObservations": [
+    {
+      "id": string,
+      "observation": string,
+      "category": "VISIBLE_LEAKAGE_OR_FLUID_STAINS" | "CORROSION_OR_SURFACE_DAMAGE" | "THERMAL_DISCOLORATION_OR_BURN_MARKS" | "LOOSE_OR_DISPLACED_COMPONENT" | "MISSING_GUARD_OR_SAFETY_CONCERN" | "ABNORMAL_VISUAL_CONDITION" | "GENERAL_CONDITION",
+      "locationDescription": string,
+      "severityHint": "INFO" | "WARNING" | "CRITICAL"
+    }
+  ],
+  "hypotheses": string[],
+  "recommendedVerificationSteps": string[],
+  "safetyEscalationWarnings": string[],
+  "limitations": string[],
   "isAmbiguous": boolean,
   "isInsufficientEvidence": boolean,
   "confidenceScore": number
@@ -74,6 +90,28 @@ Respond in strict JSON:
       const data: any = await response.json();
       const parsed = JSON.parse(data.response || '{}');
 
+      const visibleObs = Array.isArray(parsed.visibleObservations)
+        ? parsed.visibleObservations
+        : [];
+      const hypotheses = Array.isArray(parsed.hypotheses)
+        ? parsed.hypotheses
+        : [
+            `Hypothesis derived from ${this.modelName} inspection: Potential mechanical/electrical condition requires physical verification.`,
+          ];
+      const recSteps = Array.isArray(parsed.recommendedVerificationSteps)
+        ? parsed.recommendedVerificationSteps
+        : ['Verify operating condition with calibrated instrumentation before maintenance.'];
+      const safetyWarnings = Array.isArray(parsed.safetyEscalationWarnings)
+        ? parsed.safetyEscalationWarnings
+        : [
+            'SAFETY NOTICE: Follow plant Lockout/Tagout (LOTO) protocols before approaching or servicing machinery.',
+          ];
+      const limitations = Array.isArray(parsed.limitations)
+        ? parsed.limitations
+        : [
+            'Photographic analysis only: Internal temperature, pressure, and energized electrical status cannot be verified from appearance alone.',
+          ];
+
       return {
         description: parsed.description || 'Industrial visual asset analyzed by enterprise vision model.',
         equipmentTags: parsed.equipmentTags || [],
@@ -88,6 +126,16 @@ Respond in strict JSON:
         confidenceScore: Number(parsed.confidenceScore) || 0.9,
         modelUsed: this.modelName,
         processingMethod: 'LOCAL_VISION_MODEL',
+        structuredAnalysis: {
+          visibleSummary: parsed.visibleSummary || parsed.description || 'Enterprise vision model inspection summary.',
+          visibleObservations: visibleObs,
+          hypotheses,
+          recommendedVerificationSteps: recSteps,
+          safetyEscalationWarnings: safetyWarnings,
+          limitations,
+          isRootCauseConfirmed: false,
+          requiresQualifiedTechnician: true,
+        },
       };
     } catch (err: any) {
       logger.error(

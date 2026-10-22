@@ -24,6 +24,7 @@ import { PromptDefenseService } from '../ai/promptSanitizer.js';
 import { config } from '../config/env.js';
 import { SecurityEventService } from './securityEvent.service.js';
 import { SpecialistRoutingService } from './specialistRouting.service.js';
+import { HistoricalFaultService } from './historicalFaultService.js';
 
 export interface RAGContext {
   organizationId: string;
@@ -37,6 +38,7 @@ export interface RAGContext {
 export class RAGQueryEngine {
   private securityService: SecurityEventService;
   private routingService: SpecialistRoutingService;
+  private historicalFaultService: HistoricalFaultService;
 
   constructor(
     private dataStore: IDataStore,
@@ -45,10 +47,12 @@ export class RAGQueryEngine {
     private generationProvider: IMultimodalGenerationProvider,
     private rerankingProvider: IRerankingProvider,
     private collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge',
-    securityService?: SecurityEventService
+    securityService?: SecurityEventService,
+    historicalFaultService?: HistoricalFaultService
   ) {
     this.securityService = securityService || new SecurityEventService(this.dataStore);
     this.routingService = new SpecialistRoutingService(this.dataStore);
+    this.historicalFaultService = historicalFaultService || new HistoricalFaultService(this.dataStore);
   }
 
   public async query(
@@ -485,12 +489,21 @@ ${generalKnowledgeText}
     let machineMaintenanceRecords: MaintenanceRecord[] = [];
     let recurringFaultAnalysis: RecurringFaultAnalysis | null = null;
     let safetyStopWarning: string | null = null;
+    let historicalRetrieval: any = null;
 
     if (machine) {
       // Machine plant boundary check
       if (plant && machine.plantId !== plant.id) {
         throw new Error(`Machine '${machine.assetTag}' does not belong to plant '${plant.code}'.`);
       }
+
+      // Historical fault matching & recurrence analysis via HistoricalFaultService
+      historicalRetrieval = await this.historicalFaultService.matchHistoricalFaults(
+        organizationId,
+        machine.id,
+        { query },
+        userRole
+      );
 
       const allHistory = await this.dataStore.getMachineMaintenanceHistory(
         organizationId,
@@ -512,16 +525,18 @@ ${generalKnowledgeText}
         return true;
       });
 
-      recurringFaultAnalysis = await this.dataStore.detectRecurringFaults(
+      recurringFaultAnalysis = historicalRetrieval.recurrenceAnalysis || await this.dataStore.detectRecurringFaults(
         organizationId,
         machine.id
       );
 
-      if (recurringFaultAnalysis.isSafetyCritical || recurringFaultAnalysis.requiresSafetyHold) {
-        isSafetyCritical = true;
-      }
-      if (recurringFaultAnalysis.safetyWarning) {
-        safetyStopWarning = recurringFaultAnalysis.safetyWarning;
+      if (recurringFaultAnalysis) {
+        if (recurringFaultAnalysis.isSafetyCritical || recurringFaultAnalysis.requiresSafetyHold) {
+          isSafetyCritical = true;
+        }
+        if (recurringFaultAnalysis.safetyWarning) {
+          safetyStopWarning = recurringFaultAnalysis.safetyWarning;
+        }
       }
     }
 
@@ -679,7 +694,30 @@ ${generalKnowledgeText}
     }
 
     // 6b. History-Aware Evidence Synthesis: Include durable maintenance records for machine
-    if (machine && machineMaintenanceRecords.length > 0) {
+    if (machine && historicalRetrieval && historicalRetrieval.matches.length > 0) {
+      const formattedEvidence = this.historicalFaultService.formatHistoricalEvidenceForRAG(
+        historicalRetrieval,
+        machine.assetTag
+      );
+
+      if (formattedEvidence.isRelevant) {
+        authorizedEvidence.unshift({
+          chunkId: `maint_hist_${machine.id}`,
+          documentId: `machine_${machine.id}`,
+          documentNumber: `HIST-${machine.assetTag}`,
+          documentTitle: `Maintenance History Ledger for ${machine.assetTag}`,
+          documentVersionId: '1.0',
+          pageNumber: 1,
+          content: formattedEvidence.content,
+          sectionHeading: 'Machine Maintenance History Ledger',
+          score: 0.98,
+        });
+
+        for (const item of formattedEvidence.evidenceItems) {
+          authorizedEvidence.push(item);
+        }
+      }
+    } else if (machine && machineMaintenanceRecords.length > 0) {
       const confirmedFacts: string[] = [];
       const technicianObservations: string[] = [];
       const unknowns: string[] = [];

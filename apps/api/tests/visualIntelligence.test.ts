@@ -64,12 +64,14 @@ describe('Phase 5: Visual Industrial Intelligence', () => {
     generationProvider = new LocalDevInferenceAdapter('forgex-local-test-model');
     rerankingProvider = new ReciprocalRankFusionReranker(60);
 
+    const collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge';
     ragEngine = new RAGQueryEngine(
       dataStore,
       embeddingAdapter,
       vectorStore,
       generationProvider,
-      rerankingProvider
+      rerankingProvider,
+      collectionName
     );
 
     visionProvider = new LocalDevVisionAdapter();
@@ -210,7 +212,7 @@ Casing drain valve V-101-D must remain closed during flush commissioning.`;
     ]);
 
     const vector = await embeddingAdapter.generateEmbedding(chunkContent);
-    await vectorStore.upsertPoints('forgex_knowledge', [
+    await vectorStore.upsertPoints(collectionName, [
       {
         id: chunk.id,
         vector,

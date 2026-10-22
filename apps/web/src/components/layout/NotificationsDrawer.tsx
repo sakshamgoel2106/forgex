@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, CheckCircle2, ArrowUpRight, Bell } from 'lucide-react';
+import { useAuth } from '../../lib/AuthContext';
 
 interface NotificationsDrawerProps {
   isOpen: boolean;
@@ -17,7 +18,7 @@ interface AlertItem {
   targetModule: string;
 }
 
-const ACTIVE_ALERTS: AlertItem[] = [
+const DEMO_ALERTS: AlertItem[] = [
   {
     id: 'alt-01',
     timestamp: '10 mins ago',
@@ -52,7 +53,34 @@ export const NotificationsDrawer: React.FC<NotificationsDrawerProps> = ({
   onClose,
   onNavigate,
 }) => {
+  const { organization, token } = useAuth();
+  const [hasMachines, setHasMachines] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!token || !organization?.id) return;
+    let isMounted = true;
+    fetch('/api/v1/machines', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-organization-id': organization.id,
+      },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (isMounted && json?.data && Array.isArray(json.data)) {
+          setHasMachines(json.data.length > 0);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, [token, organization?.id]);
+
   if (!isOpen) return null;
+
+  const alerts = hasMachines ? DEMO_ALERTS : [];
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in">
@@ -65,7 +93,7 @@ export const NotificationsDrawer: React.FC<NotificationsDrawerProps> = ({
               Operational Notifications
             </h3>
             <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-industrial-bg text-industrial-accent border border-industrial-border font-bold">
-              {ACTIVE_ALERTS.length}
+              {alerts.length}
             </span>
           </div>
           <button
@@ -78,7 +106,18 @@ export const NotificationsDrawer: React.FC<NotificationsDrawerProps> = ({
 
         {/* Alerts List */}
         <div className="flex-1 overflow-y-auto divide-y divide-industrial-border p-4 space-y-3">
-          {ACTIVE_ALERTS.map((alert) => (
+          {alerts.length === 0 ? (
+            <div className="py-20 text-center px-4 space-y-3">
+              <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <h4 className="text-sm font-semibold text-industrial-text">All Clear — No Active Alerts</h4>
+              <p className="text-xs text-industrial-secondary leading-relaxed max-w-xs mx-auto">
+                There are currently no operational alerts, threshold warnings, or pending alarms for {organization?.name || 'this organization'}.
+              </p>
+            </div>
+          ) : (
+            alerts.map((alert) => (
             <div
               key={alert.id}
               className="p-3.5 rounded-lg bg-industrial-surface border border-industrial-border hover:border-industrial-borderLight transition space-y-2"
@@ -124,7 +163,7 @@ export const NotificationsDrawer: React.FC<NotificationsDrawerProps> = ({
                 </button>
               </div>
             </div>
-          ))}
+          )))}
         </div>
 
         {/* Footer */}

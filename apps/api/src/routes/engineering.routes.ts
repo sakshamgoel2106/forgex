@@ -13,6 +13,8 @@ import type { IStorageAdapter } from '../storage/storage.interface.js';
 import { requireRole } from '../middleware/auth.middleware.js';
 import type { CADFileFormat, DrawingType } from '@forgex/shared-types';
 import { config } from '../config/env.js';
+import { SvgSanitizer } from '../utils/svgSanitizer.js';
+import { isValidGlbHeader } from '../utils/glbBuilder.js';
 
 export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: IStorageAdapter): Router {
   const router = Router();
@@ -488,6 +490,200 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
       res.status(500).json({
         success: false,
         error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Download failed' },
+      });
+    }
+  });
+
+  /**
+   * GET /api/v1/engineering/models/:id/content
+   * Streams verified 3D CAD model binary (GLB, GLTF, STL, OBJ) for web 3D rendering.
+   * Enforces strict RBAC, tenant isolation, mechanical CAD format validation, and header integrity.
+   */
+  router.get('/models/:id/content', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const modelId = String(req.params.id);
+      const role = req.auth!.membership.role;
+
+      const canView = [
+        'ORGANIZATION_OWNER',
+        'ORGANIZATION_ADMIN',
+        'PLANT_MANAGER',
+        'ENGINEER',
+        'ENGINEER_TECHNICIAN',
+        'TECHNICIAN',
+      ].includes(role);
+
+      if (!canView) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORGEX_RBAC_FORBIDDEN',
+            message: 'Access denied: Role not authorized to view engineering 3D CAD models.',
+          },
+        });
+        return;
+      }
+
+      const model = await dataStore.getEngineeringModel3DById(orgId, modelId);
+      if (!model) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'FORGEX_MODEL_NOT_FOUND', message: 'Engineering 3D model not found or access denied.' },
+        });
+        return;
+      }
+
+      // Check if format is a raw B-Rep CAD format (STEP, STP, IGES, IGS) without converted GLB in storage
+      const rawBrepFormats = ['STEP', 'STP', 'IGES', 'IGS'];
+      if (rawBrepFormats.includes(model.fileFormat)) {
+        let hasConvertedGlb = false;
+        if (model.convertedStorageKey && storageAdapter) {
+          try {
+            await storageAdapter.getObject(model.convertedStorageKey);
+            hasConvertedGlb = true;
+          } catch {
+            hasConvertedGlb = false;
+          }
+        }
+
+        if (!hasConvertedGlb) {
+          res.status(422).json({
+            success: false,
+            error: {
+              code: 'FORGEX_UNSUPPORTED_RENDER_FORMAT',
+              message: `B-Rep CAD format '${model.fileFormat}' cannot be rendered directly in web 3D viewers without conversion to GLB. Download original CAD file for desktop CAD tools.`,
+              fileFormat: model.fileFormat,
+              downloadUrl: `/api/v1/engineering/models/${model.id}/download`,
+            },
+          });
+          return;
+        }
+      }
+
+      if (!storageAdapter) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+        });
+        return;
+      }
+
+      const storageKey = model.convertedStorageKey || model.storageKey;
+      let buffer: Buffer;
+      try {
+        buffer = await storageAdapter.getObject(storageKey);
+      } catch (err: any) {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'FORGEX_STORAGE_OBJECT_NOT_FOUND',
+            message: `3D model artifact '${storageKey}' not found in storage.`,
+          },
+        });
+        return;
+      }
+
+      if (!buffer || buffer.length === 0) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FORGEX_CORRUPTED_FILE',
+            message: `3D model file '${storageKey}' is empty (0 bytes) or corrupted.`,
+          },
+        });
+        return;
+      }
+
+      // If GLB, validate 12-byte header magic and version
+      if (model.fileFormat === 'GLB' || storageKey.endsWith('.glb')) {
+        if (!isValidGlbHeader(buffer)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_CORRUPTED_FILE',
+              message: 'Corrupted GLB binary file: invalid header magic or glTF version.',
+            },
+          });
+          return;
+        }
+      }
+
+      let contentType = 'application/octet-stream';
+      if (model.fileFormat === 'GLB' || storageKey.endsWith('.glb')) {
+        contentType = 'model/gltf-binary';
+      } else if (model.fileFormat === 'GLTF' || storageKey.endsWith('.gltf')) {
+        contentType = 'model/gltf+json';
+      } else if (model.fileFormat === 'STL' || storageKey.endsWith('.stl')) {
+        contentType = 'model/stl';
+      } else if (model.fileFormat === 'OBJ' || storageKey.endsWith('.obj')) {
+        contentType = 'model/obj';
+      }
+
+      const filename = `${model.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.${model.fileFormat.toLowerCase()}`;
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Forgex-Model-Format', model.fileFormat);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.send(buffer);
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to retrieve 3D model content' },
+      });
+    }
+  });
+
+  /**
+   * GET /api/v1/engineering/machines/:machineId/3d-model
+   * Retrieves primary 3D engineering model and component mappings for an industrial machine.
+   * Enforces machine existence and organization boundary checks.
+   */
+  router.get('/machines/:machineId/3d-model', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const machineId = String(req.params.machineId);
+
+      const machine = await dataStore.getMachineById(orgId, machineId);
+      if (!machine) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'FORGEX_MACHINE_NOT_FOUND', message: `Machine '${machineId}' not found.` },
+        });
+        return;
+      }
+
+      const models = await dataStore.listEngineeringModels3D(orgId, { machineId });
+      const primaryModel = models.find((m) => m.status === 'APPROVED') || models[0] || null;
+      const mappings = await dataStore.listComponentMappings(orgId, machineId);
+
+      res.json({
+        success: true,
+        data: {
+          machine: {
+            id: machine.id,
+            name: machine.name,
+            assetTag: machine.assetTag,
+            plantId: machine.plantId,
+            hasModel3d: machine.hasModel3d,
+            model3dFormat: machine.model3dFormat,
+            model3dStorageKey: machine.model3dStorageKey,
+          },
+          primaryModel,
+          models,
+          allModels: models,
+          mappings,
+          contentUrl: primaryModel ? `/api/v1/engineering/models/${primaryModel.id}/content` : null,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'FORGEX_INTERNAL_ERROR',
+          message: err instanceof Error ? err.message : 'Failed to retrieve machine 3D model',
+        },
       });
     }
   });
@@ -1042,6 +1238,209 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
   });
 
   /**
+   * GET /api/v1/engineering/drawings/:id/content
+   * Streams sanitized diagram content for browser P&ID and engineering viewing.
+   * Enforces strict RBAC, tenant isolation, format validation, and SVG sanitization.
+   */
+  router.get('/drawings/:id/content', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const drawingId = String(req.params.id);
+      const role = req.auth!.membership.role;
+
+      const canView = [
+        'ORGANIZATION_OWNER',
+        'ORGANIZATION_ADMIN',
+        'PLANT_MANAGER',
+        'ENGINEER',
+        'ENGINEER_TECHNICIAN',
+        'TECHNICIAN',
+      ].includes(role);
+
+      if (!canView) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'FORGEX_RBAC_FORBIDDEN',
+            message: 'Access denied: Role not authorized to view engineering drawings.',
+          },
+        });
+        return;
+      }
+
+      const dwg = await dataStore.getEngineeringDrawingById(orgId, drawingId);
+      if (!dwg) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'FORGEX_DRAWING_NOT_FOUND', message: 'Engineering drawing not found.' },
+        });
+        return;
+      }
+
+      // Explicitly reject 3D CAD formats from 2D P&ID rendering
+      if (dwg.fileFormat === 'CAD' || dwg.fileFormat === 'DXF') {
+        res.status(422).json({
+          success: false,
+          error: {
+            code: 'FORGEX_UNSUPPORTED_RENDER_FORMAT',
+            message: `CAD and 3D geometric drawings (.${dwg.fileFormat.toLowerCase()}) cannot be rendered directly in the 2D P&ID viewer. Please download the original CAD file for desktop CAD modeling.`,
+            fileFormat: dwg.fileFormat,
+            originalFileName: dwg.originalFileName,
+            downloadUrl: `/api/v1/engineering/storage-proxy?key=${encodeURIComponent(dwg.storageKey)}`,
+          },
+        });
+        return;
+      }
+
+      if (!storageAdapter) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+        });
+        return;
+      }
+
+      let buffer: Buffer;
+      try {
+        buffer = await storageAdapter.getObject(dwg.storageKey);
+      } catch (err: any) {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: 'FORGEX_STORAGE_OBJECT_NOT_FOUND',
+            message: `Drawing source file '${dwg.originalFileName}' not found in storage.`,
+          },
+        });
+        return;
+      }
+
+      if (!buffer || buffer.length === 0) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FORGEX_CORRUPTED_FILE',
+            message: `Drawing file '${dwg.originalFileName}' is empty (0 bytes) or corrupted.`,
+          },
+        });
+        return;
+      }
+
+      const filename = dwg.originalFileName || path.basename(dwg.storageKey);
+      const ext = (filename.split('.').pop() || '').toLowerCase();
+
+      // Handle SVG
+      if (dwg.fileFormat === 'SVG' || ext === 'svg') {
+        const rawSvg = buffer.toString('utf-8');
+        const { sanitized, hadUnsafeContent } = SvgSanitizer.sanitize(rawSvg);
+
+        res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+        if (hadUnsafeContent) {
+          res.setHeader('X-Forgex-Sanitized', 'true');
+        }
+        res.send(Buffer.from(sanitized, 'utf-8'));
+        return;
+      }
+
+      // Handle PDF
+      if (dwg.fileFormat === 'PDF' || ext === 'pdf') {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.send(buffer);
+        return;
+      }
+
+      // Handle Images (PNG, JPG, WebP)
+      if (dwg.fileFormat === 'PNG' || ext === 'png') {
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.send(buffer);
+        return;
+      }
+
+      if (dwg.fileFormat === 'JPG' || ext === 'jpg' || ext === 'jpeg') {
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.send(buffer);
+        return;
+      }
+
+      // Default fallback
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.send(buffer);
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'FORGEX_INTERNAL_ERROR',
+          message: err instanceof Error ? err.message : 'Failed to retrieve drawing content',
+        },
+      });
+    }
+  });
+
+  /**
+   * GET /api/v1/engineering/machines/:machineId/pid
+   * Retrieves primary P&ID drawing and component mappings for an industrial machine.
+   * Enforces machine existence and organization boundary checks.
+   */
+  router.get('/machines/:machineId/pid', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const machineId = String(req.params.machineId);
+
+      const machine = await dataStore.getMachineById(orgId, machineId);
+      if (!machine) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'FORGEX_MACHINE_NOT_FOUND', message: `Machine '${machineId}' not found.` },
+        });
+        return;
+      }
+
+      const drawings = await dataStore.listEngineeringDrawings(orgId, { machineId });
+      const pidDrawings = drawings.filter(
+        (d) => d.drawingType === 'PID' || d.drawingType === 'PROCESS_FLOW' || d.fileFormat === 'SVG'
+      );
+      const primaryDrawing = pidDrawings.find((d) => d.status === 'APPROVED') || pidDrawings[0] || drawings[0] || null;
+
+      const mappings = await dataStore.listComponentMappings(orgId, machineId);
+
+      res.json({
+        success: true,
+        data: {
+          machine: {
+            id: machine.id,
+            name: machine.name,
+            assetTag: machine.assetTag,
+            plantId: machine.plantId,
+            hasPidDiagram: machine.hasPidDiagram,
+            pidStorageKey: machine.pidStorageKey,
+          },
+          primaryDrawing,
+          drawings: pidDrawings.length > 0 ? pidDrawings : drawings,
+          mappings,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'FORGEX_INTERNAL_ERROR',
+          message: err instanceof Error ? err.message : 'Failed to retrieve machine P&ID',
+        },
+      });
+    }
+  });
+
+  /**
    * DELETE /api/v1/engineering/drawings/:id
    * Admin deletes an engineering drawing
    */
@@ -1163,6 +1562,16 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
 
       // If not validated by signature, check authenticated session
       if (!isAuthorized && req.auth) {
+        // Enforce strict tenant boundary: key must belong to authenticated user's organization
+        const expectedPrefix = `org_${req.auth.organization.id}/`;
+        if (!key.startsWith(expectedPrefix) && !key.startsWith('public/')) {
+          res.status(403).json({
+            success: false,
+            error: { code: 'FORGEX_CROSS_TENANT_FORBIDDEN', message: 'Access denied: Storage object belongs to another tenant or invalid scope.' },
+          });
+          return;
+        }
+
         const role = req.auth.membership.role;
         const canDownload = [
           'ORGANIZATION_OWNER',
@@ -1214,6 +1623,13 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
       const ext = path.extname(key).toLowerCase();
       let contentType = 'application/octet-stream';
       if (ext === '.pdf') contentType = 'application/pdf';
+      else if (ext === '.svg') {
+        contentType = 'image/svg+xml; charset=utf-8';
+        const { sanitized } = SvgSanitizer.sanitize(dataBuffer.toString('utf-8'));
+        dataBuffer = Buffer.from(sanitized, 'utf-8');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+      }
+      else if (ext === '.webp') contentType = 'image/webp';
       else if (ext === '.glb') contentType = 'model/gltf-binary';
       else if (ext === '.gltf') contentType = 'model/gltf+json';
       else if (ext === '.png') contentType = 'image/png';

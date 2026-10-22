@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { Machine, ComponentMapping, EngineeringDrawing } from '@forgex/shared-types';
 import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  Maximize2,
+  Minimize2,
   Compass,
   FileText,
   Layers,
@@ -14,6 +16,9 @@ import {
   FileQuestion,
   Upload,
   RefreshCw,
+  Download,
+  AlertTriangle,
+  ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 
@@ -23,6 +28,7 @@ interface PidEngineeringViewerModalProps {
   machine: Machine | null;
   mappings: ComponentMapping[];
   activeTag?: string | null;
+  initialDrawingId?: string | null;
   onSelectTag?: (tag: string) => void;
   onOpen3dComponent?: (componentId: string) => void;
   onOpenManual?: (pageNumber: number) => void;
@@ -35,6 +41,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   machine,
   mappings,
   activeTag,
+  initialDrawingId,
   onSelectTag,
   onOpen3dComponent,
   onOpenManual,
@@ -43,27 +50,52 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   const { token, isOwnerOrAdmin, membership } = useAuth();
   const isEngineer = isOwnerOrAdmin || membership?.role === 'ENGINEER' || membership?.role === 'PLANT_MANAGER';
 
+  // Navigation & Zoom State
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
+  const viewportRef = useRef<HTMLDivElement>(null);
 
-  const [selectedTag, setSelectedTag] = useState<string | null>(activeTag || 'P-204-SEAL');
-  const [tagSearchQuery, setTagSearchQuery] = useState('');
+  // Data & Drawings State
+  const [drawingsList, setDrawingsList] = useState<EngineeringDrawing[]>([]);
   const [drawingRecord, setDrawingRecord] = useState<EngineeringDrawing | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMetadata, setIsLoadingMetadata] = useState(true);
+  const [isLoadingContent, setIsLoadingContent] = useState(false);
+  const [contentError, setContentError] = useState<string | null>(null);
+  const [unsupportedInfo, setUnsupportedInfo] = useState<{ format: string; message: string; downloadUrl?: string } | null>(null);
+
+  // Rendered Diagram Content
+  const [svgContent, setSvgContent] = useState<string | null>(null);
+  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+
+  // Tag Selection & Search
+  const [selectedTag, setSelectedTag] = useState<string | null>(activeTag || null);
+  const [tagSearchQuery, setTagSearchQuery] = useState('');
   const [verifyingMappingId, setVerifyingMappingId] = useState<string | null>(null);
 
-  // Fetch approved engineering drawing for machine
+  // --------------------------------------------------------------------------
+  // 1. Fetch Drawings for Machine
+  // --------------------------------------------------------------------------
   useEffect(() => {
     if (!isOpen || !machine) {
+      setDrawingsList([]);
       setDrawingRecord(null);
-      setIsLoading(false);
+      setSvgContent(null);
+      setImageBlobUrl(null);
+      setPdfBlobUrl(null);
+      setContentError(null);
+      setUnsupportedInfo(null);
+      setIsLoadingMetadata(false);
       return;
     }
 
     let isMounted = true;
-    setIsLoading(true);
+    setIsLoadingMetadata(true);
+    setContentError(null);
+    setUnsupportedInfo(null);
 
     const fetchDrawings = async () => {
       try {
@@ -73,8 +105,9 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
         const res = await fetch(`/api/v1/engineering/drawings?machineId=${machine.id}`, { headers });
         if (!res.ok) {
           if (isMounted) {
+            setDrawingsList([]);
             setDrawingRecord(null);
-            setIsLoading(false);
+            setIsLoadingMetadata(false);
           }
           return;
         }
@@ -82,21 +115,33 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
         const json = await res.json();
         if (isMounted) {
           if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-            const approved = json.data.find((d: EngineeringDrawing) => d.status === 'APPROVED') || json.data[0];
-            setDrawingRecord(approved);
-            if (approved.equipmentTags && approved.equipmentTags.length > 0) {
-              setSelectedTag(activeTag || approved.equipmentTags[0]);
+            const list: EngineeringDrawing[] = json.data;
+            setDrawingsList(list);
+
+            // Select initial drawing if requested, else prefer approved P&ID, else first drawing
+            let chosen = list.find((d) => d.id === initialDrawingId);
+            if (!chosen) {
+              chosen = list.find((d) => d.status === 'APPROVED' && (d.drawingType === 'PID' || d.fileFormat === 'SVG')) ||
+                list.find((d) => d.status === 'APPROVED') ||
+                list[0];
+            }
+            setDrawingRecord(chosen || null);
+
+            if (chosen?.equipmentTags && chosen.equipmentTags.length > 0) {
+              setSelectedTag(activeTag || chosen.equipmentTags[0]);
             }
           } else {
+            setDrawingsList([]);
             setDrawingRecord(null);
           }
-          setIsLoading(false);
+          setIsLoadingMetadata(false);
         }
       } catch (err) {
         console.error('Failed to query engineering drawings:', err);
         if (isMounted) {
+          setDrawingsList([]);
           setDrawingRecord(null);
-          setIsLoading(false);
+          setIsLoadingMetadata(false);
         }
       }
     };
@@ -106,16 +151,134 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     return () => {
       isMounted = false;
     };
-  }, [isOpen, machine, activeTag, token]);
+  }, [isOpen, machine, initialDrawingId, token, activeTag]);
 
-  const handleZoomIn = () => setZoom((z) => Math.min(z + 0.25, 3.0));
-  const handleZoomOut = () => setZoom((z) => Math.max(z - 0.25, 0.5));
+  // --------------------------------------------------------------------------
+  // 2. Fetch Actual Diagram Content when Drawing Changes
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (!drawingRecord) {
+      setSvgContent(null);
+      setImageBlobUrl(null);
+      setPdfBlobUrl(null);
+      setContentError(null);
+      setUnsupportedInfo(null);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingContent(true);
+    setContentError(null);
+    setUnsupportedInfo(null);
+    setSvgContent(null);
+    setImageBlobUrl(null);
+    setPdfBlobUrl(null);
+
+    // Reset pan and zoom for new drawing
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+
+    const fetchContent = async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(`/api/v1/engineering/drawings/${drawingRecord.id}/content`, { headers });
+
+        if (res.status === 422) {
+          const errJson = await res.json().catch(() => ({}));
+          if (isMounted) {
+            setUnsupportedInfo({
+              format: drawingRecord.fileFormat,
+              message: errJson?.error?.message || 'Unsupported format for browser rendering.',
+              downloadUrl: errJson?.error?.downloadUrl,
+            });
+            setIsLoadingContent(false);
+          }
+          return;
+        }
+
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson?.error?.message || `Failed to fetch diagram content (Status ${res.status})`);
+        }
+
+        const contentType = res.headers.get('content-type') || '';
+
+        if (contentType.includes('svg')) {
+          const svgText = await res.text();
+          if (isMounted) {
+            setSvgContent(svgText);
+            setIsLoadingContent(false);
+          }
+        } else if (contentType.includes('pdf')) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          if (isMounted) {
+            setPdfBlobUrl(url);
+            setIsLoadingContent(false);
+          }
+        } else if (contentType.startsWith('image/')) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          if (isMounted) {
+            setImageBlobUrl(url);
+            setIsLoadingContent(false);
+          }
+        } else {
+          // Fallback text or binary
+          const text = await res.text();
+          if (text.trim().startsWith('<svg')) {
+            if (isMounted) {
+              setSvgContent(text);
+              setIsLoadingContent(false);
+            }
+          } else {
+            if (isMounted) {
+              setUnsupportedInfo({
+                format: drawingRecord.fileFormat,
+                message: `File format '${drawingRecord.fileFormat}' cannot be rendered natively in browser view.`,
+              });
+              setIsLoadingContent(false);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error('Error loading diagram content:', err);
+        if (isMounted) {
+          setContentError(err?.message || 'Could not load diagram source file.');
+          setIsLoadingContent(false);
+        }
+      }
+    };
+
+    fetchContent();
+
+    return () => {
+      isMounted = false;
+      if (imageBlobUrl) URL.revokeObjectURL(imageBlobUrl);
+      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
+    };
+  }, [drawingRecord, token]);
+
+  // --------------------------------------------------------------------------
+  // 3. Pan, Zoom & Viewport Controls
+  // --------------------------------------------------------------------------
+  const handleZoomIn = () => setZoom((z) => Math.min(Number((z + 0.25).toFixed(2)), 4.0));
+  const handleZoomOut = () => setZoom((z) => Math.max(Number((z - 0.25).toFixed(2)), 0.25));
   const handleResetZoom = () => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
   };
 
+  const handleFitToScreen = useCallback(() => {
+    setZoom(0.85);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
   const handleMouseDown = (e: React.MouseEvent) => {
+    // Only drag with left click
+    if (e.button !== 0) return;
     setIsDragging(true);
     dragStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
   };
@@ -130,6 +293,82 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
   const handleMouseUp = () => setIsDragging(false);
 
+  // Wheel zoom support
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    if (e.deltaY < 0) {
+      handleZoomIn();
+    } else {
+      handleZoomOut();
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // 4. Keyboard Accessibility Navigation
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in search input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      switch (e.key) {
+        case '+':
+        case '=':
+          e.preventDefault();
+          handleZoomIn();
+          break;
+        case '-':
+        case '_':
+          e.preventDefault();
+          handleZoomOut();
+          break;
+        case '0':
+          e.preventDefault();
+          handleResetZoom();
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          setIsFullScreen((prev) => !prev);
+          break;
+        case 'Escape':
+          e.preventDefault();
+          if (isFullScreen) {
+            setIsFullScreen(false);
+          } else {
+            onClose();
+          }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          setPan((p) => ({ ...p, y: p.y + 40 }));
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          setPan((p) => ({ ...p, y: p.y - 40 }));
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          setPan((p) => ({ ...p, x: p.x + 40 }));
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          setPan((p) => ({ ...p, x: p.x - 40 }));
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isFullScreen, onClose]);
+
+  // --------------------------------------------------------------------------
+  // 5. Cross-Link Verification Handler
+  // --------------------------------------------------------------------------
   const handleVerifyCrossLink = async (mappingId: string) => {
     if (!token || !machine) return;
     try {
@@ -153,9 +392,25 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     }
   };
 
+  // --------------------------------------------------------------------------
+  // 6. Interactive SVG Tag Click Handler
+  // --------------------------------------------------------------------------
+  const handleSvgContainerClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    // Check if clicked element or its parent has data-tag or id matching equipment tags
+    const taggedElement = target.closest('[data-tag], [id]');
+    if (taggedElement) {
+      const tag = taggedElement.getAttribute('data-tag') || taggedElement.getAttribute('id');
+      if (tag && equipmentTags.includes(tag)) {
+        setSelectedTag(tag);
+        onSelectTag?.(tag);
+      }
+    }
+  };
+
   if (!isOpen || !machine) return null;
 
-  const equipmentTags = drawingRecord?.equipmentTags || ['P-204-IMP', 'P-204-SEAL', 'M-204-DRV', 'FT-204', 'PT-204'];
+  const equipmentTags = drawingRecord?.equipmentTags || [];
   const filteredTags = equipmentTags.filter((tag) =>
     tag.toLowerCase().includes(tagSearchQuery.trim().toLowerCase())
   );
@@ -169,63 +424,133 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
       role="dialog"
       aria-modal="true"
       aria-labelledby="drawing-viewer-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150"
     >
-      <div className="relative w-full max-w-5xl bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
-        {/* Top Header */}
-        <div className="flex items-center justify-between px-6 py-3.5 border-b border-[#E2E8F0] bg-white">
-          <div className="flex items-center gap-2.5">
-            <Compass className="w-5 h-5 text-[#2563EB]" />
+      <div
+        className={`relative w-full bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl overflow-hidden flex flex-col transition-all duration-200 ${
+          isFullScreen ? 'max-w-[99vw] h-[98vh]' : 'max-w-6xl h-[88vh] max-h-[850px]'
+        }`}
+      >
+        {/* Top Header Bar */}
+        <div className="flex items-center justify-between px-6 py-3 border-b border-[#E2E8F0] bg-white">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-[#2563EB]">
+              <Compass className="w-5 h-5" />
+            </div>
             <div>
-              <div id="drawing-viewer-title" className="text-xs font-mono font-bold text-[#1A202C] uppercase tracking-wider">
-                Original Engineering Drawing Viewer • {machine.assetTag}
+              <div id="drawing-viewer-title" className="text-xs font-mono font-bold text-[#1A202C] uppercase tracking-wider flex items-center gap-2">
+                <span>P&ID Engineering Viewer</span>
+                <span className="text-[#64748B]">•</span>
+                <span className="text-[#2563EB]">{machine.assetTag}</span>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono font-normal">
+                  {machine.name}
+                </span>
               </div>
-              <div className="text-[10px] text-[#64748B] font-sans">
-                {drawingRecord
-                  ? `${drawingRecord.drawingTitle} (${drawingRecord.uniqueDrawingNumber} • ${drawingRecord.revision})`
-                  : 'Authorized Engineering Schematic Verification'}
+              <div className="text-[10px] text-[#64748B] font-sans mt-0.5 flex items-center gap-2">
+                {drawingRecord ? (
+                  <>
+                    <span className="font-semibold text-slate-800">{drawingRecord.drawingTitle}</span>
+                    <span>({drawingRecord.uniqueDrawingNumber} • {drawingRecord.revision})</span>
+                    <span className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 font-mono text-[9px] font-bold border border-emerald-200">
+                      {drawingRecord.status}
+                    </span>
+                  </>
+                ) : (
+                  <span>Verified Engineering Drawing Verification</span>
+                )}
               </div>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg text-[#64748B] hover:text-[#1A202C] hover:bg-slate-100 transition"
-            aria-label="Close drawing viewer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          {/* Right Header Actions */}
+          <div className="flex items-center gap-2">
+            {/* Multi-drawing Selector */}
+            {drawingsList.length > 1 && (
+              <div className="relative">
+                <select
+                  value={drawingRecord?.id || ''}
+                  onChange={(e) => {
+                    const found = drawingsList.find((d) => d.id === e.target.value);
+                    if (found) setDrawingRecord(found);
+                  }}
+                  className="text-xs font-mono py-1.5 pl-2.5 pr-7 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-semibold focus:outline-none focus:border-blue-500 appearance-none cursor-pointer"
+                  title="Switch Engineering Drawing"
+                >
+                  {drawingsList.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.uniqueDrawingNumber} ({d.fileFormat})
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            )}
+
+            {/* Download Original File Button */}
+            {drawingRecord && (
+              <a
+                href={`/api/v1/engineering/drawings/${drawingRecord.id}/download`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-1.5 rounded-lg text-[#64748B] hover:text-[#1A202C] hover:bg-slate-100 transition"
+                title="Download Original Engineering Drawing"
+                aria-label="Download Drawing"
+              >
+                <Download className="w-4 h-4" />
+              </a>
+            )}
+
+            {/* Fullscreen Toggle */}
+            <button
+              onClick={() => setIsFullScreen((prev) => !prev)}
+              className="p-1.5 rounded-lg text-[#64748B] hover:text-[#1A202C] hover:bg-slate-100 transition"
+              title={isFullScreen ? 'Exit Full Screen (F)' : 'Full Screen (F)'}
+              aria-label="Toggle Full Screen"
+            >
+              {isFullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+
+            {/* Close Modal Button */}
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-[#64748B] hover:text-[#1A202C] hover:bg-slate-100 transition"
+              aria-label="Close drawing viewer"
+              title="Close (Esc)"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        {/* Content Body */}
-        {isLoading ? (
-          <div className="h-[550px] flex flex-col items-center justify-center gap-3 bg-[#F8FAFC] text-[#64748B]">
+        {/* Modal Main Body */}
+        {isLoadingMetadata ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-[#F8FAFC] text-[#64748B]">
             <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
             <div className="text-xs font-mono">Retrieving Verified Engineering Schematics for {machine.assetTag}...</div>
           </div>
         ) : !drawingRecord ? (
-          /* Honest Missing-Drawing State */
-          <div className="h-[550px] flex flex-col items-center justify-center p-8 bg-[#F8FAFC] text-center space-y-4">
+          /* Honest Missing-Drawing Empty State */
+          <div className="flex-1 flex flex-col items-center justify-center p-8 bg-[#F8FAFC] text-center space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
               <FileQuestion className="w-8 h-8" />
             </div>
 
             <div className="max-w-lg space-y-2">
               <h3 className="text-sm font-bold text-[#1A202C] font-mono uppercase tracking-wider">
-                No Original Engineering Drawing on File
+                No Original Engineering Drawing Associated
               </h3>
               <p className="text-xs text-[#64748B] leading-relaxed">
-                ForgeX AI strictly forbids redrawing, fabricating, or substituting generic synthetic diagrams without verified revision-controlled engineering files.
+                ForgeX AI strictly prevents fabricating or substituting synthetic diagrams without verified revision-controlled engineering files on record.
               </p>
             </div>
 
-            {/* Asset Metadata Box */}
             <div className="w-full max-w-md bg-white border border-[#E2E8F0] rounded-xl p-4 text-left text-xs font-sans space-y-2 shadow-sm">
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
                 <span className="text-[#64748B] font-mono">Asset Tag:</span>
                 <span className="font-bold text-[#1A202C] font-mono">{machine.assetTag}</span>
               </div>
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
-                <span className="text-[#64748B] font-mono">Machine:</span>
+                <span className="text-[#64748B] font-mono">Machine Name:</span>
                 <span className="text-[#1A202C]">{machine.name}</span>
               </div>
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
@@ -233,14 +558,13 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                 <span className="text-[#1A202C]">{machine.plantId}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#64748B] font-mono">P&ID Drawing Status:</span>
+                <span className="text-[#64748B] font-mono">P&ID Source State:</span>
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200">
                   MISSING_SOURCE_FILE
                 </span>
               </div>
             </div>
 
-            {/* Action Bar */}
             <div className="flex items-center gap-3 pt-2">
               {isEngineer && (
                 <button
@@ -248,7 +572,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                   className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition"
                 >
                   <Upload className="w-4 h-4" />
-                  Attach Revision-Controlled P&ID (SVG / PDF / DWG)
+                  Attach Revision-Controlled P&ID
                 </button>
               )}
               <button
@@ -261,282 +585,207 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
           </div>
         ) : (
           /* Real Drawing Viewport & Tag Cross-Linking */
-          <div className="flex flex-col md:flex-row h-[550px] w-full bg-[#F5F6F7] overflow-hidden">
-            {/* Left: Interactive Canvas with Pan/Zoom */}
+          <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-[#F5F6F7]">
+            {/* Left: Interactive Canvas with Pan/Zoom & Controls */}
             <div className="relative flex-1 h-full overflow-hidden flex flex-col bg-[#F1F5F9]">
-              {/* Top Controls Bar */}
-              <div className="p-3 border-b border-[#E2E8F0] flex items-center justify-between z-10 bg-white/95 backdrop-blur-md">
-                <div className="flex items-center gap-2.5">
+              {/* Controls Bar */}
+              <div className="px-4 py-2 border-b border-[#E2E8F0] flex items-center justify-between z-10 bg-white/95 backdrop-blur-md">
+                <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-[#1A202C] font-mono">
                     {drawingRecord.uniqueDrawingNumber}
                   </span>
                   <span className="text-[10px] bg-cyan-50 text-cyan-700 border border-cyan-200 px-2 py-0.5 rounded font-mono font-bold">
                     {drawingRecord.revision}
                   </span>
-                  <span className="text-[10px] bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded hidden sm:inline font-mono">
-                    Provenance: {drawingRecord.source}
+                  <span className="text-[10px] bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded font-mono">
+                    Format: {drawingRecord.fileFormat}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono hidden lg:inline">
+                    Discipline: {drawingRecord.discipline}
                   </span>
                 </div>
 
+                {/* Pan / Zoom Interactive Controls */}
                 <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-[#CBD5E1]">
                   <button
                     onClick={handleZoomOut}
                     className="p-1 text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
-                    title="Zoom Out"
+                    title="Zoom Out (-)"
+                    aria-label="Zoom Out"
                   >
                     <ZoomOut className="w-3.5 h-3.5" />
                   </button>
-                  <span className="text-[10px] font-mono text-[#1A202C] px-2 font-semibold">{Math.round(zoom * 100)}%</span>
+                  <span className="text-[10px] font-mono text-[#1A202C] px-2 font-semibold min-w-[42px] text-center">
+                    {Math.round(zoom * 100)}%
+                  </span>
                   <button
                     onClick={handleZoomIn}
                     className="p-1 text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
-                    title="Zoom In"
+                    title="Zoom In (+)"
+                    aria-label="Zoom In"
                   >
                     <ZoomIn className="w-3.5 h-3.5" />
                   </button>
                   <button
+                    onClick={handleFitToScreen}
+                    className="px-2 py-1 text-[10px] font-mono font-semibold text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
+                    title="Fit Diagram to Viewport"
+                  >
+                    Fit
+                  </button>
+                  <button
                     onClick={handleResetZoom}
                     className="p-1 text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
-                    title="Reset Zoom & Pan"
+                    title="Reset Zoom & Pan (0)"
+                    aria-label="Reset Viewport"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
 
-              {/* Drawing Pan-Zoom Container */}
+              {/* Viewport Canvas Container */}
               <div
-                className="flex-1 overflow-hidden flex items-center justify-center p-6 select-none cursor-grab active:cursor-grabbing bg-[#F1F5F9]"
+                ref={viewportRef}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+                onWheel={handleWheel}
+                className="flex-1 overflow-hidden flex items-center justify-center p-4 select-none cursor-grab active:cursor-grabbing bg-[#EAEEF4]"
               >
-                <div
-                  style={{
-                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                    transformOrigin: 'center center',
-                  }}
-                  className="transition-transform duration-75 ease-out"
-                >
-                  {/* Genuine Original P&ID Schematic Layout */}
-                  <svg
-                    width="700"
-                    height="400"
-                    viewBox="0 0 700 400"
-                    className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl"
+                {isLoadingContent ? (
+                  <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
+                    <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
+                    <span className="text-xs font-mono">Loading diagram stream...</span>
+                  </div>
+                ) : unsupportedInfo ? (
+                  /* Explicit Unsupported Format Error State */
+                  <div className="max-w-md bg-white border border-amber-200 rounded-2xl p-6 shadow-lg text-center space-y-3">
+                    <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+                      <AlertTriangle className="w-6 h-6" />
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-900 font-mono">
+                      Unsupported Browser Format ({unsupportedInfo.format})
+                    </h4>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {unsupportedInfo.message}
+                    </p>
+                    {unsupportedInfo.downloadUrl && (
+                      <a
+                        href={unsupportedInfo.downloadUrl}
+                        download
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#151C24] hover:bg-black text-white text-xs font-semibold transition shadow-xs mt-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download Original CAD Drawing
+                      </a>
+                    )}
+                  </div>
+                ) : contentError ? (
+                  /* Corrupt / Content Load Error State */
+                  <div className="max-w-md bg-white border border-red-200 rounded-2xl p-6 shadow-lg text-center space-y-3">
+                    <div className="w-12 h-12 rounded-xl bg-red-50 border border-red-200 text-red-600 flex items-center justify-center mx-auto">
+                      <AlertCircle className="w-6 h-6" />
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-900 font-mono">Drawing Load Error</h4>
+                    <p className="text-xs text-slate-600 leading-relaxed">{contentError}</p>
+                    <button
+                      onClick={() => setDrawingRecord({ ...drawingRecord })}
+                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-800 transition"
+                    >
+                      Retry Load
+                    </button>
+                  </div>
+                ) : (
+                  /* Actual Diagram Rendering */
+                  <div
+                    style={{
+                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                      transformOrigin: 'center center',
+                    }}
+                    className="transition-transform duration-75 ease-out flex items-center justify-center"
+                    onClick={handleSvgContainerClick}
                   >
-                    {/* Process Lines */}
-                    <defs>
-                      <marker
-                        id="pid-arrow"
-                        viewBox="0 0 10 10"
-                        refX="5"
-                        refY="5"
-                        markerWidth="6"
-                        markerHeight="6"
-                        orient="auto-start-reverse"
-                      >
-                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#0284C7" />
-                      </marker>
-                    </defs>
-
-                    {/* Header Border & Title Box */}
-                    <rect x="10" y="10" width="680" height="380" fill="none" stroke="#E2E8F0" strokeWidth="1.5" />
-                    <rect x="460" y="310" width="230" height="80" fill="#F8FAFC" stroke="#CBD5E1" strokeWidth="1.5" />
-                    <text x="475" y="330" fill="#64748B" fontSize="9" fontFamily="monospace" fontWeight="bold">
-                      PROJECT: CDU HYDROTREATER TRAIN
-                    </text>
-                    <text x="475" y="348" fill="#1A202C" fontSize="10" fontFamily="monospace" fontWeight="bold">
-                      DWG: {drawingRecord.uniqueDrawingNumber}
-                    </text>
-                    <text x="475" y="365" fill="#2563EB" fontSize="9" fontFamily="monospace" fontWeight="bold">
-                      REVISION: {drawingRecord.revision} • {drawingRecord.status}
-                    </text>
-                    <text x="475" y="380" fill="#64748B" fontSize="8" fontFamily="monospace">
-                      SOURCE: {drawingRecord.source}
-                    </text>
-
-                    {/* Main Process Stream Lines */}
-                    <line x1="40" y1="200" x2="270" y2="200" stroke="#0284C7" strokeWidth="3" markerEnd="url(#pid-arrow)" />
-                    <line x1="340" y1="200" x2="520" y2="200" stroke="#0284C7" strokeWidth="3" markerEnd="url(#pid-arrow)" />
-                    <line x1="520" y1="200" x2="520" y2="100" stroke="#0284C7" strokeWidth="3" />
-                    <line x1="520" y1="100" x2="640" y2="100" stroke="#0284C7" strokeWidth="3" markerEnd="url(#pid-arrow)" />
-
-                    {/* Equipment Tag: P-204-IMP (Pump Volute & Impeller) */}
-                    <g
-                      className="cursor-pointer group"
-                      onClick={() => {
-                        setSelectedTag('P-204-IMP');
-                        onSelectTag?.('P-204-IMP');
-                      }}
-                    >
-                      <circle
-                        cx="305"
-                        cy="200"
-                        r="35"
-                        fill="#F0F9FF"
-                        stroke={selectedTag === 'P-204-IMP' ? '#2563EB' : '#0284C7'}
-                        strokeWidth={selectedTag === 'P-204-IMP' ? '4' : '2'}
+                    {/* 1. Vector SVG Rendering */}
+                    {svgContent && (
+                      <div
+                        className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl overflow-hidden p-2 select-none [&_svg]:max-w-full [&_svg]:h-auto"
+                        dangerouslySetInnerHTML={{ __html: svgContent }}
                       />
-                      <path d="M 280 225 L 305 165 L 330 225 Z" fill="none" stroke="#0284C7" strokeWidth="2" />
-                      <text
-                        x="305"
-                        y="255"
-                        fill={selectedTag === 'P-204-IMP' ? '#2563EB' : '#1A202C'}
-                        fontSize="11"
-                        fontWeight="bold"
-                        textAnchor="middle"
-                        fontFamily="monospace"
-                      >
-                        P-204-IMP
-                      </text>
-                    </g>
+                    )}
 
-                    {/* Equipment Tag: P-204-SEAL (Plan 11/53B Flush Loop) */}
-                    <g
-                      className="cursor-pointer group"
-                      onClick={() => {
-                        setSelectedTag('P-204-SEAL');
-                        onSelectTag?.('P-204-SEAL');
-                      }}
-                    >
-                      <rect
-                        x="275"
-                        y="115"
-                        width="60"
-                        height="32"
-                        rx="4"
-                        fill="#FFFBEB"
-                        stroke={selectedTag === 'P-204-SEAL' ? '#2563EB' : '#D97706'}
-                        strokeWidth={selectedTag === 'P-204-SEAL' ? '3.5' : '1.5'}
+                    {/* 2. Raster Image Rendering (PNG, JPEG, WebP) */}
+                    {imageBlobUrl && (
+                      <img
+                        src={imageBlobUrl}
+                        alt={drawingRecord.drawingTitle}
+                        draggable={false}
+                        className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl max-w-none max-h-[75vh] object-contain select-none"
                       />
-                      <line x1="305" y1="147" x2="305" y2="165" stroke="#D97706" strokeWidth="1.5" strokeDasharray="3 3" />
-                      <text x="305" y="132" fill="#D97706" fontSize="9" fontWeight="bold" textAnchor="middle" fontFamily="monospace">
-                        API 53B
-                      </text>
-                      <text
-                        x="305"
-                        y="105"
-                        fill={selectedTag === 'P-204-SEAL' ? '#2563EB' : '#64748B'}
-                        fontSize="10"
-                        fontWeight="bold"
-                        textAnchor="middle"
-                        fontFamily="monospace"
-                      >
-                        P-204-SEAL
-                      </text>
-                    </g>
+                    )}
 
-                    {/* Equipment Tag: M-204-DRV (Electric Drive Motor) */}
-                    <g
-                      className="cursor-pointer group"
-                      onClick={() => {
-                        setSelectedTag('M-204-DRV');
-                        onSelectTag?.('M-204-DRV');
-                      }}
-                    >
-                      <circle
-                        cx="180"
-                        cy="200"
-                        r="25"
-                        fill="#FAF5FF"
-                        stroke={selectedTag === 'M-204-DRV' ? '#2563EB' : '#9333EA'}
-                        strokeWidth={selectedTag === 'M-204-DRV' ? '3.5' : '1.5'}
-                      />
-                      <text x="180" y="204" fill="#9333EA" fontSize="12" fontWeight="bold" textAnchor="middle" fontFamily="monospace">
-                        M
-                      </text>
-                      <text
-                        x="180"
-                        y="240"
-                        fill={selectedTag === 'M-204-DRV' ? '#2563EB' : '#64748B'}
-                        fontSize="10"
-                        fontWeight="bold"
-                        textAnchor="middle"
-                        fontFamily="monospace"
-                      >
-                        M-204-DRV
-                      </text>
-                    </g>
-
-                    {/* Sensor Tag: PT-204 (Discharge Pressure Transmitter) */}
-                    <g
-                      className="cursor-pointer group"
-                      onClick={() => {
-                        setSelectedTag('PT-204');
-                        onSelectTag?.('PT-204');
-                      }}
-                    >
-                      <circle
-                        cx="420"
-                        cy="140"
-                        r="18"
-                        fill="#F0F9FF"
-                        stroke={selectedTag === 'PT-204' ? '#2563EB' : '#0284C7'}
-                        strokeWidth={selectedTag === 'PT-204' ? '3' : '1.5'}
-                      />
-                      <line x1="420" y1="158" x2="420" y2="200" stroke="#0284C7" strokeWidth="1.5" strokeDasharray="2 2" />
-                      <text x="420" y="144" fill="#0284C7" fontSize="9" fontWeight="bold" textAnchor="middle" fontFamily="monospace">
-                        PT
-                      </text>
-                      <text x="420" y="120" fill="#64748B" fontSize="9" textAnchor="middle" fontFamily="monospace">
-                        PT-204
-                      </text>
-                    </g>
-
-                    {/* Sensor Tag: FT-204 (Flow Transmitter) */}
-                    <g
-                      className="cursor-pointer group"
-                      onClick={() => {
-                        setSelectedTag('FT-204');
-                        onSelectTag?.('FT-204');
-                      }}
-                    >
-                      <circle
-                        cx="580"
-                        cy="60"
-                        r="18"
-                        fill="#F0F9FF"
-                        stroke={selectedTag === 'FT-204' ? '#2563EB' : '#0284C7'}
-                        strokeWidth={selectedTag === 'FT-204' ? '3' : '1.5'}
-                      />
-                      <line x1="580" y1="78" x2="580" y2="100" stroke="#0284C7" strokeWidth="1.5" strokeDasharray="2 2" />
-                      <text x="580" y="64" fill="#0284C7" fontSize="9" fontWeight="bold" textAnchor="middle" fontFamily="monospace">
-                        FT
-                      </text>
-                      <text x="580" y="40" fill="#64748B" fontSize="9" textAnchor="middle" fontFamily="monospace">
-                        FT-204
-                      </text>
-                    </g>
-                  </svg>
-                </div>
+                    {/* 3. PDF Document Rendering */}
+                    {pdfBlobUrl && (
+                      <div className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl overflow-hidden w-[780px] h-[520px]">
+                        <object
+                          data={`${pdfBlobUrl}#toolbar=0&navpanes=0`}
+                          type="application/pdf"
+                          className="w-full h-full"
+                        >
+                          <p className="p-4 text-xs text-slate-600">
+                            PDF preview unavailable in this browser.{' '}
+                            <a href={pdfBlobUrl} download className="text-blue-600 underline">
+                              Download PDF
+                            </a>
+                          </p>
+                        </object>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Viewport Footer */}
+              {/* Viewport Navigation Footer */}
               <div className="px-4 py-2 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between text-[11px] text-[#64748B]">
-                <span>Pan: Click and drag • Zoom: Top controls</span>
-                <span className="font-mono text-[10px]">P&ID Drawing: {drawingRecord.uniqueDrawingNumber}</span>
+                <div className="flex items-center gap-3">
+                  <span>Pan: Click & Drag</span>
+                  <span>•</span>
+                  <span>Zoom: Scroll or +/-</span>
+                  <span>•</span>
+                  <span>Reset: 0</span>
+                  <span>•</span>
+                  <span>Full Screen: F</span>
+                </div>
+                <div className="font-mono text-[10px] text-slate-500">
+                  {drawingRecord.originalFileName} ({drawingRecord.fileFormat})
+                </div>
               </div>
             </div>
 
-            {/* Right Side: Authorized Tag Search & Cross-Linking */}
+            {/* Right Side: Equipment Tags & Engineering Cross-Linking */}
             <div className="w-full md:w-80 border-t md:border-t-0 md:border-l border-[#E2E8F0] bg-white flex flex-col justify-between overflow-hidden">
+              {/* Tag Search Header */}
               <div className="p-3.5 border-b border-[#E2E8F0] space-y-2">
-                <div className="flex items-center gap-2">
-                  <Compass className="w-4 h-4 text-[#2563EB]" />
-                  <span className="text-xs font-mono font-bold text-[#1A202C] uppercase tracking-wider">
-                    P&ID Equipment Tags
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Compass className="w-4 h-4 text-[#2563EB]" />
+                    <span className="text-xs font-mono font-bold text-[#1A202C] uppercase tracking-wider">
+                      P&ID Equipment Tags
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold">
+                    {equipmentTags.length} Tags
                   </span>
                 </div>
 
-                {/* Tag Search Input */}
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={tagSearchQuery}
                     onChange={(e) => setTagSearchQuery(e.target.value)}
-                    placeholder="Search drawing tags..."
+                    placeholder="Search equipment tags..."
                     className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-[#F8FAFC] border border-[#CBD5E1] text-xs text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
                   />
                 </div>
@@ -544,60 +793,71 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
               {/* Tag List */}
               <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                {filteredTags.map((tag) => {
-                  const isSelected = selectedTag === tag;
-                  const mapping = mappings.find((m) => m.pidTag === tag);
+                {filteredTags.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-400">
+                    {equipmentTags.length === 0 ? 'No equipment tags declared in drawing.' : 'No matching tags found.'}
+                  </div>
+                ) : (
+                  filteredTags.map((tag) => {
+                    const isSelected = selectedTag === tag;
+                    const mapping = mappings.find((m) => m.pidTag === tag);
 
-                  return (
-                    <button
-                      key={tag}
-                      onClick={() => {
-                        setSelectedTag(tag);
-                        onSelectTag?.(tag);
-                      }}
-                      className={`w-full text-left p-2.5 rounded-xl text-xs font-mono transition flex items-center justify-between ${
-                        isSelected
-                          ? 'bg-blue-50 text-[#2563EB] border border-blue-200'
-                          : 'text-[#1A202C] hover:bg-slate-50 border border-transparent'
-                      }`}
-                    >
-                      <span className="font-bold">{tag}</span>
-                      {mapping && (
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
-                            mapping.status === 'VERIFIED'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : 'bg-amber-50 text-amber-700 border border-amber-200'
-                          }`}
-                        >
-                          {mapping.status}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                    return (
+                      <button
+                        key={tag}
+                        onClick={() => {
+                          setSelectedTag(tag);
+                          onSelectTag?.(tag);
+                        }}
+                        className={`w-full text-left p-2.5 rounded-xl text-xs font-mono transition flex items-center justify-between ${
+                          isSelected
+                            ? 'bg-blue-50 text-[#2563EB] border border-blue-200 shadow-xs'
+                            : 'text-[#1A202C] hover:bg-slate-50 border border-transparent'
+                        }`}
+                      >
+                        <span className="font-bold">{tag}</span>
+                        {mapping && (
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                              mapping.status === 'VERIFIED'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {mapping.status}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
               </div>
 
-              {/* Selected Tag Inspection & Cross-Link */}
+              {/* Selected Tag Inspection & Engineering Cross-Link Panel */}
               <div className="p-4 border-t border-[#E2E8F0] bg-[#F8FAFC] space-y-3">
                 {selectedTag ? (
                   <div className="space-y-3">
-                    <div>
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-[#64748B]">Selected Tag</div>
-                      <div className="text-xs font-bold text-[#1A202C] font-mono mt-0.5">{selectedTag}</div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-[#64748B]">Selected Tag</div>
+                        <div className="text-xs font-bold text-[#1A202C] font-mono mt-0.5">{selectedTag}</div>
+                      </div>
+                      <span className="text-[10px] font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-bold">
+                        {machine.assetTag}
+                      </span>
                     </div>
 
                     {selectedMapping ? (
                       <div className="bg-white border border-[#E2E8F0] rounded-xl p-3 space-y-2.5 text-xs shadow-sm">
                         <div className="flex items-center justify-between">
                           <span className="text-[#64748B] text-[11px]">3D Component:</span>
-                          <span className="font-medium text-[#1A202C] text-[11px] truncate max-w-[130px]">
+                          <span className="font-medium text-[#1A202C] text-[11px] truncate max-w-[130px]" title={selectedMapping.componentName}>
                             {selectedMapping.componentName}
                           </span>
                         </div>
 
                         <div className="flex items-center justify-between">
-                          <span className="text-[#64748B] text-[11px]">Verification Status:</span>
+                          <span className="text-[#64748B] text-[11px]">Cross-Link State:</span>
                           <span
                             className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
                               selectedMapping.status === 'VERIFIED'

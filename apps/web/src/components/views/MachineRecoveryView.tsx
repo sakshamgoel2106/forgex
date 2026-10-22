@@ -16,6 +16,7 @@ import {
   ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
+import { useToast } from '../../lib/ToastContext';
 import type {
   MachineRecoverySummary,
   MachineRecoveryProfile,
@@ -30,6 +31,7 @@ interface MachineRecoveryViewProps {
 }
 
 export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavigateToCopilot }) => {
+  const { toast } = useToast();
   const { token, organization, user, membership, isOwnerOrAdmin } = useAuth();
   const userRole = membership?.role || 'VIEWER';
   const isSupervisory = isOwnerOrAdmin || userRole === 'PLANT_MANAGER' || userRole === 'ENGINEER_TECHNICIAN';
@@ -167,7 +169,12 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
   // Handle Evidence Ingestion & AI Extraction
   const handleIngestEvidence = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedMachineId || !ingestRawText.trim()) return;
+    if (!selectedMachineId || !ingestRawText.trim()) {
+      const msg = 'Evidence text or manual excerpt cannot be empty.';
+      setErrorMessage(msg);
+      toast.error('Validation Error', msg);
+      return;
+    }
 
     setIngesting(true);
     setErrorMessage(null);
@@ -189,6 +196,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
         throw new Error(json.error?.message || 'Evidence extraction failed.');
       }
 
+      toast.success('Evidence Extracted', json.message || 'Evidence parsed and claims generated.');
       setIngestResult(json.data);
       setSuccessMessage(json.message);
       setIngestRawText('');
@@ -196,6 +204,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
       await loadOverviewData();
     } catch (err: any) {
       setErrorMessage(err.message);
+      toast.error('Extraction Failed', err.message);
     } finally {
       setIngesting(false);
     }
@@ -204,7 +213,9 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
   // Handle Claim Review
   const handleSubmitReview = async (claimId: string) => {
     if (!reviewRationale.trim()) {
-      setErrorMessage('Substantive engineering review rationale is required.');
+      const msg = 'Substantive engineering review rationale is required.';
+      setErrorMessage(msg);
+      toast.error('Validation Error', msg);
       return;
     }
 
@@ -229,6 +240,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
         throw new Error(json.error?.message || 'Claim review failed.');
       }
 
+      toast.success('Claim Reviewed', `Claim decision '${reviewDecision}' recorded successfully.`);
       setSuccessMessage(`Claim decision '${reviewDecision}' recorded successfully.`);
       setReviewingClaimId(null);
       setReviewRationale('');
@@ -239,6 +251,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
       await loadOverviewData();
     } catch (err: any) {
       setErrorMessage(err.message);
+      toast.error('Review Failed', err.message);
     } finally {
       setSubmittingReview(false);
     }
@@ -268,6 +281,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
         throw new Error(json.error?.message || 'Failed to create collection task.');
       }
 
+      toast.success('Task Created', 'Information recovery task successfully created.');
       setSuccessMessage('Information recovery task successfully created.');
       setIsTaskModalOpen(false);
       if (selectedMachineId) {
@@ -276,6 +290,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
       await loadOverviewData();
     } catch (err: any) {
       setErrorMessage(err.message);
+      toast.error('Task Creation Failed', err.message);
     } finally {
       setSubmittingTask(false);
     }
@@ -285,7 +300,9 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
   const handleRegisterMachine = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!regAssetTag || !regName || !regPlantId) {
-      setErrorMessage('Asset Tag, Machine Name, and Plant are required.');
+      const msg = 'Asset Tag, Machine Name, and Plant are required.';
+      setErrorMessage(msg);
+      toast.error('Validation Error', msg);
       return;
     }
 
@@ -312,6 +329,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
         throw new Error(json.error?.message || 'Failed to register machine.');
       }
 
+      toast.success('Machine Registered', json.message || 'Legacy machine registered successfully.');
       setSuccessMessage(json.message);
       setIsRegisterModalOpen(false);
       setRegAssetTag('');
@@ -322,6 +340,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
       await loadOverviewData();
     } catch (err: any) {
       setErrorMessage(err.message);
+      toast.error('Registration Failed', err.message);
     } finally {
       setSubmittingRegister(false);
     }

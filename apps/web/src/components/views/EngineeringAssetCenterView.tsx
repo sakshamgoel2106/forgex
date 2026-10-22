@@ -65,6 +65,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
   const [is3dViewerOpen, setIs3dViewerOpen] = useState<boolean>(false);
   const [isPidViewerOpen, setIsPidViewerOpen] = useState<boolean>(false);
   const [activePidTag, setActivePidTag] = useState<string | null>(null);
+  const [activeDrawingId, setActiveDrawingId] = useState<string | null>(null);
 
   // Form states
   const [modelForm, setModelForm] = useState({
@@ -333,7 +334,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
     }
   };
 
-  const open3dViewerForMachine = async (machId?: string) => {
+  const open3dViewerForMachine = async (machId?: string, _componentId?: string) => {
     const target = machines.find((m) => m.id === machId) || machines[0];
     if (target) {
       setViewerMachine(target);
@@ -356,11 +357,12 @@ export const EngineeringAssetCenterView: React.FC = () => {
     }
   };
 
-  const openPidViewerForMachine = async (machId?: string, tag?: string) => {
+  const openPidViewerForMachine = async (machId?: string, tag?: string, drawingId?: string) => {
     const target = machines.find((m) => m.id === machId) || machines[0];
     if (target) {
       setViewerMachine(target);
       setActivePidTag(tag || 'P-204-SEAL');
+      setActiveDrawingId(drawingId || null);
       try {
         const mRes = await fetch(`/api/v1/machines/${target.id}/mappings`, {
           headers: {
@@ -821,7 +823,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
                     {dwg.equipmentTags.map((tag) => (
                       <span
                         key={tag}
-                        onClick={() => openPidViewerForMachine(dwg.machineId, tag)}
+                        onClick={() => openPidViewerForMachine(dwg.machineId, tag, dwg.id)}
                         className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-[#1A202C] hover:text-[#2563EB] font-mono text-[10px] border border-[#CBD5E1] cursor-pointer transition font-medium"
                       >
                         {tag}
@@ -832,7 +834,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
 
                 <div className="mt-4 pt-3 border-t border-[#E2E8F0] flex items-center justify-between">
                   <button
-                    onClick={() => openPidViewerForMachine(dwg.machineId)}
+                    onClick={() => openPidViewerForMachine(dwg.machineId, undefined, dwg.id)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#151C24] hover:bg-black text-white transition shadow-xs"
                   >
                     <Eye className="w-3.5 h-3.5" />
@@ -1364,9 +1366,10 @@ export const EngineeringAssetCenterView: React.FC = () => {
           machine={viewerMachine}
           mappings={viewerMappings}
           activeTag={activePidTag}
-          onOpen3dComponent={() => {
+          initialDrawingId={activeDrawingId}
+          onOpen3dComponent={(componentId) => {
             setIsPidViewerOpen(false);
-            open3dViewerForMachine(viewerMachine.id);
+            open3dViewerForMachine(viewerMachine.id, componentId);
           }}
         />
       )}

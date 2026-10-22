@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, ShieldAlert, Cpu, Layers, CheckCircle2, AlertTriangle, UploadCloud } from 'lucide-react';
 import type { DataClassification, MachineCriticality, DocumentationReadiness } from '@forgex/shared-types';
+import { useToast } from '../../lib/ToastContext';
 
 interface RegisterMachineModalProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
   token,
   organizationId,
 }) => {
+  const { toast } = useToast();
   const [mode, setMode] = useState<'single' | 'batch'>('single');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +74,13 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
 
   const handleSingleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!assetTag.trim() || !name.trim()) {
+      const errMsg = 'Asset Tag and Machine Name are required fields.';
+      setError(errMsg);
+      toast.error('Validation Error', errMsg);
+      return;
+    }
+
     setError(null);
     setSubmitting(true);
     try {
@@ -101,13 +110,18 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
 
       const json = await res.json();
       if (res.ok && json.success) {
+        toast.success('Machine Registered', `Asset ${assetTag.trim().toUpperCase()} successfully added to registry.`);
         onMachineCreated();
         onClose();
       } else {
-        setError(json.error?.message || 'Failed to register machine.');
+        const errMsg = json.error?.message || 'Failed to register machine.';
+        setError(errMsg);
+        toast.error('Registration Failed', errMsg);
       }
     } catch (err: any) {
-      setError(err?.message || 'Network error registering machine.');
+      const errMsg = err?.message || 'Network error registering machine.';
+      setError(errMsg);
+      toast.error('Network Error', errMsg);
     } finally {
       setSubmitting(false);
     }
@@ -115,10 +129,17 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
 
   const handleBatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const lines = batchCsv.split('\n').filter((l) => l.trim().length > 0);
+    if (lines.length === 0) {
+      const errMsg = 'Please enter at least one machine entry in CSV format.';
+      setError(errMsg);
+      toast.error('Validation Error', errMsg);
+      return;
+    }
+
     setError(null);
     setSubmitting(true);
     try {
-      const lines = batchCsv.split('\n').filter((l) => l.trim().length > 0);
       const items = lines.map((line) => {
         const parts = line.split(',').map((p) => p.trim());
         return {
@@ -145,13 +166,18 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
 
       const json = await res.json();
       if (res.ok && json.success) {
+        toast.success('Batch Enrolled', `Successfully registered ${items.length} industrial machines.`);
         onMachineCreated();
         onClose();
       } else {
-        setError(json.error?.message || 'Batch registration failed.');
+        const errMsg = json.error?.message || 'Batch registration failed.';
+        setError(errMsg);
+        toast.error('Batch Import Failed', errMsg);
       }
     } catch (err: any) {
-      setError(err?.message || 'Network error registering batch machines.');
+      const errMsg = err?.message || 'Network error registering batch machines.';
+      setError(errMsg);
+      toast.error('Network Error', errMsg);
     } finally {
       setSubmitting(false);
     }

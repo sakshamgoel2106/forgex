@@ -5,7 +5,9 @@ export type VisualAssetType =
   | 'MANUAL_PAGE'
   | 'DIAGRAM'
   | 'PID_RENDER'
-  | 'USER_UPLOAD';
+  | 'USER_UPLOAD'
+  | 'CAD_MODEL'
+  | 'ENGINEERING_DRAWING';
 
 export interface NormalizedBoundingBox {
   x1: number; // Normalized coordinate 0..1000
@@ -27,6 +29,7 @@ export interface VisualAsset {
   id: string;
   organizationId: string;
   plantId?: string | null;
+  machineId?: string | null;
   documentId?: string | null;
   documentVersionId?: string | null;
   pageNumber?: number | null;
@@ -44,8 +47,49 @@ export interface VisualAsset {
   modelUsed: string;
   confidenceScore: number;
   isAmbiguous: boolean;
+  processingStatus?:
+    | 'UPLOADED'
+    | 'QUEUED'
+    | 'PROCESSING'
+    | 'EXTRACTED'
+    | 'INDEXING'
+    | 'INDEXED'
+    | 'PROCESSED'
+    | 'ANALYSIS_COMPLETED'
+    | 'INSUFFICIENT_EVIDENCE'
+    | 'FAILED'
+    | 'UNSUPPORTED_FORMAT';
+  uploadedByUserId?: string | null;
+  dataClassification?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface VisualObservationItem {
+  id: string;
+  observation: string;
+  category:
+    | 'VISIBLE_LEAKAGE_OR_FLUID_STAINS'
+    | 'CORROSION_OR_SURFACE_DAMAGE'
+    | 'THERMAL_DISCOLORATION_OR_BURN_MARKS'
+    | 'LOOSE_OR_DISPLACED_COMPONENT'
+    | 'MISSING_GUARD_OR_SAFETY_CONCERN'
+    | 'ABNORMAL_VISUAL_CONDITION'
+    | 'GENERAL_CONDITION';
+  locationDescription?: string;
+  bbox?: NormalizedBoundingBox | null;
+  severityHint?: 'INFO' | 'WARNING' | 'CRITICAL';
+}
+
+export interface StructuredIndustrialAnalysis {
+  visibleSummary: string;
+  visibleObservations: VisualObservationItem[];
+  hypotheses: string[]; // Clearly labeled as hypotheses / possible explanations (NEVER confirmed root cause)
+  recommendedVerificationSteps: string[]; // Recommended inspection or physical measurement
+  safetyEscalationWarnings: string[]; // Condition requiring immediate safety escalation
+  limitations: string[]; // Explicit limitations (e.g. image-only, internal temperature/pressure unknown)
+  isRootCauseConfirmed: false; // Always false for image-only analysis
+  requiresQualifiedTechnician: boolean;
 }
 
 export interface VisualInspectionRequest {
@@ -56,6 +100,7 @@ export interface VisualInspectionRequest {
   query: string;
   plantId: string;
   assetId?: string | null;
+  machineId?: string | null;
   equipmentTagHint?: string | null;
   documentVersionId?: string | null;
   pageNumber?: number | null;
@@ -74,4 +119,5 @@ export interface VisualInspectionResponse {
   crossRetrievedManualCitations: Citation[];
   modelUsed: string;
   processingMethod: string;
+  structuredAnalysis?: StructuredIndustrialAnalysis;
 }

@@ -10,6 +10,7 @@ import {
   FileCheck2,
 } from 'lucide-react';
 import type { MissingInformationTask, TaskStatus } from '@forgex/shared-types';
+import { useToast } from '../../lib/ToastContext';
 
 interface TaskManagementModalProps {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export const TaskManagementModal: React.FC<TaskManagementModalProps> = ({
   isOwnerOrAdmin,
   onTasksUpdated,
 }) => {
+  const { toast } = useToast();
   const [tasks, setTasks] = useState<MissingInformationTask[]>([]);
   const [activeTab, setActiveTab] = useState<'list' | 'create'>('list');
   const [selectedTask, setSelectedTask] = useState<MissingInformationTask | null>(null);
@@ -90,9 +92,18 @@ export const TaskManagementModal: React.FC<TaskManagementModalProps> = ({
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!machineId) {
-      setError('Please select or specify a machine to assign this task.');
+      const errMsg = 'Please select or specify a machine to assign this task.';
+      setError(errMsg);
+      toast.error('Validation Error', errMsg);
       return;
     }
+    if (!title.trim()) {
+      const errMsg = 'Task title cannot be empty.';
+      setError(errMsg);
+      toast.error('Validation Error', errMsg);
+      return;
+    }
+
     setError(null);
     setLoading(true);
     try {
@@ -114,14 +125,19 @@ export const TaskManagementModal: React.FC<TaskManagementModalProps> = ({
 
       const json = await res.json();
       if (res.ok && json.success) {
+        toast.success('Task Dispatched', 'Field verification task successfully dispatched.');
         setActiveTab('list');
         fetchTasks();
         onTasksUpdated?.();
       } else {
-        setError(json.error?.message || 'Failed to create task');
+        const errMsg = json.error?.message || 'Failed to create task';
+        setError(errMsg);
+        toast.error('Dispatch Failed', errMsg);
       }
     } catch (err: any) {
-      setError(err?.message || 'Network error creating task');
+      const errMsg = err?.message || 'Network error creating task';
+      setError(errMsg);
+      toast.error('Network Error', errMsg);
     } finally {
       setLoading(false);
     }
@@ -137,7 +153,9 @@ export const TaskManagementModal: React.FC<TaskManagementModalProps> = ({
       try {
         parsedSpecs = JSON.parse(submittedSpecsJson);
       } catch {
-        setError('Submitted specifications must be valid JSON.');
+        const errMsg = 'Submitted specifications must be valid JSON format.';
+        setError(errMsg);
+        toast.error('Invalid Data Format', errMsg);
         setSubmittingData(false);
         return;
       }
@@ -157,14 +175,19 @@ export const TaskManagementModal: React.FC<TaskManagementModalProps> = ({
 
       const json = await res.json();
       if (res.ok && json.success) {
+        toast.success('Field Findings Submitted', 'Specifications recorded and submitted for engineering supervisor approval.');
         setSelectedTask(json.data);
         fetchTasks();
         onTasksUpdated?.();
       } else {
-        setError(json.error?.message || 'Failed to submit technician data');
+        const errMsg = json.error?.message || 'Failed to submit technician data';
+        setError(errMsg);
+        toast.error('Submission Failed', errMsg);
       }
     } catch (err: any) {
-      setError(err?.message || 'Network error submitting findings');
+      const errMsg = err?.message || 'Network error submitting findings';
+      setError(errMsg);
+      toast.error('Network Error', errMsg);
     } finally {
       setSubmittingData(false);
     }
@@ -190,14 +213,25 @@ export const TaskManagementModal: React.FC<TaskManagementModalProps> = ({
 
       const json = await res.json();
       if (res.ok && json.success) {
+        if (action === 'APPROVE') {
+          toast.success('Task Approved', 'Field data verified and applied to machine documentation.');
+        } else if (action === 'REJECT') {
+          toast.warning('Task Rejected', 'Field data submission rejected by supervisor.');
+        } else {
+          toast.info('Changes Requested', 'Task returned to technician with requested adjustments.');
+        }
         setSelectedTask(json.data);
         fetchTasks();
         onTasksUpdated?.();
       } else {
-        setError(json.error?.message || 'Review action failed');
+        const errMsg = json.error?.message || 'Review action failed';
+        setError(errMsg);
+        toast.error('Review Action Failed', errMsg);
       }
     } catch (err: any) {
-      setError(err?.message || 'Network error reviewing task');
+      const errMsg = err?.message || 'Network error reviewing task';
+      setError(errMsg);
+      toast.error('Network Error', errMsg);
     } finally {
       setReviewing(false);
     }

@@ -3,16 +3,29 @@ import multer from 'multer';
 import { VisualController } from '../controllers/visual.controller.js';
 import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
+import type { IEmbeddingAdapter } from '../embeddings/embeddings.interface.js';
+import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
+import type { IVisionProcessingProvider } from '../ai/vision.interface.js';
 import type { VisualIntelligenceEngine } from '../services/visualIntelligenceEngine.js';
 import { requireRole } from '../middleware/auth.middleware.js';
 
 export function createVisualRouter(
   dataStore: IDataStore,
   storageAdapter: IStorageAdapter,
-  visualEngine: VisualIntelligenceEngine
+  visualEngine: VisualIntelligenceEngine,
+  embeddingAdapter?: IEmbeddingAdapter,
+  vectorStore?: IVectorStoreAdapter,
+  visionProvider?: IVisionProcessingProvider
 ): Router {
   const router = Router();
-  const controller = new VisualController(dataStore, storageAdapter, visualEngine);
+  const controller = new VisualController(
+    dataStore,
+    storageAdapter,
+    visualEngine,
+    embeddingAdapter,
+    vectorStore,
+    visionProvider
+  );
 
   // Configure Multer for streaming image upload
   const upload = multer({
@@ -31,10 +44,50 @@ export function createVisualRouter(
     },
   });
 
+  // Configure Multer for comprehensive engineering and visual asset uploads (50MB limit)
+  const engineeringUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 50 * 1024 * 1024,
+      files: 1,
+    },
+    fileFilter: (_req, file, cb) => {
+      const ext = (file.originalname.split('.').pop() || '').toLowerCase();
+      const dangerous = ['exe', 'bat', 'cmd', 'sh', 'ps1', 'vbs', 'js', 'jar', 'msi', 'scr', 'dll'];
+      if (dangerous.includes(ext)) {
+        cb(new Error(`Security Violation: Upload of executable format '.${ext}' is prohibited.`));
+        return;
+      }
+      cb(null, true);
+    },
+  });
+
+  // Admin-Only Upload Endpoint for Machine Engineering & Visual Intelligence Assets
+  router.post(
+    '/upload',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN']),
+    (req, res, next) => {
+      engineeringUpload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_UPLOAD_FILTER_REJECTED',
+              message: err.message,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+        next();
+      });
+    },
+    controller.upload
+  );
+
   // Visual Inspection endpoint (Supports multipart upload or JSON base64)
   router.post(
     '/inspect',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
     (req, res, next) => {
       upload.single('file')(req, res, (err) => {
         if (err) {
@@ -53,22 +106,43 @@ export function createVisualRouter(
   // List Visual Assets for Organization
   router.get(
     '/assets',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
     controller.listAssets
   );
 
   // Get Visual Asset Details
   router.get(
     '/assets/:id',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
     controller.getAssetById
   );
 
   // Stream raw visual asset image for side-by-side inspection
   router.get(
     '/assets/:id/image',
-    requireRole(['ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
     controller.getAssetImage
+  );
+
+  // Trigger text extraction, chunking, and Knowledge Hub/RAG ingestion on uploaded engineering documents
+  router.post(
+    '/assets/:id/process',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN']),
+    controller.processAsset
+  );
+
+  // Get real-time document processing and ingestion status
+  router.get(
+    '/assets/:id/processing-status',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
+    controller.getProcessingStatus
+  );
+
+  // Idempotently retry document processing on failure
+  router.post(
+    '/assets/:id/retry',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN']),
+    controller.retryProcessing
   );
 
   return router;

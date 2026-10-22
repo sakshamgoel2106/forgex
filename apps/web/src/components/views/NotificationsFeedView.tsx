@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../../lib/AuthContext';
 import {
   Bell,
   CheckCircle2,
@@ -8,6 +9,7 @@ import {
   Clock,
   ArrowRight,
   Check,
+  RefreshCw,
 } from 'lucide-react';
 
 interface NotificationItem {
@@ -20,59 +22,60 @@ interface NotificationItem {
   targetModule: string;
 }
 
-const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: 'notif-1',
-    type: 'CRITICAL_ALERT',
-    title: 'High Thermal Trip: HP-204 (87.4°C)',
-    message: 'Oil bath temperature sensor TT-204 crossed 85°C trip threshold. Immediate cooling loop inspection required.',
-    timestamp: '12m ago',
-    read: false,
-    targetModule: 'copilot',
-  },
-  {
-    id: 'notif-2',
-    type: 'ASSIGNMENT',
-    title: 'Work Order Dispatched: WO-8812',
-    message: 'Shift Supervisor assigned you to leading overhaul on Schuler 400T Hydraulic Press.',
-    timestamp: '35m ago',
-    read: false,
-    targetModule: 'maintenance',
-  },
-  {
-    id: 'notif-3',
-    type: 'SECURITY',
-    title: 'Unauthorized Document Retrieval Blocked (403)',
-    message: 'Technician account attempted to download Restricted OEM Mechanical Seal Blueprint #DWG-8801. Blocked and logged.',
-    timestamp: '2h ago',
-    read: false,
-    targetModule: 'audit',
-  },
-  {
-    id: 'notif-4',
-    type: 'DUE_SOON',
-    title: 'PM Calibration Due in 4 Hours: PUMP-204-B',
-    message: 'Mechanical seal barrier fluid pressure transmitter PT-204 calibration window closes at 18:00.',
-    timestamp: '3h ago',
-    read: true,
-    targetModule: 'maintenance',
-  },
-  {
-    id: 'notif-5',
-    type: 'DOC_FAILED',
-    title: 'Document OCR Ingestion Warning: SCAN-MECH-09.pdf',
-    message: 'Faded dot-matrix table on page 14 failed automated OCR confidence threshold (64%). Manual review task created.',
-    timestamp: '5h ago',
-    read: true,
-    targetModule: 'knowledge-hub',
-  },
-];
-
 export const NotificationsFeedView: React.FC<{
   onNavigate?: (module: string) => void;
 }> = ({ onNavigate }) => {
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const { token, organization } = useAuth();
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [filterTab, setFilterTab] = useState<'ALL' | 'UNREAD'>('ALL');
+  const [loading, setLoading] = useState(true);
+
+  const fetchAlerts = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    try {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
+      if (organization?.id) {
+        headers['x-organization-id'] = organization.id;
+      }
+
+      const res = await fetch('/api/v1/audit/alerts?limit=50', { headers });
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        const mapped: NotificationItem[] = json.data.map((a: any) => ({
+          id: a.id,
+          type:
+            a.severity === 'CRITICAL'
+              ? 'CRITICAL_ALERT'
+              : a.alertType === 'UNAUTHORIZED_ACCESS'
+              ? 'SECURITY'
+              : a.alertType === 'DOCUMENT_FAILURE'
+              ? 'DOC_FAILED'
+              : 'CRITICAL_ALERT',
+          title: a.title || `${a.severity} Event: ${a.alertType || 'Security Alert'}`,
+          message: a.message || a.description || 'System alert triggered by compliance engine.',
+          timestamp: a.createdAt ? new Date(a.createdAt).toLocaleString() : 'Recent',
+          read: a.reviewStatus === 'RESOLVED',
+          targetModule: a.targetModule || 'audit',
+        }));
+        setNotifications(mapped);
+      } else {
+        setNotifications([]);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch notifications feed', err);
+      setNotifications([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [token, organization?.id]);
+
+  useEffect(() => {
+    fetchAlerts();
+  }, [fetchAlerts]);
 
   const filtered = notifications.filter((n) => (filterTab === 'ALL' ? true : !n.read));
 
@@ -102,7 +105,7 @@ export const NotificationsFeedView: React.FC<{
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-[#F5F6F7] text-[#1A202C] font-sans antialiased p-6 space-y-6">
+    <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 w-full overflow-y-auto bg-[#F5F6F7] text-[#1A202C] font-sans antialiased p-6 space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#E2E8F0] bg-white p-5 rounded-xl shadow-sm">
         <div className="flex items-center gap-3">
@@ -114,7 +117,7 @@ export const NotificationsFeedView: React.FC<{
               Operational Notifications & Security Alerts
             </h1>
             <p className="text-xs text-[#64748B]">
-              Real-time plant alarms, work order dispatches, and compliance security events
+              Real-time plant alarms, work order dispatches, and compliance security events for {organization?.name || 'Your Organization'}
             </p>
           </div>
         </div>
@@ -140,23 +143,40 @@ export const NotificationsFeedView: React.FC<{
             </button>
           </div>
 
+          {notifications.length > 0 && (
+            <button
+              onClick={markAllRead}
+              className="px-3 py-1.5 bg-white border border-[#CBD5E1] hover:bg-gray-50 text-gray-700 font-semibold text-xs rounded transition flex items-center gap-1 shadow-sm"
+            >
+              <Check className="w-3.5 h-3.5" />
+              Mark all read
+            </button>
+          )}
+
           <button
-            onClick={markAllRead}
-            className="px-3 py-1.5 bg-white border border-[#CBD5E1] hover:bg-gray-50 text-gray-700 font-semibold text-xs rounded transition flex items-center gap-1 shadow-sm"
+            onClick={fetchAlerts}
+            className="p-1.5 bg-white border border-[#CBD5E1] hover:bg-gray-50 text-gray-700 rounded transition shadow-sm"
+            title="Refresh alerts"
           >
-            <Check className="w-3.5 h-3.5" />
-            Mark all read
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#2563EB]' : ''}`} />
           </button>
         </div>
       </div>
 
       {/* Notifications List */}
-      <div className="space-y-3 max-w-4xl">
-        {filtered.length === 0 ? (
+      <div className="space-y-3 w-full">
+        {loading ? (
           <div className="p-12 text-center bg-white rounded-xl border border-gray-200">
+            <RefreshCw className="w-6 h-6 text-[#2563EB] animate-spin mx-auto mb-2" />
+            <p className="text-xs font-mono text-gray-500">Syncing real-time notifications...</p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="p-12 text-center bg-white rounded-xl border border-gray-200 shadow-sm">
             <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto mb-2" />
-            <h3 className="text-sm font-bold text-gray-900">All caught up</h3>
-            <p className="text-xs text-gray-500">No unread notifications at this time.</p>
+            <h3 className="text-sm font-bold text-gray-900">All Caught Up</h3>
+            <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+              There are no active security alerts, critical faults, or unread dispatches for your company.
+            </p>
           </div>
         ) : (
           filtered.map((item) => (

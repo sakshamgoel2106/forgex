@@ -35,7 +35,7 @@ export interface IVectorStoreAdapter {
   search(
     collectionName: string,
     vector: number[],
-    filter?: { organizationId?: string; plantId?: string; documentId?: string },
+    filter?: { organizationId?: string; plantId?: string; documentId?: string; machineId?: string },
     limit?: number
   ): Promise<VectorSearchResult[]>;
   clear(collectionName?: string): Promise<void>;

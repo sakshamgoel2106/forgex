@@ -10,7 +10,9 @@ export type MaintenanceVerificationState =
   | 'PENDING'
   | 'PASSED'
   | 'FAILED'
-  | 'NOT_APPLICABLE';
+  | 'NOT_APPLICABLE'
+  | 'VERIFIED'
+  | 'UNVERIFIED';
 
 export type MaintenanceMeasurementSource =
   | 'MANUAL_GAUGE'
@@ -78,8 +80,10 @@ export interface MaintenanceRecord {
   plantId: string;
   machineId: string;
   machineAssetTag: string;
-  ticketId: string;
-  ticketNumber: string;
+  ticketId?: string | null;
+  ticketNumber?: string | null;
+  caseId?: string | null;
+  caseNumber?: string | null;
   componentId?: string | null;
   componentName?: string | null;
   reportingUserId: string;
@@ -174,3 +178,68 @@ export interface RecurringFaultAnalysis {
   intelligenceSource?: 'HISTORICAL_MAINTENANCE_RECORDS';
   patternDisclaimer?: string;
 }
+
+export interface HistoricalFaultMatchRequest {
+  query?: string;
+  faultCategory?: string;
+  faultCode?: string;
+  componentId?: string;
+  limit?: number;
+  minScore?: number;
+  timeWindowDays?: number;
+}
+
+export type HistoricalEvidenceType = 'RECORDED_FACT' | 'POSSIBLE_SIMILARITY' | 'UNCONFIRMED_HYPOTHESIS';
+export type PriorRepairEffectiveness = 'EFFECTIVE' | 'PARTIALLY_EFFECTIVE' | 'INEFFECTIVE' | 'UNVERIFIED';
+export type MatchConfidence = 'HIGH' | 'MEDIUM' | 'LOW' | 'INSUFFICIENT_SIMILARITY';
+
+export interface ConflictingDiagnosisEntry {
+  rootCauseA: string;
+  rootCauseB: string;
+  recordIdA: string;
+  recordIdB: string;
+  recordNumberA: string;
+  recordNumberB: string;
+  description: string;
+}
+
+export interface HistoricalFaultMatchResult {
+  recordId: string;
+  recordNumber: string;
+  incidentDate: string;
+  machineId: string;
+  machineAssetTag: string;
+  plantId: string;
+  faultCategory: string;
+  recordedProblemDescription: string;
+  recordedDiagnosis: string;
+  diagnosisStatus: RootCauseStatus;
+  correctiveActions: string[];
+  partsReplaced: PartReplaced[];
+  recordedOutcome: MaintenanceVerificationState;
+  workOrderReference: string;
+  ticketId?: string | null;
+  caseId?: string | null;
+  matchScore: number;
+  matchReasons: string[];
+  matchConfidence: MatchConfidence;
+  evidenceType: HistoricalEvidenceType;
+  priorRepairEffectiveness: PriorRepairEffectiveness;
+  measurements?: MaintenanceMeasurement[];
+  resolvingTechnicianName?: string;
+}
+
+export interface HistoricalFaultRetrievalResponse {
+  machineId: string;
+  machineAssetTag: string;
+  query: string;
+  totalHistoryCount: number;
+  matchedCount: number;
+  matches: HistoricalFaultMatchResult[];
+  recurrenceAnalysis: RecurringFaultAnalysis;
+  conflictingDiagnoses: ConflictingDiagnosisEntry[];
+  hasConflictingEvidence: boolean;
+  searchStatus: 'MATCHES_FOUND' | 'NO_MATCHING_RECORDS' | 'INSUFFICIENT_HISTORY';
+  patternDisclaimer?: string;
+}
+

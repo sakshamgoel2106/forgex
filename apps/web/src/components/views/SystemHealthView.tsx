@@ -76,11 +76,11 @@ export const SystemHealthView: React.FC = () => {
           <div className="flex items-center gap-2">
             <Activity className="w-5 h-5 text-[#2563EB]" />
             <h2 className="text-base font-bold font-mono text-[#1A202C] uppercase tracking-wide">
-              Subsystem Diagnostic & Health Monitor
+              Server Infrastructure & Cloud Diagnostics
             </h2>
           </div>
           <p className="text-xs text-[#64748B] mt-1 font-mono">
-            Direct telemetry polling from ForgeX AI Core API (/api/v1/health)
+            Platform backend status (PostgreSQL, Redis, Vector Engine, Core API) • Software telemetry only
           </p>
         </div>
 
@@ -90,7 +90,7 @@ export const SystemHealthView: React.FC = () => {
           className="px-3.5 py-1.5 rounded-lg bg-white hover:bg-slate-50 border border-[#E2E8F0] text-xs font-mono font-medium text-[#1A202C] flex items-center gap-2 transition shadow-sm"
         >
           <RefreshCw className={`w-3.5 h-3.5 text-[#2563EB] ${loading ? 'animate-spin' : ''}`} />
-          Probe Health
+          Refresh Status
         </button>
       </div>
 

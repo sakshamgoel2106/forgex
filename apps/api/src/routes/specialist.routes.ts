@@ -797,6 +797,7 @@ export function createTicketRouter(dataStore: IDataStore): Router {
           repairActions,
           partsReplaced,
           postRepairTestResults,
+          verificationState,
           requiresRestartApproval,
           notes,
         } = req.body;
@@ -847,6 +848,7 @@ export function createTicketRouter(dataStore: IDataStore): Router {
           repairActions,
           partsReplaced,
           postRepairTestResults,
+          verificationState,
           requiresRestartApproval,
           notes,
         });

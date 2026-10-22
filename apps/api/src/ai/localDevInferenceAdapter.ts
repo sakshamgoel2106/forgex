@@ -185,7 +185,12 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
     // Structure facts vs operational explanations
     answerBody += `### Sourced Operational Facts (Verified from ${topEvidence.documentNumber}, Page ${topEvidence.pageNumber})\n`;
     answerBody += `[VERIFIED MACHINE-SPECIFIC FACTS]\n`;
-    if (topEvidence.content.includes('Authorized Maintenance History') || topEvidence.content.includes('Governed Machine Knowledge Base')) {
+    if (
+      topEvidence.content.includes('Authorized Maintenance History') ||
+      topEvidence.content.includes('Historical Maintenance') ||
+      topEvidence.content.includes('Maintenance Ledger') ||
+      topEvidence.content.includes('Governed Machine Knowledge Base')
+    ) {
       const histLines = topEvidence.content.split('\n').filter((l) => l.trim().length > 0);
       answerBody += histLines.map((l) => `- ${l}`).join('\n') + '\n';
     } else {
@@ -196,11 +201,24 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       answerBody += `- Supplementary Reference (${sanitizedEvidence[1].documentNumber}, Page ${sanitizedEvidence[1].pageNumber}): ${sanitizedEvidence[1].content.split('\n')[0]}\n`;
     }
 
-    if (topEvidence.content.includes('TECHNICIAN OBSERVATIONS') || topEvidence.content.includes('Authorized Maintenance History')) {
+    if (
+      topEvidence.content.includes('TECHNICIAN OBSERVATIONS') ||
+      topEvidence.content.includes('Authorized Maintenance History') ||
+      topEvidence.content.includes('POSSIBLE SIMILARITIES') ||
+      topEvidence.content.includes('SUSPECTED') ||
+      topEvidence.content.includes('Historical Maintenance') ||
+      topEvidence.content.includes('Maintenance Ledger')
+    ) {
       answerBody += `\n### [HISTORICAL TECHNICIAN OBSERVATIONS & HYPOTHESES]\n`;
       const obsLines = topEvidence.content
         .split('\n')
-        .filter((l) => l.includes('TECHNICIAN OBSERVATIONS') || l.includes('Suspected Root Cause'));
+        .filter(
+          (l) =>
+            l.includes('TECHNICIAN OBSERVATIONS') ||
+            l.includes('Suspected Root Cause') ||
+            l.includes('SUSPECTED') ||
+            l.includes('POSSIBLE SIMILARITIES')
+        );
       if (obsLines.length > 0) {
         answerBody += obsLines.map((l) => `- ${l}`).join('\n') + '\n';
       } else {

@@ -205,7 +205,14 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     '/api/v1/visual',
     authenticate,
     aiLimiter,
-    createVisualRouter(dataStore, storageAdapter, visualEngine)
+    createVisualRouter(
+      dataStore,
+      storageAdapter,
+      visualEngine,
+      embeddingAdapter,
+      vectorStore,
+      visionProvider
+    )
   );
   app.use(
     '/api/v1/maintenance',

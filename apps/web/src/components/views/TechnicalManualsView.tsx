@@ -21,6 +21,7 @@ import {
 import type { DocumentType, DocumentStatus, ExtractionMethod } from '@forgex/shared-types';
 import { StatusBadge } from '../ui/StatusBadge';
 import { apiFetch } from '../../lib/api';
+import { useToast } from '../../lib/ToastContext';
 
 export interface DocumentPagePreview {
   pageNumber: number;
@@ -63,195 +64,16 @@ export interface HubDocument {
   versionId?: string;
 }
 
-const INITIAL_DOCUMENTS: HubDocument[] = [
-  {
-    id: 'doc-001',
-    documentNumber: 'SOP-MECH-401',
-    title: 'Emergency Centrifugal Pump LOTO & Seal Overhaul Procedure',
-    category: 'SOP',
-    revision: 'REV-C',
-    status: 'INDEXED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 2457600,
-    mimeType: 'text/markdown',
-    checksum: 'sha256:8f4b52c009d1...39e14a',
-    totalPages: 3,
-    totalChunks: 6,
-    assetTags: ['PUMP-204-B', 'VALVE-101'],
-    retryCount: 0,
-    progressPercent: 100,
-    currentStep: 'Vector indexing completed successfully',
-    updatedAt: '2026-10-18 09:30 UTC',
-    pages: [
-      {
-        pageNumber: 1,
-        rawText: `# SOP-MECH-401: Emergency Centrifugal Pump LOTO Procedure
-Revision: REV-C
-Asset Tag: PUMP-204-B
+const INITIAL_DOCUMENTS: HubDocument[] = [];
 
-## SECTION 1: MANDATORY SAFETY & HAZARD MITIGATION
-Before commencing mechanical overhaul on Centrifugal Pump PUMP-204-B, all suction and discharge isolation valves (V-101 and V-102) must be mechanically locked out and tagged according to OSHA Standard 1910.147.
-
-| Step | Hazard Identified | Engineering Control | Required PPE |
-| :--- | :--- | :--- | :--- |
-| 1.1 | High-Pressure Hydrocarbon (450 PSI) | Double Block & Bleed | Chemical Splash Goggles, Nitrile Gloves |
-| 1.2 | Electrical Energy 480V 3-Phase | Breaker Padlock & Zero-Energy Test | Category 2 Arc Flash Suit |`,
-        sectionHeadings: ['SECTION 1: MANDATORY SAFETY & HAZARD MITIGATION'],
-        extractionMethod: 'MARKDOWN_AST',
-        hasTables: true,
-      },
-      {
-        pageNumber: 2,
-        rawText: `## SECTION 2: CASING DRAIN & VENT PROCEDURE
-1. Connect grounded copper bonding clamp to casing test nipple.
-2. Slowly open casing drain valve VD-04 into slop manifold until pressure gauge PI-204 reads 0.0 PSIG.
-3. Loosen gland follower bolts in cross-pattern to prevent binding of carbon seal rings.`,
-        sectionHeadings: ['SECTION 2: CASING DRAIN & VENT PROCEDURE'],
-        extractionMethod: 'MARKDOWN_AST',
-        hasTables: false,
-      },
-      {
-        pageNumber: 3,
-        rawText: `## SECTION 3: SHAFT RUNOUT & IMPELLER CLEARANCE
-1. Position magnetic-base dial indicator tip against pump drive shaft.
-2. Rotate shaft by hand through 360 degrees. Total Indicator Reading (TIR) must not exceed +/- 0.002 inches.
-3. Torque casing bolts to 185 ft-lbs in star sequence.`,
-        sectionHeadings: ['SECTION 3: SHAFT RUNOUT & IMPELLER CLEARANCE'],
-        extractionMethod: 'MARKDOWN_AST',
-        hasTables: false,
-      },
-    ],
-    chunks: [
-      {
-        chunkIndex: 0,
-        qdrantPointId: 'b7552fed-d23f-4490-948a-6a2afe519039',
-        pageNumber: 1,
-        sectionHeading: 'SECTION 1: MANDATORY SAFETY & HAZARD MITIGATION',
-        content: 'Emergency Centrifugal Pump LOTO Procedure. Isolation valves V-101 and V-102 must be locked out per OSHA 1910.147.',
-        isTable: true,
-      },
-      {
-        chunkIndex: 1,
-        qdrantPointId: 'cbd251e8-4257-4fe6-a011-b0565b449ea3',
-        pageNumber: 2,
-        sectionHeading: 'SECTION 2: CASING DRAIN & VENT PROCEDURE',
-        content: 'Connect grounded copper bonding clamp to casing test nipple. Loosen gland follower bolts in cross-pattern.',
-        isTable: false,
-      },
-    ],
-  },
-  {
-    id: 'doc-002',
-    documentNumber: 'OEM-MAN-883',
-    title: 'Flowserve Mark 3 ANSI Chemical Process Pump Operations Manual',
-    category: 'OEM_MANUAL',
-    revision: 'REV-2',
-    status: 'INDEXED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 8493021,
-    mimeType: 'application/pdf',
-    checksum: 'sha256:e3b0c44298fc...1c49aa',
-    totalPages: 4,
-    totalChunks: 12,
-    assetTags: ['PUMP-204-B'],
-    retryCount: 0,
-    progressPercent: 100,
-    currentStep: 'Vector indexing completed',
-    updatedAt: '2026-10-14 14:15 UTC',
-    pages: [
-      {
-        pageNumber: 1,
-        rawText: `FLOWSERVE MARK 3 ANSI B73.1 PROCESS PUMP
-Installation, Operation and Maintenance Instructions
-Flowserve Pump Division — Industrial Machinery`,
-        sectionHeadings: ['FLOWSERVE MARK 3 ANSI B73.1 PROCESS PUMP'],
-        extractionMethod: 'NATIVE_TEXT',
-        hasTables: false,
-      },
-    ],
-    chunks: [
-      {
-        chunkIndex: 0,
-        qdrantPointId: '3e45c6c2-0d4c-436a-b3e2-60941b439bc5',
-        pageNumber: 1,
-        sectionHeading: 'FLOWSERVE MARK 3 ANSI B73.1 PROCESS PUMP',
-        content: 'Installation, Operation and Maintenance Instructions for Flowserve Mark 3 ANSI Chemical Process Pump.',
-        isTable: false,
-      },
-    ],
-  },
-  {
-    id: 'doc-003',
-    documentNumber: 'PID-DWG-4010',
-    title: 'Crude Distillation Unit 1 Piping & Instrumentation Diagram (Scanned)',
-    category: 'SCHEMATIC_PID',
-    revision: 'REV-8',
-    status: 'INDEXED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 5218390,
-    mimeType: 'application/pdf',
-    checksum: 'sha256:119ca4930128...fa2210',
-    totalPages: 1,
-    totalChunks: 2,
-    assetTags: ['CDU-LINE-01'],
-    retryCount: 0,
-    progressPercent: 100,
-    currentStep: 'OCR & layout extraction completed',
-    updatedAt: '2026-10-16 11:20 UTC',
-    pages: [
-      {
-        pageNumber: 1,
-        rawText: `[OCR EXTRACTED — SCANNED MANUAL: PID-DWG-4010.pdf (PAGE 1)]
-SECTION: OPTICAL CHARACTER RECOGNITION SUMMARY
-Extracted alphanumeric industrial identifiers:
-LINE-4-CDU-CRUDE-HC-400-A1A PUMP-204-A PUMP-204-B V-101 V-102 PI-204 FT-101
-Operational Notice: Scanned documentation processed via layout-aware OCR engine. Note: CAD symbology is indexed as visual bounding vectors; native CAD parsing not claimed in Phase 3.`,
-        sectionHeadings: ['OPTICAL CHARACTER RECOGNITION SUMMARY'],
-        extractionMethod: 'OCR',
-        hasTables: false,
-      },
-    ],
-    chunks: [
-      {
-        chunkIndex: 0,
-        qdrantPointId: 'afb28f49-9e85-4aa4-9137-3d0233e1becd',
-        pageNumber: 1,
-        sectionHeading: 'OPTICAL CHARACTER RECOGNITION SUMMARY',
-        content: 'LINE-4-CDU-CRUDE-HC-400-A1A PUMP-204-A PUMP-204-B V-101 V-102 PI-204 FT-101',
-        isTable: false,
-      },
-    ],
-  },
-  {
-    id: 'doc-004',
-    documentNumber: 'ELEC-WIR-209',
-    title: 'Variable Frequency Drive (VFD) 4160V High Voltage Feed Wiring Diagram',
-    category: 'WIRING_DIAGRAM',
-    revision: 'REV-1',
-    status: 'FAILED',
-    plantCode: 'PLANT-TX-04',
-    fileSizeBytes: 1492039,
-    mimeType: 'application/pdf',
-    checksum: 'sha256:99dabb014492...ff0123',
-    totalPages: 0,
-    totalChunks: 0,
-    assetTags: ['VFD-DRV-04'],
-    errorMessage: 'Embedding generation failed: Provider service inference timeout after 30000ms.',
-    retryCount: 1,
-    progressPercent: 40,
-    currentStep: 'Failed during embedding vectorization step',
-    updatedAt: '2026-10-18 10:15 UTC',
-    pages: [],
-    chunks: [],
-  },
-];
 
 export const TechnicalManualsView: React.FC = () => {
+  const { toast } = useToast();
   const [documents, setDocuments] = useState<HubDocument[]>(INITIAL_DOCUMENTS);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
-  const [selectedDoc, setSelectedDoc] = useState<HubDocument | null>(INITIAL_DOCUMENTS[0]);
+  const [selectedDoc, setSelectedDoc] = useState<HubDocument | null>(null);
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
 
   // Upload Modal State
@@ -275,7 +97,13 @@ export const TechnicalManualsView: React.FC = () => {
     try {
       const res = await apiFetch('/api/v1/documents');
       const json = await res.json();
-      if (res.ok && json.success && Array.isArray(json.data) && json.data.length > 0) {
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        if (json.data.length === 0) {
+          setDocuments([]);
+          setSelectedDoc(null);
+          return;
+        }
+
         const mapped: HubDocument[] = json.data.map((d: any) => {
           const v = d.latestVersion || {};
           const j = d.latestJob || {};
@@ -286,7 +114,7 @@ export const TechnicalManualsView: React.FC = () => {
             category: d.category || d.type || 'SOP',
             revision: v.revision || d.revision || 'REV-A',
             status: v.status || d.status || 'INDEXED',
-            plantCode: d.plantCode || d.plantId || 'PLANT-TX-04',
+            plantCode: d.plantCode || d.plantId || 'PLANT-DEFAULT',
             fileSizeBytes: v.fileSizeBytes || d.fileSizeBytes || 0,
             mimeType: v.mimeType || d.mimeType || 'application/pdf',
             checksum: v.checksumSha256 || d.checksumSha256 || 'sha256:verified',
@@ -316,9 +144,14 @@ export const TechnicalManualsView: React.FC = () => {
         if (target) {
           loadPagesForDoc(target.id);
         }
+      } else {
+        setDocuments([]);
+        setSelectedDoc(null);
       }
     } catch (err) {
       console.error('Failed to load documents from backend', err);
+      setDocuments([]);
+      setSelectedDoc(null);
     }
   };
 
@@ -372,6 +205,8 @@ export const TechnicalManualsView: React.FC = () => {
     const targetDoc = documents.find((d) => d.id === docId);
     if (!targetDoc) return;
 
+    toast.info('Ingestion Retry', `Re-dispatching vector extraction job for ${targetDoc.documentNumber}...`);
+
     setDocuments((prev) =>
       prev.map((d) => {
         if (d.id !== docId) return d;
@@ -405,12 +240,17 @@ export const TechnicalManualsView: React.FC = () => {
           const status = current.latestVersion?.status || current.status;
           if (status === 'INDEXED' || status === 'FAILED') {
             clearInterval(poll);
+            if (status === 'INDEXED') {
+              toast.success('Indexing Completed', `Document ${targetDoc.documentNumber} is now indexed.`);
+            } else {
+              toast.error('Indexing Failed', current.latestVersion?.errorMessage || 'Document re-indexing failed.');
+            }
             await fetchDocuments(docId);
           }
         }
       }, 1000);
     } catch (err: any) {
-      alert(`Retry request failed: ${err?.message}`);
+      toast.error('Retry Failed', err?.message || 'Failed to dispatch retry request');
       await fetchDocuments(docId);
     }
   };
@@ -430,6 +270,7 @@ export const TechnicalManualsView: React.FC = () => {
         throw new Error(json.error || 'Delete failed');
       }
 
+      toast.success('Document Deleted', 'Document and associated vector chunks purged.');
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
       if (selectedDoc?.id === docId) {
         const remaining = documents.filter((d) => d.id !== docId);
@@ -439,7 +280,7 @@ export const TechnicalManualsView: React.FC = () => {
         }
       }
     } catch (err: any) {
-      alert(`Delete failed: ${err?.message}`);
+      toast.error('Delete Failed', err?.message || 'Failed to delete document.');
     }
   };
 
@@ -447,12 +288,16 @@ export const TechnicalManualsView: React.FC = () => {
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadFile) {
-      setUploadError('Please select a file to ingest.');
+      const errMsg = 'Please select a technical document file (.pdf, .docx, .txt) to ingest.';
+      setUploadError(errMsg);
+      toast.error('Missing File', errMsg);
       return;
     }
 
     if (!uploadForm.documentNumber || !uploadForm.title) {
-      setUploadError('Document Number and Title are required.');
+      const errMsg = 'Document Number and Title are required fields.';
+      setUploadError(errMsg);
+      toast.error('Validation Error', errMsg);
       return;
     }
 
@@ -460,6 +305,7 @@ export const TechnicalManualsView: React.FC = () => {
     setUploadError(null);
     setUploadProgress(15);
     setUploadStepMessage('Uploading file and verifying magic-byte integrity...');
+    toast.info('Ingesting Document', `Uploading ${uploadForm.documentNumber.toUpperCase()} for indexing...`);
 
     try {
       const formData = new FormData();
@@ -508,8 +354,11 @@ export const TechnicalManualsView: React.FC = () => {
               setIsUploading(false);
 
               if (status === 'FAILED') {
-                setUploadError(current.latestVersion?.errorMessage || current.latestJob?.errorMessage || 'Document processing failed.');
+                const errMsg = current.latestVersion?.errorMessage || current.latestJob?.errorMessage || 'Document processing failed.';
+                setUploadError(errMsg);
+                toast.error('Ingestion Failed', errMsg);
               } else {
+                toast.success('Document Ingested', `Document ${uploadedDoc.documentNumber} indexed successfully.`);
                 setIsUploadModalOpen(false);
                 setUploadFile(null);
                 setUploadForm({
@@ -530,7 +379,9 @@ export const TechnicalManualsView: React.FC = () => {
       }, 800);
     } catch (err: any) {
       setIsUploading(false);
-      setUploadError(err?.message || 'Network error occurred during upload.');
+      const errMsg = err?.message || 'Network error occurred during upload.';
+      setUploadError(errMsg);
+      toast.error('Upload Error', errMsg);
     }
   };
 
@@ -636,7 +487,22 @@ export const TechnicalManualsView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E2E8F0]">
-                {filteredDocs.map((doc) => {
+                {filteredDocs.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-16 text-center text-gray-500 bg-white">
+                      <div className="max-w-sm mx-auto space-y-3">
+                        <FileText className="w-10 h-10 text-gray-300 mx-auto" />
+                        <div>
+                          <p className="text-xs font-bold text-gray-800">No Technical Manuals or SOPs Uploaded Yet</p>
+                          <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">
+                            Upload OEM manuals, engineering P&IDs, or standard operating procedures using the button above to index documents for AI Copilot reasoning.
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredDocs.map((doc) => {
                   const isSelected = selectedDoc?.id === doc.id;
                   const isFailed = doc.status === 'FAILED';
                   const isProcessing = doc.status === 'PROCESSING';
@@ -714,7 +580,8 @@ export const TechnicalManualsView: React.FC = () => {
                       </td>
                     </tr>
                   );
-                })}
+                })
+              )}
               </tbody>
             </table>
           </div>

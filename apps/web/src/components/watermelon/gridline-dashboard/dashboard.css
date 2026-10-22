@@ -52,6 +52,5 @@ body:has(.gridline-dashboard) [data-slot="tooltip-content"] > svg {
 }
 
 .gridline-dashboard * {
-  scrollbar-width: thin;
-  scrollbar-color: #283543 #0B0F14;
+  scrollbar-width: none;
 }

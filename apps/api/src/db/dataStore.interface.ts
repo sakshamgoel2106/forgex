@@ -100,7 +100,24 @@ import type {
   ExpertKnowledgeFilterOptions,
   OperationalAnalyticsDashboard,
   OperationalAnalyticsFilterOptions,
+  EmailOtpRecord,
+  GoogleOAuthStateRecord,
 } from '@forgex/shared-types';
+
+export interface CreateEmailOtpDTO {
+  email: string;
+  codeHash: string;
+  purpose: 'login' | 'register' | 'invitation' | 'password_reset';
+  expiresAt: string;
+}
+
+export interface SaveGoogleOAuthStateDTO {
+  state: string;
+  purpose: 'login' | 'register' | 'invitation';
+  redirectUri: string;
+  invitationToken?: string;
+  expiresAt: string;
+}
 
 export interface CreateOrganizationDTO {
   name: string;
@@ -111,6 +128,12 @@ export interface CreateUserDTO {
   externalAuthId: string;
   email: string;
   fullName: string;
+  emailVerified?: boolean;
+  passwordHash?: string;
+  status?: string;
+  googleId?: string;
+  googleEmail?: string;
+  authProvider?: string;
 }
 
 export interface CreateMembershipDTO {
@@ -129,6 +152,13 @@ export interface CreateInvitationDTO {
   tokenHash: string;
   expiresAt: string;
   assignedPlantIds?: string[];
+  assignedMachineIds?: string[];
+  qrTokenHash?: string;
+  qrExpiresAt?: string;
+  activationCodeHash?: string;
+  employeeId?: string;
+  department?: string;
+  designation?: string;
 }
 
 export interface RegisterOrganizationDTO {
@@ -137,6 +167,16 @@ export interface RegisterOrganizationDTO {
   adminEmail: string;
   adminFullName: string;
   externalAuthId: string;
+  passwordHash?: string;
+  industry?: string;
+  country?: string;
+  timezone?: string;
+  website?: string;
+  companySize?: string;
+  initialSiteName?: string;
+  deploymentType?: 'saas' | 'enterprise';
+  verificationTokenHash?: string;
+  verificationExpiresAt?: string;
 }
 
 export interface CreatePlantDTO {
@@ -235,6 +275,7 @@ export interface IDataStore {
   createOrganization(dto: CreateOrganizationDTO): Promise<Organization>;
   getOrganizationById(id: string): Promise<Organization | null>;
   getOrganizationBySlug(slug: string): Promise<Organization | null>;
+  updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization | null>;
 
   // Users & Profiles
   createUser(dto: CreateUserDTO): Promise<User>;
@@ -244,6 +285,29 @@ export interface IDataStore {
   updateUser(userId: string, updates: Partial<User>): Promise<User | null>;
   listUserSessions(userId: string): Promise<UserSession[]>;
   revokeUserSession(userId: string, sessionId: string): Promise<boolean>;
+  revokeAllUserSessions(userId: string): Promise<number>;
+  getUserByVerificationToken(tokenHash: string): Promise<User | null>;
+  setUserEmailVerified(userId: string, verified: boolean): Promise<User | null>;
+  setUserVerificationToken(userId: string, tokenHash: string | null, expiresAt: string | null): Promise<User | null>;
+  setUserPassword(userId: string, passwordHash: string): Promise<User | null>;
+  createPasswordResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void>;
+  getPasswordResetToken(tokenHash: string): Promise<{ userId: string; expiresAt: string; usedAt: string | null } | null>;
+  consumePasswordResetToken(tokenHash: string): Promise<boolean>;
+
+  // Email OTP Authentication
+  createEmailOtp(dto: CreateEmailOtpDTO): Promise<EmailOtpRecord>;
+  getLatestEmailOtp(email: string, purpose: string): Promise<EmailOtpRecord | null>;
+  incrementEmailOtpAttempts(otpId: string): Promise<number>;
+  consumeEmailOtp(otpId: string): Promise<boolean>;
+  countRecentEmailOtps(email: string, sinceDate: string): Promise<number>;
+
+  // Google OAuth & Social Identity
+  getUserByGoogleId(googleId: string): Promise<User | null>;
+  setUserGoogleId(userId: string, googleId: string, googleEmail?: string): Promise<User | null>;
+  unlinkUserGoogleId(userId: string): Promise<User | null>;
+  saveGoogleOAuthState(dto: SaveGoogleOAuthStateDTO): Promise<GoogleOAuthStateRecord>;
+  getGoogleOAuthState(state: string): Promise<GoogleOAuthStateRecord | null>;
+  consumeGoogleOAuthState(state: string): Promise<boolean>;
 
   // Memberships & Team Management
   createMembership(dto: CreateMembershipDTO): Promise<OrganizationMembership>;
@@ -268,6 +332,10 @@ export interface IDataStore {
   createInvitation(dto: CreateInvitationDTO): Promise<OrganizationInvitation>;
   getInvitationById(organizationId: string, invitationId: string): Promise<OrganizationInvitation | null>;
   getInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | null>;
+  getInvitationByQrTokenHash(qrTokenHash: string): Promise<OrganizationInvitation | null>;
+  getInvitationByActivationCodeHash(codeHash: string): Promise<OrganizationInvitation | null>;
+  incrementActivationCodeAttempts(invitationId: string): Promise<number>;
+  updateInvitationQrToken(invitationId: string, qrTokenHash: string, qrExpiresAt: string): Promise<OrganizationInvitation | null>;
   listInvitations(organizationId: string, status?: InvitationStatus): Promise<OrganizationInvitation[]>;
   updateInvitationStatus(
     invitationId: string,
@@ -352,6 +420,7 @@ export interface IDataStore {
   // Visual Assets (Phase 5)
   createVisualAsset(dto: CreateVisualAssetDTO): Promise<VisualAsset>;
   getVisualAssetById(organizationId: string, id: string): Promise<VisualAsset | null>;
+  updateVisualAsset(organizationId: string, id: string, updates: Partial<VisualAsset>): Promise<VisualAsset | null>;
   listVisualAssets(organizationId: string, filter?: VisualAssetFilterOptions): Promise<VisualAsset[]>;
   deleteVisualAsset(organizationId: string, id: string): Promise<boolean>;
 
@@ -454,6 +523,7 @@ export interface IDataStore {
   getMaintenanceRecordById(organizationId: string, id: string): Promise<MaintenanceRecord | null>;
   getMaintenanceRecordByNumber(organizationId: string, recordNumber: string): Promise<MaintenanceRecord | null>;
   listMaintenanceRecords(organizationId: string, filters?: MaintenanceRecordFilterOptions): Promise<MaintenanceRecord[]>;
+  countMaintenanceRecords(organizationId: string, filters?: MaintenanceRecordFilterOptions): Promise<number>;
   updateMaintenanceRecord(organizationId: string, id: string, updates: UpdateMaintenanceRecordDTO): Promise<MaintenanceRecord | null>;
   getMachineMaintenanceHistory(organizationId: string, machineId: string): Promise<MaintenanceRecord[]>;
 
@@ -516,6 +586,8 @@ export interface CreateMaintenanceCaseDTO {
   operatingConditions?: Record<string, any>;
   visualAssetIds?: string[];
   supportingDocumentIds?: string[];
+  sourceTicketId?: string | null;
+  partsUsed?: any[] | null;
   diagnosticHypothesis?: DiagnosticHypothesis | null;
   checklist?: ChecklistStep[];
   findings?: TechnicianFindings | null;
@@ -525,6 +597,7 @@ export interface CreateMaintenanceCaseDTO {
   candidateForExpertKnowledge?: boolean;
   resolvedAt?: string | null;
   closedAt?: string | null;
+  maintenanceRecordId?: string | null;
 }
 
 export interface MaintenanceCaseFilterOptions {
@@ -548,6 +621,7 @@ export interface CreateCaseHistoryDTO {
 export interface CreateVisualAssetDTO {
   organizationId: string;
   plantId?: string | null;
+  machineId?: string | null;
   documentId?: string | null;
   documentVersionId?: string | null;
   pageNumber?: number | null;
@@ -565,14 +639,19 @@ export interface CreateVisualAssetDTO {
   modelUsed: string;
   confidenceScore?: number;
   isAmbiguous?: boolean;
+  processingStatus?: 'UPLOADED' | 'PROCESSING' | 'PROCESSED' | 'FAILED';
+  uploadedByUserId?: string | null;
+  dataClassification?: string | null;
 }
 
 export interface VisualAssetFilterOptions {
   plantId?: string;
+  machineId?: string;
   documentId?: string;
   documentVersionId?: string;
   assetType?: VisualAssetType;
   equipmentTag?: string;
+  processingStatus?: string;
 }
 
 export interface CreateConversationDTO {
@@ -876,8 +955,10 @@ export interface CreateMaintenanceRecordDTO {
   plantId: string;
   machineId: string;
   machineAssetTag: string;
-  ticketId: string;
-  ticketNumber: string;
+  ticketId?: string | null;
+  ticketNumber?: string | null;
+  caseId?: string | null;
+  caseNumber?: string | null;
   componentId?: string | null;
   componentName?: string | null;
   reportingUserId: string;
@@ -911,6 +992,7 @@ export interface CreateMaintenanceRecordDTO {
   relatedIncidentRecordIds?: string[];
   attachments?: MaintenanceAttachment[];
   knowledgeApproved?: boolean;
+  resolvedAt?: string | null;
 }
 
 export interface UpdateMaintenanceRecordDTO {
@@ -946,12 +1028,20 @@ export interface MaintenanceRecordFilterOptions {
   machineId?: string;
   plantId?: string;
   ticketId?: string;
+  caseId?: string;
   faultCategory?: string;
   rootCauseStatus?: RootCauseStatus;
   verificationState?: MaintenanceVerificationState;
   approvalStatus?: ResolutionApprovalStatus;
   requiresRestartApproval?: boolean;
   restartApproved?: boolean;
+  technicianUserId?: string;
+  isRecurring?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
+  sortOrder?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
 }
 
 export interface RecurringFaultOptions {

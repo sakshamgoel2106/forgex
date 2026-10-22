@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './lib/AuthContext';
+import { ToastProvider } from './lib/ToastContext';
 import { AppShell } from './components/layout/AppShell';
 import type { NavModule } from './components/layout/Sidebar';
 import { ShieldAlert, ArrowRight } from 'lucide-react';
@@ -13,7 +14,6 @@ import { MaintenanceWorkspaceView } from './components/views/MaintenanceWorkspac
 import { ExpertKnowledgeView } from './components/views/ExpertKnowledgeView';
 import { TeamManagementView } from './components/views/TeamManagementView';
 import { EngineeringAssetCenterView } from './components/views/EngineeringAssetCenterView';
-import { AuditLedgerView } from './components/views/AuditLedgerView';
 import { SettingsView } from './components/views/SettingsView';
 import { LoginView } from './components/views/LoginView';
 import { MachineRecoveryView } from './components/views/MachineRecoveryView';
@@ -93,6 +93,18 @@ const AppContent: React.FC = () => {
     }
   }, [membership?.role]);
 
+  // Global cross-module navigation event listener
+  useEffect(() => {
+    const handleNavEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ module: string; caseId?: string }>;
+      if (customEvent.detail?.module) {
+        setActiveModule(customEvent.detail.module as NavModule);
+      }
+    };
+    window.addEventListener('forgex:navigate', handleNavEvent);
+    return () => window.removeEventListener('forgex:navigate', handleNavEvent);
+  }, []);
+
   if (isLoading) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-[#0B0F17] text-[#E2E8F0]">
@@ -153,7 +165,12 @@ const AppContent: React.FC = () => {
       case 'maintenance':
         return <MaintenanceWorkspaceView />;
       case 'history':
-        return <MaintenanceHistoryView />;
+        return (
+          <MaintenanceHistoryView
+            onNavigate={(mod) => setActiveModule(mod as NavModule)}
+            onNavigateToWorkOrder={(_ticket) => setActiveModule('maintenance')}
+          />
+        );
       case 'visual':
         return <VisualIntelligenceView />;
       case 'tech':
@@ -182,12 +199,12 @@ const AppContent: React.FC = () => {
         );
       case 'audit':
         return isOwnerOrAdmin || role === 'PLANT_MANAGER' ? (
-          <AuditLedgerView />
+          <SettingsView initialTab="security" />
         ) : (
           <RBACFallbackBanner moduleName="Security & Audit Ledger" role={role} onRedirect={setActiveModule} />
         );
       case 'settings':
-        return <SettingsView />;
+        return <SettingsView initialTab="profile" />;
       default:
         return <OverviewView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
     }
@@ -202,9 +219,11 @@ const AppContent: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </ToastProvider>
   );
 };
 

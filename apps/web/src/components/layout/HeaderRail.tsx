@@ -7,20 +7,15 @@ import {
   ChevronDown,
   User,
 } from 'lucide-react';
-import { StatusBadge } from '../ui/StatusBadge';
 
 interface HeaderRailProps {
   plantSite: string;
   onPlantChange: (site: string) => void;
-  onOpenHealthModal: () => void;
-  systemHealthy: boolean;
 }
 
 export const HeaderRail: React.FC<HeaderRailProps> = ({
   plantSite,
   onPlantChange,
-  onOpenHealthModal,
-  systemHealthy,
 }) => {
   return (
     <header className="h-14 border-b border-graphite-800 bg-graphite-900/90 backdrop-blur px-4 flex items-center justify-between select-none">
@@ -80,21 +75,8 @@ export const HeaderRail: React.FC<HeaderRailProps> = ({
         </div>
       </div>
 
-      {/* Right Controls: Subsystem Health & User Profile */}
+      {/* Right Controls: User Profile */}
       <div className="flex items-center gap-3">
-        {/* Subsystem Health Trigger */}
-        <button
-          onClick={onOpenHealthModal}
-          className="flex items-center gap-2 px-2.5 py-1 rounded bg-graphite-950 hover:bg-graphite-800 border border-graphite-800 transition text-xs font-mono"
-          title="Inspect Subsystem Health"
-        >
-          <StatusBadge
-            label={systemHealthy ? 'SYSTEMS NOMINAL' : 'CHECK SUBSYSTEMS'}
-            tone={systemHealthy ? 'healthy' : 'warning'}
-            pulse={systemHealthy}
-          />
-        </button>
-
         {/* User Badge */}
         <div className="flex items-center gap-2 pl-2 border-l border-graphite-800">
           <div className="w-7 h-7 rounded-full bg-graphite-800 border border-graphite-700 flex items-center justify-center text-graphite-300">

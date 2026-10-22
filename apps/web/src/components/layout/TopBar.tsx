@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   Bell,
@@ -6,8 +6,7 @@ import {
   Clock,
   Building2,
   Menu,
-  Cpu,
-  Activity,
+  Settings,
   ShieldCheck,
   LogOut,
   ChevronLeft,
@@ -33,7 +32,6 @@ interface TopBarProps {
   onOpenSearch: () => void;
   onOpenNotifications: () => void;
   onOpenMobileNav: () => void;
-  onOpenHealthModal: () => void;
   onNavigate: (module: NavModule) => void;
   onToggleSidebar?: () => void;
   sidebarCollapsed?: boolean;
@@ -57,7 +55,7 @@ const MODULE_LABELS: Record<NavModule, string> = {
   notifications: 'Notifications',
   team: 'Team & Access',
   audit: 'Security & Audit',
-  settings: 'Settings & Health',
+  settings: 'Settings',
 };
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -67,13 +65,53 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenSearch,
   onOpenNotifications,
   onOpenMobileNav,
-  onOpenHealthModal,
   onNavigate,
   onToggleSidebar,
   sidebarCollapsed,
 }) => {
-  const { user, organization, membership, memberships, logout, switchOrganization } = useAuth();
+  const { user, organization, membership, memberships, logout, switchOrganization, token } = useAuth();
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
+  const [plants, setPlants] = useState<any[]>([]);
+  const [hasMachines, setHasMachines] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!token || !organization?.id) return;
+    let isMounted = true;
+
+    // Fetch real plants belonging to this organization
+    fetch('/api/v1/plants', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-organization-id': organization.id,
+      },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (isMounted && json?.data && Array.isArray(json.data)) {
+          setPlants(json.data);
+        }
+      })
+      .catch(() => {});
+
+    // Check if organization has any registered machines
+    fetch('/api/v1/machines', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-organization-id': organization.id,
+      },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (isMounted && json?.data && Array.isArray(json.data)) {
+          setHasMachines(json.data.length > 0);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, [token, organization?.id]);
 
   const userName = user?.fullName || 'John Doe';
   const userInitials = userName
@@ -86,6 +124,14 @@ export const TopBar: React.FC<TopBarProps> = ({
   const roleLabel = membership?.role?.replace(/_/g, ' ') || 'Administrator';
   const orgName = organization?.name || 'Apex Energy Operations';
   const currentModuleLabel = MODULE_LABELS[activeModule] || 'Overview';
+
+  const currentPlant = plants.find((p) => p.id === plantSite || p.code === plantSite);
+  const currentPlantLabel = plants.length === 0
+    ? 'No Plants Configured'
+    : (currentPlant ? currentPlant.name : 'All Facilities');
+
+  // If organization has no machines, unread alert count is strictly 0
+  const unreadAlertCount = hasMachines ? 3 : 0;
 
   return (
     <div className="shrink-0">
@@ -175,42 +221,67 @@ export const TopBar: React.FC<TopBarProps> = ({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-white border border-gray-200 hover:border-[#1D4ED8] transition text-left outline-none shadow-sm">
-                <Building2 className="w-3.5 h-3.5 text-[#1D4ED8] shrink-0" />
+                <Building2 className={`w-3.5 h-3.5 shrink-0 ${plants.length > 0 ? 'text-[#1D4ED8]' : 'text-slate-400'}`} />
                 <div className="min-w-0 flex items-center gap-1.5 text-xs font-mono">
                   <span className="font-semibold text-gray-800 truncate max-w-[120px]">
-                    {organization?.name || 'Acme Industries'}
+                    {organization?.name || 'Company'}
                   </span>
                   <span className="text-gray-300">|</span>
-                  <span className="text-gray-600 truncate max-w-[110px]">
-                    {plantSite === 'RIVERSIDE' ? 'Riverside Plant' : plantSite === 'GULF' ? 'Gulf Coast' : 'Stuttgart Werk 2'}
+                  <span className={`truncate max-w-[140px] ${plants.length === 0 ? 'text-amber-700 italic' : 'text-gray-600'}`}>
+                    {currentPlantLabel}
                   </span>
                 </div>
                 <ChevronDown className="w-3 h-3 text-gray-400 ml-0.5 shrink-0" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52 bg-white border-gray-200 shadow-lg">
-              <DropdownMenuLabel className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
-                Industrial Complexes
+            <DropdownMenuContent align="end" className="w-64 bg-white border-gray-200 shadow-lg p-1.5">
+              <DropdownMenuLabel className="text-[10px] text-gray-400 font-bold uppercase tracking-widest px-2 py-1">
+                Plant Facilities ({plants.length})
               </DropdownMenuLabel>
-              {[
-                { key: 'RIVERSIDE', label: 'Riverside Plant', sub: 'Plant 1 · North Area' },
-                { key: 'GULF', label: 'Gulf Coast Refinery', sub: 'Unit 4B' },
-                { key: 'MIDWEST', label: 'Midwest Cracker', sub: 'Train 2' },
-              ].map((p) => (
-                <DropdownMenuItem
-                  key={p.key}
-                  onClick={() => onPlantChange(p.key)}
-                  className="text-xs cursor-pointer focus:bg-gray-50 flex items-center justify-between py-2"
-                >
-                  <div>
-                    <div className="font-medium text-gray-800">{p.label}</div>
-                    <div className="text-[10px] text-gray-400">{p.sub}</div>
-                  </div>
-                  {plantSite === p.key && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] ml-2" />
-                  )}
-                </DropdownMenuItem>
-              ))}
+              {plants.length === 0 ? (
+                <div className="px-3 py-3 text-center space-y-1.5">
+                  <p className="text-xs text-gray-700 font-semibold">No Plants Configured</p>
+                  <p className="text-[11px] text-gray-400 leading-relaxed">
+                    You have not registered any manufacturing or plant facilities for {organization?.name || 'this company'} yet.
+                  </p>
+                  <button
+                    onClick={() => onNavigate('engineering-assets')}
+                    className="mt-1 text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline"
+                  >
+                    + Register Plant in Assets
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <DropdownMenuItem
+                    onClick={() => onPlantChange('')}
+                    className="text-xs cursor-pointer focus:bg-gray-50 flex items-center justify-between py-2 rounded"
+                  >
+                    <div>
+                      <div className="font-medium text-gray-800">All Facilities</div>
+                      <div className="text-[10px] text-gray-400">All registered plant sites</div>
+                    </div>
+                    {!plantSite && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] ml-2" />
+                    )}
+                  </DropdownMenuItem>
+                  {plants.map((p) => (
+                    <DropdownMenuItem
+                      key={p.id}
+                      onClick={() => onPlantChange(p.id)}
+                      className="text-xs cursor-pointer focus:bg-gray-50 flex items-center justify-between py-2 rounded"
+                    >
+                      <div>
+                        <div className="font-medium text-gray-800">{p.name}</div>
+                        <div className="text-[10px] text-gray-400">{p.code || p.location || 'Industrial Plant'}</div>
+                      </div>
+                      {plantSite === p.id && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] ml-2" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -221,27 +292,28 @@ export const TopBar: React.FC<TopBarProps> = ({
             aria-label="View notifications"
           >
             <Bell className="w-4 h-4" />
-            <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-              3
-            </span>
-          </button>
-
-          {/* System Health */}
-          <button
-            onClick={onOpenHealthModal}
-            className="hidden lg:flex p-2 rounded-md bg-white border border-gray-200 text-gray-500 hover:text-[#16A34A] hover:border-green-300 transition shadow-sm"
-            aria-label="System health"
-          >
-            <Activity className="w-4 h-4" />
+            {unreadAlertCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+                {unreadAlertCount}
+              </span>
+            )}
           </button>
 
           {/* User Profile */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-2 pl-1 outline-none group">
-                <div className="w-8 h-8 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xs font-bold border-2 border-[#BFDBFE]">
-                  {userInitials}
-                </div>
+                {user?.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={userName}
+                    className="w-8 h-8 rounded-full object-cover border-2 border-[#BFDBFE] shadow-sm bg-slate-100"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xs font-bold border-2 border-[#BFDBFE]">
+                    {userInitials}
+                  </div>
+                )}
                 <div className="text-left hidden md:block">
                   <div className="text-xs font-semibold text-gray-800 group-hover:text-[#1D4ED8] transition leading-tight">
                     {userName}
@@ -252,25 +324,31 @@ export const TopBar: React.FC<TopBarProps> = ({
               </button>
             </DropdownMenuTrigger>
 
-            <DropdownMenuContent align="end" className="w-56 bg-white border-gray-200 shadow-xl">
-              <div className="px-3 py-2 border-b border-gray-100">
-                <div className="font-semibold text-sm text-gray-900">{userName}</div>
-                <div className="text-[11px] text-[#1D4ED8] font-semibold capitalize">{roleLabel.toLowerCase()}</div>
-                <div className="text-[10px] text-gray-400 truncate mt-0.5">{orgName}</div>
+            <DropdownMenuContent align="end" className="w-60 bg-white border-gray-200 shadow-xl">
+              <div className="px-3 py-2.5 border-b border-gray-100 flex items-center gap-2.5">
+                {user?.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={userName}
+                    className="w-9 h-9 rounded-full object-cover border border-gray-200 shrink-0 bg-slate-100"
+                  />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-[#1D4ED8] text-white flex items-center justify-center text-xs font-bold shrink-0">
+                    {userInitials}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="font-semibold text-sm text-gray-900 truncate">{userName}</div>
+                  <div className="text-[11px] text-[#1D4ED8] font-semibold capitalize leading-tight">{roleLabel.toLowerCase()}</div>
+                  <div className="text-[10px] text-gray-400 truncate mt-0.5">{orgName}</div>
+                </div>
               </div>
               <DropdownMenuItem
                 onClick={() => onNavigate('settings')}
                 className="text-xs cursor-pointer focus:bg-gray-50 gap-2 py-2"
               >
-                <Cpu className="w-3.5 h-3.5 text-[#1D4ED8]" />
-                Inference & Settings
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={onOpenHealthModal}
-                className="text-xs cursor-pointer focus:bg-gray-50 gap-2 py-2"
-              >
-                <Activity className="w-3.5 h-3.5 text-emerald-500" />
-                System Health
+                <Settings className="w-3.5 h-3.5 text-[#1D4ED8]" />
+                Account & Org Settings
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => onNavigate('audit')}

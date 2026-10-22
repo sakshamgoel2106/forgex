@@ -4,6 +4,7 @@ import type { IStorageAdapter } from '../storage/storage.interface.js';
 import type { IEmbeddingAdapter } from '../embeddings/embeddings.interface.js';
 import type { IVectorStoreAdapter, VectorPoint } from '../vector/vectorStore.interface.js';
 import { logger } from '../utils/logger.js';
+import { buildIndustrialPumpGlb } from '../utils/glbBuilder.js';
 
 export async function bootstrapInitialData(
   dataStore: IDataStore,
@@ -385,9 +386,19 @@ export async function bootstrapInitialData(
         status: 'APPROVED',
         dataClassification: 'CONFIDENTIAL',
         uploadedByUserId: user.id,
-        extractedComponentsCount: 18,
+        extractedComponentsCount: 5,
       });
       logger.info('Bootstrapped official 3D GLB model for PUMP-204-B');
+
+      if (storageAdapter) {
+        try {
+          const pumpGlb = buildIndustrialPumpGlb();
+          await storageAdapter.putObject('models/centrifugal_pump.glb', pumpGlb, 'model/gltf-binary');
+          logger.info('Bootstrapped genuine 3D GLB file models/centrifugal_pump.glb into storage');
+        } catch (err) {
+          logger.warn({ err }, 'Failed to seed 3D GLB model file into storage');
+        }
+      }
     }
 
     const existingDrawings = await dataStore.listEngineeringDrawings(org.id, { machineId: pump.id });
@@ -412,6 +423,111 @@ export async function bootstrapInitialData(
         uploadedByUserId: user.id,
       });
       logger.info('Bootstrapped engineering P&ID drawing DWG-2026-P204-PID-01 for PUMP-204-B');
+
+      if (storageAdapter) {
+        try {
+          const sampleSvg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" width="100%" height="100%" style="background-color: #FFFFFF;">
+  <defs>
+    <marker id="pid-flow-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0284C7" />
+    </marker>
+    <marker id="pid-seal-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D97706" />
+    </marker>
+  </defs>
+
+  <!-- Border & Engineering Drawing Title Block (ISA-5.1 Specification) -->
+  <rect x="15" y="15" width="870" height="490" fill="none" stroke="#CBD5E1" stroke-width="2" />
+  <rect x="580" y="390" width="305" height="115" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.5" />
+  <text x="595" y="415" fill="#64748B" font-size="10" font-family="monospace" font-weight="bold">PLANT: DEER PARK REFINING COMPLEX</text>
+  <text x="595" y="435" fill="#0F172A" font-size="12" font-family="monospace" font-weight="bold">SYSTEM: CDU HYDROTREATER TRAIN</text>
+  <text x="595" y="455" fill="#2563EB" font-size="11" font-family="monospace" font-weight="bold">DWG: DWG-2026-P204-PID-01 (REV 4.1)</text>
+  <text x="595" y="475" fill="#475569" font-size="10" font-family="monospace">EQUIPMENT: PUMP-204-B BOOSTER PUMP</text>
+  <text x="595" y="492" fill="#64748B" font-size="9" font-family="monospace">EPC: FLUOR DANIELS • STANDARD: ISA-5.1</text>
+
+  <!-- Primary Process Flow Lines (Crude Hydrocarbon) -->
+  <line x1="40" y1="260" x2="350" y2="260" stroke="#0284C7" stroke-width="4" marker-end="url(#pid-flow-arrow)" />
+  <text x="60" y="245" fill="#0369A1" font-size="11" font-family="monospace" font-weight="bold">12"-HC-204-A1A (CRUDE FEED SUCTION)</text>
+
+  <!-- Suction Isolation Valve V-101 -->
+  <g id="V-101" data-tag="V-101" class="pid-valve" style="cursor: pointer;">
+    <polygon points="180,250 180,270 210,250 210,270" fill="#E0F2FE" stroke="#0284C7" stroke-width="2" />
+    <line x1="195" y1="250" x2="195" y2="235" stroke="#0284C7" stroke-width="2" />
+    <line x1="185" y1="235" x2="205" y2="235" stroke="#0284C7" stroke-width="2" />
+    <text x="195" y="225" fill="#0369A1" font-size="10" font-family="monospace" font-weight="bold" text-anchor="middle">V-101</text>
+  </g>
+
+  <!-- Centrifugal Pump Volute & Impeller (P-204-IMP) -->
+  <g id="P-204-IMP" data-tag="P-204-IMP" class="pid-tag-group" style="cursor: pointer;">
+    <circle cx="395" cy="260" r="45" fill="#F0F9FF" stroke="#0284C7" stroke-width="3" />
+    <polygon points="365,290 395,215 425,290" fill="none" stroke="#0284C7" stroke-width="2.5" />
+    <circle cx="395" cy="260" r="8" fill="#0284C7" />
+    <text x="395" y="325" fill="#0F172A" font-size="13" font-family="monospace" font-weight="bold" text-anchor="middle">P-204-IMP</text>
+    <text x="395" y="342" fill="#64748B" font-size="10" font-family="monospace" text-anchor="middle">OH2 Centrifugal Volute</text>
+  </g>
+
+  <!-- Drive Motor (M-204-DRV) -->
+  <g id="M-204-DRV" data-tag="M-204-DRV" class="pid-tag-group" style="cursor: pointer;">
+    <line x1="395" y1="260" x2="260" y2="260" stroke="#64748B" stroke-width="3" stroke-dasharray="4 2" />
+    <rect x="235" y="320" width="70" height="70" rx="6" fill="#FAF5FF" stroke="#9333EA" stroke-width="2.5" />
+    <line x1="270" y1="260" x2="270" y2="320" stroke="#64748B" stroke-width="3" />
+    <text x="270" y="355" fill="#9333EA" font-size="18" font-family="monospace" font-weight="bold" text-anchor="middle">M</text>
+    <text x="270" y="375" fill="#7E22CE" font-size="10" font-family="monospace" font-weight="bold" text-anchor="middle">480V 75kW</text>
+    <text x="270" y="410" fill="#0F172A" font-size="12" font-family="monospace" font-weight="bold" text-anchor="middle">M-204-DRV</text>
+  </g>
+
+  <!-- Mechanical Seal Cartridge & Plan 53B Barrier Fluid Loop (P-204-SEAL) -->
+  <g id="P-204-SEAL" data-tag="P-204-SEAL" class="pid-tag-group" style="cursor: pointer;">
+    <rect x="355" y="150" width="80" height="42" rx="5" fill="#FFFBEB" stroke="#D97706" stroke-width="2.5" />
+    <line x1="375" y1="192" x2="375" y2="225" stroke="#D97706" stroke-width="2" stroke-dasharray="3 2" marker-end="url(#pid-seal-arrow)" />
+    <line x1="415" y1="225" x2="415" y2="192" stroke="#D97706" stroke-width="2" stroke-dasharray="3 2" marker-end="url(#pid-seal-arrow)" />
+    <text x="395" y="170" fill="#B45309" font-size="10" font-family="monospace" font-weight="bold" text-anchor="middle">API PLAN 53B</text>
+    <text x="395" y="184" fill="#B45309" font-size="9" font-family="monospace" text-anchor="middle">BARRIER LOOP</text>
+    <text x="395" y="140" fill="#B45309" font-size="12" font-family="monospace" font-weight="bold" text-anchor="middle">P-204-SEAL</text>
+  </g>
+
+  <!-- Discharge Line (8" to Heater) -->
+  <line x1="395" y1="215" x2="395" y2="120" stroke="#0284C7" stroke-width="4" />
+  <line x1="395" y1="120" x2="850" y2="120" stroke="#0284C7" stroke-width="4" marker-end="url(#pid-flow-arrow)" />
+  <text x="640" y="105" fill="#0369A1" font-size="11" font-family="monospace" font-weight="bold">8"-HC-204-A1B (TO HEATER PRE-HEAT)</text>
+
+  <!-- Discharge Check Valve & Isolation Valve -->
+  <g id="V-102" data-tag="V-102" class="pid-valve" style="cursor: pointer;">
+    <polygon points="460,110 460,130 490,110 490,130" fill="#E0F2FE" stroke="#0284C7" stroke-width="2" />
+    <line x1="475" y1="110" x2="475" y2="95" stroke="#0284C7" stroke-width="2" />
+    <line x1="465" y1="95" x2="485" y2="95" stroke="#0284C7" stroke-width="2" />
+    <text x="475" y="85" fill="#0369A1" font-size="10" font-family="monospace" font-weight="bold" text-anchor="middle">V-102</text>
+  </g>
+
+  <!-- Instrumentation: Pressure Transmitter (PT-204) -->
+  <g id="PT-204" data-tag="PT-204" class="pid-tag-group" style="cursor: pointer;">
+    <circle cx="560" cy="180" r="24" fill="#F0F9FF" stroke="#0284C7" stroke-width="2" />
+    <line x1="536" y1="180" x2="584" y2="180" stroke="#0284C7" stroke-width="1.5" />
+    <line x1="560" y1="120" x2="560" y2="156" stroke="#0284C7" stroke-width="1.5" stroke-dasharray="3 2" />
+    <text x="560" y="172" fill="#0284C7" font-size="11" font-family="monospace" font-weight="bold" text-anchor="middle">PT</text>
+    <text x="560" y="196" fill="#0284C7" font-size="10" font-family="monospace" font-weight="bold" text-anchor="middle">204</text>
+    <text x="560" y="222" fill="#475569" font-size="11" font-family="monospace" font-weight="bold" text-anchor="middle">PT-204</text>
+    <text x="560" y="236" fill="#64748B" font-size="9" font-family="monospace" text-anchor="middle">0 - 150 PSI</text>
+  </g>
+
+  <!-- Instrumentation: Flow Transmitter (FT-204) -->
+  <g id="FT-204" data-tag="FT-204" class="pid-tag-group" style="cursor: pointer;">
+    <circle cx="700" cy="180" r="24" fill="#F0F9FF" stroke="#0284C7" stroke-width="2" />
+    <line x1="676" y1="180" x2="724" y2="180" stroke="#0284C7" stroke-width="1.5" />
+    <line x1="700" y1="120" x2="700" y2="156" stroke="#0284C7" stroke-width="1.5" stroke-dasharray="3 2" />
+    <text x="700" y="172" fill="#0284C7" font-size="11" font-family="monospace" font-weight="bold" text-anchor="middle">FT</text>
+    <text x="700" y="196" fill="#0284C7" font-size="10" font-family="monospace" font-weight="bold" text-anchor="middle">204</text>
+    <text x="700" y="222" fill="#475569" font-size="11" font-family="monospace" font-weight="bold" text-anchor="middle">FT-204</text>
+    <text x="700" y="236" fill="#64748B" font-size="9" font-family="monospace" text-anchor="middle">0 - 1200 GPM</text>
+  </g>
+</svg>`;
+          await storageAdapter.putObject('schematics/pid_pump_204.svg', Buffer.from(sampleSvg, 'utf-8'), 'image/svg+xml');
+          logger.info('Bootstrapped genuine P&ID SVG file schematics/pid_pump_204.svg into storage');
+        } catch (sErr: any) {
+          logger.warn({ err: sErr?.message }, 'Could not write initial P&ID SVG to storage');
+        }
+      }
     }
 
     const existingResources = await dataStore.listManufacturerResources(org.id, { machineId: pump.id });

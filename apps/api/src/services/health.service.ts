@@ -27,31 +27,39 @@ export class HealthService {
       message: 'PostgreSQL connection pool ready',
     };
 
+    const redisTarget = config.REDIS_URL.includes('@')
+      ? config.REDIS_URL.split('@')[1]
+      : config.REDIS_URL.replace(/^[a-z]+:\/\//, '');
+
+    const redisHealth: SubsystemHealth = this.overrides.redis || {
+      status: 'UP',
+      message: `Redis task broker configured at ${redisTarget}`,
+    };
+
+    const qdrantTarget = config.QDRANT_URL.includes('//')
+      ? config.QDRANT_URL.split('//')[1].split(':')[0]
+      : 'localhost';
+
     const vectorStoreHealth: SubsystemHealth = this.overrides.vectorStore || {
       status: 'UP',
-      message: `Qdrant endpoint configured at ${config.QDRANT_URL}`,
+      message: `Qdrant vector cluster target: ${qdrantTarget}`,
     };
 
     const objectStorageHealth: SubsystemHealth = this.overrides.objectStorage || {
       status: 'UP',
-      message: `S3 storage provider active (${config.S3_BUCKET_NAME})`,
-    };
-
-    const redisHealth: SubsystemHealth = this.overrides.redis || {
-      status: 'UP',
-      message: `Redis 7 task broker configured at ${config.REDIS_URL}`,
+      message: `Storage provider active [${config.STORAGE_PROVIDER}] bucket [${config.S3_BUCKET_NAME}]`,
     };
 
     const inferenceHealth: SubsystemHealth = this.overrides.inferenceProvider || {
       status: 'UP',
       message: `Inference provider [${config.INFERENCE_PROVIDER}] mode [${config.DEPLOYMENT_MODE}] target: ${
-        config.DEPLOYMENT_MODE === 'enterprise' ? config.OLLAMA_BASE_URL : 'Cloud AI Gateway'
+        config.DEPLOYMENT_MODE === 'enterprise' ? 'Local Ollama' : 'Cloud AI Gateway'
       }`,
     };
 
     const documentWorkerHealth: SubsystemHealth = this.overrides.documentWorker || {
       status: 'UP',
-      message: `Document extraction worker reachable at ${config.WORKER_URL}`,
+      message: `Document extraction worker configured (${config.NODE_ENV === 'test' ? 'mock' : 'live'})`,
     };
 
     const allUp =

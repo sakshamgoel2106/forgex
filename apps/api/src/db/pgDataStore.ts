@@ -77,6 +77,8 @@ import type {
   SpecialistWorkloadMetric,
   TicketSeverity,
   TicketStatus,
+  EmailOtpRecord,
+  GoogleOAuthStateRecord,
 } from '@forgex/shared-types';
 import { DEFAULT_INDUSTRY_PROFILES } from '@forgex/shared-types';
 import type {
@@ -107,6 +109,8 @@ import type {
   CreateMachineDTO,
   MachineFilterOptions,
   CreateMissingInfoTaskDTO,
+  CreateEmailOtpDTO,
+  SaveGoogleOAuthStateDTO,
   MissingInfoTaskFilterOptions,
   CreateComponentMappingDTO,
   IssueEmployeeBadgeDTO,
@@ -160,7 +164,7 @@ export class PgDataStore implements IDataStore {
 
   public async getOrganizationById(id: string): Promise<Organization | null> {
     const res = await this.pool.query(
-      `SELECT id, name, slug, created_at, updated_at
+      `SELECT id, name, slug, industry, country, timezone, website, company_size, measurement_units, deployment_type, created_at, updated_at
        FROM organizations WHERE id = $1`,
       [id]
     );
@@ -170,6 +174,13 @@ export class PgDataStore implements IDataStore {
       id: row.id,
       name: row.name,
       slug: row.slug,
+      industry: row.industry ?? undefined,
+      country: row.country ?? undefined,
+      timezone: row.timezone ?? undefined,
+      website: row.website ?? undefined,
+      companySize: row.company_size ?? undefined,
+      measurementUnits: (row.measurement_units as 'metric' | 'imperial') ?? 'metric',
+      deploymentType: (row.deployment_type as 'saas' | 'enterprise') ?? 'saas',
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };
@@ -177,7 +188,7 @@ export class PgDataStore implements IDataStore {
 
   public async getOrganizationBySlug(slug: string): Promise<Organization | null> {
     const res = await this.pool.query(
-      `SELECT id, name, slug, created_at, updated_at
+      `SELECT id, name, slug, industry, country, timezone, website, company_size, measurement_units, deployment_type, created_at, updated_at
        FROM organizations WHERE slug = $1`,
       [slug]
     );
@@ -187,6 +198,80 @@ export class PgDataStore implements IDataStore {
       id: row.id,
       name: row.name,
       slug: row.slug,
+      industry: row.industry ?? undefined,
+      country: row.country ?? undefined,
+      timezone: row.timezone ?? undefined,
+      website: row.website ?? undefined,
+      companySize: row.company_size ?? undefined,
+      measurementUnits: (row.measurement_units as 'metric' | 'imperial') ?? 'metric',
+      deploymentType: (row.deployment_type as 'saas' | 'enterprise') ?? 'saas',
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization | null> {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (updates.name !== undefined) {
+      fields.push(`name = $${idx++}`);
+      values.push(updates.name);
+    }
+    if (updates.industry !== undefined) {
+      fields.push(`industry = $${idx++}`);
+      values.push(updates.industry);
+    }
+    if (updates.country !== undefined) {
+      fields.push(`country = $${idx++}`);
+      values.push(updates.country);
+    }
+    if (updates.timezone !== undefined) {
+      fields.push(`timezone = $${idx++}`);
+      values.push(updates.timezone);
+    }
+    if (updates.website !== undefined) {
+      fields.push(`website = $${idx++}`);
+      values.push(updates.website);
+    }
+    if (updates.companySize !== undefined) {
+      fields.push(`company_size = $${idx++}`);
+      values.push(updates.companySize);
+    }
+    if (updates.measurementUnits !== undefined) {
+      fields.push(`measurement_units = $${idx++}`);
+      values.push(updates.measurementUnits);
+    }
+
+    if (fields.length === 0) {
+      return this.getOrganizationById(id);
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const res = await this.pool.query(
+      `UPDATE organizations
+       SET ${fields.join(', ')}
+       WHERE id = $${idx}
+       RETURNING id, name, slug, industry, country, timezone, website, company_size, measurement_units, deployment_type, created_at, updated_at`,
+      values
+    );
+
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      industry: row.industry ?? undefined,
+      country: row.country ?? undefined,
+      timezone: row.timezone ?? undefined,
+      website: row.website ?? undefined,
+      companySize: row.company_size ?? undefined,
+      measurementUnits: (row.measurement_units as 'metric' | 'imperial') ?? 'metric',
+      deploymentType: (row.deployment_type as 'saas' | 'enterprise') ?? 'saas',
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };
@@ -195,76 +280,113 @@ export class PgDataStore implements IDataStore {
   // --------------------------------------------------------------------------
   // Users
   // --------------------------------------------------------------------------
-  public async createUser(dto: CreateUserDTO): Promise<User> {
-    const res = await this.pool.query(
-      `INSERT INTO users (external_auth_id, email, full_name)
-       VALUES ($1, $2, $3)
-       RETURNING id, external_auth_id, email, full_name, created_at, updated_at`,
-      [dto.externalAuthId, dto.email, dto.fullName]
-    );
-    const row = res.rows[0];
+  private mapUserRow(row: any): User {
+    let parsedPreferences = row.preferences;
+    if (typeof parsedPreferences === 'string') {
+      try {
+        parsedPreferences = JSON.parse(parsedPreferences);
+      } catch {
+        parsedPreferences = undefined;
+      }
+    }
+
     return {
       id: row.id,
       externalAuthId: row.external_auth_id,
       email: row.email,
       fullName: row.full_name,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
+      jobTitle: row.job_title ?? undefined,
+      department: row.department ?? undefined,
+      phone: row.phone ?? undefined,
+      avatarUrl: row.avatar_url ?? undefined,
+      preferences: parsedPreferences ?? undefined,
+      emailVerified: row.email_verified ?? false,
+      passwordHash: row.password_hash ?? undefined,
+      status: row.account_status ?? row.status ?? 'ACTIVE',
+      googleId: row.google_id ?? undefined,
+      googleEmail: row.google_email ?? undefined,
+      authProvider: row.auth_provider ?? undefined,
+      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
     };
+  }
+
+  public async createUser(dto: CreateUserDTO): Promise<User> {
+    const res = await this.pool.query(
+      `INSERT INTO users (external_auth_id, email, full_name, email_verified, password_hash, account_status, google_id, google_email, auth_provider)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        dto.externalAuthId ?? null,
+        dto.email,
+        dto.fullName,
+        dto.emailVerified ?? false,
+        dto.passwordHash ?? null,
+        dto.status ?? 'ACTIVE',
+        dto.googleId ?? null,
+        dto.googleEmail ?? null,
+        dto.authProvider ?? 'local',
+      ]
+    );
+    return this.mapUserRow(res.rows[0]);
   }
 
   public async getUserById(id: string): Promise<User | null> {
     const res = await this.pool.query(
-      `SELECT id, external_auth_id, email, full_name, created_at, updated_at
-       FROM users WHERE id = $1`,
+      `SELECT * FROM users WHERE id = $1`,
       [id]
     );
     if (res.rows.length === 0) return null;
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      externalAuthId: row.external_auth_id,
-      email: row.email,
-      fullName: row.full_name,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
-    };
+    return this.mapUserRow(res.rows[0]);
   }
 
   public async getUserByExternalAuthId(externalAuthId: string): Promise<User | null> {
     const res = await this.pool.query(
-      `SELECT id, external_auth_id, email, full_name, created_at, updated_at
-       FROM users WHERE external_auth_id = $1`,
+      `SELECT * FROM users WHERE external_auth_id = $1`,
       [externalAuthId]
     );
     if (res.rows.length === 0) return null;
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      externalAuthId: row.external_auth_id,
-      email: row.email,
-      fullName: row.full_name,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
-    };
+    return this.mapUserRow(res.rows[0]);
   }
 
   public async getUserByEmail(email: string): Promise<User | null> {
     const res = await this.pool.query(
-      `SELECT id, external_auth_id, email, full_name, created_at, updated_at
-       FROM users WHERE LOWER(email) = LOWER($1)`,
+      `SELECT * FROM users WHERE LOWER(email) = LOWER($1)`,
       [email]
     );
     if (res.rows.length === 0) return null;
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      externalAuthId: row.external_auth_id,
-      email: row.email,
-      fullName: row.full_name,
-      createdAt: row.created_at.toISOString(),
-      updatedAt: row.updated_at.toISOString(),
-    };
+    return this.mapUserRow(res.rows[0]);
+  }
+
+  public async getUserByGoogleId(googleId: string): Promise<User | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM users WHERE google_id = $1`,
+      [googleId]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapUserRow(res.rows[0]);
+  }
+
+  public async setUserGoogleId(userId: string, googleId: string, googleEmail?: string): Promise<User | null> {
+    await this.pool.query(
+      `UPDATE users
+       SET google_id = $1, google_email = $2, auth_provider = 'google', updated_at = NOW()
+       WHERE id = $3`,
+      [googleId, googleEmail ? googleEmail.toLowerCase() : null, userId]
+    );
+    return this.getUserById(userId);
+  }
+
+  public async unlinkUserGoogleId(userId: string): Promise<User | null> {
+    const user = await this.getUserById(userId);
+    const newProvider = user?.passwordHash ? 'local' : 'email_otp';
+    await this.pool.query(
+      `UPDATE users
+       SET google_id = NULL, google_email = NULL, auth_provider = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [newProvider, userId]
+    );
+    return this.getUserById(userId);
   }
 
   private pgUserSessions: Map<string, UserSession[]> = new Map();
@@ -273,17 +395,52 @@ export class PgDataStore implements IDataStore {
     const existing = await this.getUserById(userId);
     if (!existing) return null;
 
-    const fullName = updates.fullName ?? existing.fullName;
-    await this.pool.query(
-      `UPDATE users SET full_name = $1, updated_at = NOW() WHERE id = $2`,
-      [fullName, userId]
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (updates.fullName !== undefined) {
+      fields.push(`full_name = $${idx++}`);
+      values.push(updates.fullName);
+    }
+    if (updates.jobTitle !== undefined) {
+      fields.push(`job_title = $${idx++}`);
+      values.push(updates.jobTitle);
+    }
+    if (updates.department !== undefined) {
+      fields.push(`department = $${idx++}`);
+      values.push(updates.department);
+    }
+    if (updates.phone !== undefined) {
+      fields.push(`phone = $${idx++}`);
+      values.push(updates.phone);
+    }
+    if (updates.avatarUrl !== undefined) {
+      fields.push(`avatar_url = $${idx++}`);
+      values.push(updates.avatarUrl);
+    }
+    if (updates.preferences !== undefined) {
+      fields.push(`preferences = $${idx++}`);
+      values.push(JSON.stringify(updates.preferences));
+    }
+
+    if (fields.length === 0) {
+      return existing;
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(userId);
+
+    const res = await this.pool.query(
+      `UPDATE users
+       SET ${fields.join(', ')}
+       WHERE id = $${idx}
+       RETURNING *`,
+      values
     );
 
-    return {
-      ...existing,
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
+    if (res.rows.length === 0) return null;
+    return this.mapUserRow(res.rows[0]);
   }
 
   public async listUserSessions(userId: string): Promise<UserSession[]> {
@@ -318,6 +475,217 @@ export class PgDataStore implements IDataStore {
       return true;
     }
     return false;
+  }
+
+  public async revokeAllUserSessions(userId: string): Promise<number> {
+    const sessions = await this.listUserSessions(userId);
+    const count = sessions.length;
+    this.pgUserSessions.set(userId, []);
+    return count;
+  }
+
+  public async getUserByVerificationToken(tokenHash: string): Promise<User | null> {
+    const res = await this.pool.query(
+      `SELECT * FROM users WHERE verification_token_hash = $1`,
+      [tokenHash]
+    );
+    if (res.rows.length === 0) return null;
+    return this.mapUserRow(res.rows[0]);
+  }
+
+  public async setUserEmailVerified(userId: string, verified: boolean): Promise<User | null> {
+    await this.pool.query(
+      `UPDATE users
+       SET email_verified = $1, verification_token_hash = NULL, verification_expires_at = NULL, updated_at = NOW()
+       WHERE id = $2`,
+      [verified, userId]
+    );
+    return this.getUserById(userId);
+  }
+
+  public async setUserVerificationToken(
+    userId: string,
+    tokenHash: string | null,
+    expiresAt: string | null
+  ): Promise<User | null> {
+    await this.pool.query(
+      `UPDATE users
+       SET verification_token_hash = $1, verification_expires_at = $2, updated_at = NOW()
+       WHERE id = $3`,
+      [tokenHash, expiresAt, userId]
+    );
+    return this.getUserById(userId);
+  }
+
+  public async setUserPassword(userId: string, passwordHash: string): Promise<User | null> {
+    await this.pool.query(
+      `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+      [passwordHash, userId]
+    );
+    return this.getUserById(userId);
+  }
+
+  public async createPasswordResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+       VALUES ($1, $2, $3)`,
+      [userId, tokenHash, expiresAt]
+    );
+  }
+
+  public async getPasswordResetToken(
+    tokenHash: string
+  ): Promise<{ userId: string; expiresAt: string; usedAt: string | null } | null> {
+    const res = await this.pool.query(
+      `SELECT user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = $1`,
+      [tokenHash]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      userId: row.user_id,
+      expiresAt: row.expires_at.toISOString(),
+      usedAt: row.used_at ? row.used_at.toISOString() : null,
+    };
+  }
+
+  public async consumePasswordResetToken(tokenHash: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `UPDATE password_reset_tokens
+       SET used_at = NOW()
+       WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+       RETURNING id`,
+      [tokenHash]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Email OTP & Google OAuth Identity Methods
+  // --------------------------------------------------------------------------
+  public async createEmailOtp(dto: CreateEmailOtpDTO): Promise<EmailOtpRecord> {
+    const res = await this.pool.query(
+      `INSERT INTO email_otp_codes (email, code_hash, purpose, expires_at)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, email, code_hash, purpose, attempts, max_attempts, expires_at, used_at, created_at`,
+      [dto.email.toLowerCase(), dto.codeHash, dto.purpose, dto.expiresAt]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      email: row.email,
+      codeHash: row.code_hash,
+      purpose: row.purpose,
+      attempts: row.attempts,
+      maxAttempts: row.max_attempts,
+      expiresAt: row.expires_at.toISOString(),
+      usedAt: row.used_at ? row.used_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  public async getLatestEmailOtp(email: string, purpose: string): Promise<EmailOtpRecord | null> {
+    const res = await this.pool.query(
+      `SELECT id, email, code_hash, purpose, attempts, max_attempts, expires_at, used_at, created_at
+       FROM email_otp_codes
+       WHERE LOWER(email) = LOWER($1) AND purpose = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [email, purpose]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      email: row.email,
+      codeHash: row.code_hash,
+      purpose: row.purpose,
+      attempts: row.attempts,
+      maxAttempts: row.max_attempts,
+      expiresAt: row.expires_at.toISOString(),
+      usedAt: row.used_at ? row.used_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  public async incrementEmailOtpAttempts(otpId: string): Promise<number> {
+    const res = await this.pool.query(
+      `UPDATE email_otp_codes
+       SET attempts = attempts + 1
+       WHERE id = $1
+       RETURNING attempts`,
+      [otpId]
+    );
+    if (res.rows.length === 0) return 0;
+    return res.rows[0].attempts;
+  }
+
+  public async consumeEmailOtp(otpId: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `UPDATE email_otp_codes
+       SET used_at = NOW()
+       WHERE id = $1 AND used_at IS NULL AND expires_at > NOW()
+       RETURNING id`,
+      [otpId]
+    );
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  public async countRecentEmailOtps(email: string, sinceDate: string): Promise<number> {
+    const res = await this.pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM email_otp_codes
+       WHERE LOWER(email) = LOWER($1) AND created_at >= $2`,
+      [email, sinceDate]
+    );
+    return res.rows[0]?.count ?? 0;
+  }
+
+  public async saveGoogleOAuthState(dto: SaveGoogleOAuthStateDTO): Promise<GoogleOAuthStateRecord> {
+    const res = await this.pool.query(
+      `INSERT INTO google_oauth_states (state, purpose, redirect_uri, invitation_token, expires_at)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING state, purpose, redirect_uri, invitation_token, expires_at, created_at`,
+      [dto.state, dto.purpose, dto.redirectUri, dto.invitationToken ?? null, dto.expiresAt]
+    );
+    const row = res.rows[0];
+    return {
+      state: row.state,
+      purpose: row.purpose,
+      redirectUri: row.redirect_uri,
+      invitationToken: row.invitation_token ?? undefined,
+      expiresAt: row.expires_at.toISOString(),
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  public async getGoogleOAuthState(state: string): Promise<GoogleOAuthStateRecord | null> {
+    const res = await this.pool.query(
+      `SELECT state, purpose, redirect_uri, invitation_token, expires_at, created_at
+       FROM google_oauth_states
+       WHERE state = $1`,
+      [state]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      state: row.state,
+      purpose: row.purpose,
+      redirectUri: row.redirect_uri,
+      invitationToken: row.invitation_token ?? undefined,
+      expiresAt: row.expires_at.toISOString(),
+      createdAt: row.created_at.toISOString(),
+    };
+  }
+
+  public async consumeGoogleOAuthState(state: string): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM google_oauth_states
+       WHERE state = $1 AND expires_at > NOW()
+       RETURNING state`,
+      [state]
+    );
+    return (res.rowCount ?? 0) > 0;
   }
 
   // --------------------------------------------------------------------------
@@ -528,9 +896,15 @@ export class PgDataStore implements IDataStore {
   // --------------------------------------------------------------------------
   public async createInvitation(dto: CreateInvitationDTO): Promise<OrganizationInvitation> {
     const res = await this.pool.query(
-      `INSERT INTO organization_invitations (organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids)
-       VALUES ($1, LOWER($2), $3, $4, $5, $6, 'PENDING', $7)
-       RETURNING id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at`,
+      `INSERT INTO organization_invitations (
+         organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+         assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+         employee_id, department, designation
+       )
+       VALUES ($1, LOWER($2), $3, $4, $5, $6, 'PENDING', $7, $8, $9, $10, $11, $12, $13, $14)
+       RETURNING id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+                 assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+                 activation_code_attempts, employee_id, department, designation, created_at, updated_at`,
       [
         dto.organizationId,
         dto.email,
@@ -539,6 +913,13 @@ export class PgDataStore implements IDataStore {
         dto.tokenHash,
         dto.expiresAt,
         dto.assignedPlantIds ?? [],
+        dto.assignedMachineIds ?? [],
+        dto.qrTokenHash ?? null,
+        dto.qrExpiresAt ?? null,
+        dto.activationCodeHash ?? null,
+        dto.employeeId ?? null,
+        dto.department ?? null,
+        dto.designation ?? null,
       ]
     );
     const row = res.rows[0];
@@ -552,6 +933,14 @@ export class PgDataStore implements IDataStore {
       expiresAt: row.expires_at.toISOString(),
       status: row.status as InvitationStatus,
       assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };
@@ -559,7 +948,9 @@ export class PgDataStore implements IDataStore {
 
   public async getInvitationById(organizationId: string, invitationId: string): Promise<OrganizationInvitation | null> {
     const res = await this.pool.query(
-      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+              assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+              activation_code_attempts, employee_id, department, designation, created_at, updated_at
        FROM organization_invitations
        WHERE id = $1 AND organization_id = $2`,
       [invitationId, organizationId]
@@ -576,6 +967,14 @@ export class PgDataStore implements IDataStore {
       expiresAt: row.expires_at.toISOString(),
       status: row.status as InvitationStatus,
       assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };
@@ -583,7 +982,9 @@ export class PgDataStore implements IDataStore {
 
   public async getInvitationByTokenHash(tokenHash: string): Promise<OrganizationInvitation | null> {
     const res = await this.pool.query(
-      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+              assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+              activation_code_attempts, employee_id, department, designation, created_at, updated_at
        FROM organization_invitations
        WHERE token_hash = $1`,
       [tokenHash]
@@ -600,6 +1001,133 @@ export class PgDataStore implements IDataStore {
       expiresAt: row.expires_at.toISOString(),
       status: row.status as InvitationStatus,
       assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getInvitationByQrTokenHash(qrTokenHash: string): Promise<OrganizationInvitation | null> {
+    const res = await this.pool.query(
+      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+              assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+              activation_code_attempts, employee_id, department, designation, created_at, updated_at
+       FROM organization_invitations
+       WHERE qr_token_hash = $1`,
+      [qrTokenHash]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    const isExpired = row.qr_expires_at && new Date(row.qr_expires_at) < new Date() && row.status === 'PENDING';
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: (isExpired ? 'EXPIRED' : row.status) as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async getInvitationByActivationCodeHash(codeHash: string): Promise<OrganizationInvitation | null> {
+    const res = await this.pool.query(
+      `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+              assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+              activation_code_attempts, employee_id, department, designation, created_at, updated_at
+       FROM organization_invitations
+       WHERE activation_code_hash = $1`,
+      [codeHash]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: row.status as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
+  }
+
+  public async incrementActivationCodeAttempts(invitationId: string): Promise<number> {
+    const res = await this.pool.query(
+      `UPDATE organization_invitations
+       SET activation_code_attempts = activation_code_attempts + 1, updated_at = NOW()
+       WHERE id = $1
+       RETURNING activation_code_attempts`,
+      [invitationId]
+    );
+    return res.rows[0]?.activation_code_attempts ?? 0;
+  }
+
+  public async updateInvitationQrToken(
+    invitationId: string,
+    qrTokenHash: string,
+    qrExpiresAt: string
+  ): Promise<OrganizationInvitation | null> {
+    const res = await this.pool.query(
+      `UPDATE organization_invitations
+       SET qr_token_hash = $1, qr_expires_at = $2, updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+                 assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+                 activation_code_attempts, employee_id, department, designation, created_at, updated_at`,
+      [qrTokenHash, qrExpiresAt, invitationId]
+    );
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      email: row.email,
+      role: row.role as OrgRole,
+      invitedByUserId: row.invited_by_user_id,
+      tokenHash: row.token_hash,
+      expiresAt: row.expires_at.toISOString(),
+      status: row.status as InvitationStatus,
+      assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };
@@ -607,11 +1135,15 @@ export class PgDataStore implements IDataStore {
 
   public async listInvitations(organizationId: string, status?: InvitationStatus): Promise<OrganizationInvitation[]> {
     const query = status
-      ? `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+      ? `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+                assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+                activation_code_attempts, employee_id, department, designation, created_at, updated_at
          FROM organization_invitations
          WHERE organization_id = $1 AND status = $2
          ORDER BY created_at DESC`
-      : `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at
+      : `SELECT id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+                assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+                activation_code_attempts, employee_id, department, designation, created_at, updated_at
          FROM organization_invitations
          WHERE organization_id = $1
          ORDER BY created_at DESC`;
@@ -628,6 +1160,14 @@ export class PgDataStore implements IDataStore {
       expiresAt: row.expires_at.toISOString(),
       status: row.status as InvitationStatus,
       assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     }));
@@ -641,7 +1181,9 @@ export class PgDataStore implements IDataStore {
       `UPDATE organization_invitations
        SET status = $1, updated_at = NOW()
        WHERE id = $2
-       RETURNING id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status, assigned_plant_ids, created_at, updated_at`,
+       RETURNING id, organization_id, email, role, invited_by_user_id, token_hash, expires_at, status,
+                 assigned_plant_ids, assigned_machine_ids, qr_token_hash, qr_expires_at, activation_code_hash,
+                 activation_code_attempts, employee_id, department, designation, created_at, updated_at`,
       [status, invitationId]
     );
     if (res.rows.length === 0) return null;
@@ -656,6 +1198,14 @@ export class PgDataStore implements IDataStore {
       expiresAt: row.expires_at.toISOString(),
       status: row.status as InvitationStatus,
       assignedPlantIds: row.assigned_plant_ids ?? [],
+      assignedMachineIds: row.assigned_machine_ids ?? [],
+      qrTokenHash: row.qr_token_hash ?? undefined,
+      qrExpiresAt: row.qr_expires_at ? row.qr_expires_at.toISOString() : undefined,
+      activationCodeHash: row.activation_code_hash ?? undefined,
+      activationCodeAttempts: row.activation_code_attempts ?? 0,
+      employeeId: row.employee_id ?? undefined,
+      department: row.department ?? undefined,
+      designation: row.designation ?? undefined,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };
@@ -685,46 +1235,90 @@ export class PgDataStore implements IDataStore {
         throw new Error(`Organization slug '${dto.organizationSlug}' is already claimed.`);
       }
 
-      // 2. Create organization
+      // 2. Create organization with industry and deployment metadata
       const orgRes = await client.query(
-        `INSERT INTO organizations (name, slug)
-         VALUES ($1, $2)
-         RETURNING id, name, slug, created_at, updated_at`,
-        [dto.organizationName, dto.organizationSlug]
+        `INSERT INTO organizations (name, slug, industry, country, timezone, website, company_size, deployment_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, name, slug, industry, country, timezone, website, company_size, deployment_type, created_at, updated_at`,
+        [
+          dto.organizationName,
+          dto.organizationSlug,
+          dto.industry ?? null,
+          dto.country ?? null,
+          dto.timezone ?? null,
+          dto.website ?? null,
+          dto.companySize ?? null,
+          dto.deploymentType ?? 'saas',
+        ]
       );
       const orgRow = orgRes.rows[0];
       const organization: Organization = {
         id: orgRow.id,
         name: orgRow.name,
         slug: orgRow.slug,
+        industry: orgRow.industry ?? undefined,
+        country: orgRow.country ?? undefined,
+        timezone: orgRow.timezone ?? undefined,
+        website: orgRow.website ?? undefined,
+        companySize: orgRow.company_size ?? undefined,
+        deploymentType: orgRow.deployment_type ?? 'saas',
         createdAt: orgRow.created_at.toISOString(),
         updatedAt: orgRow.updated_at.toISOString(),
       };
 
       // 3. Find or create user
       let userRes = await client.query(
-        `SELECT id, external_auth_id, email, full_name, created_at, updated_at
+        `SELECT id, external_auth_id, email, full_name, email_verified, password_hash, created_at, updated_at
          FROM users WHERE external_auth_id = $1 OR email = $2`,
         [dto.externalAuthId, dto.adminEmail]
       );
 
       let adminUser: User;
+      const emailVerified = dto.verificationTokenHash ? false : true;
       if (userRes.rows.length > 0) {
         const uRow = userRes.rows[0];
+        if (dto.passwordHash || dto.verificationTokenHash) {
+          await client.query(
+            `UPDATE users
+             SET password_hash = COALESCE($1, password_hash),
+                 email_verified = $2,
+                 verification_token_hash = $3,
+                 verification_expires_at = $4,
+                 updated_at = NOW()
+             WHERE id = $5`,
+            [
+              dto.passwordHash ?? null,
+              emailVerified,
+              dto.verificationTokenHash ?? null,
+              dto.verificationExpiresAt ?? null,
+              uRow.id,
+            ]
+          );
+        }
         adminUser = {
           id: uRow.id,
           externalAuthId: uRow.external_auth_id,
           email: uRow.email,
           fullName: uRow.full_name,
+          emailVerified,
+          passwordHash: dto.passwordHash ?? uRow.password_hash,
           createdAt: uRow.created_at.toISOString(),
           updatedAt: uRow.updated_at.toISOString(),
         };
       } else {
         const insUser = await client.query(
-          `INSERT INTO users (external_auth_id, email, full_name)
-           VALUES ($1, $2, $3)
-           RETURNING id, external_auth_id, email, full_name, created_at, updated_at`,
-          [dto.externalAuthId, dto.adminEmail, dto.adminFullName]
+          `INSERT INTO users (external_auth_id, email, full_name, password_hash, email_verified, verification_token_hash, verification_expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING id, external_auth_id, email, full_name, email_verified, password_hash, created_at, updated_at`,
+          [
+            dto.externalAuthId,
+            dto.adminEmail,
+            dto.adminFullName,
+            dto.passwordHash ?? null,
+            emailVerified,
+            dto.verificationTokenHash ?? null,
+            dto.verificationExpiresAt ?? null,
+          ]
         );
         const uRow = insUser.rows[0];
         adminUser = {
@@ -732,6 +1326,8 @@ export class PgDataStore implements IDataStore {
           externalAuthId: uRow.external_auth_id,
           email: uRow.email,
           fullName: uRow.full_name,
+          emailVerified: uRow.email_verified,
+          passwordHash: uRow.password_hash,
           createdAt: uRow.created_at.toISOString(),
           updatedAt: uRow.updated_at.toISOString(),
         };
@@ -756,6 +1352,17 @@ export class PgDataStore implements IDataStore {
         updatedAt: mRow.updated_at.toISOString(),
         user: adminUser,
       };
+
+      // 5. Create initial site if specified
+      if (dto.initialSiteName) {
+        const plantCode = `SITE-${organization.slug.toUpperCase().slice(0, 8)}`;
+        await client.query(
+          `INSERT INTO plants (organization_id, code, name, location, air_gapped_mode)
+           VALUES ($1, $2, $3, $4, FALSE)
+           ON CONFLICT DO NOTHING`,
+          [organization.id, plantCode, dto.initialSiteName, dto.country || 'Primary Manufacturing Facility']
+        );
+      }
 
       await client.query('COMMIT');
       return { organization, adminUser, membership };
@@ -2077,16 +2684,17 @@ export class PgDataStore implements IDataStore {
   public async createVisualAsset(dto: CreateVisualAssetDTO): Promise<VisualAsset> {
     const res = await this.pool.query(
       `INSERT INTO visual_assets (
-         organization_id, plant_id, document_id, document_version_id, page_number,
+         organization_id, plant_id, machine_id, document_id, document_version_id, page_number,
          asset_type, storage_key, filename, mime_type, file_size_bytes, width, height,
          description, equipment_tags, component_labels, extraction_method, model_used,
-         confidence_score, is_ambiguous
+         confidence_score, is_ambiguous, uploaded_by_user_id, processing_status, data_classification
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        RETURNING *`,
       [
         dto.organizationId,
         dto.plantId ?? null,
+        dto.machineId ?? null,
         dto.documentId ?? null,
         dto.documentVersionId ?? null,
         dto.pageNumber ?? null,
@@ -2104,6 +2712,9 @@ export class PgDataStore implements IDataStore {
         dto.modelUsed,
         dto.confidenceScore ?? 1.0,
         dto.isAmbiguous ?? false,
+        dto.uploadedByUserId ?? null,
+        dto.processingStatus ?? 'UPLOADED',
+        dto.dataClassification ?? 'INTERNAL',
       ]
     );
     return this.mapVisualAssetRow(res.rows[0]);
@@ -2114,6 +2725,69 @@ export class PgDataStore implements IDataStore {
       `SELECT * FROM visual_assets WHERE id = $1 AND organization_id = $2`,
       [id, organizationId]
     );
+    if (res.rows.length === 0) return null;
+    return this.mapVisualAssetRow(res.rows[0]);
+  }
+
+  public async updateVisualAsset(
+    organizationId: string,
+    id: string,
+    updates: Partial<VisualAsset>
+  ): Promise<VisualAsset | null> {
+    const existing = await this.getVisualAssetById(organizationId, id);
+    if (!existing) return null;
+
+    const setClauses: string[] = ['updated_at = NOW()'];
+    const values: any[] = [id, organizationId];
+
+    if (updates.processingStatus !== undefined) {
+      values.push(updates.processingStatus);
+      setClauses.push(`processing_status = $${values.length}`);
+    }
+    if (updates.documentId !== undefined) {
+      values.push(updates.documentId);
+      setClauses.push(`document_id = $${values.length}`);
+    }
+    if (updates.documentVersionId !== undefined) {
+      values.push(updates.documentVersionId);
+      setClauses.push(`document_version_id = $${values.length}`);
+    }
+    if (updates.description !== undefined) {
+      values.push(updates.description);
+      setClauses.push(`description = $${values.length}`);
+    }
+    if (updates.equipmentTags !== undefined) {
+      values.push(updates.equipmentTags);
+      setClauses.push(`equipment_tags = $${values.length}`);
+    }
+    if (updates.componentLabels !== undefined) {
+      values.push(JSON.stringify(updates.componentLabels));
+      setClauses.push(`component_labels = $${values.length}`);
+    }
+    if (updates.extractionMethod !== undefined) {
+      values.push(updates.extractionMethod);
+      setClauses.push(`extraction_method = $${values.length}`);
+    }
+    if (updates.modelUsed !== undefined) {
+      values.push(updates.modelUsed);
+      setClauses.push(`model_used = $${values.length}`);
+    }
+    if (updates.confidenceScore !== undefined) {
+      values.push(updates.confidenceScore);
+      setClauses.push(`confidence_score = $${values.length}`);
+    }
+    if (updates.isAmbiguous !== undefined) {
+      values.push(updates.isAmbiguous);
+      setClauses.push(`is_ambiguous = $${values.length}`);
+    }
+
+    const query = `
+      UPDATE visual_assets
+      SET ${setClauses.join(', ')}
+      WHERE id = $1 AND organization_id = $2
+      RETURNING *
+    `;
+    const res = await this.pool.query(query, values);
     if (res.rows.length === 0) return null;
     return this.mapVisualAssetRow(res.rows[0]);
   }
@@ -2129,6 +2803,10 @@ export class PgDataStore implements IDataStore {
       params.push(filter.plantId);
       conditions.push(`plant_id = $${params.length}`);
     }
+    if (filter?.machineId) {
+      params.push(filter.machineId);
+      conditions.push(`machine_id = $${params.length}`);
+    }
     if (filter?.documentId) {
       params.push(filter.documentId);
       conditions.push(`document_id = $${params.length}`);
@@ -2140,6 +2818,10 @@ export class PgDataStore implements IDataStore {
     if (filter?.assetType) {
       params.push(filter.assetType);
       conditions.push(`asset_type = $${params.length}`);
+    }
+    if (filter?.processingStatus) {
+      params.push(filter.processingStatus);
+      conditions.push(`processing_status = $${params.length}`);
     }
     if (filter?.equipmentTag) {
       params.push(filter.equipmentTag);
@@ -2166,6 +2848,7 @@ export class PgDataStore implements IDataStore {
       id: row.id,
       organizationId: row.organization_id,
       plantId: row.plant_id,
+      machineId: row.machine_id || undefined,
       documentId: row.document_id,
       documentVersionId: row.document_version_id,
       pageNumber: row.page_number,
@@ -2185,6 +2868,9 @@ export class PgDataStore implements IDataStore {
       modelUsed: row.model_used,
       confidenceScore: Number(row.confidence_score),
       isAmbiguous: row.is_ambiguous,
+      uploadedByUserId: row.uploaded_by_user_id || undefined,
+      processingStatus: row.processing_status || undefined,
+      dataClassification: row.data_classification || undefined,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
     };
@@ -2218,7 +2904,10 @@ export class PgDataStore implements IDataStore {
         dto.assignedTechnicianUserId || null,
         dto.assignedTechnicianName || null,
         dto.symptomDescription,
-        JSON.stringify(dto.operatingConditions || {}),
+        JSON.stringify({
+          ...(dto.operatingConditions || {}),
+          ...(dto.sourceTicketId ? { sourceTicketId: dto.sourceTicketId } : {}),
+        }),
         JSON.stringify(dto.visualAssetIds || []),
         JSON.stringify(dto.supportingDocumentIds || []),
         dto.diagnosticHypothesis ? JSON.stringify(dto.diagnosticHypothesis) : null,
@@ -2342,6 +3031,10 @@ export class PgDataStore implements IDataStore {
       params.push(updates.closedAt);
       setClauses.push(`closed_at = $${params.length}`);
     }
+    if (updates.maintenanceRecordId !== undefined) {
+      params.push(updates.maintenanceRecordId);
+      setClauses.push(`maintenance_record_id = $${params.length}`);
+    }
 
     const res = await this.pool.query(
       `UPDATE maintenance_cases
@@ -2462,6 +3155,8 @@ export class PgDataStore implements IDataStore {
       supportingDocumentIds: typeof row.supporting_document_ids === 'string'
         ? JSON.parse(row.supporting_document_ids)
         : (row.supporting_document_ids || []),
+      sourceTicketId: row.source_ticket_id || (row.operating_conditions && typeof row.operating_conditions === 'object' ? row.operating_conditions.sourceTicketId : null) || null,
+      partsUsed: (row.findings && typeof row.findings === 'object' && row.findings.partsUsed) ? row.findings.partsUsed : null,
       diagnosticHypothesis: typeof row.diagnostic_hypothesis === 'string'
         ? JSON.parse(row.diagnostic_hypothesis)
         : row.diagnostic_hypothesis,
@@ -2483,6 +3178,7 @@ export class PgDataStore implements IDataStore {
       updatedAt: row.updated_at.toISOString(),
       resolvedAt: row.resolved_at ? row.resolved_at.toISOString() : null,
       closedAt: row.closed_at ? row.closed_at.toISOString() : null,
+      maintenanceRecordId: row.maintenance_record_id || null,
     };
   }
 
@@ -5023,8 +5719,10 @@ export class PgDataStore implements IDataStore {
       plantId: row.plant_id,
       machineId: row.machine_id,
       machineAssetTag: row.machine_asset_tag,
-      ticketId: row.ticket_id,
-      ticketNumber: row.ticket_number,
+      ticketId: row.ticket_id || null,
+      ticketNumber: row.ticket_number || null,
+      caseId: row.case_id || null,
+      caseNumber: row.case_number || null,
       componentId: row.component_id || null,
       componentName: row.component_name || null,
       reportingUserId: row.reporting_user_id,
@@ -5105,8 +5803,107 @@ export class PgDataStore implements IDataStore {
     organizationId: string,
     data: CreateMaintenanceRecordDTO
   ): Promise<MaintenanceRecord> {
+    if (!organizationId) {
+      throw new Error('Validation Error: organizationId is required');
+    }
+    if (!data.machineId || !data.machineId.trim()) {
+      throw new Error('Validation Error: machineId is required');
+    }
+    if (!data.faultCategory || !data.faultCategory.trim()) {
+      throw new Error('Validation Error: faultCategory is required');
+    }
+    if (!data.problemStatement || !data.problemStatement.trim()) {
+      throw new Error('Validation Error: problemStatement is required');
+    }
+    if (!data.rootCause || !data.rootCause.trim()) {
+      throw new Error('Validation Error: rootCause is required');
+    }
+    if (!data.repairActions || !Array.isArray(data.repairActions) || data.repairActions.length === 0) {
+      throw new Error('Validation Error: At least one repairAction is required');
+    }
+
+    // Verify machine tenant ownership
+    const machineCheck = await this.pool.query(
+      `SELECT organization_id FROM assets WHERE id = $1`,
+      [data.machineId]
+    );
+    if (machineCheck.rows.length > 0 && machineCheck.rows[0].organization_id !== organizationId) {
+      throw new Error(`Cross-tenant security violation: Machine ${data.machineId} belongs to another organization.`);
+    }
+
+    // Verify plant tenant ownership
+    if (data.plantId) {
+      const plantCheck = await this.pool.query(
+        `SELECT organization_id FROM plants WHERE id = $1`,
+        [data.plantId]
+      );
+      if (plantCheck.rows.length > 0 && plantCheck.rows[0].organization_id !== organizationId) {
+        throw new Error(`Cross-tenant security violation: Plant ${data.plantId} belongs to another organization.`);
+      }
+    }
+
+    // Verify technician tenant ownership
+    if (data.resolvingTechnicianUserId) {
+      const techCheck = await this.pool.query(
+        `SELECT organization_id FROM organization_memberships WHERE user_id = $1 AND organization_id = $2`,
+        [data.resolvingTechnicianUserId, organizationId]
+      );
+      if (techCheck.rows.length === 0) {
+        throw new Error(`Cross-tenant security violation: Resolving technician ${data.resolvingTechnicianUserId} does not belong to organization ${organizationId}.`);
+      }
+    }
+
+    // Verify ticket tenant ownership
+    if (data.ticketId) {
+      const ticketCheck = await this.pool.query(
+        `SELECT organization_id FROM specialist_tickets WHERE id = $1`,
+        [data.ticketId]
+      );
+      if (ticketCheck.rows.length > 0 && ticketCheck.rows[0].organization_id !== organizationId) {
+        throw new Error(`Cross-tenant security violation: Ticket ${data.ticketId} belongs to another organization.`);
+      }
+    }
+
+    // Verify case tenant ownership
+    if (data.caseId) {
+      const caseCheck = await this.pool.query(
+        `SELECT organization_id FROM maintenance_cases WHERE id = $1`,
+        [data.caseId]
+      );
+      if (caseCheck.rows.length > 0 && caseCheck.rows[0].organization_id !== organizationId) {
+        throw new Error(`Cross-tenant security violation: Case ${data.caseId} belongs to another organization.`);
+      }
+    }
+
+    if (!data.ticketId && !data.caseId) {
+      throw new Error('Validation Error: Either ticketId or caseId is required');
+    }
+
+    // Duplicate prevention: If record already exists for ticketId in this organization, return existing
+    if (data.ticketId) {
+      const existingRes = await this.pool.query(
+        `SELECT * FROM maintenance_records WHERE organization_id = $1 AND ticket_id = $2 LIMIT 1`,
+        [organizationId, data.ticketId]
+      );
+      if (existingRes.rows.length > 0) {
+        return this.mapRowToMaintenanceRecord(existingRes.rows[0]);
+      }
+    }
+
+    // Duplicate prevention: If record already exists for caseId in this organization, return existing
+    if (data.caseId) {
+      const existingRes = await this.pool.query(
+        `SELECT * FROM maintenance_records WHERE organization_id = $1 AND case_id = $2 LIMIT 1`,
+        [organizationId, data.caseId]
+      );
+      if (existingRes.rows.length > 0) {
+        return this.mapRowToMaintenanceRecord(existingRes.rows[0]);
+      }
+    }
+
     const id = 'mr_' + Math.random().toString(36).substring(2, 10);
     const now = new Date().toISOString();
+    const resolvedAt = data.resolvedAt || now;
     const recordNumber =
       data.recordNumber ||
       `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -5147,7 +5944,7 @@ export class PgDataStore implements IDataStore {
     const res = await this.pool.query(
       `INSERT INTO maintenance_records (
         id, record_number, organization_id, plant_id, machine_id, machine_asset_tag,
-        ticket_id, ticket_number, component_id, component_name, reporting_user_id,
+        ticket_id, ticket_number, case_id, case_number, component_id, component_name, reporting_user_id,
         reporting_user_name, assigned_technician_user_id, assigned_technician_name,
         resolving_technician_user_id, resolving_technician_name, fault_category,
         problem_statement, observed_symptoms, measurements, root_cause, root_cause_status,
@@ -5160,7 +5957,7 @@ export class PgDataStore implements IDataStore {
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
         $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
-        $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49
+        $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51
       ) RETURNING *`,
       [
         id,
@@ -5169,8 +5966,10 @@ export class PgDataStore implements IDataStore {
         data.plantId,
         data.machineId,
         data.machineAssetTag,
-        data.ticketId,
-        data.ticketNumber,
+        data.ticketId ?? null,
+        data.ticketNumber ?? null,
+        data.caseId ?? null,
+        data.caseNumber ?? null,
         data.componentId ?? null,
         data.componentName ?? null,
         data.reportingUserId,
@@ -5201,7 +6000,7 @@ export class PgDataStore implements IDataStore {
         data.approvedByUserId ?? null,
         data.approvedAt ?? null,
         data.approvalNotes ?? null,
-        now,
+        resolvedAt,
         null,
         JSON.stringify(relatedIncidentRecordIds),
         JSON.stringify(data.attachments || []),
@@ -5261,6 +6060,86 @@ export class PgDataStore implements IDataStore {
       values.push(filters.ticketId);
       whereClauses.push(`ticket_id = $${values.length}`);
     }
+    if (filters?.caseId) {
+      values.push(filters.caseId);
+      whereClauses.push(`case_id = $${values.length}`);
+    }
+    if (filters?.faultCategory) {
+      values.push(filters.faultCategory);
+      whereClauses.push(`fault_category = $${values.length}`);
+    }
+    if (filters?.rootCauseStatus) {
+      values.push(filters.rootCauseStatus);
+      whereClauses.push(`root_cause_status = $${values.length}`);
+    }
+    if (filters?.verificationState) {
+      values.push(filters.verificationState);
+      whereClauses.push(`verification_state = $${values.length}`);
+    }
+    if (filters?.approvalStatus) {
+      values.push(filters.approvalStatus);
+      whereClauses.push(`approval_status = $${values.length}`);
+    }
+    if (filters?.requiresRestartApproval !== undefined) {
+      values.push(filters.requiresRestartApproval);
+      whereClauses.push(`requires_restart_approval = $${values.length}`);
+    }
+    if (filters?.technicianUserId) {
+      values.push(filters.technicianUserId);
+      whereClauses.push(`resolving_technician_user_id = $${values.length}`);
+    }
+    if (filters?.isRecurring !== undefined) {
+      values.push(filters.isRecurring);
+      whereClauses.push(`is_recurring_incident = $${values.length}`);
+    }
+    if (filters?.dateFrom) {
+      values.push(filters.dateFrom);
+      whereClauses.push(`resolved_at >= $${values.length}`);
+    }
+    if (filters?.dateTo) {
+      values.push(filters.dateTo);
+      whereClauses.push(`resolved_at <= $${values.length}`);
+    }
+
+    const sortDirection = filters?.sortOrder === 'asc' ? 'ASC' : 'DESC';
+    let query = `SELECT * FROM maintenance_records WHERE ${whereClauses.join(' AND ')} ORDER BY resolved_at ${sortDirection}, id ${sortDirection}`;
+
+    if (filters?.limit !== undefined) {
+      values.push(filters.limit);
+      query += ` LIMIT $${values.length}`;
+    }
+    if (filters?.offset !== undefined) {
+      values.push(filters.offset);
+      query += ` OFFSET $${values.length}`;
+    }
+
+    const res = await this.pool.query(query, values);
+    return res.rows.map((row: any) => this.mapRowToMaintenanceRecord(row));
+  }
+
+  public async countMaintenanceRecords(
+    organizationId: string,
+    filters?: MaintenanceRecordFilterOptions
+  ): Promise<number> {
+    const whereClauses: string[] = ['organization_id = $1'];
+    const values: unknown[] = [organizationId];
+
+    if (filters?.machineId) {
+      values.push(filters.machineId);
+      whereClauses.push(`machine_id = $${values.length}`);
+    }
+    if (filters?.plantId) {
+      values.push(filters.plantId);
+      whereClauses.push(`plant_id = $${values.length}`);
+    }
+    if (filters?.ticketId) {
+      values.push(filters.ticketId);
+      whereClauses.push(`ticket_id = $${values.length}`);
+    }
+    if (filters?.caseId) {
+      values.push(filters.caseId);
+      whereClauses.push(`case_id = $${values.length}`);
+    }
     if (filters?.faultCategory) {
       values.push(filters.faultCategory);
       whereClauses.push(`fault_category = $${values.length}`);
@@ -5285,12 +6164,28 @@ export class PgDataStore implements IDataStore {
       values.push(filters.restartApproved);
       whereClauses.push(`restart_approved = $${values.length}`);
     }
+    if (filters?.technicianUserId) {
+      values.push(filters.technicianUserId);
+      whereClauses.push(`resolving_technician_user_id = $${values.length}`);
+    }
+    if (filters?.isRecurring !== undefined) {
+      values.push(filters.isRecurring);
+      whereClauses.push(`is_recurring_incident = $${values.length}`);
+    }
+    if (filters?.dateFrom) {
+      values.push(filters.dateFrom);
+      whereClauses.push(`resolved_at >= $${values.length}`);
+    }
+    if (filters?.dateTo) {
+      values.push(filters.dateTo);
+      whereClauses.push(`resolved_at <= $${values.length}`);
+    }
 
     const res = await this.pool.query(
-      `SELECT * FROM maintenance_records WHERE ${whereClauses.join(' AND ')} ORDER BY resolved_at DESC`,
+      `SELECT COUNT(*) FROM maintenance_records WHERE ${whereClauses.join(' AND ')}`,
       values
     );
-    return res.rows.map((row: any) => this.mapRowToMaintenanceRecord(row));
+    return parseInt(res.rows[0].count, 10);
   }
 
   public async updateMaintenanceRecord(
@@ -5651,7 +6546,7 @@ export class PgDataStore implements IDataStore {
     const incidentTimeline = maxCategoryRecords.map((r) => ({
       recordId: r.id,
       recordNumber: r.recordNumber,
-      ticketNumber: r.ticketNumber,
+      ticketNumber: r.ticketNumber || r.caseNumber || 'N/A',
       resolvedAt: r.resolvedAt,
       faultCategory: r.faultCategory,
       rootCause: r.rootCause,
@@ -5677,6 +6572,35 @@ export class PgDataStore implements IDataStore {
       recommendedInspectionSteps.push('Review technician repair logs and verify component replacement serials.');
     }
 
+    let averageRecurrenceIntervalDays: number | null = null;
+    if (maxCategoryRecords.length > 1) {
+      const sortedDates = maxCategoryRecords
+        .map((r) => new Date(r.resolvedAt).getTime())
+        .filter((t) => !isNaN(t))
+        .sort((a, b) => a - b);
+      if (sortedDates.length > 1) {
+        let totalDiffDays = 0;
+        for (let i = 1; i < sortedDates.length; i++) {
+          totalDiffDays += (sortedDates[i] - sortedDates[i - 1]) / (24 * 3600 * 1000);
+        }
+        averageRecurrenceIntervalDays = Number(
+          (totalDiffDays / (sortedDates.length - 1)).toFixed(1)
+        );
+      }
+    }
+
+    let priorRepairEffectiveness: 'EFFECTIVE' | 'PARTIALLY_EFFECTIVE' | 'INEFFECTIVE' | 'UNVERIFIED' =
+      'EFFECTIVE';
+    if (isRecurringFault) {
+      if (unknownRootCauseCount > 0 || (averageRecurrenceIntervalDays !== null && averageRecurrenceIntervalDays < 14)) {
+        priorRepairEffectiveness = 'INEFFECTIVE';
+      } else {
+        priorRepairEffectiveness = 'PARTIALLY_EFFECTIVE';
+      }
+    } else if (recurrenceCount === 0) {
+      priorRepairEffectiveness = 'UNVERIFIED';
+    }
+
     return {
       machineId,
       machineAssetTag: assetTag,
@@ -5696,8 +6620,8 @@ export class PgDataStore implements IDataStore {
       safetyWarning: exceededLimitWarning,
       requiresSafetyHold: limitExceeded || (isRecurringFault && policy.requiresSafetyStop),
       requiresRestartApproval: isSafetyCritical,
-      priorRepairEffectiveness: isRecurringFault ? 'PARTIALLY_EFFECTIVE' : 'EFFECTIVE',
-      averageRecurrenceIntervalDays: null,
+      priorRepairEffectiveness,
+      averageRecurrenceIntervalDays,
       intelligenceSource: 'HISTORICAL_MAINTENANCE_RECORDS',
       patternDisclaimer:
         'Historical pattern intelligence is derived strictly from durable maintenance records. It does not constitute real-time sensor predictive maintenance.',
@@ -5761,33 +6685,93 @@ export class PgDataStore implements IDataStore {
       newStatus = 'RESOLVED';
     }
 
-    const record = await this.createMaintenanceRecord(organizationId, {
-      plantId: ticket.plantId,
-      machineId: ticket.machineId || '',
-      machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
-      ticketId: ticket.id,
-      ticketNumber: ticket.ticketNumber,
-      componentId: null,
-      reportingUserId: ticket.reportedByUserId,
-      reportingUserName: ticket.reportedByUserName,
-      assignedTechnicianUserId: ticket.assignedSpecialistUserId,
-      assignedTechnicianName: ticket.assignedSpecialistName,
-      resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
-      resolvingTechnicianName: resolution.resolvingTechnicianName,
-      faultCategory: resolution.faultCategory,
-      problemStatement: ticket.originalQuestion,
-      observedSymptoms: resolution.observedSymptoms ?? [],
-      measurements: resolution.measurements ?? [],
-      rootCause: resolution.rootCause,
-      rootCauseStatus: resolution.rootCauseStatus,
-      repairActions: resolution.repairActions,
-      partsReplaced: resolution.partsReplaced ?? [],
-      postRepairTestResults: resolution.postRepairTestResults ?? [],
-      verificationState,
-      requiresRestartApproval,
-      restartApproved: false,
-      approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
-    });
+    // Idempotency check: If ticket is already resolved and has linked record, return existing
+    if ((ticket.status === 'RESOLVED' || ticket.status === 'PENDING_VERIFICATION') && ticket.maintenanceRecordId) {
+      const existingRecord = await this.getMaintenanceRecordById(organizationId, ticket.maintenanceRecordId);
+      if (existingRecord) {
+        return { ticket, record: existingRecord };
+      }
+    }
+
+    // If resolving after ticket reopening, update existing maintenance record rather than creating a duplicate
+    let record: MaintenanceRecord;
+    if (ticket.maintenanceRecordId) {
+      const existingRecord = await this.getMaintenanceRecordById(organizationId, ticket.maintenanceRecordId);
+      if (existingRecord) {
+        const updated = await this.updateMaintenanceRecord(organizationId, ticket.maintenanceRecordId, {
+          observedSymptoms: resolution.observedSymptoms ?? [],
+          measurements: resolution.measurements ?? [],
+          rootCause: resolution.rootCause,
+          rootCauseStatus: resolution.rootCauseStatus,
+          repairActions: resolution.repairActions,
+          partsReplaced: resolution.partsReplaced ?? [],
+          postRepairTestResults: resolution.postRepairTestResults ?? [],
+          verificationState,
+          requiresRestartApproval,
+          restartApproved: false,
+          approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+          actorUserId: resolution.resolvingTechnicianUserId,
+          note: `Resolution re-applied after ticket reopening: ${resolution.notes || ''}`,
+        });
+        record = updated || existingRecord;
+      } else {
+        record = await this.createMaintenanceRecord(organizationId, {
+          plantId: ticket.plantId,
+          machineId: ticket.machineId || '',
+          machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
+          ticketId: ticket.id,
+          ticketNumber: ticket.ticketNumber,
+          componentId: null,
+          reportingUserId: ticket.reportedByUserId,
+          reportingUserName: ticket.reportedByUserName,
+          assignedTechnicianUserId: ticket.assignedSpecialistUserId,
+          assignedTechnicianName: ticket.assignedSpecialistName,
+          resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
+          resolvingTechnicianName: resolution.resolvingTechnicianName,
+          faultCategory: resolution.faultCategory,
+          problemStatement: ticket.originalQuestion,
+          observedSymptoms: resolution.observedSymptoms ?? [],
+          measurements: resolution.measurements ?? [],
+          rootCause: resolution.rootCause,
+          rootCauseStatus: resolution.rootCauseStatus,
+          repairActions: resolution.repairActions,
+          partsReplaced: resolution.partsReplaced ?? [],
+          postRepairTestResults: resolution.postRepairTestResults ?? [],
+          verificationState,
+          requiresRestartApproval,
+          restartApproved: false,
+          approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+        });
+      }
+    } else {
+      record = await this.createMaintenanceRecord(organizationId, {
+        plantId: ticket.plantId,
+        machineId: ticket.machineId || '',
+        machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
+        ticketId: ticket.id,
+        ticketNumber: ticket.ticketNumber,
+        componentId: null,
+        reportingUserId: ticket.reportedByUserId,
+        reportingUserName: ticket.reportedByUserName,
+        assignedTechnicianUserId: ticket.assignedSpecialistUserId,
+        assignedTechnicianName: ticket.assignedSpecialistName,
+        resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
+        resolvingTechnicianName: resolution.resolvingTechnicianName,
+        faultCategory: resolution.faultCategory,
+        problemStatement: ticket.originalQuestion,
+        observedSymptoms: resolution.observedSymptoms ?? [],
+        measurements: resolution.measurements ?? [],
+        rootCause: resolution.rootCause,
+        rootCauseStatus: resolution.rootCauseStatus,
+        repairActions: resolution.repairActions,
+        partsReplaced: resolution.partsReplaced ?? [],
+        postRepairTestResults: resolution.postRepairTestResults ?? [],
+        verificationState,
+        requiresRestartApproval,
+        restartApproved: false,
+        approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+      });
+    }
 
     const previousStatus = ticket.status;
     const history = [...ticket.history];
@@ -5804,37 +6788,48 @@ export class PgDataStore implements IDataStore {
       timestamp: now,
     });
 
-    await this.pool.query(
-      `UPDATE specialist_tickets
-       SET status = $3,
-           fault_category = $4,
-           root_cause = $5,
-           root_cause_status = $6,
-           maintenance_record_id = $7,
-           requires_restart_approval = $8,
-           restart_approved = FALSE,
-           technician_observations = $9,
-           repair_outcome = $10,
-           resolved_at = CASE WHEN $3 = 'RESOLVED' THEN NOW() ELSE resolved_at END,
-           resolved_by_user_id = CASE WHEN $3 = 'RESOLVED' THEN $11 ELSE resolved_by_user_id END,
-           history = $12,
-           updated_at = NOW()
-       WHERE organization_id = $1 AND id = $2`,
-      [
-        organizationId,
-        ticketId,
-        newStatus,
-        resolution.faultCategory,
-        resolution.rootCause,
-        resolution.rootCauseStatus,
-        record.id,
-        requiresRestartApproval,
-        resolution.observedSymptoms?.join(', ') || null,
-        `Actions: ${resolution.repairActions.join('; ')}. Verification: ${verificationState}.`,
-        resolution.resolvingTechnicianUserId,
-        JSON.stringify(history),
-      ]
-    );
+    try {
+      await this.pool.query(
+        `UPDATE specialist_tickets
+         SET status = $3,
+             fault_category = $4,
+             root_cause = $5,
+             root_cause_status = $6,
+             maintenance_record_id = $7,
+             requires_restart_approval = $8,
+             restart_approved = FALSE,
+             technician_observations = $9,
+             repair_outcome = $10,
+             resolved_at = CASE WHEN $3 = 'RESOLVED' THEN NOW() ELSE resolved_at END,
+             resolved_by_user_id = CASE WHEN $3 = 'RESOLVED' THEN $11 ELSE resolved_by_user_id END,
+             history = $12,
+             updated_at = NOW()
+         WHERE organization_id = $1 AND id = $2`,
+        [
+          organizationId,
+          ticketId,
+          newStatus,
+          resolution.faultCategory,
+          resolution.rootCause,
+          resolution.rootCauseStatus,
+          record.id,
+          requiresRestartApproval,
+          resolution.observedSymptoms?.join(', ') || null,
+          `Actions: ${resolution.repairActions.join('; ')}. Verification: ${verificationState}.`,
+          resolution.resolvingTechnicianUserId,
+          JSON.stringify(history),
+        ]
+      );
+    } catch (err: any) {
+      if (!ticket.maintenanceRecordId && record.id) {
+        // Safe rollback: Clean up newly created record if ticket update failed
+        await this.pool.query(
+          `DELETE FROM maintenance_records WHERE organization_id = $1 AND id = $2`,
+          [organizationId, record.id]
+        ).catch(() => {});
+      }
+      throw err;
+    }
 
     const updatedTicket = await this.getSpecialistTicketById(organizationId, ticketId);
     return { ticket: updatedTicket!, record };

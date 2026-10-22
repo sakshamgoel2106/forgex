@@ -2,9 +2,12 @@ import { z } from 'zod';
 import dotenv from 'dotenv';
 import path from 'node:path';
 
-// Load .env from root or local directory
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+const isTestEnv = process.env.NODE_ENV === 'test';
+dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
 dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
+if (isTestEnv) {
+  process.env.NODE_ENV = 'test';
+}
 
 const booleanFromString = (defaultValue: boolean) =>
   z.preprocess((val) => {
@@ -31,6 +34,13 @@ const envSchema = z.object({
   SUPABASE_PROJECT_URL: z.string().optional().default(''),
   KEYCLOAK_REALM_URL: z.string().optional().default(''),
   KEYCLOAK_CLIENT_ID: z.string().optional().default(''),
+  GOOGLE_CLIENT_ID: z.string().optional().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
+  SMTP_HOST: z.string().optional().default(''),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_USER: z.string().optional().default(''),
+  SMTP_PASS: z.string().optional().default(''),
+  SMTP_FROM: z.string().default('no-reply@forgex.industrial.ai'),
   JWT_SECRET: z.string().min(16).default('super_secret_forgex_jwt_key_at_least_32_characters_long_min_change_me'),
   JWT_EXPIRES_IN: z.string().default('15m'),
 
@@ -100,6 +110,8 @@ export function getSanitizedConfig(cfg: EnvConfig): Record<string, unknown> {
     ...cfg,
     JWT_SECRET: '[REDACTED]',
     S3_SECRET_ACCESS_KEY: '[REDACTED]',
+    GOOGLE_CLIENT_SECRET: '[REDACTED]',
+    SMTP_PASS: '[REDACTED]',
     SUPABASE_JWT_SECRET: maskSecret(cfg.SUPABASE_JWT_SECRET),
     QDRANT_API_KEY: maskSecret(cfg.QDRANT_API_KEY),
     CLOUD_AI_API_KEY: maskSecret(cfg.CLOUD_AI_API_KEY),

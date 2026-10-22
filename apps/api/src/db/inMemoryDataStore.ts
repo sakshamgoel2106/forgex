@@ -78,6 +78,8 @@ import type {
   SpecialistWorkloadMetric,
   KnowledgeGapMetric,
   UnansweredQuestionSample,
+  EmailOtpRecord,
+  GoogleOAuthStateRecord,
 } from '@forgex/shared-types';
 import { DEFAULT_INDUSTRY_PROFILES } from '@forgex/shared-types';
 import type {
@@ -108,6 +110,8 @@ import type {
   CreateMachineDTO,
   MachineFilterOptions,
   CreateMissingInfoTaskDTO,
+  CreateEmailOtpDTO,
+  SaveGoogleOAuthStateDTO,
   MissingInfoTaskFilterOptions,
   CreateComponentMappingDTO,
   IssueEmployeeBadgeDTO,
@@ -239,6 +243,21 @@ export class InMemoryDataStore implements IDataStore {
     return null;
   }
 
+  public async updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization | null> {
+    const existing = this.organizations.get(id);
+    if (!existing) return null;
+    const updated: Organization = {
+      ...existing,
+      ...updates,
+      id: existing.id,
+      slug: existing.slug,
+      deploymentType: existing.deploymentType, // immutable
+      updatedAt: new Date().toISOString(),
+    };
+    this.organizations.set(id, updated);
+    return updated;
+  }
+
   // --------------------------------------------------------------------------
   // Users
   // --------------------------------------------------------------------------
@@ -284,6 +303,7 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   private userSessions: Map<string, UserSession[]> = new Map();
+  private passwordResetTokens = new Map<string, { userId: string; expiresAt: string; usedAt: string | null }>();
 
   public async updateUser(userId: string, updates: Partial<User>): Promise<User | null> {
     const user = this.users.get(userId);
@@ -298,9 +318,8 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   public async listUserSessions(userId: string): Promise<UserSession[]> {
-    let sessions = this.userSessions.get(userId);
-    if (!sessions || sessions.length === 0) {
-      sessions = [
+    if (!this.userSessions.has(userId)) {
+      const initialSessions: UserSession[] = [
         {
           id: `sess-${crypto.randomUUID().slice(0, 8)}`,
           device: 'Industrial Toughbook CF-33 (Chrome / Linux x86_64)',
@@ -316,9 +335,9 @@ export class InMemoryDataStore implements IDataStore {
           isCurrent: false,
         },
       ];
-      this.userSessions.set(userId, sessions);
+      this.userSessions.set(userId, initialSessions);
     }
-    return sessions;
+    return this.userSessions.get(userId) || [];
   }
 
   public async revokeUserSession(userId: string, sessionId: string): Promise<boolean> {
@@ -329,6 +348,180 @@ export class InMemoryDataStore implements IDataStore {
       return true;
     }
     return false;
+  }
+
+  public async revokeAllUserSessions(userId: string): Promise<number> {
+    const sessions = await this.listUserSessions(userId);
+    const count = sessions.length;
+    this.userSessions.set(userId, []);
+    return count;
+  }
+
+  public async getUserByVerificationToken(tokenHash: string): Promise<User | null> {
+    for (const user of this.users.values()) {
+      if (user.verificationTokenHash === tokenHash) {
+        return user;
+      }
+    }
+    return null;
+  }
+
+  public async setUserEmailVerified(userId: string, verified: boolean): Promise<User | null> {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    user.emailVerified = verified;
+    user.verificationTokenHash = undefined;
+    user.verificationExpiresAt = undefined;
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+
+  public async setUserVerificationToken(
+    userId: string,
+    tokenHash: string | null,
+    expiresAt: string | null
+  ): Promise<User | null> {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    user.verificationTokenHash = tokenHash ?? undefined;
+    user.verificationExpiresAt = expiresAt ?? undefined;
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+
+  public async setUserPassword(userId: string, passwordHash: string): Promise<User | null> {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    user.passwordHash = passwordHash;
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+
+  public async createPasswordResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
+    this.passwordResetTokens.set(tokenHash, {
+      userId,
+      expiresAt,
+      usedAt: null,
+    });
+  }
+
+  public async getPasswordResetToken(
+    tokenHash: string
+  ): Promise<{ userId: string; expiresAt: string; usedAt: string | null } | null> {
+    return this.passwordResetTokens.get(tokenHash) ?? null;
+  }
+
+  public async consumePasswordResetToken(tokenHash: string): Promise<boolean> {
+    const tokenRecord = this.passwordResetTokens.get(tokenHash);
+    if (!tokenRecord) return false;
+    if (tokenRecord.usedAt !== null) return false;
+    if (new Date(tokenRecord.expiresAt) < new Date()) return false;
+    tokenRecord.usedAt = new Date().toISOString();
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Email OTP & Google OAuth Identity Methods
+  // --------------------------------------------------------------------------
+  private emailOtps = new Map<string, EmailOtpRecord>();
+  private googleOAuthStates = new Map<string, GoogleOAuthStateRecord>();
+
+  public async createEmailOtp(dto: CreateEmailOtpDTO): Promise<EmailOtpRecord> {
+    const record: EmailOtpRecord = {
+      id: crypto.randomUUID(),
+      email: dto.email.toLowerCase(),
+      codeHash: dto.codeHash,
+      purpose: dto.purpose,
+      attempts: 0,
+      maxAttempts: 5,
+      expiresAt: dto.expiresAt,
+      usedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    this.emailOtps.set(record.id, record);
+    return record;
+  }
+
+  public async getLatestEmailOtp(email: string, purpose: string): Promise<EmailOtpRecord | null> {
+    const matching = Array.from(this.emailOtps.values())
+      .filter((o) => o.email.toLowerCase() === email.toLowerCase() && o.purpose === purpose)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return matching[0] ?? null;
+  }
+
+  public async incrementEmailOtpAttempts(otpId: string): Promise<number> {
+    const record = this.emailOtps.get(otpId);
+    if (!record) return 0;
+    record.attempts += 1;
+    return record.attempts;
+  }
+
+  public async consumeEmailOtp(otpId: string): Promise<boolean> {
+    const record = this.emailOtps.get(otpId);
+    if (!record) return false;
+    if (record.usedAt) return false;
+    if (new Date(record.expiresAt) < new Date()) return false;
+    record.usedAt = new Date().toISOString();
+    return true;
+  }
+
+  public async countRecentEmailOtps(email: string, sinceDate: string): Promise<number> {
+    const sinceTime = new Date(sinceDate).getTime();
+    return Array.from(this.emailOtps.values()).filter(
+      (o) => o.email.toLowerCase() === email.toLowerCase() && new Date(o.createdAt).getTime() >= sinceTime
+    ).length;
+  }
+
+  public async getUserByGoogleId(googleId: string): Promise<User | null> {
+    for (const u of this.users.values()) {
+      if (u.googleId === googleId) return u;
+    }
+    return null;
+  }
+
+  public async setUserGoogleId(userId: string, googleId: string, googleEmail?: string): Promise<User | null> {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    user.googleId = googleId;
+    if (googleEmail) user.googleEmail = googleEmail.toLowerCase();
+    user.authProvider = 'google';
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+
+  public async unlinkUserGoogleId(userId: string): Promise<User | null> {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    delete (user as any).googleId;
+    delete (user as any).googleEmail;
+    user.authProvider = user.passwordHash ? 'local' : 'email_otp';
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+
+  public async saveGoogleOAuthState(dto: SaveGoogleOAuthStateDTO): Promise<GoogleOAuthStateRecord> {
+    const record: GoogleOAuthStateRecord = {
+      state: dto.state,
+      purpose: dto.purpose,
+      redirectUri: dto.redirectUri,
+      invitationToken: dto.invitationToken,
+      expiresAt: dto.expiresAt,
+      createdAt: new Date().toISOString(),
+    };
+    this.googleOAuthStates.set(record.state, record);
+    return record;
+  }
+
+  public async getGoogleOAuthState(state: string): Promise<GoogleOAuthStateRecord | null> {
+    return this.googleOAuthStates.get(state) ?? null;
+  }
+
+  public async consumeGoogleOAuthState(state: string): Promise<boolean> {
+    const record = this.googleOAuthStates.get(state);
+    if (!record) return false;
+    if (new Date(record.expiresAt) < new Date()) return false;
+    this.googleOAuthStates.delete(state);
+    return true;
   }
 
   // --------------------------------------------------------------------------
@@ -476,6 +669,14 @@ export class InMemoryDataStore implements IDataStore {
       expiresAt: dto.expiresAt,
       status: 'PENDING',
       assignedPlantIds: dto.assignedPlantIds ?? [],
+      assignedMachineIds: dto.assignedMachineIds ?? [],
+      qrTokenHash: dto.qrTokenHash,
+      qrExpiresAt: dto.qrExpiresAt,
+      activationCodeHash: dto.activationCodeHash,
+      activationCodeAttempts: 0,
+      employeeId: dto.employeeId,
+      department: dto.department,
+      designation: dto.designation,
       createdAt: now,
       updatedAt: now,
     };
@@ -505,6 +706,53 @@ export class InMemoryDataStore implements IDataStore {
       }
     }
     return null;
+  }
+
+  public async getInvitationByQrTokenHash(qrTokenHash: string): Promise<OrganizationInvitation | null> {
+    for (const inv of this.invitations.values()) {
+      if (inv.qrTokenHash === qrTokenHash) {
+        if (inv.qrExpiresAt && new Date(inv.qrExpiresAt) < new Date() && inv.status === 'PENDING') {
+          inv.status = 'EXPIRED';
+          inv.updatedAt = new Date().toISOString();
+        }
+        return inv;
+      }
+    }
+    return null;
+  }
+
+  public async getInvitationByActivationCodeHash(codeHash: string): Promise<OrganizationInvitation | null> {
+    for (const inv of this.invitations.values()) {
+      if (inv.activationCodeHash === codeHash) {
+        if (inv.status === 'PENDING' && new Date(inv.expiresAt) < new Date()) {
+          inv.status = 'EXPIRED';
+          inv.updatedAt = new Date().toISOString();
+        }
+        return inv;
+      }
+    }
+    return null;
+  }
+
+  public async incrementActivationCodeAttempts(invitationId: string): Promise<number> {
+    const inv = this.invitations.get(invitationId);
+    if (!inv) return 0;
+    inv.activationCodeAttempts = (inv.activationCodeAttempts || 0) + 1;
+    inv.updatedAt = new Date().toISOString();
+    return inv.activationCodeAttempts;
+  }
+
+  public async updateInvitationQrToken(
+    invitationId: string,
+    qrTokenHash: string,
+    qrExpiresAt: string
+  ): Promise<OrganizationInvitation | null> {
+    const inv = this.invitations.get(invitationId);
+    if (!inv) return null;
+    inv.qrTokenHash = qrTokenHash;
+    inv.qrExpiresAt = qrExpiresAt;
+    inv.updatedAt = new Date().toISOString();
+    return inv;
   }
 
   public async listInvitations(organizationId: string, status?: InvitationStatus): Promise<OrganizationInvitation[]> {
@@ -554,11 +802,17 @@ export class InMemoryDataStore implements IDataStore {
       throw new Error(`Organization slug '${dto.organizationSlug}' is already claimed.`);
     }
 
-    // 2. Create organization
+    // 2. Create organization with industry and deployment metadata
     const org = await this.createOrganization({
       name: dto.organizationName,
       slug: dto.organizationSlug,
     });
+    org.industry = dto.industry;
+    org.country = dto.country;
+    org.timezone = dto.timezone;
+    org.website = dto.website;
+    org.companySize = dto.companySize;
+    org.deploymentType = dto.deploymentType ?? 'saas';
 
     // 3. Find or create administrator user
     let user = await this.getUserByExternalAuthId(dto.externalAuthId);
@@ -579,6 +833,19 @@ export class InMemoryDataStore implements IDataStore {
       }
     }
 
+    // Set passwords and verification state if supplied
+    if (dto.passwordHash) {
+      user.passwordHash = dto.passwordHash;
+    }
+    if (dto.verificationTokenHash) {
+      user.verificationTokenHash = dto.verificationTokenHash;
+      user.verificationExpiresAt = dto.verificationExpiresAt;
+      user.emailVerified = false;
+    } else {
+      user.emailVerified = true;
+    }
+    user.status = 'ACTIVE';
+
     // 4. Create initial membership as ORGANIZATION_OWNER
     const membership = await this.createMembership({
       organizationId: org.id,
@@ -586,6 +853,17 @@ export class InMemoryDataStore implements IDataStore {
       role: 'ORGANIZATION_OWNER',
       status: 'ACTIVE',
     });
+
+    // 5. Optionally create initial site/plant if specified
+    if (dto.initialSiteName) {
+      try {
+        await this.createPlant(org.id, {
+          code: `SITE-${org.slug.toUpperCase().slice(0, 8)}`,
+          name: dto.initialSiteName,
+          location: dto.country || 'Primary Manufacturing Facility',
+        });
+      } catch {}
+    }
 
     return {
       organization: org,
@@ -1338,6 +1616,7 @@ export class InMemoryDataStore implements IDataStore {
       id,
       organizationId: dto.organizationId,
       plantId: dto.plantId ?? null,
+      machineId: dto.machineId ?? null,
       documentId: dto.documentId ?? null,
       documentVersionId: dto.documentVersionId ?? null,
       pageNumber: dto.pageNumber ?? null,
@@ -1355,6 +1634,9 @@ export class InMemoryDataStore implements IDataStore {
       modelUsed: dto.modelUsed,
       confidenceScore: dto.confidenceScore ?? 1.0,
       isAmbiguous: dto.isAmbiguous ?? false,
+      processingStatus: dto.processingStatus ?? 'UPLOADED',
+      uploadedByUserId: dto.uploadedByUserId ?? null,
+      dataClassification: dto.dataClassification ?? 'INTERNAL',
       createdAt: now,
       updatedAt: now,
     };
@@ -1368,6 +1650,22 @@ export class InMemoryDataStore implements IDataStore {
     return asset;
   }
 
+  public async updateVisualAsset(
+    organizationId: string,
+    id: string,
+    updates: Partial<VisualAsset>
+  ): Promise<VisualAsset | null> {
+    const asset = this.visualAssets.get(id);
+    if (!asset || asset.organizationId !== organizationId) return null;
+    const updated: VisualAsset = {
+      ...asset,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.visualAssets.set(id, updated);
+    return updated;
+  }
+
   public async listVisualAssets(
     organizationId: string,
     filter?: VisualAssetFilterOptions
@@ -1376,9 +1674,11 @@ export class InMemoryDataStore implements IDataStore {
     for (const a of this.visualAssets.values()) {
       if (a.organizationId !== organizationId) continue;
       if (filter?.plantId && a.plantId !== filter.plantId) continue;
+      if (filter?.machineId && a.machineId !== filter.machineId) continue;
       if (filter?.documentId && a.documentId !== filter.documentId) continue;
       if (filter?.documentVersionId && a.documentVersionId !== filter.documentVersionId) continue;
       if (filter?.assetType && a.assetType !== filter.assetType) continue;
+      if (filter?.processingStatus && a.processingStatus !== filter.processingStatus) continue;
       if (filter?.equipmentTag && !a.equipmentTags.includes(filter.equipmentTag)) continue;
       results.push(a);
     }
@@ -1415,6 +1715,8 @@ export class InMemoryDataStore implements IDataStore {
       operatingConditions: dto.operatingConditions || {},
       visualAssetIds: dto.visualAssetIds || [],
       supportingDocumentIds: dto.supportingDocumentIds || [],
+      sourceTicketId: dto.sourceTicketId || (dto.operatingConditions?.sourceTicketId as string) || null,
+      partsUsed: dto.partsUsed || dto.findings?.partsUsed || null,
       diagnosticHypothesis: dto.diagnosticHypothesis || null,
       checklist: dto.checklist || [],
       findings: dto.findings || null,
@@ -1426,6 +1728,7 @@ export class InMemoryDataStore implements IDataStore {
       updatedAt: now,
       resolvedAt: dto.resolvedAt || null,
       closedAt: dto.closedAt || null,
+      maintenanceRecordId: dto.maintenanceRecordId || null,
     };
 
     this.maintenanceCases.set(maintenanceCase.id, maintenanceCase);
@@ -3300,8 +3603,93 @@ export class InMemoryDataStore implements IDataStore {
     organizationId: string,
     data: CreateMaintenanceRecordDTO
   ): Promise<MaintenanceRecord> {
+    if (!organizationId) {
+      throw new Error('Validation Error: organizationId is required');
+    }
+    if (!data.machineId || !data.machineId.trim()) {
+      throw new Error('Validation Error: machineId is required');
+    }
+    if (!data.faultCategory || !data.faultCategory.trim()) {
+      throw new Error('Validation Error: faultCategory is required');
+    }
+    if (!data.problemStatement || !data.problemStatement.trim()) {
+      throw new Error('Validation Error: problemStatement is required');
+    }
+    if (!data.rootCause || !data.rootCause.trim()) {
+      throw new Error('Validation Error: rootCause is required');
+    }
+    if (!data.repairActions || !Array.isArray(data.repairActions) || data.repairActions.length === 0) {
+      throw new Error('Validation Error: At least one repairAction is required');
+    }
+
+    // Verify machine tenant ownership if machine is registered
+    const machine = this.machines.get(data.machineId);
+    if (machine && machine.organizationId !== organizationId) {
+      throw new Error(`Cross-tenant security violation: Machine ${data.machineId} belongs to another organization.`);
+    }
+
+    // Verify plant tenant ownership if plant is registered
+    if (data.plantId) {
+      const plant = this.plants.get(data.plantId);
+      if (plant && plant.organizationId !== organizationId) {
+        throw new Error(`Cross-tenant security violation: Plant ${data.plantId} belongs to another organization.`);
+      }
+    }
+
+    // Verify technician tenant ownership if technician and memberships are registered
+    if (data.resolvingTechnicianUserId && this.memberships.size > 0) {
+      const isMember = Array.from(this.memberships.values()).some(
+        (m) => m.userId === data.resolvingTechnicianUserId && m.organizationId === organizationId
+      );
+      const userExists = this.users.has(data.resolvingTechnicianUserId);
+      if (userExists && !isMember) {
+        throw new Error(`Cross-tenant security violation: Resolving technician ${data.resolvingTechnicianUserId} belongs to another organization.`);
+      }
+    }
+
+    // Verify ticket tenant ownership if ticket is registered
+    if (data.ticketId) {
+      const ticket = this.specialistTickets.get(data.ticketId);
+      if (ticket && ticket.organizationId !== organizationId) {
+        throw new Error(`Cross-tenant security violation: Ticket ${data.ticketId} belongs to another organization.`);
+      }
+    }
+
+    // Verify case tenant ownership if case is registered
+    if (data.caseId) {
+      const caseItem = this.maintenanceCases.get(data.caseId);
+      if (caseItem && caseItem.organizationId !== organizationId) {
+        throw new Error(`Cross-tenant security violation: Case ${data.caseId} belongs to another organization.`);
+      }
+    }
+
+    if (!data.ticketId && !data.caseId) {
+      throw new Error('Validation Error: Either ticketId or caseId is required');
+    }
+
+    // Duplicate prevention: If a record already exists for this organization and ticketId, return it idempotently
+    if (data.ticketId) {
+      const existing = Array.from(this.maintenanceRecords.values()).find(
+        (r) => r.organizationId === organizationId && r.ticketId === data.ticketId
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
+    // Duplicate prevention: If a record already exists for this organization and caseId, return it idempotently
+    if (data.caseId) {
+      const existing = Array.from(this.maintenanceRecords.values()).find(
+        (r) => r.organizationId === organizationId && r.caseId === data.caseId
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const resolvedAt = data.resolvedAt || now;
     const recordNumber =
       data.recordNumber ||
       `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -3343,8 +3731,10 @@ export class InMemoryDataStore implements IDataStore {
       plantId: data.plantId,
       machineId: data.machineId,
       machineAssetTag: data.machineAssetTag,
-      ticketId: data.ticketId,
-      ticketNumber: data.ticketNumber,
+      ticketId: data.ticketId ?? null,
+      ticketNumber: data.ticketNumber ?? null,
+      caseId: data.caseId ?? null,
+      caseNumber: data.caseNumber ?? null,
       componentId: data.componentId ?? null,
       componentName: data.componentName ?? null,
       reportingUserId: data.reportingUserId,
@@ -3377,7 +3767,7 @@ export class InMemoryDataStore implements IDataStore {
       approvedByUserId: data.approvedByUserId ?? null,
       approvedAt: data.approvedAt ?? null,
       approvalNotes: data.approvalNotes ?? null,
-      resolvedAt: now,
+      resolvedAt,
       closedAt: null,
       relatedIncidentRecordIds,
       attachments: data.attachments ?? [],
@@ -3421,12 +3811,13 @@ export class InMemoryDataStore implements IDataStore {
     organizationId: string,
     filters?: MaintenanceRecordFilterOptions
   ): Promise<MaintenanceRecord[]> {
-    const results: MaintenanceRecord[] = [];
+    let results: MaintenanceRecord[] = [];
     for (const r of this.maintenanceRecords.values()) {
       if (r.organizationId !== organizationId) continue;
       if (filters?.machineId && r.machineId !== filters.machineId) continue;
       if (filters?.plantId && r.plantId !== filters.plantId) continue;
       if (filters?.ticketId && r.ticketId !== filters.ticketId) continue;
+      if (filters?.caseId && r.caseId !== filters.caseId) continue;
       if (filters?.faultCategory && r.faultCategory !== filters.faultCategory) continue;
       if (filters?.rootCauseStatus && r.rootCauseStatus !== filters.rootCauseStatus) continue;
       if (filters?.verificationState && r.verificationState !== filters.verificationState) continue;
@@ -3443,11 +3834,64 @@ export class InMemoryDataStore implements IDataStore {
       ) {
         continue;
       }
+      if (filters?.technicianUserId && r.resolvingTechnicianUserId !== filters.technicianUserId) continue;
+      if (filters?.isRecurring !== undefined && r.isRecurringIncident !== filters.isRecurring) continue;
+      if (filters?.dateFrom && new Date(r.resolvedAt) < new Date(filters.dateFrom)) continue;
+      if (filters?.dateTo && new Date(r.resolvedAt) > new Date(filters.dateTo)) continue;
       results.push(r);
     }
-    return results.sort(
-      (a, b) => new Date(b.resolvedAt).getTime() - new Date(a.resolvedAt).getTime()
-    );
+
+    const sortOrder = filters?.sortOrder === 'asc' ? 'asc' : 'desc';
+    results.sort((a, b) => {
+      const timeDiff = new Date(b.resolvedAt).getTime() - new Date(a.resolvedAt).getTime();
+      const primary = sortOrder === 'asc' ? -timeDiff : timeDiff;
+      if (primary !== 0) return primary;
+      return sortOrder === 'asc' ? (a.id || '').localeCompare(b.id || '') : (b.id || '').localeCompare(a.id || '');
+    });
+
+    if (filters?.offset !== undefined || filters?.limit !== undefined) {
+      const offset = filters?.offset ?? 0;
+      const limit = filters?.limit ?? results.length;
+      results = results.slice(offset, offset + limit);
+    }
+
+    return results;
+  }
+
+  public async countMaintenanceRecords(
+    organizationId: string,
+    filters?: MaintenanceRecordFilterOptions
+  ): Promise<number> {
+    let count = 0;
+    for (const r of this.maintenanceRecords.values()) {
+      if (r.organizationId !== organizationId) continue;
+      if (filters?.machineId && r.machineId !== filters.machineId) continue;
+      if (filters?.plantId && r.plantId !== filters.plantId) continue;
+      if (filters?.ticketId && r.ticketId !== filters.ticketId) continue;
+      if (filters?.caseId && r.caseId !== filters.caseId) continue;
+      if (filters?.faultCategory && r.faultCategory !== filters.faultCategory) continue;
+      if (filters?.rootCauseStatus && r.rootCauseStatus !== filters.rootCauseStatus) continue;
+      if (filters?.verificationState && r.verificationState !== filters.verificationState) continue;
+      if (filters?.approvalStatus && r.approvalStatus !== filters.approvalStatus) continue;
+      if (
+        filters?.requiresRestartApproval !== undefined &&
+        r.requiresRestartApproval !== filters.requiresRestartApproval
+      ) {
+        continue;
+      }
+      if (
+        filters?.restartApproved !== undefined &&
+        r.restartApproved !== filters.restartApproved
+      ) {
+        continue;
+      }
+      if (filters?.technicianUserId && r.resolvingTechnicianUserId !== filters.technicianUserId) continue;
+      if (filters?.isRecurring !== undefined && r.isRecurringIncident !== filters.isRecurring) continue;
+      if (filters?.dateFrom && new Date(r.resolvedAt) < new Date(filters.dateFrom)) continue;
+      if (filters?.dateTo && new Date(r.resolvedAt) > new Date(filters.dateTo)) continue;
+      count++;
+    }
+    return count;
   }
 
   public async updateMaintenanceRecord(
@@ -3461,8 +3905,35 @@ export class InMemoryDataStore implements IDataStore {
     const now = new Date().toISOString();
     const changes: Record<string, { from: any; to: any }> = {};
 
+    const ALLOWED_UPDATE_KEYS = new Set([
+      'observedSymptoms',
+      'measurements',
+      'rootCause',
+      'rootCauseStatus',
+      'repairActions',
+      'partsReplaced',
+      'postRepairTestResults',
+      'verificationState',
+      'verificationNotes',
+      'verifiedByUserId',
+      'verifiedAt',
+      'requiresRestartApproval',
+      'restartApproved',
+      'restartApprovedByUserId',
+      'restartApprovedAt',
+      'restartNotes',
+      'approvalStatus',
+      'approvedByUserId',
+      'approvedAt',
+      'approvalNotes',
+      'closedAt',
+      'relatedIncidentRecordIds',
+      'attachments',
+      'knowledgeApproved',
+    ]);
+
     for (const [key, val] of Object.entries(updates)) {
-      if (key === 'actorUserId' || key === 'note') continue;
+      if (!ALLOWED_UPDATE_KEYS.has(key)) continue;
       if (val !== undefined && (record as any)[key] !== val) {
         changes[key] = { from: (record as any)[key], to: val };
         (record as any)[key] = val;
@@ -3674,7 +4145,7 @@ export class InMemoryDataStore implements IDataStore {
     const incidentTimeline = maxCategoryRecords.map((r) => ({
       recordId: r.id,
       recordNumber: r.recordNumber,
-      ticketNumber: r.ticketNumber,
+      ticketNumber: r.ticketNumber || r.caseNumber || 'N/A',
       resolvedAt: r.resolvedAt,
       faultCategory: r.faultCategory,
       rootCause: r.rootCause,
@@ -3810,33 +4281,93 @@ export class InMemoryDataStore implements IDataStore {
       newStatus = 'RESOLVED';
     }
 
-    const record = await this.createMaintenanceRecord(organizationId, {
-      plantId: ticket.plantId,
-      machineId: ticket.machineId || '',
-      machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
-      ticketId: ticket.id,
-      ticketNumber: ticket.ticketNumber,
-      componentId: null,
-      reportingUserId: ticket.reportedByUserId,
-      reportingUserName: ticket.reportedByUserName,
-      assignedTechnicianUserId: ticket.assignedSpecialistUserId,
-      assignedTechnicianName: ticket.assignedSpecialistName,
-      resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
-      resolvingTechnicianName: resolution.resolvingTechnicianName,
-      faultCategory: resolution.faultCategory,
-      problemStatement: ticket.originalQuestion,
-      observedSymptoms: resolution.observedSymptoms ?? [],
-      measurements: resolution.measurements ?? [],
-      rootCause: resolution.rootCause,
-      rootCauseStatus: resolution.rootCauseStatus,
-      repairActions: resolution.repairActions,
-      partsReplaced: resolution.partsReplaced ?? [],
-      postRepairTestResults: resolution.postRepairTestResults ?? [],
-      verificationState,
-      requiresRestartApproval,
-      restartApproved: false,
-      approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
-    });
+    // Idempotency check: If ticket is already resolved and has linked record, return existing
+    if ((ticket.status === 'RESOLVED' || ticket.status === 'PENDING_VERIFICATION') && ticket.maintenanceRecordId) {
+      const existingRecord = await this.getMaintenanceRecordById(organizationId, ticket.maintenanceRecordId);
+      if (existingRecord) {
+        return { ticket, record: existingRecord };
+      }
+    }
+
+    // If resolving after ticket reopening, update existing maintenance record rather than creating a duplicate
+    let record: MaintenanceRecord;
+    if (ticket.maintenanceRecordId) {
+      const existingRecord = await this.getMaintenanceRecordById(organizationId, ticket.maintenanceRecordId);
+      if (existingRecord) {
+        const updated = await this.updateMaintenanceRecord(organizationId, ticket.maintenanceRecordId, {
+          observedSymptoms: resolution.observedSymptoms ?? [],
+          measurements: resolution.measurements ?? [],
+          rootCause: resolution.rootCause,
+          rootCauseStatus: resolution.rootCauseStatus,
+          repairActions: resolution.repairActions,
+          partsReplaced: resolution.partsReplaced ?? [],
+          postRepairTestResults: resolution.postRepairTestResults ?? [],
+          verificationState,
+          requiresRestartApproval,
+          restartApproved: false,
+          approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+          actorUserId: resolution.resolvingTechnicianUserId,
+          note: `Resolution re-applied after ticket reopening: ${resolution.notes || ''}`,
+        });
+        record = updated || existingRecord;
+      } else {
+        record = await this.createMaintenanceRecord(organizationId, {
+          plantId: ticket.plantId,
+          machineId: ticket.machineId || '',
+          machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
+          ticketId: ticket.id,
+          ticketNumber: ticket.ticketNumber,
+          componentId: null,
+          reportingUserId: ticket.reportedByUserId,
+          reportingUserName: ticket.reportedByUserName,
+          assignedTechnicianUserId: ticket.assignedSpecialistUserId,
+          assignedTechnicianName: ticket.assignedSpecialistName,
+          resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
+          resolvingTechnicianName: resolution.resolvingTechnicianName,
+          faultCategory: resolution.faultCategory,
+          problemStatement: ticket.originalQuestion,
+          observedSymptoms: resolution.observedSymptoms ?? [],
+          measurements: resolution.measurements ?? [],
+          rootCause: resolution.rootCause,
+          rootCauseStatus: resolution.rootCauseStatus,
+          repairActions: resolution.repairActions,
+          partsReplaced: resolution.partsReplaced ?? [],
+          postRepairTestResults: resolution.postRepairTestResults ?? [],
+          verificationState,
+          requiresRestartApproval,
+          restartApproved: false,
+          approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+        });
+      }
+    } else {
+      record = await this.createMaintenanceRecord(organizationId, {
+        plantId: ticket.plantId,
+        machineId: ticket.machineId || '',
+        machineAssetTag: ticket.machineAssetTag || 'UNKNOWN',
+        ticketId: ticket.id,
+        ticketNumber: ticket.ticketNumber,
+        componentId: null,
+        reportingUserId: ticket.reportedByUserId,
+        reportingUserName: ticket.reportedByUserName,
+        assignedTechnicianUserId: ticket.assignedSpecialistUserId,
+        assignedTechnicianName: ticket.assignedSpecialistName,
+        resolvingTechnicianUserId: resolution.resolvingTechnicianUserId,
+        resolvingTechnicianName: resolution.resolvingTechnicianName,
+        faultCategory: resolution.faultCategory,
+        problemStatement: ticket.originalQuestion,
+        observedSymptoms: resolution.observedSymptoms ?? [],
+        measurements: resolution.measurements ?? [],
+        rootCause: resolution.rootCause,
+        rootCauseStatus: resolution.rootCauseStatus,
+        repairActions: resolution.repairActions,
+        partsReplaced: resolution.partsReplaced ?? [],
+        postRepairTestResults: resolution.postRepairTestResults ?? [],
+        verificationState,
+        requiresRestartApproval,
+        restartApproved: false,
+        approvalStatus: requiresRestartApproval ? 'PENDING_APPROVAL' : 'NOT_REQUIRED',
+      });
+    }
 
     const previousStatus = ticket.status;
     ticket.status = newStatus;

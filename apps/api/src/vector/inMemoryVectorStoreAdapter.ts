@@ -53,9 +53,14 @@ export class InMemoryVectorStoreAdapter implements IVectorStoreAdapter {
   public async search(
     collectionName: string,
     vector: number[],
-    filter?: { organizationId?: string; plantId?: string; documentId?: string },
+    filter?: { organizationId?: string; plantId?: string; documentId?: string; machineId?: string },
     limit = 10
   ): Promise<VectorSearchResult[]> {
+    // Fail-Closed Tenant Isolation Enforcement: missing organization filter MUST throw
+    if (!filter?.organizationId) {
+      throw new Error('Tenant Isolation Violation: Vector search requires a validated organizationId filter.');
+    }
+
     const col = this.collections.get(collectionName);
     if (!col) return [];
 
@@ -63,13 +68,16 @@ export class InMemoryVectorStoreAdapter implements IVectorStoreAdapter {
 
     for (const pt of col.values()) {
       // Enforce authorized tenant isolation filter
-      if (filter?.organizationId && pt.payload.organizationId !== filter.organizationId) {
+      if (pt.payload.organizationId !== filter.organizationId) {
         continue;
       }
       if (filter?.plantId && pt.payload.plantId !== filter.plantId) {
         continue;
       }
       if (filter?.documentId && pt.payload.documentId !== filter.documentId) {
+        continue;
+      }
+      if (filter?.machineId && pt.payload.machineId !== filter.machineId) {
         continue;
       }
 

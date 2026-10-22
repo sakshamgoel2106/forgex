@@ -13,12 +13,12 @@ export function createAssetRouter(dataStore: IDataStore): Router {
   // All roles can read assets
   router.get(
     '/',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER', 'ENGINEER_TECHNICIAN']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER', 'ENGINEER_TECHNICIAN', 'WORKER']),
     controller.list
   );
   router.get(
     '/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER', 'ENGINEER_TECHNICIAN']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER', 'ENGINEER_TECHNICIAN', 'WORKER']),
     controller.getById
   );
 
