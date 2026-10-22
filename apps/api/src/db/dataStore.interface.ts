@@ -95,6 +95,7 @@ import type {
   PublishGuidanceDTO,
   ListGuidanceFilters,
   ExpertKnowledgeEntry,
+  ExpertNoteReview,
   CreateExpertKnowledgeDTO,
   ReviewExpertKnowledgeDTO,
   ExpertKnowledgeFilterOptions,
@@ -102,6 +103,7 @@ import type {
   OperationalAnalyticsFilterOptions,
   EmailOtpRecord,
   GoogleOAuthStateRecord,
+  RcaSession,
 } from '@forgex/shared-types';
 
 export interface CreateEmailOtpDTO {
@@ -563,11 +565,22 @@ export interface IDataStore {
   revokePublishedGuidance(organizationId: string, guidanceId: string, reason?: string): Promise<PublishedApprovedGuidance | null>;
 
   // Expert Knowledge Library (Prompt 04)
-  createExpertKnowledgeEntry(organizationId: string, data: CreateExpertKnowledgeDTO & { authorUserId: string; authorEmail?: string; authorRole?: string }): Promise<ExpertKnowledgeEntry>;
+  createExpertKnowledgeEntry(organizationId: string, data: CreateExpertKnowledgeDTO & { authorUserId: string; authorEmail?: string; authorRole?: string; authorName?: string }): Promise<ExpertKnowledgeEntry>;
   getExpertKnowledgeEntryById(organizationId: string, id: string): Promise<ExpertKnowledgeEntry | null>;
   listExpertKnowledgeEntries(organizationId: string, filters?: ExpertKnowledgeFilterOptions): Promise<ExpertKnowledgeEntry[]>;
   reviewExpertKnowledgeEntry(organizationId: string, id: string, review: ReviewExpertKnowledgeDTO & { reviewedByUserId: string; reviewedByEmail?: string; actorRole?: string }): Promise<ExpertKnowledgeEntry>;
   revokeExpertKnowledgeEntry(organizationId: string, id: string, reason: string, revokedByUserId: string): Promise<ExpertKnowledgeEntry | null>;
+  upvoteExpertKnowledgeEntry(organizationId: string, id: string): Promise<ExpertKnowledgeEntry | null>;
+  downvoteExpertKnowledgeEntry(organizationId: string, id: string): Promise<ExpertKnowledgeEntry | null>;
+  updateExpertKnowledgeEntry(organizationId: string, id: string, updates: Partial<ExpertKnowledgeEntry>): Promise<ExpertKnowledgeEntry | null>;
+  addExpertKnowledgeReview(organizationId: string, id: string, review: ExpertNoteReview): Promise<ExpertKnowledgeEntry | null>;
+  deleteExpertKnowledgeEntry(organizationId: string, id: string): Promise<boolean>;
+
+  // Root Cause Analysis (RCA) Sessions
+  saveRcaSession(session: RcaSession): Promise<RcaSession>;
+  listRcaSessions(organizationId: string, options?: { plantId?: string; assetId?: string; limit?: number }): Promise<RcaSession[]>;
+  getRcaSessionById(organizationId: string, id: string): Promise<RcaSession | null>;
+  updateRcaSessionStep(organizationId: string, sessionId: string, stepId: string, status: 'PENDING' | 'PASS' | 'FAIL', technicianNotes?: string, extra?: { isLocked?: boolean; verifiedAt?: string; verifiedBy?: string }): Promise<RcaSession | null>;
 }
 
 export interface CreateMaintenanceCaseDTO {
@@ -598,6 +611,23 @@ export interface CreateMaintenanceCaseDTO {
   resolvedAt?: string | null;
   closedAt?: string | null;
   maintenanceRecordId?: string | null;
+  // Rich Industrial Ticket Payload Fields
+  createdAtFormatted?: string;
+  plantName?: string;
+  reportedByName?: string;
+  reportedByRole?: string;
+  assetTag?: string;
+  assetName?: string;
+  machineStatus?: string;
+  faultCode?: string;
+  topRootCause?: string;
+  probability?: number;
+  recommendedFix?: string;
+  investigationProgress?: string;
+  specialistDiscipline?: string;
+  priority?: string;
+  lotoApplied?: boolean;
+  technicianNotes?: string;
 }
 
 export interface MaintenanceCaseFilterOptions {
@@ -939,6 +969,24 @@ export interface CreateSpecialistTicketDTO {
   assignedSpecialistName?: string | null;
   assignmentStatus?: TicketAssignmentStatus;
   status?: TicketStatus;
+  // Rich Industrial Ticket Payload Fields
+  createdAtFormatted?: string;
+  plantName?: string;
+  reportedByName?: string;
+  reportedByRole?: string;
+  assetTag?: string;
+  assetName?: string;
+  machineStatus?: string;
+  faultCode?: string;
+  symptomDescription?: string;
+  topRootCause?: string;
+  probability?: number;
+  recommendedFix?: string;
+  investigationProgress?: string;
+  specialistDiscipline?: string;
+  priority?: string;
+  lotoApplied?: boolean;
+  technicianNotes?: string;
 }
 
 export interface SpecialistTicketFilterOptions {

@@ -590,6 +590,36 @@ ${generalKnowledgeText}
         continue;
       }
 
+      if (payload.type === 'EXPERT_KNOWLEDGE' || payload.isExpertKnowledge) {
+        const ekId = (payload.expertKnowledgeId || payload.documentId) as string;
+        const ek = await this.dataStore.getExpertKnowledgeEntryById(organizationId, ekId);
+        if (ek) {
+          if (machine) {
+            const hasTag =
+              (ek.machineAssetTags && ek.machineAssetTags.includes(machine.assetTag)) ||
+              ek.machineAssetTag === machine.assetTag;
+            if (ek.machineAssetTag && !hasTag) {
+              continue;
+            }
+          }
+          candidates.push({
+            chunkId: hit.id,
+            documentId: `expert_${ek.id}`,
+            documentNumber: `EXP-${(ek.category || 'TIP').slice(0, 3).toUpperCase()}-${ek.id.slice(0, 6).toUpperCase()}`,
+            documentTitle: `[FIELD EXPERT WISDOM] ${ek.title}`,
+            documentVersionId: '1.0',
+            pageNumber: 1,
+            content: (payload.content as string) || ek.description,
+            sectionHeading: `Technician Field Wisdom (${ek.category})`,
+            initialScore: hit.score,
+            isTable: false,
+            isFigure: false,
+            extractionMethod: 'FIELD_NOTE',
+          });
+        }
+        continue;
+      }
+
       const doc = await this.dataStore.getDocumentById(organizationId, payload.documentId as string);
       if (!doc) continue;
 

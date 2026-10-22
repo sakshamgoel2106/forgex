@@ -68,6 +68,7 @@ import type {
   PublishGuidanceDTO,
   ListGuidanceFilters,
   ExpertKnowledgeEntry,
+  ExpertNoteReview,
   CreateExpertKnowledgeDTO,
   ReviewExpertKnowledgeDTO,
   ExpertKnowledgeFilterOptions,
@@ -80,6 +81,7 @@ import type {
   UnansweredQuestionSample,
   EmailOtpRecord,
   GoogleOAuthStateRecord,
+  RcaSession,
 } from '@forgex/shared-types';
 import { DEFAULT_INDUSTRY_PROFILES } from '@forgex/shared-types';
 import type {
@@ -179,6 +181,9 @@ export class InMemoryDataStore implements IDataStore {
 
   // Expert Knowledge Library (Prompt 04)
   private expertKnowledgeEntries = new Map<string, ExpertKnowledgeEntry>();
+
+  // Root Cause Analysis (RCA) Sessions
+  private rcaSessions = new Map<string, RcaSession>();
 
   constructor() {
     this.seedDefaultIndustryProfiles();
@@ -1752,6 +1757,22 @@ export class InMemoryDataStore implements IDataStore {
       resolvedAt: dto.resolvedAt || null,
       closedAt: dto.closedAt || null,
       maintenanceRecordId: dto.maintenanceRecordId || null,
+      createdAtFormatted: dto.createdAtFormatted,
+      plantName: dto.plantName,
+      reportedByName: dto.reportedByName,
+      reportedByRole: dto.reportedByRole,
+      assetTag: dto.assetTag,
+      assetName: dto.assetName,
+      machineStatus: dto.machineStatus,
+      faultCode: dto.faultCode,
+      topRootCause: dto.topRootCause,
+      probability: dto.probability,
+      recommendedFix: dto.recommendedFix,
+      investigationProgress: dto.investigationProgress,
+      specialistDiscipline: dto.specialistDiscipline,
+      priority: dto.priority,
+      lotoApplied: dto.lotoApplied,
+      technicianNotes: dto.technicianNotes,
     };
 
     this.maintenanceCases.set(maintenanceCase.id, maintenanceCase);
@@ -3096,6 +3117,21 @@ export class InMemoryDataStore implements IDataStore {
       history: [initialHistory],
       createdAt: now,
       updatedAt: now,
+      createdAtFormatted: dto.createdAtFormatted,
+      plantName: dto.plantName,
+      reportedByRole: dto.reportedByRole,
+      assetName: dto.assetName,
+      machineStatus: dto.machineStatus,
+      faultCode: dto.faultCode,
+      symptomDescription: dto.symptomDescription,
+      topRootCause: dto.topRootCause,
+      probability: dto.probability,
+      recommendedFix: dto.recommendedFix,
+      investigationProgress: dto.investigationProgress,
+      specialistDiscipline: dto.specialistDiscipline,
+      priority: dto.priority,
+      lotoApplied: dto.lotoApplied,
+      technicianNotes: dto.technicianNotes,
     };
 
     this.specialistTickets.set(id, ticket);
@@ -5400,28 +5436,49 @@ export class InMemoryDataStore implements IDataStore {
 
   public async createExpertKnowledgeEntry(
     organizationId: string,
-    data: CreateExpertKnowledgeDTO & { authorUserId: string; authorEmail?: string; authorRole?: string }
+    data: CreateExpertKnowledgeDTO & { authorUserId: string; authorEmail?: string; authorRole?: string; authorName?: string }
   ): Promise<ExpertKnowledgeEntry> {
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
 
     let machineAssetTag: string | null = data.machineAssetTag || null;
+    let machineAssetTags: string[] = data.machineAssetTags ? [...data.machineAssetTags] : [];
+    if (machineAssetTag) {
+      const splitTags = machineAssetTag
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (splitTags.length > 0) {
+        machineAssetTags = Array.from(new Set([...machineAssetTags, ...splitTags]));
+        machineAssetTag = splitTags[0];
+      }
+    }
+
     if (data.machineId && !machineAssetTag) {
       const machine = await this.getMachineById(organizationId, data.machineId);
       if (machine) {
         machineAssetTag = machine.assetTag;
+        if (!machineAssetTags.includes(machine.assetTag)) {
+          machineAssetTags.push(machine.assetTag);
+        }
       }
     }
 
     const entry: ExpertKnowledgeEntry = {
       id,
       organizationId,
-      plantId: data.plantId,
+      plantId: data.plantId || 'default-plant',
       machineId: data.machineId || null,
       machineAssetTag,
+      machineAssetTags,
       category: data.category,
+      severity: data.severity || 'Pro-Tip / Best Practice',
+      symptom: data.symptom || null,
+      taskDuringIssue: data.taskDuringIssue || null,
+      observedAt: data.observedAt || null,
       title: data.title,
       description: data.description,
+      aiSupplementalInsight: data.aiSupplementalInsight || null,
       symptoms: data.symptoms || [],
       rootCause: data.rootCause || null,
       resolutionSteps: data.resolutionSteps || [],
@@ -5430,10 +5487,15 @@ export class InMemoryDataStore implements IDataStore {
       safetyPrecautions: data.safetyPrecautions || [],
       technicalSpecifications: data.technicalSpecifications || {},
       tags: data.tags || [],
-      status: 'AWAITING_REVIEW', // Unverified until approved
+      status: data.status || 'AWAITING_REVIEW',
+      upvotes: typeof data.upvotes === 'number' ? data.upvotes : 0,
+      reviews: Array.isArray(data.reviews) ? data.reviews : [],
+      averageRating: typeof data.averageRating === 'number' ? data.averageRating : 5.0,
+      reviewCount: typeof data.reviewCount === 'number' ? data.reviewCount : (data.reviews?.length ?? 0),
       authorUserId: data.authorUserId,
       authorEmail: data.authorEmail || null,
       authorRole: data.authorRole || null,
+      authorName: data.authorName || data.authorEmail || 'Plant Specialist',
       dataClassification: data.dataClassification || 'INTERNAL',
       createdAt: now,
       updatedAt: now,
@@ -5465,6 +5527,7 @@ export class InMemoryDataStore implements IDataStore {
       if (filters?.plantId && entry.plantId !== filters.plantId) continue;
       if (filters?.machineId && entry.machineId && entry.machineId !== filters.machineId) continue;
       if (filters?.category && entry.category !== filters.category) continue;
+      if (filters?.severity && entry.severity !== filters.severity) continue;
       if (filters?.status && entry.status !== filters.status) continue;
       if (filters?.dataClassification && entry.dataClassification !== filters.dataClassification) continue;
       if (filters?.search) {
@@ -5472,7 +5535,12 @@ export class InMemoryDataStore implements IDataStore {
         const matches =
           entry.title.toLowerCase().includes(q) ||
           entry.description.toLowerCase().includes(q) ||
+          (entry.symptom && entry.symptom.toLowerCase().includes(q)) ||
+          (entry.taskDuringIssue && entry.taskDuringIssue.toLowerCase().includes(q)) ||
           (entry.machineAssetTag && entry.machineAssetTag.toLowerCase().includes(q)) ||
+          (entry.machineAssetTags && entry.machineAssetTags.some((t) => t.toLowerCase().includes(q))) ||
+          (entry.authorName && entry.authorName.toLowerCase().includes(q)) ||
+          (entry.category && entry.category.toLowerCase().includes(q)) ||
           entry.tags.some((t) => t.toLowerCase().includes(q));
         if (!matches) continue;
       }
@@ -5557,6 +5625,132 @@ export class InMemoryDataStore implements IDataStore {
     entry.reviewedAt = new Date().toISOString();
     entry.updatedAt = new Date().toISOString();
     return entry;
+  }
+
+  public async upvoteExpertKnowledgeEntry(
+    organizationId: string,
+    id: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) return null;
+
+    entry.upvotes = (entry.upvotes || 0) + 1;
+    entry.updatedAt = new Date().toISOString();
+    return entry;
+  }
+
+  public async downvoteExpertKnowledgeEntry(
+    organizationId: string,
+    id: string
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) return null;
+
+    entry.downvotes = (entry.downvotes || 0) + 1;
+    entry.updatedAt = new Date().toISOString();
+    return entry;
+  }
+
+  public async updateExpertKnowledgeEntry(
+    organizationId: string,
+    id: string,
+    updates: Partial<ExpertKnowledgeEntry>
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) return null;
+
+    Object.assign(entry, updates, { updatedAt: new Date().toISOString() });
+    return entry;
+  }
+
+  public async addExpertKnowledgeReview(
+    organizationId: string,
+    id: string,
+    review: ExpertNoteReview
+  ): Promise<ExpertKnowledgeEntry | null> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) return null;
+
+    if (!Array.isArray(entry.reviews)) {
+      entry.reviews = [];
+    }
+    entry.reviews.push(review);
+
+    const sum = entry.reviews.reduce((acc, r) => acc + (Number(r.rating) || 5), 0);
+    entry.averageRating = Number((sum / entry.reviews.length).toFixed(1));
+    entry.reviewCount = entry.reviews.length;
+    entry.updatedAt = new Date().toISOString();
+
+    return entry;
+  }
+
+  public async deleteExpertKnowledgeEntry(
+    organizationId: string,
+    id: string
+  ): Promise<boolean> {
+    const entry = await this.getExpertKnowledgeEntryById(organizationId, id);
+    if (!entry) return false;
+
+    return this.expertKnowledgeEntries.delete(id);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Root Cause Analysis (RCA) Sessions Persistence
+  // ---------------------------------------------------------------------------
+
+  public async saveRcaSession(session: RcaSession): Promise<RcaSession> {
+    this.rcaSessions.set(session.id, { ...session });
+    return session;
+  }
+
+  public async listRcaSessions(
+    organizationId: string,
+    options?: { plantId?: string; assetId?: string; limit?: number }
+  ): Promise<RcaSession[]> {
+    const results: RcaSession[] = [];
+    for (const session of this.rcaSessions.values()) {
+      if (session.organizationId !== organizationId) continue;
+      if (options?.plantId && session.plantId !== options.plantId) continue;
+      if (options?.assetId && session.assetId !== options.assetId && session.assetTag !== options.assetId) continue;
+      results.push(session);
+    }
+    return results
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, options?.limit || 20);
+  }
+
+  public async getRcaSessionById(organizationId: string, id: string): Promise<RcaSession | null> {
+    const session = this.rcaSessions.get(id);
+    if (!session || session.organizationId !== organizationId) return null;
+    return session;
+  }
+
+  public async updateRcaSessionStep(
+    organizationId: string,
+    sessionId: string,
+    stepId: string,
+    status: 'PENDING' | 'PASS' | 'FAIL',
+    technicianNotes?: string,
+    extra?: { isLocked?: boolean; verifiedAt?: string; verifiedBy?: string }
+  ): Promise<RcaSession | null> {
+    const session = await this.getRcaSessionById(organizationId, sessionId);
+    if (!session) return null;
+
+    session.investigationSteps = session.investigationSteps.map((step) => {
+      if (step.id === stepId) {
+        return {
+          ...step,
+          status,
+          technicianNotes: technicianNotes !== undefined ? technicianNotes : step.technicianNotes,
+          isLocked: extra?.isLocked !== undefined ? extra.isLocked : step.isLocked,
+          verifiedAt: extra?.verifiedAt !== undefined ? extra.verifiedAt : step.verifiedAt,
+          verifiedBy: extra?.verifiedBy !== undefined ? extra.verifiedBy : step.verifiedBy,
+        };
+      }
+      return step;
+    });
+    session.updatedAt = new Date().toISOString();
+    return session;
   }
 }
 

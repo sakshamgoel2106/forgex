@@ -41,7 +41,10 @@ export class MaintenanceController {
 
       const {
         plantId,
+        plantName,
         assetId,
+        assetTag,
+        assetName,
         title,
         description,
         severity = 'MEDIUM',
@@ -52,6 +55,18 @@ export class MaintenanceController {
         assignedTechnicianUserId,
         assignedTechnicianName,
         sourceTicketId,
+        reportedByRole,
+        createdAtFormatted,
+        machineStatus,
+        faultCode,
+        topRootCause,
+        probability,
+        recommendedFix,
+        investigationProgress,
+        specialistDiscipline,
+        priority,
+        lotoApplied,
+        technicianNotes,
       } = req.body;
 
       if (!title || typeof title !== 'string' || title.trim().length === 0) {
@@ -109,7 +124,10 @@ export class MaintenanceController {
       const result = await this.workflowEngine.createCase(
         {
           plantId,
+          plantName,
           assetId: assetId.trim(),
+          assetTag,
+          assetName,
           title: title.trim(),
           description: typeof description === 'string' ? description.trim() : undefined,
           severity,
@@ -120,6 +138,18 @@ export class MaintenanceController {
           assignedTechnicianUserId,
           assignedTechnicianName,
           sourceTicketId: typeof sourceTicketId === 'string' ? sourceTicketId.trim() : undefined,
+          reportedByRole: reportedByRole || userRole,
+          createdAtFormatted,
+          machineStatus,
+          faultCode,
+          topRootCause,
+          probability,
+          recommendedFix,
+          investigationProgress,
+          specialistDiscipline,
+          priority: priority || severity,
+          lotoApplied: Boolean(lotoApplied),
+          technicianNotes,
         },
         { organizationId, userId, userRole }
       );

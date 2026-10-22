@@ -209,6 +209,50 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
   });
 
   /**
+   * POST /api/v1/maintenance-records
+   * Create durable maintenance record
+   */
+  router.post('/', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const data = req.body;
+
+      let plantId = data.plantId;
+      if (!plantId) {
+        const plants = await dataStore.listPlants(organizationId);
+        plantId = plants[0]?.id || 'plant-default';
+      }
+
+      const record = await dataStore.createMaintenanceRecord(organizationId, {
+        plantId,
+        machineId: data.machineId || data.assetId || 'machine-default',
+        machineAssetTag: data.machineAssetTag || data.assetTag || 'PLANT-MACHINE',
+        ticketNumber: data.ticketNumber || `MR-${Date.now()}`,
+        problemStatement: data.problemStatement || 'Operational maintenance procedure',
+        rootCause: data.rootCause || 'Verified condition cleared',
+        faultCategory: data.faultCategory || 'MAINTENANCE',
+        repairActions: Array.isArray(data.repairActions) && data.repairActions.length > 0 ? data.repairActions : ['Investigation steps completed'],
+        reportingUserId: req.auth!.user.id,
+        reportingUserName: req.auth!.user.fullName,
+        resolvingTechnicianUserId: req.auth!.user.id,
+        resolvingTechnicianName: req.auth!.user.fullName || 'Technician',
+        verificationState: data.verificationState || 'PASSED',
+        approvalStatus: data.approvalStatus || 'APPROVED',
+        resolvedAt: data.resolvedAt || new Date().toISOString(),
+        observedSymptoms: Array.isArray(data.observedSymptoms) ? data.observedSymptoms : [],
+      });
+
+      res.status(201).json({
+        success: true,
+        data: record,
+      });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'Failed to create maintenance record');
+      res.status(500).json({ success: false, error: err?.message || 'Failed to create maintenance record' });
+    }
+  });
+
+  /**
    * GET /api/v1/maintenance-records/similar
    * Retrieve similar historical records with relevance matching
    */
