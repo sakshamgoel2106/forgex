@@ -85,10 +85,12 @@ export class DocumentParser {
       'application/x-dxf',
     ];
 
-    if (cadExtensions.includes(ext) || cadMimes.includes(mimeType.toLowerCase())) {
-      throw new Error(
-        `UNSUPPORTED_FORMAT: CAD and 3D geometric models (.${ext}) require specialized CAD/geometric rendering pipelines and cannot be ingested as text documents for RAG indexing.`
-      );
+    if (
+      cadExtensions.includes(ext) ||
+      cadMimes.includes(mimeType.toLowerCase()) ||
+      mimeType.startsWith('model/')
+    ) {
+      return this.parse3DModel(buffer, ext, filename, metadata);
     }
 
     if (mimeType === 'application/pdf' || ext === 'pdf') {

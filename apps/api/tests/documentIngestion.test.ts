@@ -253,8 +253,9 @@ Ensure shaft runout is strictly within +/- 0.002 inches using a dial indicator m
       expect(docRes.body.data.latestVersion.totalPages).toBe(1);
 
       // Verify vector search matches 3D model
+      const collectionName = process.env.QDRANT_COLLECTION || 'forgex_knowledge';
       const searchResults = await vectorStore.search(
-        'forgex_knowledge',
+        collectionName,
         await embeddingAdapter.generateEmbedding('Sulzer OH2 CAD 3D model PUMP-204-B'),
         { organizationId: orgA.id }
       );

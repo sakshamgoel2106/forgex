@@ -131,6 +131,13 @@ npm run test
 ### Step 6: Start Development Servers
 Run the backend gateway and frontend engineering workspace concurrently:
 
+- **Windows Quick Start (One-Click Launcher)**:
+  Double-click `start.bat` (or run in terminal):
+  ```cmd
+  start.bat
+  ```
+  *(Launches both API and Web UI in dedicated console windows and opens `http://localhost:5173` in your browser).*
+
 - **Start Core API Gateway** (Port 4000):
   ```bash
   pnpm run dev:api
@@ -138,6 +145,10 @@ Run the backend gateway and frontend engineering workspace concurrently:
 - **Start Industrial Workspace UI** (Port 5173):
   ```bash
   pnpm run dev:web
+  ```
+- **Stop All Servers & Free Ports**:
+  ```cmd
+  stop-servers.bat
   ```
 
 ---

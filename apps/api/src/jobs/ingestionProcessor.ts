@@ -162,7 +162,6 @@ export class IngestionProcessor {
           isTable: chunk.isTable,
           isFigure: chunk.isFigure,
           extractionMethod: chunk.extractionMethod,
-          documentNumber: document.documentNumber,
           title: document.title,
           category: document.category,
           assetTags: document.assetTags || [],
