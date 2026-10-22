@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import nodemailer from 'nodemailer';
 import type { IDataStore } from '../db/dataStore.interface.js';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
@@ -189,6 +188,11 @@ export class EmailOtpService {
     } else if (config.NODE_ENV !== 'test' && config.SMTP_HOST && config.SMTP_USER && config.SMTP_PASS) {
       try {
         const isSecure = config.SMTP_PORT === 465;
+        const nodemailerModule = (await import('nodemailer').catch(() => null)) as any;
+        const nodemailer = nodemailerModule?.default || nodemailerModule;
+        if (!nodemailer) {
+          throw new Error('Nodemailer package is not installed for SMTP transport.');
+        }
         const transporter = nodemailer.createTransport({
           host: config.SMTP_HOST,
           port: config.SMTP_PORT,
