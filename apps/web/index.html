@@ -17,6 +17,18 @@
   </head>
   <body class="bg-[#F5F6F7] text-[#1A202C] antialiased font-sans selection:bg-blue-500/20 selection:text-blue-900 overflow-hidden">
     <div id="root"></div>
+    <script>
+      window.addEventListener('error', function (e) {
+        console.error('Captured window startup error:', e.error || e.message);
+        var root = document.getElementById('root');
+        if (root && (!root.innerHTML || root.innerHTML.trim() === '')) {
+          root.innerHTML = '<div style="padding:32px;font-family:monospace;background:#0b0f17;color:#f87171;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center"><div style="background:#141b26;border:1px solid #334155;border-radius:12px;padding:24px;max-width:600px;width:100%;box-shadow:0 10px 25px rgba(0,0,0,0.5)"><h3 style="color:#ef4444;margin:0 0 12px 0;font-size:16px">ForgeX Startup Script Failure</h3><pre style="white-space:pre-wrap;font-size:12px;line-height:1.5;background:#0b0f17;padding:12px;border-radius:8px;border:1px solid #1e293b">' + (e.error ? (e.error.stack || e.error.message) : e.message) + '</pre><button onclick="location.reload()" style="margin-top:16px;padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Retry</button></div></div>';
+        }
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        console.error('Captured unhandled rejection:', e.reason);
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

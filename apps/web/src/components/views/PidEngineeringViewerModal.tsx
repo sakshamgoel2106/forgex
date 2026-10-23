@@ -21,7 +21,10 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
-import { PidPdfViewer } from './PidPdfViewer';
+
+const PidPdfViewer = React.lazy(() =>
+  import('./PidPdfViewer').then((m) => ({ default: m.PidPdfViewer }))
+);
 
 interface PidEngineeringViewerModalProps {
   isOpen: boolean;
@@ -896,15 +899,24 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                   </div>
                 ) : activePdfUrl ? (
                   /* 3. Deep Zoom Pan Pinch PDF Rendering using react-pdf & react-zoom-pan-pinch */
-                  <PidPdfViewer
-                    fileUrl={activePdfUrl}
-                    drawingTitle={drawingRecord?.drawingTitle || 'P&ID Schematic'}
-                    activeTag={selectedTag}
-                    onTagClick={(tag) => {
-                      setSelectedTag(tag);
-                      onSelectTag?.(tag);
-                    }}
-                  />
+                  <React.Suspense
+                    fallback={
+                      <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                        <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
+                        <span className="text-xs font-mono mt-2">Loading P&ID PDF Engine...</span>
+                      </div>
+                    }
+                  >
+                    <PidPdfViewer
+                      fileUrl={activePdfUrl}
+                      drawingTitle={drawingRecord?.drawingTitle || 'P&ID Schematic'}
+                      activeTag={selectedTag}
+                      onTagClick={(tag) => {
+                        setSelectedTag(tag);
+                        onSelectTag?.(tag);
+                      }}
+                    />
+                  </React.Suspense>
                 ) : (
                   /* Actual Diagram Rendering */
                   <div

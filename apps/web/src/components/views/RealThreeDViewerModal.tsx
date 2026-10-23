@@ -17,7 +17,10 @@ import {
   Info,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
-import { ThreeDModelViewer } from './ThreeDModelViewer';
+
+const ThreeDModelViewer = React.lazy(() =>
+  import('./ThreeDModelViewer').then((m) => ({ default: m.ThreeDModelViewer }))
+);
 
 export interface RealThreeDViewerModalProps {
   isOpen: boolean;
@@ -567,23 +570,32 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
               {/* WebGL Canvas Viewport powered by @react-three/fiber and @react-three/drei */}
               <div className="flex-1 w-full h-full relative overflow-hidden">
                 {activeModelUrl ? (
-                  <ThreeDModelViewer
-                    fileUrl={activeModelUrl}
-                    fileFormat={modelRecord.fileFormat}
-                    wireframe={wireframe}
-                    selectedComponentId={selectedComponentId}
-                    onSelectComponent={(compId) => setSelectedComponentId(compId)}
-                    onModelStats={setModelStats}
-                    onComponentList={(extracted) => {
-                      setComponentList(
-                        extracted.map((c) => ({
-                          id: c.id,
-                          name: c.name,
-                          vertexCount: c.vertexCount,
-                        }))
-                      );
-                    }}
-                  />
+                  <React.Suspense
+                    fallback={
+                      <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                        <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
+                        <span className="text-xs font-mono mt-2">Loading 3D Engine...</span>
+                      </div>
+                    }
+                  >
+                    <ThreeDModelViewer
+                      fileUrl={activeModelUrl}
+                      fileFormat={modelRecord.fileFormat}
+                      wireframe={wireframe}
+                      selectedComponentId={selectedComponentId}
+                      onSelectComponent={(compId) => setSelectedComponentId(compId)}
+                      onModelStats={setModelStats}
+                      onComponentList={(extracted) => {
+                        setComponentList(
+                          extracted.map((c) => ({
+                            id: c.id,
+                            name: c.name,
+                            vertexCount: c.vertexCount,
+                          }))
+                        );
+                      }}
+                    />
+                  </React.Suspense>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-full text-slate-500">
                     <RefreshCw className="w-5 h-5 animate-spin text-[#2563EB]" />
