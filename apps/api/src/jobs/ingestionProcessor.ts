@@ -5,6 +5,8 @@ import type { IVectorStoreAdapter, VectorPoint } from '../vector/vectorStore.int
 import type { IVisionProcessingProvider } from '../ai/vision.interface.js';
 import { DocumentParser } from '../ingestion/documentParser.js';
 import { ContentChunker } from '../ingestion/contentChunker.js';
+import { RecoveryAiExtractor } from '../services/recoveryAiExtractor.js';
+import type { Machine } from '@forgex/shared-types';
 import { logger } from '../utils/logger.js';
 
 export interface ProcessDocumentOptions {
@@ -17,6 +19,7 @@ export interface ProcessDocumentOptions {
 export class IngestionProcessor {
   private parser: DocumentParser;
   private chunker: ContentChunker;
+  private recoveryExtractor: RecoveryAiExtractor;
 
   constructor(
     private dataStore: IDataStore,
@@ -28,6 +31,7 @@ export class IngestionProcessor {
   ) {
     this.parser = new DocumentParser(visionProvider);
     this.chunker = new ContentChunker();
+    this.recoveryExtractor = new RecoveryAiExtractor(dataStore);
   }
 
   public async processJob(opts: ProcessDocumentOptions): Promise<void> {
@@ -85,12 +89,12 @@ export class IngestionProcessor {
         }
       );
 
-      // 5. Transition to EXTRACTED state: Save Document Pages with provenance (idempotent overwrite)
+      // 5. Save Document Pages with provenance (idempotent overwrite)
       await this.dataStore.updateProcessingJobProgress(
         jobId,
         60,
         `Extracted ${extracted.pages.length} document pages with provenance`,
-        'EXTRACTED' as any
+        'PROCESSING'
       );
       await this.dataStore.deleteDocumentPages(version.id);
       await this.dataStore.saveDocumentPages(
@@ -109,7 +113,7 @@ export class IngestionProcessor {
         jobId,
         75,
         'Generating provenance-preserving semantic chunks',
-        'INDEXING' as any
+        'PROCESSING'
       );
       const chunkDrafts = this.chunker.chunkPages(version.id, extracted.pages);
 
@@ -125,7 +129,7 @@ export class IngestionProcessor {
         jobId,
         85,
         `Generating dense embeddings for ${chunkDrafts.length} chunks via ${this.embeddingAdapter.getModelName()}`,
-        'INDEXING' as any
+        'PROCESSING'
       );
       const chunkTexts = chunkDrafts.map((c) => c.content);
       const embeddings = await this.embeddingAdapter.generateEmbeddings(chunkTexts);
@@ -135,7 +139,7 @@ export class IngestionProcessor {
         jobId,
         92,
         'Indexing chunks with authorized metadata into vector database',
-        'INDEXING' as any
+        'PROCESSING'
       );
 
       const resolvedMachineId =
@@ -199,6 +203,93 @@ export class IngestionProcessor {
         }))
       );
 
+      // 9b. AI Machine Recovery Nameplate & Operating Limits Extraction
+      try {
+        const candidateMachineIds: string[] = [];
+        if (machineId) candidateMachineIds.push(machineId);
+        if ((document as any).machineId) candidateMachineIds.push((document as any).machineId);
+        if ((document as any).assetIds && Array.isArray((document as any).assetIds)) {
+          candidateMachineIds.push(...(document as any).assetIds);
+        }
+
+        try {
+          const linkedFromJunction = await this.dataStore.getLinkedMachineIdsForDocument(organizationId, document.id);
+          candidateMachineIds.push(...linkedFromJunction);
+        } catch {
+          // ignore
+        }
+
+        const targetMachines: Machine[] = [];
+        for (const mId of candidateMachineIds) {
+          if (!mId) continue;
+          try {
+            const m = await this.dataStore.getMachineById(organizationId, mId);
+            if (m && !targetMachines.some((item) => item.id === m.id)) {
+              targetMachines.push(m);
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (targetMachines.length === 0 && document.assetTags && document.assetTags.length > 0) {
+          for (const tag of document.assetTags) {
+            try {
+              const m = await this.dataStore.getMachineByAssetTag(organizationId, tag);
+              if (m && !targetMachines.some((item) => item.id === m.id)) {
+                targetMachines.push(m);
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        // Automatic fallback: scan document text and tags against registered machines
+        if (targetMachines.length === 0) {
+          try {
+            const allOrgMachines = await this.dataStore.listMachines(organizationId);
+            const docTags = document.assetTags || [];
+            const pageText = extracted.pages.slice(0, 5).map((p) => p.rawText.toUpperCase()).join(' ');
+
+            for (const m of allOrgMachines) {
+              const tagUpper = m.assetTag.toUpperCase();
+              if (docTags.some((t) => t.toUpperCase() === tagUpper) || pageText.includes(tagUpper)) {
+                if (!targetMachines.some((item) => item.id === m.id)) {
+                  targetMachines.push(m);
+                  this.dataStore.linkDocumentToAsset(organizationId, document.id, m.id, m.assetTag).catch(() => {});
+                }
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (targetMachines.length > 0) {
+          await this.dataStore.updateProcessingJobProgress(
+            jobId,
+            96,
+            `Running AI extraction for ${targetMachines.length} linked machine(s)`,
+            'PROCESSING'
+          );
+
+          await this.recoveryExtractor.extractAndSaveMachineRecoveryClaims({
+            organizationId,
+            document,
+            version,
+            extractedPages: extracted.pages,
+            targetMachines,
+            submittedByUserId: (document as any).createdByUserId || 'system',
+          });
+        }
+      } catch (extractErr: any) {
+        logger.warn(
+          { err: extractErr?.message, documentId: document.id },
+          'Notice: Machine Recovery AI extraction non-blocking error'
+        );
+      }
+
       // 10. Finalize: Never report indexing success before all required indexing steps finish
       await this.dataStore.updateDocumentVersionStatus(
         version.id,
@@ -253,7 +344,7 @@ export class IngestionProcessor {
         jobId,
         0,
         isUnsupported ? 'Unsupported document format' : 'Processing failed',
-        isUnsupported ? ('UNSUPPORTED_FORMAT' as any) : 'FAILED',
+        'FAILED',
         errorMsg
       );
     }

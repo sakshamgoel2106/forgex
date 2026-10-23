@@ -60,8 +60,8 @@ const MODULE_LABELS: Record<NavModule, string> = {
 
 export const TopBar: React.FC<TopBarProps> = ({
   activeModule,
-  plantSite,
-  onPlantChange,
+  plantSite: _plantSite,
+  onPlantChange: _onPlantChange,
   onOpenSearch,
   onOpenNotifications,
   onOpenMobileNav,
@@ -71,27 +71,11 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const { user, organization, membership, memberships, logout, switchOrganization, token } = useAuth();
   const [activeFallbackNotice, setActiveFallbackNotice] = useState<string | null>(null);
-  const [plants, setPlants] = useState<any[]>([]);
   const [hasMachines, setHasMachines] = useState<boolean>(false);
 
   useEffect(() => {
     if (!token || !organization?.id) return;
     let isMounted = true;
-
-    // Fetch real plants belonging to this organization
-    fetch('/api/v1/plants', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'x-organization-id': organization.id,
-      },
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (isMounted && json?.data && Array.isArray(json.data)) {
-          setPlants(json.data);
-        }
-      })
-      .catch(() => {});
 
     // Check if organization has any registered machines
     fetch('/api/v1/machines', {
@@ -124,11 +108,6 @@ export const TopBar: React.FC<TopBarProps> = ({
   const roleLabel = membership?.role?.replace(/_/g, ' ') || 'Administrator';
   const orgName = organization?.name || 'Apex Energy Operations';
   const currentModuleLabel = MODULE_LABELS[activeModule] || 'Overview';
-
-  const currentPlant = plants.find((p) => p.id === plantSite || p.code === plantSite);
-  const currentPlantLabel = plants.length === 0
-    ? 'No Plants Configured'
-    : (currentPlant ? currentPlant.name : 'All Facilities');
 
   // If organization has no machines, unread alert count is strictly 0
   const unreadAlertCount = hasMachines ? 3 : 0;
@@ -217,73 +196,19 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Right: Plant + Alerts + User */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Plant Context Bar [Org: Name | Plant: Site] */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-white border border-gray-200 hover:border-[#1D4ED8] transition text-left outline-none shadow-sm">
-                <Building2 className={`w-3.5 h-3.5 shrink-0 ${plants.length > 0 ? 'text-[#1D4ED8]' : 'text-slate-400'}`} />
-                <div className="min-w-0 flex items-center gap-1.5 text-xs font-mono">
-                  <span className="font-semibold text-gray-800 truncate max-w-[120px]">
-                    {organization?.name || 'Company'}
-                  </span>
-                  <span className="text-gray-300">|</span>
-                  <span className={`truncate max-w-[140px] ${plants.length === 0 ? 'text-amber-700 italic' : 'text-gray-600'}`}>
-                    {currentPlantLabel}
-                  </span>
-                </div>
-                <ChevronDown className="w-3 h-3 text-gray-400 ml-0.5 shrink-0" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-64 bg-white border-gray-200 shadow-lg p-1.5">
-              <DropdownMenuLabel className="text-[10px] text-gray-400 font-bold uppercase tracking-widest px-2 py-1">
-                Plant Facilities ({plants.length})
-              </DropdownMenuLabel>
-              {plants.length === 0 ? (
-                <div className="px-3 py-3 text-center space-y-1.5">
-                  <p className="text-xs text-gray-700 font-semibold">No Plants Configured</p>
-                  <p className="text-[11px] text-gray-400 leading-relaxed">
-                    You have not registered any manufacturing or plant facilities for {organization?.name || 'this company'} yet.
-                  </p>
-                  <button
-                    onClick={() => onNavigate('engineering-assets')}
-                    className="mt-1 text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline"
-                  >
-                    + Register Plant in Assets
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <DropdownMenuItem
-                    onClick={() => onPlantChange('')}
-                    className="text-xs cursor-pointer focus:bg-gray-50 flex items-center justify-between py-2 rounded"
-                  >
-                    <div>
-                      <div className="font-medium text-gray-800">All Facilities</div>
-                      <div className="text-[10px] text-gray-400">All registered plant sites</div>
-                    </div>
-                    {!plantSite && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] ml-2" />
-                    )}
-                  </DropdownMenuItem>
-                  {plants.map((p) => (
-                    <DropdownMenuItem
-                      key={p.id}
-                      onClick={() => onPlantChange(p.id)}
-                      className="text-xs cursor-pointer focus:bg-gray-50 flex items-center justify-between py-2 rounded"
-                    >
-                      <div>
-                        <div className="font-medium text-gray-800">{p.name}</div>
-                        <div className="text-[10px] text-gray-400">{p.code || p.location || 'Industrial Plant'}</div>
-                      </div>
-                      {plantSite === p.id && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#1D4ED8] ml-2" />
-                      )}
-                    </DropdownMenuItem>
-                  ))}
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* Single-Factory Facility Context */}
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-white border border-gray-200 text-left shadow-sm">
+            <Building2 className="w-3.5 h-3.5 shrink-0 text-[#1D4ED8]" />
+            <div className="min-w-0 flex items-center gap-1.5 text-xs font-mono">
+              <span className="font-semibold text-gray-800 truncate max-w-[130px]">
+                {organization?.name || 'Company'}
+              </span>
+              <span className="text-gray-300">|</span>
+              <span className="truncate max-w-[130px] text-gray-600 font-medium">
+                Main Facility
+              </span>
+            </div>
+          </div>
 
           {/* Notification Bell */}
           <button

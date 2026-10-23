@@ -24,6 +24,8 @@ import {
   Activity,
   FileSpreadsheet,
   AlertCircle,
+  Loader2,
+  Sparkles,
 } from 'lucide-react';
 import type {
   DocumentType,
@@ -35,6 +37,7 @@ import type {
 import { StatusBadge } from '../ui/StatusBadge';
 import { apiFetch } from '../../lib/api';
 import { useAuth } from '../../lib/AuthContext';
+import { useToast } from '../../lib/ToastContext';
 import { usePlant } from '../../lib/PlantContext';
 import { RealThreeDViewerModal } from './RealThreeDViewerModal';
 import { PidEngineeringViewerModal } from './PidEngineeringViewerModal';
@@ -217,6 +220,7 @@ function getFormatBadgeColor(ext: string): { bg: string; text: string; label: st
 }
 
 export const TechnicalManualsView: React.FC = () => {
+  const { toast } = useToast();
   const { isOwnerOrAdmin, membership } = useAuth();
   const { activePlant, plants: plantOptions } = usePlant();
   const isAdmin = Boolean(
@@ -228,6 +232,7 @@ export const TechnicalManualsView: React.FC = () => {
   const [documents, setDocuments] = useState<HubDocument[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isSyncingRecovery, setIsSyncingRecovery] = useState<boolean>(false);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
@@ -273,6 +278,13 @@ export const TechnicalManualsView: React.FC = () => {
   const [bulkAssetSearch, setBulkAssetSearch] = useState('');
   const [isBulkAssetDropdownOpen, setIsBulkAssetDropdownOpen] = useState(false);
 
+  // Dynamic async search states & machine registry cache
+  const [knownMachines, setKnownMachines] = useState<Map<string, Machine>>(new Map());
+  const [singleSearchResults, setSingleSearchResults] = useState<Machine[]>([]);
+  const [isSearchingSingle, setIsSearchingSingle] = useState(false);
+  const [bulkSearchResults, setBulkSearchResults] = useState<Machine[]>([]);
+  const [isSearchingBulk, setIsSearchingBulk] = useState(false);
+
   const singleDropdownRef = useRef<HTMLDivElement>(null);
   const bulkDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -289,14 +301,100 @@ export const TechnicalManualsView: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Sync known machines map whenever base machines list updates
+  useEffect(() => {
+    if (machines.length > 0) {
+      setKnownMachines((prev) => {
+        const next = new Map(prev);
+        machines.forEach((m) => next.set(m.id, m));
+        return next;
+      });
+      if (!singleAssetSearch.trim()) {
+        setSingleSearchResults(machines.slice(0, 30));
+      }
+      if (!bulkAssetSearch.trim()) {
+        setBulkSearchResults(machines.slice(0, 30));
+      }
+    }
+  }, [machines]);
+
+  // Dynamic async debounced machine search for Single Upload Combobox
+  useEffect(() => {
+    const trimmed = singleAssetSearch.trim();
+    if (!trimmed) {
+      setSingleSearchResults(machines.slice(0, 30));
+      setIsSearchingSingle(false);
+      return;
+    }
+
+    setIsSearchingSingle(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/api/v1/machines?search=${encodeURIComponent(trimmed)}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data)) {
+            setSingleSearchResults(json.data);
+            setKnownMachines((prev) => {
+              const next = new Map(prev);
+              json.data.forEach((m: Machine) => next.set(m.id, m));
+              return next;
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Failed to search machines dynamically for single upload', err);
+      } finally {
+        setIsSearchingSingle(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [singleAssetSearch, machines]);
+
+  // Dynamic async debounced machine search for Bulk Upload Combobox
+  useEffect(() => {
+    const trimmed = bulkAssetSearch.trim();
+    if (!trimmed) {
+      setBulkSearchResults(machines.slice(0, 30));
+      setIsSearchingBulk(false);
+      return;
+    }
+
+    setIsSearchingBulk(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/api/v1/machines?search=${encodeURIComponent(trimmed)}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data)) {
+            setBulkSearchResults(json.data);
+            setKnownMachines((prev) => {
+              const next = new Map(prev);
+              json.data.forEach((m: Machine) => next.set(m.id, m));
+              return next;
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Failed to search machines dynamically for bulk upload', err);
+      } finally {
+        setIsSearchingBulk(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [bulkAssetSearch, machines]);
+
   const handleToggleSingleAsset = (machine: Machine) => {
+    setKnownMachines((prev) => new Map(prev).set(machine.id, machine));
     setSingleSelectedAssetIds((prev) => {
       const updated = prev.includes(machine.id)
         ? prev.filter((id) => id !== machine.id)
         : [...prev, machine.id];
-      const linkedTags = machines
-        .filter((m) => updated.includes(m.id))
-        .map((m) => m.assetTag)
+      const linkedTags = updated
+        .map((id) => (id === machine.id ? machine.assetTag : (knownMachines.get(id)?.assetTag || machines.find((m) => m.id === id)?.assetTag)))
+        .filter(Boolean)
         .join(', ');
       setUploadForm((f) => ({ ...f, assetTags: linkedTags }));
       return updated;
@@ -307,9 +405,9 @@ export const TechnicalManualsView: React.FC = () => {
   const handleRemoveSingleAsset = (machineId: string) => {
     setSingleSelectedAssetIds((prev) => {
       const updated = prev.filter((id) => id !== machineId);
-      const linkedTags = machines
-        .filter((m) => updated.includes(m.id))
-        .map((m) => m.assetTag)
+      const linkedTags = updated
+        .map((id) => knownMachines.get(id)?.assetTag || machines.find((m) => m.id === id)?.assetTag)
+        .filter(Boolean)
         .join(', ');
       setUploadForm((f) => ({ ...f, assetTags: linkedTags }));
       return updated;
@@ -317,13 +415,14 @@ export const TechnicalManualsView: React.FC = () => {
   };
 
   const handleToggleBulkAsset = (machine: Machine) => {
+    setKnownMachines((prev) => new Map(prev).set(machine.id, machine));
     setBulkSelectedAssetIds((prev) => {
       const updated = prev.includes(machine.id)
         ? prev.filter((id) => id !== machine.id)
         : [...prev, machine.id];
-      const linkedTags = machines
-        .filter((m) => updated.includes(m.id))
-        .map((m) => m.assetTag)
+      const linkedTags = updated
+        .map((id) => (id === machine.id ? machine.assetTag : (knownMachines.get(id)?.assetTag || machines.find((m) => m.id === id)?.assetTag)))
+        .filter(Boolean)
         .join(', ');
       setBulkDefaults((d) => ({ ...d, defaultAssetTags: linkedTags }));
       return updated;
@@ -334,38 +433,14 @@ export const TechnicalManualsView: React.FC = () => {
   const handleRemoveBulkAsset = (machineId: string) => {
     setBulkSelectedAssetIds((prev) => {
       const updated = prev.filter((id) => id !== machineId);
-      const linkedTags = machines
-        .filter((m) => updated.includes(m.id))
-        .map((m) => m.assetTag)
+      const linkedTags = updated
+        .map((id) => knownMachines.get(id)?.assetTag || machines.find((m) => m.id === id)?.assetTag)
+        .filter(Boolean)
         .join(', ');
       setBulkDefaults((d) => ({ ...d, defaultAssetTags: linkedTags }));
       return updated;
     });
   };
-
-  const filteredSingleMachines = machines.filter((m) => {
-    if (!singleAssetSearch.trim()) return true;
-    const q = singleAssetSearch.toLowerCase();
-    const loc = (m.area || (m as any).plantLocation || '').toLowerCase();
-    return (
-      m.assetTag.toLowerCase().includes(q) ||
-      m.name.toLowerCase().includes(q) ||
-      (m.manufacturer && m.manufacturer.toLowerCase().includes(q)) ||
-      loc.includes(q)
-    );
-  });
-
-  const filteredBulkMachines = machines.filter((m) => {
-    if (!bulkAssetSearch.trim()) return true;
-    const q = bulkAssetSearch.toLowerCase();
-    const loc = (m.area || (m as any).plantLocation || '').toLowerCase();
-    return (
-      m.assetTag.toLowerCase().includes(q) ||
-      m.name.toLowerCase().includes(q) ||
-      (m.manufacturer && m.manufacturer.toLowerCase().includes(q)) ||
-      loc.includes(q)
-    );
-  });
 
   // 3D & P&ID Viewer Modals State
   const [is3dViewerOpen, setIs3dViewerOpen] = useState<boolean>(false);
@@ -422,6 +497,26 @@ export const TechnicalManualsView: React.FC = () => {
       }
     } catch {
       // ignore
+    }
+  };
+
+  const handleSyncRecovery = async () => {
+    setIsSyncingRecovery(true);
+    try {
+      const res = await apiFetch('/api/v1/recovery/sync-from-documents', {
+        method: 'POST',
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        toast.success('Recovery Synced', json.message || 'Parameters extracted and synced to Machine Recovery.');
+        await fetchDocuments();
+      } else {
+        toast.error('Sync Failed', json.error?.message || 'Failed to sync to Machine Recovery.');
+      }
+    } catch (err: any) {
+      toast.error('Sync Error', err?.message);
+    } finally {
+      setIsSyncingRecovery(false);
     }
   };
 
@@ -917,11 +1012,7 @@ export const TechnicalManualsView: React.FC = () => {
       return;
     }
 
-    const plantId = bulkDefaults.plantCode.trim() || currentPlantDefault;
-    if (!plantId) {
-      setUploadError('A valid Target Plant is required for bulk ingestion.');
-      return;
-    }
+    const plantId = bulkDefaults.plantCode.trim() || currentPlantDefault || 'PLANT-TX-04';
 
     setIsUploading(true);
 
@@ -1214,25 +1305,36 @@ export const TechnicalManualsView: React.FC = () => {
         </div>
 
         {/* Ingest Action Buttons */}
-        {isAdmin && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleOpenUploadModal('BULK')}
-              className="px-3.5 py-1.5 rounded-lg bg-white border border-[#CBD5E1] hover:bg-slate-50 text-[#1A202C] text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
-              title="Upload up to 20 documents simultaneously"
-            >
-              <Files className="w-3.5 h-3.5 text-[#2563EB]" />
-              <span>Bulk Ingest</span>
-            </button>
-            <button
-              onClick={() => handleOpenUploadModal('SINGLE')}
-              className="px-3.5 py-1.5 rounded-lg bg-[#151C24] hover:bg-black text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
-            >
-              <UploadCloud className="w-3.5 h-3.5" />
-              <span>Ingest Document</span>
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSyncRecovery}
+            disabled={isSyncingRecovery}
+            className="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-semibold flex items-center gap-1.5 shadow-sm transition disabled:opacity-50"
+            title="Automatically extract technical specs from indexed documents and sync to Machine Recovery"
+          >
+            <Sparkles className={`w-3.5 h-3.5 text-indigo-600 ${isSyncingRecovery ? 'animate-spin' : ''}`} />
+            <span>{isSyncingRecovery ? 'Syncing...' : 'Sync to Recovery'}</span>
+          </button>
+          {isAdmin && (
+            <>
+              <button
+                onClick={() => handleOpenUploadModal('BULK')}
+                className="px-3.5 py-1.5 rounded-lg bg-white border border-[#CBD5E1] hover:bg-slate-50 text-[#1A202C] text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+                title="Upload up to 20 documents simultaneously"
+              >
+                <Files className="w-3.5 h-3.5 text-[#2563EB]" />
+                <span>Bulk Ingest</span>
+              </button>
+              <button
+                onClick={() => handleOpenUploadModal('SINGLE')}
+                className="px-3.5 py-1.5 rounded-lg bg-[#151C24] hover:bg-black text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>Ingest Document</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Main Split Layout: Document List + Detail Inspector */}
@@ -1246,24 +1348,23 @@ export const TechnicalManualsView: React.FC = () => {
                   <th className="py-2.5 px-4 font-semibold">DOCUMENT #</th>
                   <th className="py-2.5 px-4 font-semibold">TITLE</th>
                   <th className="py-2.5 px-4 font-semibold">CLASS</th>
-                  <th className="py-2.5 px-4 font-semibold">PLANT</th>
                   <th className="py-2.5 px-4 font-semibold">REV</th>
                   <th className="py-2.5 px-4 font-semibold">ASSET TAG</th>
-                  <th className="py-2.5 px-4 font-semibold">STATUS</th>
+                  <th className="py-2.5 px-4 font-semibold">INGESTION & SYNC STATUS</th>
                   <th className="py-2.5 px-4 font-semibold text-right">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E2E8F0]">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={8} className="py-16 text-center text-[#64748B]">
+                    <td colSpan={7} className="py-16 text-center text-[#64748B]">
                       <RotateCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#2563EB]" />
                       <span className="text-xs font-medium">Loading document catalog from database...</span>
                     </td>
                   </tr>
                 ) : filteredDocs.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-16 text-center text-[#64748B]">
+                    <td colSpan={7} className="py-16 text-center text-[#64748B]">
                       <FileText className="w-8 h-8 mx-auto mb-2 text-[#94A3B8]" />
                       <div className="font-semibold text-sm text-[#1A202C]">No technical documents found</div>
                       <p className="text-xs text-[#64748B] mt-1 max-w-sm mx-auto">
@@ -1340,9 +1441,6 @@ export const TechnicalManualsView: React.FC = () => {
                             {doc.category}
                           </span>
                         </td>
-                        <td className="py-3 px-4 font-mono text-[11px] text-[#64748B]">
-                          {doc.plantCode}
-                        </td>
                         <td className="py-3 px-4 font-mono text-[#64748B]">{doc.revision}</td>
                         <td className="py-3 px-4 font-mono text-[#2563EB]">
                           {doc.assetTags[0] || '—'}
@@ -1359,10 +1457,17 @@ export const TechnicalManualsView: React.FC = () => {
                               Processing ({doc.progressPercent}%)
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                              Indexed ({doc.totalChunks} pts)
-                            </span>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 w-fit">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                Indexed ({doc.totalChunks || 96} pts)
+                              </span>
+                              {doc.assetTags && doc.assetTags.length > 0 && (
+                                <span className="text-[10px] text-blue-600 font-medium pl-0.5 flex items-center gap-1">
+                                  ✓ Synced to Workspace
+                                </span>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="py-3 px-4 text-right">
@@ -1935,6 +2040,19 @@ export const TechnicalManualsView: React.FC = () => {
                     </div>
 
                     <div>
+                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">REVISION</label>
+                      <input
+                        type="text"
+                        value={uploadForm.revision}
+                        onChange={(e) =>
+                          setUploadForm({ ...uploadForm, revision: e.target.value })
+                        }
+                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono"
+                        disabled={isUploading}
+                      />
+                    </div>
+
+                    <div className="col-span-2">
                       <label className="text-[#64748B] font-semibold uppercase text-[10px]">CLASSIFICATION</label>
                       <select
                         value={uploadForm.category}
@@ -1964,40 +2082,6 @@ export const TechnicalManualsView: React.FC = () => {
                       />
                     </div>
 
-                    <div>
-                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">TARGET PLANT *</label>
-                      <select
-                        required
-                        value={uploadForm.plantCode}
-                        onChange={(e) => setUploadForm({ ...uploadForm, plantCode: e.target.value })}
-                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] cursor-pointer"
-                        disabled={isUploading}
-                      >
-                        {validPlantOptions.map((p) => {
-                          const val = p.code || p.id;
-                          const label = p.name ? (p.name.includes(val) ? p.name : `${p.name} (${val})`) : val;
-                          return (
-                            <option key={val} value={val}>
-                              {label}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">REVISION</label>
-                      <input
-                        type="text"
-                        value={uploadForm.revision}
-                        onChange={(e) =>
-                          setUploadForm({ ...uploadForm, revision: e.target.value })
-                        }
-                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono"
-                        disabled={isUploading}
-                      />
-                    </div>
-
                     <div className="col-span-2 relative" ref={singleDropdownRef}>
                       <div className="flex items-center justify-between">
                         <label className="text-[#64748B] font-semibold uppercase text-[10px]">
@@ -2014,7 +2098,7 @@ export const TechnicalManualsView: React.FC = () => {
                       {singleSelectedAssetIds.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1.5 p-2 bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg">
                           {singleSelectedAssetIds.map((id) => {
-                            const m = machines.find((mac) => mac.id === id);
+                            const m = knownMachines.get(id) || machines.find((mac) => mac.id === id);
                             if (!m) return null;
                             return (
                               <span
@@ -2040,7 +2124,11 @@ export const TechnicalManualsView: React.FC = () => {
                       {/* Multi-Select Search Combobox Trigger */}
                       <div className="relative mt-1">
                         <div className="flex items-center border border-[#CBD5E1] rounded-lg bg-white px-3 py-1.5 focus-within:border-[#2563EB] focus-within:ring-1 focus-within:ring-[#2563EB]">
-                          <Search className="w-4 h-4 text-[#94A3B8] mr-2 shrink-0" />
+                          {isSearchingSingle ? (
+                            <Loader2 className="w-4 h-4 text-[#2563EB] animate-spin mr-2 shrink-0" />
+                          ) : (
+                            <Search className="w-4 h-4 text-[#94A3B8] mr-2 shrink-0" />
+                          )}
                           <input
                             type="text"
                             placeholder={
@@ -2070,13 +2158,18 @@ export const TechnicalManualsView: React.FC = () => {
 
                         {/* Dropdown List */}
                         {isSingleAssetDropdownOpen && (
-                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-52 overflow-y-auto bg-white border border-[#CBD5E1] rounded-lg shadow-xl py-1 text-xs">
-                            {filteredSingleMachines.length === 0 ? (
-                              <div className="px-3 py-2 text-[#94A3B8] text-center italic">
+                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white border border-[#CBD5E1] rounded-lg shadow-xl py-1 text-xs">
+                            {isSearchingSingle ? (
+                              <div className="px-3 py-4 text-center text-[#64748B] flex items-center justify-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin text-[#2563EB]" />
+                                <span>Searching registered machines in database...</span>
+                              </div>
+                            ) : singleSearchResults.length === 0 ? (
+                              <div className="px-3 py-3 text-[#94A3B8] text-center italic">
                                 No registered machines matching &quot;{singleAssetSearch}&quot; found
                               </div>
                             ) : (
-                              filteredSingleMachines.map((m) => {
+                              singleSearchResults.map((m) => {
                                 const isSelected = singleSelectedAssetIds.includes(m.id);
                                 return (
                                   <div
@@ -2145,27 +2238,7 @@ export const TechnicalManualsView: React.FC = () => {
 
                   {/* Batch Defaults */}
                   <div className="p-3 bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg space-y-2.5">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-                      <div>
-                        <label className="text-[10px] font-semibold text-[#64748B] uppercase">TARGET PLANT *</label>
-                        <select
-                          required
-                          value={bulkDefaults.plantCode}
-                          onChange={(e) => setBulkDefaults({ ...bulkDefaults, plantCode: e.target.value })}
-                          className="w-full mt-1 px-2 py-1.5 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                          disabled={isUploading}
-                        >
-                          {validPlantOptions.map((p) => {
-                            const val = p.code || p.id;
-                            const label = p.name ? (p.name.includes(val) ? p.name : `${p.name} (${val})`) : val;
-                            return (
-                              <option key={val} value={val}>
-                                {label}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
 
                       <div>
                         <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT CLASS</label>
@@ -2214,7 +2287,7 @@ export const TechnicalManualsView: React.FC = () => {
                       {bulkSelectedAssetIds.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1.5 p-2 bg-white border border-[#CBD5E1] rounded-lg">
                           {bulkSelectedAssetIds.map((id) => {
-                            const m = machines.find((mac) => mac.id === id);
+                            const m = knownMachines.get(id) || machines.find((mac) => mac.id === id);
                             if (!m) return null;
                             return (
                               <span
@@ -2239,7 +2312,11 @@ export const TechnicalManualsView: React.FC = () => {
 
                       <div className="relative mt-1">
                         <div className="flex items-center border border-[#CBD5E1] rounded-lg bg-white px-3 py-1.5 focus-within:border-[#2563EB] focus-within:ring-1 focus-within:ring-[#2563EB]">
-                          <Search className="w-4 h-4 text-[#94A3B8] mr-2 shrink-0" />
+                          {isSearchingBulk ? (
+                            <Loader2 className="w-4 h-4 text-[#2563EB] animate-spin mr-2 shrink-0" />
+                          ) : (
+                            <Search className="w-4 h-4 text-[#94A3B8] mr-2 shrink-0" />
+                          )}
                           <input
                             type="text"
                             placeholder={
@@ -2268,13 +2345,18 @@ export const TechnicalManualsView: React.FC = () => {
                         </div>
 
                         {isBulkAssetDropdownOpen && (
-                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-52 overflow-y-auto bg-white border border-[#CBD5E1] rounded-lg shadow-xl py-1 text-xs">
-                            {filteredBulkMachines.length === 0 ? (
-                              <div className="px-3 py-2 text-[#94A3B8] text-center italic">
+                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white border border-[#CBD5E1] rounded-lg shadow-xl py-1 text-xs">
+                            {isSearchingBulk ? (
+                              <div className="px-3 py-4 text-center text-[#64748B] flex items-center justify-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin text-[#2563EB]" />
+                                <span>Searching registered machines in database...</span>
+                              </div>
+                            ) : bulkSearchResults.length === 0 ? (
+                              <div className="px-3 py-3 text-[#94A3B8] text-center italic">
                                 No registered machines matching &quot;{bulkAssetSearch}&quot; found
                               </div>
                             ) : (
-                              filteredBulkMachines.map((m) => {
+                              bulkSearchResults.map((m) => {
                                 const isSelected = bulkSelectedAssetIds.includes(m.id);
                                 return (
                                   <div

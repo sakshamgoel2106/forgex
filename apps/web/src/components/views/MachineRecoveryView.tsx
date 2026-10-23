@@ -23,7 +23,6 @@ import type {
   MachineRecoveryProfile,
   MachineEvidenceClaim,
   MissingInformationTask,
-  Plant,
   Machine,
 } from '@forgex/shared-types';
 
@@ -40,10 +39,9 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
   // State
   const [summary, setSummary] = useState<MachineRecoverySummary | null>(null);
   const [machines, setMachines] = useState<Machine[]>([]);
-  const [plants, setPlants] = useState<Plant[]>([]);
-  const [selectedPlantId, setSelectedPlantId] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterConfidence, setFilterConfidence] = useState<string>('ALL');
+  const [isSyncingDocuments, setIsSyncingDocuments] = useState(false);
 
   // Active Machine Detail State
   const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
@@ -108,9 +106,8 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
     setLoading(true);
     setErrorMessage(null);
     try {
-      const plantParam = selectedPlantId !== 'ALL' ? `?plantId=${selectedPlantId}` : '';
       const [sumRes, machRes, plantRes] = await Promise.all([
-        fetch(`/api/v1/recovery/summary${plantParam}`, { headers: getHeaders() }),
+        fetch('/api/v1/recovery/summary', { headers: getHeaders() }),
         fetch('/api/v1/machines', { headers: getHeaders() }),
         fetch('/api/v1/plants', { headers: getHeaders() }),
       ]);
@@ -121,18 +118,40 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
 
       if (sumJson.success) setSummary(sumJson.data);
       if (machJson.success && Array.isArray(machJson.data)) setMachines(machJson.data);
-      if (plantJson.success && Array.isArray(plantJson.data)) {
-        setPlants(plantJson.data);
-        if (plantJson.data.length > 0 && !regPlantId) {
-          setRegPlantId(plantJson.data[0].id);
-        }
+      if (plantJson.success && Array.isArray(plantJson.data) && plantJson.data.length > 0 && !regPlantId) {
+        setRegPlantId(plantJson.data[0].id);
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to load machine recovery data.');
     } finally {
       setLoading(false);
     }
-  }, [token, selectedPlantId, getHeaders, regPlantId]);
+  }, [token, getHeaders, regPlantId]);
+
+  const handleSyncFromDocuments = async () => {
+    setIsSyncingDocuments(true);
+    try {
+      const res = await fetch('/api/v1/recovery/sync-from-documents', {
+        method: 'POST',
+        headers: getHeaders(),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        toast.success('Sync Complete', json.message || 'Extracted parameters from Knowledge Hub documents.');
+        setSuccessMessage(json.message);
+        await loadOverviewData();
+        if (selectedMachineId) await loadMachineProfile(selectedMachineId);
+      } else {
+        toast.error('Sync Failed', json.error?.message || 'Could not sync documents.');
+        setErrorMessage(json.error?.message || 'Failed to sync documents.');
+      }
+    } catch (err: any) {
+      toast.error('Sync Error', err?.message);
+      setErrorMessage(err?.message);
+    } finally {
+      setIsSyncingDocuments(false);
+    }
+  };
 
   useEffect(() => {
     loadOverviewData();
@@ -361,7 +380,6 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
 
   // Filter Machines
   const filteredMachines = machines.filter((m) => {
-    if (selectedPlantId !== 'ALL' && m.plantId !== selectedPlantId) return false;
     if (filterConfidence === 'VERIFIED' && m.verificationState !== 'VERIFIED') return false;
     if (filterConfidence === 'PARTIAL' && m.verificationState !== 'PARTIALLY_VERIFIED') return false;
     if (filterConfidence === 'UNIDENTIFIED' && m.verificationState !== 'UNVERIFIED') return false;
@@ -400,6 +418,15 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleSyncFromDocuments}
+            disabled={isSyncingDocuments}
+            className="px-3.5 py-1.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded-md text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+            title="Automatically scan indexed Knowledge Hub documents and extract nameplate & technical parameters into Recovery"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${isSyncingDocuments ? 'animate-spin' : ''}`} />
+            <span>{isSyncingDocuments ? 'Extracting Claims...' : 'Sync & Extract to Recovery'}</span>
+          </button>
           {isSupervisory && (
             <button
               onClick={() => setIsRegisterModalOpen(true)}
@@ -520,16 +547,6 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
               />
             </div>
 
-            <select
-              value={selectedPlantId}
-              onChange={(e) => setSelectedPlantId(e.target.value)}
-              className="bg-white border border-[#CBD5E1] px-2.5 py-1.5 text-xs text-[#1A202C] rounded focus:outline-none focus:border-[#2563EB]"
-            >
-              <option value="ALL">All Plants</option>
-              {plants.map((p) => (
-                <option key={p.id} value={p.id}>{p.code} - {p.name}</option>
-              ))}
-            </select>
 
             <select
               value={filterConfidence}
@@ -1192,19 +1209,6 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[#475569] mb-1 font-medium">Plant Location *</label>
-                  <select
-                    value={regPlantId}
-                    onChange={(e) => setRegPlantId(e.target.value)}
-                    className="w-full bg-white border border-[#CBD5E1] p-2 text-xs text-[#1A202C] rounded focus:border-[#2563EB]"
-                  >
-                    {plants.map((p) => (
-                      <option key={p.id} value={p.id}>{p.code} - {p.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
                   <label className="block text-[#475569] mb-1 font-medium">Category</label>
                   <select
                     value={regType}
@@ -1217,17 +1221,17 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                     <option value="Industrial Machinery">Other Machinery</option>
                   </select>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-[#475569] mb-1 font-medium">Plant Area</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Unit 4 Crude Distillation"
-                  value={regArea}
-                  onChange={(e) => setRegArea(e.target.value)}
-                  className="w-full bg-white border border-[#CBD5E1] p-2 text-xs text-[#1A202C] rounded focus:border-[#2563EB]"
-                />
+                <div>
+                  <label className="block text-[#475569] mb-1 font-medium">Facility / Plant Area</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Unit 4 Crude Distillation"
+                    value={regArea}
+                    onChange={(e) => setRegArea(e.target.value)}
+                    className="w-full bg-white border border-[#CBD5E1] p-2 text-xs text-[#1A202C] rounded focus:border-[#2563EB]"
+                  />
+                </div>
               </div>
 
               <div className="pt-2 border-t border-[#E2E8F0] space-y-2">

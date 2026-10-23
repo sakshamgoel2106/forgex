@@ -381,6 +381,16 @@ export interface IDataStore {
   getDocumentByNumber(organizationId: string, documentNumber: string): Promise<TechnicalDocument | null>;
   listDocuments(organizationId: string, filter?: DocumentFilterOptions): Promise<TechnicalDocument[]>;
   deleteDocument(organizationId: string, documentId: string): Promise<boolean>;
+  linkDocumentToAsset(
+    organizationId: string,
+    documentId: string,
+    assetId: string,
+    assetTag?: string
+  ): Promise<void>;
+  getLinkedMachineIdsForDocument(
+    organizationId: string,
+    documentId: string
+  ): Promise<string[]>;
 
   // Document Versions
   createDocumentVersion(dto: CreateDocumentVersionDTO): Promise<DocumentVersion>;

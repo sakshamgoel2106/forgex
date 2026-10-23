@@ -20,6 +20,8 @@ import type {
 
 import type { IEmbeddingAdapter } from '../embeddings/embeddings.interface.js';
 import type { IVectorStoreAdapter, VectorPoint } from '../vector/vectorStore.interface.js';
+import { RecoveryAiExtractor } from '../services/recoveryAiExtractor.js';
+import type { Machine } from '@forgex/shared-types';
 
 export function createRecoveryRouter(
   dataStore: IDataStore,
@@ -29,6 +31,7 @@ export function createRecoveryRouter(
   vectorStore?: IVectorStoreAdapter
 ): Router {
   const router = Router();
+  const recoveryExtractor = new RecoveryAiExtractor(dataStore);
 
   /**
    * GET /api/v1/recovery/summary
@@ -1588,6 +1591,127 @@ ${updated.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check:
       res.status(500).json({
         success: false,
         error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  /**
+   * POST /api/v1/recovery/sync-from-documents
+   * Triggers automated AI extraction across all indexed documents in Knowledge Hub for linked machines
+   */
+  router.post('/sync-from-documents', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const orgId = req.auth!.organization.id;
+      const actorUserId = req.auth!.user.id;
+
+      const documents = await dataStore.listDocuments(orgId);
+      const allMachines = await dataStore.listMachines(orgId);
+
+      let processedDocsCount = 0;
+      let totalClaimsGenerated = 0;
+
+      for (const doc of documents) {
+        const versions = await dataStore.listDocumentVersions(doc.id);
+        const latestIndexedVersion = versions.find((v) => v.status === 'INDEXED') || versions[0];
+        if (!latestIndexedVersion) continue;
+
+        let pages = await dataStore.listDocumentPages(latestIndexedVersion.id);
+        if (!pages || pages.length === 0) {
+          const chunks = await dataStore.listKnowledgeChunks(latestIndexedVersion.id);
+          if (chunks && chunks.length > 0) {
+            const pageMap = new Map<number, string[]>();
+            for (const c of chunks) {
+              const pNum = c.pageNumber || 1;
+              const list = pageMap.get(pNum) || [];
+              list.push(c.content);
+              pageMap.set(pNum, list);
+            }
+            pages = Array.from(pageMap.entries()).map(([pageNumber, contents]) => ({
+              id: crypto.randomUUID(),
+              documentVersionId: latestIndexedVersion.id,
+              pageNumber,
+              rawText: contents.join('\n\n'),
+              sectionHeadings: [],
+              extractionMethod: 'NATIVE_TEXT',
+              hasTables: false,
+              createdAt: new Date().toISOString(),
+            }));
+          }
+        }
+        if (!pages || pages.length === 0) continue;
+
+        // Resolve linked machines
+        const linkedMachineIds: string[] = [];
+        try {
+          const fromJunction = await dataStore.getLinkedMachineIdsForDocument(orgId, doc.id);
+          linkedMachineIds.push(...fromJunction);
+        } catch {
+          // fallback
+        }
+        if (doc.machineId) linkedMachineIds.push(doc.machineId);
+        if ((doc as any).assetIds && Array.isArray((doc as any).assetIds)) {
+          linkedMachineIds.push(...(doc as any).assetIds);
+        }
+
+        const targetMachines: Machine[] = [];
+        for (const mId of linkedMachineIds) {
+          const found = allMachines.find((m) => m.id === mId);
+          if (found && !targetMachines.some((item) => item.id === found.id)) {
+            targetMachines.push(found);
+          }
+        }
+
+        // Automatic fallback: check tags or extracted text
+        if (targetMachines.length === 0) {
+          const docTags = doc.assetTags || [];
+          const pageText = pages.slice(0, 5).map((p) => p.rawText.toUpperCase()).join(' ');
+          for (const m of allMachines) {
+            const tagUpper = m.assetTag.toUpperCase();
+            if (docTags.some((t) => t.toUpperCase() === tagUpper) || pageText.includes(tagUpper)) {
+              if (!targetMachines.some((item) => item.id === m.id)) {
+                targetMachines.push(m);
+                dataStore.linkDocumentToAsset(orgId, doc.id, m.id, m.assetTag).catch(() => {});
+              }
+            }
+          }
+        }
+
+        if (targetMachines.length > 0) {
+          processedDocsCount++;
+          const claims = await recoveryExtractor.extractAndSaveMachineRecoveryClaims({
+            organizationId: orgId,
+            document: {
+              id: doc.id,
+              documentNumber: doc.documentNumber,
+              title: doc.title,
+              category: doc.category,
+              createdByUserId: doc.createdByUserId,
+            },
+            version: {
+              id: latestIndexedVersion.id,
+              revision: latestIndexedVersion.revision,
+              storageKey: latestIndexedVersion.storageKey,
+            },
+            extractedPages: pages.map((p) => ({ pageNumber: p.pageNumber, rawText: p.rawText })),
+            targetMachines,
+            submittedByUserId: actorUserId,
+          });
+          totalClaimsGenerated += claims.length;
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Synced ${processedDocsCount} indexed documents across ${allMachines.length} machines. Extracted ${totalClaimsGenerated} parameter claims.`,
+        data: {
+          processedDocsCount,
+          totalClaimsGenerated,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_SYNC_FAILED', message: err?.message || 'Sync failed' },
       });
     }
   });

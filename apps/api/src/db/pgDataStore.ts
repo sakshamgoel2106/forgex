@@ -1674,7 +1674,7 @@ export class PgDataStore implements IDataStore {
         await this.pool.query(
           `INSERT INTO asset_documents (organization_id, asset_id, document_id)
            VALUES ($1, $2, $3)
-           ON CONFLICT (asset_id, document_id) DO NOTHING`,
+           ON CONFLICT (organization_id, asset_id, document_id) DO NOTHING`,
           [dto.organizationId, aId, row.id]
         );
       } catch {
@@ -1820,6 +1820,72 @@ export class PgDataStore implements IDataStore {
       [documentId, organizationId]
     );
     return res.rows.length > 0;
+  }
+
+  public async linkDocumentToAsset(
+    organizationId: string,
+    documentId: string,
+    assetId: string,
+    assetTag?: string
+  ): Promise<void> {
+    try {
+      await this.pool.query(
+        `INSERT INTO asset_documents (organization_id, asset_id, document_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (organization_id, asset_id, document_id) DO NOTHING`,
+        [organizationId, assetId, documentId]
+      );
+    } catch {
+      // ignore junction error
+    }
+
+    try {
+      if (assetTag && assetTag.trim()) {
+        await this.pool.query(
+          `UPDATE documents
+           SET asset_ids = ARRAY(
+                 SELECT DISTINCT unnest(array_append(COALESCE(asset_ids, '{}'), $2::text))
+               ),
+               asset_tags = ARRAY(
+                 SELECT DISTINCT unnest(array_append(COALESCE(asset_tags, '{}'), $3::text))
+               ),
+               machine_id = COALESCE(machine_id, $2::uuid)
+           WHERE organization_id = $1 AND id = $4`,
+          [organizationId, assetId, assetTag.trim(), documentId]
+        );
+      } else {
+        await this.pool.query(
+          `UPDATE documents
+           SET asset_ids = ARRAY(
+                 SELECT DISTINCT unnest(array_append(COALESCE(asset_ids, '{}'), $2::text))
+               ),
+               machine_id = COALESCE(machine_id, $2::uuid)
+           WHERE organization_id = $1 AND id = $3`,
+          [organizationId, assetId, documentId]
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  public async getLinkedMachineIdsForDocument(
+    organizationId: string,
+    documentId: string
+  ): Promise<string[]> {
+    try {
+      const res = await this.pool.query(
+        `SELECT DISTINCT asset_id::text AS machine_id FROM asset_documents WHERE organization_id = $1 AND document_id = $2
+         UNION
+         SELECT unnest(asset_ids)::text AS machine_id FROM documents WHERE organization_id = $1 AND id = $2 AND asset_ids IS NOT NULL AND array_length(asset_ids, 1) > 0
+         UNION
+         SELECT machine_id::text FROM documents WHERE organization_id = $1 AND id = $2 AND machine_id IS NOT NULL`,
+        [organizationId, documentId]
+      );
+      return res.rows.map((r) => r.machine_id).filter(Boolean);
+    } catch {
+      return [];
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -8708,6 +8774,12 @@ export class PgDataStore implements IDataStore {
             organizationId,
           ]
         );
+
+        try {
+          await this.getMachineVerification(organizationId, machine.id);
+        } catch {
+          // ignore
+        }
       }
     } else if (review.decision === 'REJECT') {
       if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {

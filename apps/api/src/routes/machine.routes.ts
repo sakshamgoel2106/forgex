@@ -65,10 +65,10 @@ export function createMachineRouter(dataStore: IDataStore): Router {
         }
 
         const orgPlants = await dataStore.listPlants(orgId);
-        const resolvedPlantId = plantId || orgPlants[0]?.id || 'default-plant';
+        const resolvedPlantId = plantId || (assignedPlants.length > 0 ? assignedPlants[0] : null) || orgPlants[0]?.id || 'default-plant';
 
-        // Plant scoping enforcement
-        if (!isSuperAdmin && assignedPlants.length > 0 && !assignedPlants.includes(resolvedPlantId)) {
+        // Plant scoping enforcement (only if explicitly specifying a different plant and restricted)
+        if (plantId && !isSuperAdmin && assignedPlants.length > 0 && !assignedPlants.includes(resolvedPlantId)) {
           res.status(403).json({
             success: false,
             error: {

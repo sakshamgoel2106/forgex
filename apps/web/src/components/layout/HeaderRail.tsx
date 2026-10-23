@@ -4,19 +4,15 @@ import {
   ShieldCheck,
   Radio,
   Sliders,
-  ChevronDown,
   User,
 } from 'lucide-react';
 
 interface HeaderRailProps {
-  plantSite: string;
-  onPlantChange: (site: string) => void;
+  plantSite?: string;
+  onPlantChange?: (site: string) => void;
 }
 
-export const HeaderRail: React.FC<HeaderRailProps> = ({
-  plantSite,
-  onPlantChange,
-}) => {
+export const HeaderRail: React.FC<HeaderRailProps> = () => {
   return (
     <header className="h-14 border-b border-graphite-800 bg-graphite-900/90 backdrop-blur px-4 flex items-center justify-between select-none">
       {/* Brand & Subsystem Tag */}
@@ -43,20 +39,11 @@ export const HeaderRail: React.FC<HeaderRailProps> = ({
         {/* Separator */}
         <div className="h-6 w-px bg-graphite-800" />
 
-        {/* Plant Site Selector */}
+        {/* Plant Site Selector - Single Facility Mode */}
         <div className="flex items-center gap-2 bg-graphite-950 px-2.5 py-1 rounded border border-graphite-800">
           <Sliders className="w-3.5 h-3.5 text-amber-500" />
-          <span className="text-xs text-graphite-400 font-mono">PLANT:</span>
-          <select
-            value={plantSite}
-            onChange={(e) => onPlantChange(e.target.value)}
-            className="bg-transparent text-xs font-mono font-medium text-graphite-200 outline-none cursor-pointer"
-          >
-            <option value="PLANT-TX-04">PLANT-TX-04 (Refinery Complex)</option>
-            <option value="PLANT-OH-02">PLANT-OH-02 (Cold Rolling Mill)</option>
-            <option value="PLANT-LA-01">PLANT-LA-01 (Ethylene Cracker)</option>
-          </select>
-          <ChevronDown className="w-3 h-3 text-graphite-500 pointer-events-none" />
+          <span className="text-xs text-graphite-400 font-mono">FACILITY:</span>
+          <span className="text-xs font-mono font-medium text-graphite-200">Main Facility</span>
         </div>
       </div>
 

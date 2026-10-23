@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Globe,
@@ -46,6 +46,35 @@ export const PublicLookupModal: React.FC<PublicLookupModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PublicMachineKnowledge | null>(null);
   const [showMissingFields, setShowMissingFields] = useState(false);
+  const [targetMachineId, setTargetMachineId] = useState<string>(machineId || '');
+  const [machines, setMachines] = useState<{ id: string; assetTag: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (machineId) {
+      setTargetMachineId(machineId);
+    }
+  }, [machineId]);
+
+  useEffect(() => {
+    if (token && organizationId && isOpen) {
+      fetch('/api/v1/machines', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-organization-id': organizationId,
+        },
+      })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j.success && Array.isArray(j.data)) {
+            setMachines(j.data);
+            if (!targetMachineId && j.data.length > 0) {
+              setTargetMachineId(j.data[0].id);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [token, organizationId, isOpen]);
 
   if (!isOpen) return null;
 
@@ -96,7 +125,7 @@ export const PublicLookupModal: React.FC<PublicLookupModalProps> = ({
           ...(organizationId ? { 'x-organization-id': organizationId } : {}),
         },
         body: JSON.stringify({
-          machineId,
+          machineId: targetMachineId || machineId,
           reviewNotes: reviewNotes.trim() || undefined,
         }),
       });
@@ -529,17 +558,37 @@ export const PublicLookupModal: React.FC<PublicLookupModalProps> = ({
               {/* Admin Approval Controls */}
               {result.verificationStatus !== 'APPROVED' && result.verificationStatus !== 'REJECTED' && (
                 <div className="pt-3 border-t border-[#E2E8F0] space-y-2">
-                  <div>
-                    <label className="text-[10px] text-[#64748B] font-semibold uppercase block mb-1">
-                      Reviewer Rationale & Notes:
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Verified against Grundfos CR 2024 Engineering Manual Section 4"
-                      value={reviewNotes}
-                      onChange={(e) => setReviewNotes(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs outline-none focus:border-[#2563EB]"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-[#64748B] font-semibold uppercase block mb-1">
+                        Associate & Merge with Machine:
+                      </label>
+                      <select
+                        value={targetMachineId}
+                        onChange={(e) => setTargetMachineId(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs outline-none focus:border-[#2563EB]"
+                      >
+                        <option value="">Do not attach to a machine</option>
+                        {machines.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.assetTag} - {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-[#64748B] font-semibold uppercase block mb-1">
+                        Reviewer Rationale & Notes:
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Verified against OEM Specification"
+                        value={reviewNotes}
+                        onChange={(e) => setReviewNotes(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs outline-none focus:border-[#2563EB]"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex justify-end gap-2 pt-1">

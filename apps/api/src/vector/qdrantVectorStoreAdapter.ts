@@ -18,7 +18,10 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (this.apiKey) headers['api-key'] = this.apiKey;
 
-      const check = await fetch(`${this.endpoint}/collections/${collectionName}`, { headers });
+      const check = await fetch(`${this.endpoint}/collections/${collectionName}`, {
+        headers,
+        signal: AbortSignal.timeout(1000),
+      });
       if (check.status === 404) {
         await fetch(`${this.endpoint}/collections/${collectionName}`, {
           method: 'PUT',
@@ -29,6 +32,7 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
               distance: 'Cosine',
             },
           }),
+          signal: AbortSignal.timeout(1000),
         });
       }
     } catch {
@@ -51,6 +55,7 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
         method: 'PUT',
         headers,
         body: JSON.stringify({ points: qdrantPoints }),
+        signal: AbortSignal.timeout(1500),
       });
 
       if (!res.ok) throw new Error(`Qdrant error: ${res.statusText}`);
@@ -68,6 +73,7 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
         method: 'POST',
         headers,
         body: JSON.stringify({ points: pointIds }),
+        signal: AbortSignal.timeout(1000),
       });
     } catch {
       await this.fallbackAdapter.deletePoints(collectionName, pointIds);
@@ -94,6 +100,7 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
         method: 'POST',
         headers,
         body: JSON.stringify({ filter: { must: mustClauses } }),
+        signal: AbortSignal.timeout(1000),
       });
     } catch {
       await this.fallbackAdapter.deleteByFilter(collectionName, filter);

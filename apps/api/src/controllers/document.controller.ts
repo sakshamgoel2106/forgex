@@ -7,6 +7,7 @@ import type { IStorageAdapter } from '../storage/storage.interface.js';
 import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import type { IngestionQueue } from '../jobs/ingestionQueue.js';
 import { validateUpload, sanitizeFilename } from '../ingestion/fileValidator.js';
+import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
 export class DocumentController {
@@ -100,45 +101,48 @@ export class DocumentController {
         return;
       }
 
-      // 2. Validate metadata fields
+      // 2. Validate metadata fields (Single-Factory MVP: plantId is optional / auto-resolved)
       const {
         documentNumber,
         title,
-        plantId,
         category,
         revision = 'REV-A',
         assetTags = '',
       } = req.body;
 
-      if (!documentNumber || !title || !plantId || !category) {
+      if (!documentNumber || !title || !category) {
         res.status(400).json({
           success: false,
-          error: 'Missing required metadata: documentNumber, title, plantId, and category are mandatory.',
+          error: 'Missing required metadata: documentNumber, title, and category are mandatory.',
         });
         return;
       }
 
-      // Verify plant belongs to this organization (never implicitly auto-create plants)
-      let plant = await this.dataStore.getPlantById(organizationId, plantId);
+      // Single-Factory MVP: Automatically resolve the tenant's primary facility
+      let plant = null;
+      if (req.body.plantId) {
+        plant = await this.dataStore.getPlantById(organizationId, req.body.plantId);
+        if (!plant) {
+          const existingPlants = await this.dataStore.listPlants(organizationId);
+          plant = existingPlants.find(
+            (p) =>
+              p.id === req.body.plantId ||
+              p.code?.toLowerCase() === req.body.plantId.toLowerCase() ||
+              p.name?.toLowerCase().includes(req.body.plantId.toLowerCase())
+          ) || null;
+        }
+      }
+
       if (!plant) {
         const existingPlants = await this.dataStore.listPlants(organizationId);
-        const match = existingPlants.find(
-          (p) =>
-            p.id === plantId ||
-            p.code?.toLowerCase() === plantId.toLowerCase() ||
-            p.name?.toLowerCase().includes(plantId.toLowerCase())
-        );
-        if (match) {
-          plant = match;
+        if (existingPlants.length > 0) {
+          plant = existingPlants[0];
         } else {
-          res.status(400).json({
-            success: false,
-            error: {
-              code: 'FORGEX_INVALID_PLANT',
-              message: 'Invalid plant: Target plant does not exist or does not belong to the authenticated organization.',
-            },
+          plant = await this.dataStore.createPlant(organizationId, {
+            code: config.PLANT_SITE_CODE || 'PLANT-TX-04',
+            name: 'Main Facility',
+            location: 'Single Factory',
           });
-          return;
         }
       }
 
@@ -330,43 +334,39 @@ export class DocumentController {
         return;
       }
 
-      // 1. Validate Target Plant
+      // 1. Resolve Target Plant (Single-Factory MVP: plantId is optional / auto-resolved)
       const {
-        plantId,
         defaultCategory = 'SOP',
         defaultRevision = 'REV-A',
         defaultAssetTags = '',
         metadataOverrides,
       } = req.body;
 
-      if (!plantId) {
-        res.status(400).json({
-          success: false,
-          error: 'Missing required metadata: plantId is mandatory for bulk ingestion.',
-        });
-        return;
+      // Single-Factory MVP: Automatically resolve the tenant's primary facility
+      let plant = null;
+      if (req.body.plantId) {
+        plant = await this.dataStore.getPlantById(organizationId, req.body.plantId);
+        if (!plant) {
+          const existingPlants = await this.dataStore.listPlants(organizationId);
+          plant = existingPlants.find(
+            (p) =>
+              p.id === req.body.plantId ||
+              p.code?.toLowerCase() === req.body.plantId.toLowerCase() ||
+              p.name?.toLowerCase().includes(req.body.plantId.toLowerCase())
+          ) || null;
+        }
       }
 
-      let plant = await this.dataStore.getPlantById(organizationId, plantId);
       if (!plant) {
         const existingPlants = await this.dataStore.listPlants(organizationId);
-        const match = existingPlants.find(
-          (p) =>
-            p.id === plantId ||
-            p.code?.toLowerCase() === plantId.toLowerCase() ||
-            p.name?.toLowerCase().includes(plantId.toLowerCase())
-        );
-        if (match) {
-          plant = match;
+        if (existingPlants.length > 0) {
+          plant = existingPlants[0];
         } else {
-          res.status(400).json({
-            success: false,
-            error: {
-              code: 'FORGEX_INVALID_PLANT',
-              message: 'Invalid plant: Target plant does not exist or does not belong to the authenticated organization.',
-            },
+          plant = await this.dataStore.createPlant(organizationId, {
+            code: config.PLANT_SITE_CODE || 'PLANT-TX-04',
+            name: 'Main Facility',
+            location: 'Single Factory',
           });
-          return;
         }
       }
 
@@ -1093,6 +1093,7 @@ export class DocumentController {
   }): Promise<void> {
     const {
       organizationId,
+      document,
       category,
       putResult,
       resolvedMachines,
@@ -1102,17 +1103,32 @@ export class DocumentController {
       extension,
     } = params;
 
-    const docCat = category;
+    const docCat = category as string;
     const ext = (extension || 'pdf').toUpperCase();
 
     for (const m of resolvedMachines) {
-      if (
+      // 1. Explicitly link document to machine in relational tables (asset_documents junction table & documents array)
+      try {
+        await this.dataStore.linkDocumentToAsset(organizationId, document.id, m.id, m.assetTag);
+      } catch (linkErr: any) {
+        logger.warn(
+          { err: linkErr?.message, machineId: m.id, documentId: document.id },
+          'Failed to link document to asset in junction table'
+        );
+      }
+
+      // 2. Identify if document is a technical manual, SOP, or operating documentation
+      const isDocumentation =
         docCat === 'OEM_MANUAL' ||
         docCat === 'SOP' ||
-        (docCat as string) === 'MANUAL' ||
+        docCat === 'MANUAL' ||
         docCat === 'FAULT_CODE_INDEX' ||
-        docCat === 'SAFETY_DATA_SHEET'
-      ) {
+        docCat === 'SAFETY_DATA_SHEET' ||
+        docCat === 'TECHNICAL_MANUAL' ||
+        docCat === 'MAINTENANCE_MANUAL' ||
+        (docCat !== 'PID_DIAGRAM' && docCat !== 'SCHEMATIC_PID' && docCat !== '3D_MODEL');
+
+      if (isDocumentation) {
         const rType = docCat === 'OEM_MANUAL' || (docCat as string) === 'MANUAL' ? 'OFFICIAL_MANUAL' : 'APPROVED_REFERENCE';
         try {
           await this.dataStore.createManufacturerResource(organizationId, {

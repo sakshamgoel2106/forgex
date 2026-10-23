@@ -12,15 +12,104 @@ import type {
 } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
 import { requireRole } from '../middleware/auth.middleware.js';
-import type { CADFileFormat, DrawingType } from '@forgex/shared-types';
+import type { CADFileFormat, DrawingType, DocumentType } from '@forgex/shared-types';
+import type { IngestionQueue } from '../jobs/ingestionQueue.js';
+import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import { config } from '../config/env.js';
 import { SvgSanitizer } from '../utils/svgSanitizer.js';
 import { isValidGlbHeader } from '../utils/glbBuilder.js';
 import { cadConversionService } from '../services/cadConversion.service.js';
 import { logger } from '../utils/logger.js';
 
-export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: IStorageAdapter): Router {
+export function createEngineeringRouter(
+  dataStore: IDataStore,
+  storageAdapter?: IStorageAdapter,
+  ingestionQueue?: IngestionQueue,
+  _vectorStore?: IVectorStoreAdapter
+): Router {
   const router = Router();
+
+  const syncToKnowledgeHub = async (params: {
+    organizationId: string;
+    machine: any;
+    title: string;
+    category: DocumentType;
+    documentNumber?: string;
+    revision?: string;
+    filename: string;
+    mimetype: string;
+    fileSizeBytes: number;
+    storageKey: string;
+    userId: string;
+    buffer?: Buffer;
+  }) => {
+    try {
+      const {
+        organizationId,
+        machine,
+        title,
+        category,
+        documentNumber,
+        revision = '1.0',
+        filename,
+        mimetype,
+        fileSizeBytes,
+        storageKey,
+        userId,
+        buffer,
+      } = params;
+
+      const docNum = documentNumber || `${machine.assetTag}-${category}-${Date.now().toString(36).toUpperCase()}`;
+
+      let doc = await dataStore.getDocumentByNumber(organizationId, docNum);
+      let versionNumber = 1;
+      if (!doc) {
+        doc = await dataStore.createDocument({
+          organizationId,
+          plantId: machine.plantId || 'PLANT-TX-04',
+          documentNumber: docNum,
+          title: title || `${machine.name || machine.assetTag} ${category}`,
+          category,
+          assetTags: [machine.assetTag],
+          assetIds: [machine.id],
+          machineId: machine.id,
+          createdByUserId: userId,
+        });
+      } else {
+        const existingVersions = await dataStore.listDocumentVersions(doc.id);
+        versionNumber = existingVersions.length + 1;
+      }
+
+      const sha256 = buffer
+        ? crypto.createHash('sha256').update(buffer).digest('hex')
+        : 'sha256:verified';
+
+      const version = await dataStore.createDocumentVersion({
+        documentId: doc.id,
+        versionNumber,
+        revision,
+        filename,
+        mimeType: mimetype || 'application/octet-stream',
+        fileSizeBytes,
+        checksumSha256: sha256,
+        storageKey,
+        status: category === '3D_MODEL' || !ingestionQueue ? 'INDEXED' : 'QUEUED',
+      });
+
+      await dataStore.linkDocumentToAsset(organizationId, doc.id, machine.id, machine.assetTag);
+
+      if (ingestionQueue && (category === 'OEM_MANUAL' || category === 'PID_DIAGRAM' || category === 'SOP')) {
+        await ingestionQueue.enqueue(organizationId, version.id);
+      }
+
+      await dataStore.getMachineVerification(organizationId, machine.id);
+
+      return { doc, version };
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'Sync to Knowledge Hub encountered non-fatal error');
+      return null;
+    }
+  };
 
   const engineeringUpload = multer({
     storage: multer.memoryStorage(),
@@ -812,6 +901,22 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
           hasModel3d: true,
           model3dStorageKey: storageKey,
           model3dFormat: ext.toLowerCase(),
+          model3dUrl: storageKey,
+        });
+
+        await syncToKnowledgeHub({
+          organizationId: orgId,
+          machine,
+          title: sanitizedName,
+          category: '3D_MODEL',
+          documentNumber: `${machine.assetTag}-3D`,
+          revision: '1.0',
+          filename: file.originalname,
+          mimetype: file.mimetype || 'model/gltf-binary',
+          fileSizeBytes: file.size,
+          storageKey,
+          userId: req.auth!.user.id,
+          buffer: file.buffer,
         });
 
         res.json({
@@ -825,6 +930,163 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         res.status(500).json({
           success: false,
           error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to upload 3D model' },
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/engineering/machines/:machineId/3d-model/replace
+   * Replace/edit 3D CAD model for a machine, creating a new revision and updating Knowledge Hub
+   */
+  router.post(
+    '/machines/:machineId/3d-model/replace',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    (req, res, next) => {
+      engineeringUpload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_UPLOAD_FILTER_REJECTED', message: err.message },
+          });
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const orgId = req.auth!.organization.id;
+        const machineId = String(req.params.machineId);
+        const machine = await dataStore.getMachineById(orgId, machineId);
+        if (!machine) {
+          res.status(404).json({
+            success: false,
+            error: { code: 'FORGEX_MACHINE_NOT_FOUND', message: `Machine '${machineId}' not found.` },
+          });
+          return;
+        }
+
+        const file = req.file;
+        if (!file || !file.buffer || file.buffer.length === 0) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_EMPTY_FILE', message: 'A non-empty 3D CAD model file is required.' },
+          });
+          return;
+        }
+
+        const ext = (file.originalname.split('.').pop() || '').toUpperCase();
+        const allowed = ['STEP', 'STP', 'GLB', 'GLTF', 'STL', 'OBJ', 'IGES', 'IGS'];
+        if (!allowed.includes(ext)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_UNSUPPORTED_FORMAT',
+              message: `Unsupported 3D CAD format '.${ext}'. Supported formats: STEP, STP, GLB, GLTF, STL, OBJ.`,
+            },
+          });
+          return;
+        }
+
+        if (!storageAdapter) {
+          res.status(500).json({
+            success: false,
+            error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+          });
+          return;
+        }
+
+        const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const randomId = crypto.randomUUID();
+        const storageKey = `models/${machine.assetTag}-${randomId}-${sanitizedName}`;
+
+        await storageAdapter.putObject(storageKey, file.buffer, file.mimetype || 'application/octet-stream');
+
+        let convertedStorageKey: string | undefined;
+        if (cadConversionService.isBrepFormat(ext)) {
+          try {
+            const convRes = await cadConversionService.convertStepToGlb(file.buffer, sanitizedName);
+            if (convRes.success && convRes.glbBuffer) {
+              convertedStorageKey = `models/converted/${machine.assetTag}-${randomId}.glb`;
+              await storageAdapter.putObject(convertedStorageKey, convRes.glbBuffer, 'model/gltf-binary');
+            }
+          } catch (convErr: any) {
+            logger.warn({ err: convErr?.message }, 'CAD conversion during replace encountered error');
+          }
+        }
+
+        // Find existing model to bump revision
+        const existingModels = await dataStore.listEngineeringModels3D(orgId, { machineId: machine.id });
+        const currentModel = existingModels[0];
+        const nextRev = req.body.revision || (currentModel ? `REV-${String.fromCharCode((currentModel.modelRevision || 'A').charCodeAt(0) + 1)}` : '2.0');
+
+        let model;
+        if (currentModel) {
+          model = await dataStore.updateEngineeringModel3D(orgId, currentModel.id, {
+            title: sanitizedName,
+            storageKey,
+            convertedStorageKey,
+            fileFormat: ext as any,
+            fileSizeBytes: file.size,
+            fileHashSha256: crypto.createHash('sha256').update(file.buffer).digest('hex'),
+            modelRevision: nextRev,
+            status: 'APPROVED',
+          });
+        } else {
+          model = await dataStore.createEngineeringModel3D(orgId, {
+            plantId: machine.plantId || 'PLANT-TX-04',
+            machineId: machine.id,
+            industryProfileCode: 'GENERAL',
+            assetCategory: 'MACHINERY',
+            title: sanitizedName,
+            fileHashSha256: crypto.createHash('sha256').update(file.buffer).digest('hex'),
+            storageKey,
+            convertedStorageKey,
+            fileFormat: ext as any,
+            fileSizeBytes: file.size,
+            modelRevision: nextRev,
+            status: 'APPROVED',
+            dataClassification: machine.dataClassification || 'CONFIDENTIAL',
+            uploadedByUserId: req.auth!.user.id,
+          });
+        }
+
+        await dataStore.updateMachine(orgId, machine.id, {
+          hasModel3d: true,
+          model3dStorageKey: storageKey,
+          model3dFormat: ext.toLowerCase(),
+          model3dUrl: storageKey,
+        });
+
+        await syncToKnowledgeHub({
+          organizationId: orgId,
+          machine,
+          title: sanitizedName,
+          category: '3D_MODEL',
+          documentNumber: `${machine.assetTag}-3D`,
+          revision: nextRev,
+          filename: file.originalname,
+          mimetype: file.mimetype || 'model/gltf-binary',
+          fileSizeBytes: file.size,
+          storageKey,
+          userId: req.auth!.user.id,
+          buffer: file.buffer,
+        });
+
+        await dataStore.getMachineVerification(orgId, machine.id);
+
+        res.json({
+          success: true,
+          message: `3D model successfully replaced with revision ${nextRev}.`,
+          data: {
+            model,
+            converted: !!convertedStorageKey,
+          },
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to replace 3D model' },
         });
       }
     }
@@ -1138,11 +1400,141 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
           metadata: { title: resource.title, manufacturer: resource.manufacturer, sourceType: resource.sourceType },
         });
 
+        if (resource.machineId) {
+          const machine = await dataStore.getMachineById(orgId, resource.machineId);
+          if (machine) {
+            await syncToKnowledgeHub({
+              organizationId: orgId,
+              machine,
+              title: resource.title,
+              category: 'OEM_MANUAL',
+              documentNumber: `${machine.assetTag}-OEM-${Date.now().toString(36).toUpperCase()}`,
+              revision: resource.versionRevision || '1.0',
+              filename: file ? file.originalname : `${resource.title}.pdf`,
+              mimetype: file?.mimetype || 'application/pdf',
+              fileSizeBytes: fileSizeBytes || (file ? file.size : 1024),
+              storageKey: storageKey || 'resources/manual.pdf',
+              userId: actorUserId,
+              buffer: file?.buffer,
+            });
+
+            await dataStore.updateMachine(orgId, machine.id, {
+              documentationReadiness: 'READY',
+            });
+            await dataStore.getMachineVerification(orgId, machine.id);
+          }
+        }
+
         res.status(201).json({ success: true, data: resource });
       } catch (err) {
         res.status(500).json({
           success: false,
           error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to register resource' },
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/engineering/manufacturer-resources/:id/replace
+   * Replace manufacturer resource / manual with new file revision
+   */
+  router.post(
+    '/manufacturer-resources/:id/replace',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    (req, res, next) => {
+      engineeringUpload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_UPLOAD_FILTER_REJECTED', message: err.message },
+          });
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const orgId = req.auth!.organization.id;
+        const resourceId = String(req.params.id);
+        const existing = await dataStore.getManufacturerResourceById(orgId, resourceId);
+        if (!existing) {
+          res.status(404).json({
+            success: false,
+            error: { code: 'FORGEX_RESOURCE_NOT_FOUND', message: `Resource '${resourceId}' not found.` },
+          });
+          return;
+        }
+
+        const file = req.file;
+        let storageKey = existing.storageKey;
+        let fileFormat = existing.fileFormat;
+        let fileSizeBytes = existing.fileSizeBytes;
+        let fileHashSha256 = existing.fileHashSha256;
+
+        if (file && file.buffer) {
+          if (!storageAdapter) {
+            res.status(500).json({
+              success: false,
+              error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+            });
+            return;
+          }
+          const ext = (file.originalname.split('.').pop() || 'PDF').toUpperCase();
+          const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_');
+          const randomId = crypto.randomUUID();
+          storageKey = `resources/${randomId}-${sanitizedName}`;
+          await storageAdapter.putObject(storageKey, file.buffer, file.mimetype || 'application/pdf');
+          fileFormat = ext as any;
+          fileSizeBytes = file.size;
+          fileHashSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
+        }
+
+        const nextRev = req.body.revision || `${(parseFloat(existing.versionRevision || '1.0') + 0.1).toFixed(1)}`;
+
+        const updated = await dataStore.updateManufacturerResource(orgId, resourceId, {
+          storageKey,
+          versionRevision: nextRev,
+          fileFormat,
+          fileSizeBytes,
+          fileHashSha256,
+          verificationStatus: 'VERIFIED',
+        });
+
+        if (existing.machineId) {
+          const machine = await dataStore.getMachineById(orgId, existing.machineId);
+          if (machine) {
+            await syncToKnowledgeHub({
+              organizationId: orgId,
+              machine,
+              title: existing.title,
+              category: 'OEM_MANUAL',
+              documentNumber: `${machine.assetTag}-OEM`,
+              revision: nextRev,
+              filename: file ? file.originalname : `${existing.title}.pdf`,
+              mimetype: file?.mimetype || 'application/pdf',
+              fileSizeBytes: fileSizeBytes || 1024,
+              storageKey: storageKey || 'resources/manual.pdf',
+              userId: req.auth!.user.id,
+              buffer: file?.buffer,
+            });
+
+            await dataStore.updateMachine(orgId, machine.id, {
+              documentationReadiness: 'READY',
+            });
+            await dataStore.getMachineVerification(orgId, machine.id);
+          }
+        }
+
+        res.json({
+          success: true,
+          message: `Manufacturer resource replaced with revision ${nextRev}.`,
+          data: updated,
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to replace resource' },
         });
       }
     }
@@ -1391,6 +1783,31 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
           },
         });
 
+        if (drawing.machineId) {
+          const machine = await dataStore.getMachineById(orgId, drawing.machineId);
+          if (machine) {
+            await dataStore.updateMachine(orgId, machine.id, {
+              pidStorageKey: drawing.storageKey,
+              hasPidDiagram: true,
+              pAndIdUrl: drawing.storageKey,
+            });
+
+            await syncToKnowledgeHub({
+              organizationId: orgId,
+              machine,
+              title: drawing.drawingTitle,
+              category: 'PID_DIAGRAM',
+              documentNumber: drawing.uniqueDrawingNumber,
+              revision: drawing.revision,
+              filename: drawing.originalFileName,
+              mimetype: drawing.fileFormat === 'PDF' ? 'application/pdf' : 'application/octet-stream',
+              fileSizeBytes: drawing.fileSizeBytes,
+              storageKey: drawing.storageKey,
+              userId: actorUserId,
+            });
+          }
+        }
+
         res.status(201).json({ success: true, data: drawing });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Failed to register drawing';
@@ -1398,6 +1815,114 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         res.status(isDuplicate ? 409 : 500).json({
           success: false,
           error: { code: isDuplicate ? 'FORGEX_DUPLICATE_DRAWING' : 'FORGEX_INTERNAL_ERROR', message: msg },
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/engineering/drawings/:id/replace
+   * Replace engineering drawing file, bump revision, and re-index in Knowledge Hub
+   */
+  router.post(
+    '/drawings/:id/replace',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    (req, res, next) => {
+      engineeringUpload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_UPLOAD_FILTER_REJECTED', message: err.message },
+          });
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const orgId = req.auth!.organization.id;
+        const drawingId = String(req.params.id);
+        const existing = await dataStore.getEngineeringDrawingById(orgId, drawingId);
+        if (!existing) {
+          res.status(404).json({
+            success: false,
+            error: { code: 'FORGEX_DRAWING_NOT_FOUND', message: `Drawing '${drawingId}' not found.` },
+          });
+          return;
+        }
+
+        const file = req.file;
+        let storageKey = existing.storageKey;
+        let fileFormat = existing.fileFormat;
+        let fileSizeBytes = existing.fileSizeBytes;
+        let fileHashSha256 = existing.fileHashSha256;
+
+        if (file && file.buffer) {
+          if (!storageAdapter) {
+            res.status(500).json({
+              success: false,
+              error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+            });
+            return;
+          }
+          const ext = (file.originalname.split('.').pop() || 'PDF').toUpperCase();
+          const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_');
+          const randomId = crypto.randomUUID();
+          storageKey = `drawings/${randomId}-${sanitizedName}`;
+          await storageAdapter.putObject(storageKey, file.buffer, file.mimetype || 'application/pdf');
+          fileFormat = ext as any;
+          fileSizeBytes = file.size;
+          fileHashSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
+        }
+
+        const nextRev = req.body.revision || `Rev ${String.fromCharCode((existing.revision || 'A').charCodeAt(existing.revision?.length ? existing.revision.length - 1 : 0) + 1)}`;
+
+        const updated = await dataStore.updateEngineeringDrawing(orgId, drawingId, {
+          storageKey,
+          revision: nextRev,
+          fileFormat,
+          fileSizeBytes,
+          fileHashSha256,
+          status: 'APPROVED',
+        });
+
+        if (existing.machineId) {
+          const machine = await dataStore.getMachineById(orgId, existing.machineId);
+          if (machine) {
+            await dataStore.updateMachine(orgId, machine.id, {
+              pidStorageKey: storageKey,
+              hasPidDiagram: true,
+              pAndIdUrl: storageKey,
+            });
+
+            await syncToKnowledgeHub({
+              organizationId: orgId,
+              machine,
+              title: existing.drawingTitle,
+              category: 'PID_DIAGRAM',
+              documentNumber: existing.uniqueDrawingNumber,
+              revision: nextRev,
+              filename: file ? file.originalname : `${existing.uniqueDrawingNumber}.${fileFormat.toLowerCase()}`,
+              mimetype: file?.mimetype || 'application/pdf',
+              fileSizeBytes,
+              storageKey,
+              userId: req.auth!.user.id,
+              buffer: file?.buffer,
+            });
+
+            await dataStore.getMachineVerification(orgId, machine.id);
+          }
+        }
+
+        res.json({
+          success: true,
+          message: `Engineering drawing replaced with revision ${nextRev}.`,
+          data: updated,
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to replace drawing' },
         });
       }
     }

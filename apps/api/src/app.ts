@@ -237,7 +237,7 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   app.use('/api/v1/knowledge', authenticate, createPublicKnowledgeRouter(dataStore));
   app.use('/api/v1/tasks', authenticate, createTaskRouter(dataStore));
   app.use('/api/v1/badges', authenticate, createBadgeRouter(dataStore));
-  app.use('/api/v1/engineering', authenticate, createEngineeringRouter(dataStore, storageAdapter));
+  app.use('/api/v1/engineering', authenticate, createEngineeringRouter(dataStore, storageAdapter, ingestionQueue, vectorStore));
   app.use('/api/v1/maintenance-records', authenticate, createMaintenanceRecordRouter(dataStore));
   app.use('/api/v1/recovery', authenticate, createRecoveryRouter(dataStore, recoveryService, storageAdapter, embeddingAdapter, vectorStore));
   const rcaRouter = createRcaRouter(dataStore, embeddingAdapter, vectorStore, generationProvider, rcaService);

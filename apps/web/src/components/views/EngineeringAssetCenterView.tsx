@@ -40,8 +40,20 @@ export const EngineeringAssetCenterView: React.FC = () => {
   const [resources, setResources] = useState<ManufacturerResource[]>([]);
   const [drawings, setDrawings] = useState<EngineeringDrawing[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
-  const [plants, setPlants] = useState<{ id: string; name: string }[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Replace file modal state
+  const [replaceTarget, setReplaceTarget] = useState<{
+    type: '3D_MODEL' | 'DRAWING' | 'RESOURCE';
+    id: string;
+    machineId?: string;
+    title: string;
+    currentRevision: string;
+  } | null>(null);
+  const [replaceFile, setReplaceFile] = useState<File | null>(null);
+  const [replaceRevision, setReplaceRevision] = useState<string>('');
+  const [replaceTitle, setReplaceTitle] = useState<string>('');
+  const [isReplacing, setIsReplacing] = useState<boolean>(false);
 
   // Search & filter
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -115,13 +127,12 @@ export const EngineeringAssetCenterView: React.FC = () => {
         'x-organization-id': organization.id,
       };
 
-      const [sumRes, modRes, resRes, dwgRes, machRes, plantRes] = await Promise.all([
+      const [sumRes, modRes, resRes, dwgRes, machRes] = await Promise.all([
         fetch('/api/v1/engineering/summary', { headers }),
         fetch('/api/v1/engineering/models', { headers }),
         fetch('/api/v1/engineering/manufacturer-resources', { headers }),
         fetch('/api/v1/engineering/drawings', { headers }),
         fetch('/api/v1/machines', { headers }),
-        fetch('/api/v1/plants', { headers }),
       ]);
 
       if (sumRes.ok) {
@@ -143,10 +154,6 @@ export const EngineeringAssetCenterView: React.FC = () => {
       if (machRes.ok) {
         const mData = await machRes.json();
         setMachines(mData.data || []);
-      }
-      if (plantRes.ok) {
-        const pData = await plantRes.json();
-        setPlants(pData.data || []);
       }
     } catch (err) {
       console.error('Failed to load engineering data', err);
@@ -209,6 +216,53 @@ export const EngineeringAssetCenterView: React.FC = () => {
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleReplaceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replaceTarget || !replaceFile) return;
+    setIsReplacing(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', replaceFile);
+      formData.append('revision', replaceRevision || 'REV-B');
+      formData.append('title', replaceTitle || replaceTarget.title);
+
+      let url = '';
+      if (replaceTarget.type === '3D_MODEL') {
+        const targetMachId = replaceTarget.machineId || replaceTarget.id.replace('asset-3d-', '');
+        url = `/api/v1/engineering/machines/${targetMachId}/3d-model/replace`;
+      } else if (replaceTarget.type === 'DRAWING') {
+        url = `/api/v1/engineering/drawings/${replaceTarget.id}/replace`;
+      } else {
+        url = `/api/v1/engineering/manufacturer-resources/${replaceTarget.id}/replace`;
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-organization-id': organization!.id,
+        },
+        body: formData,
+      });
+
+      if (res.ok) {
+        setReplaceTarget(null);
+        setReplaceFile(null);
+        setReplaceRevision('');
+        setReplaceTitle('');
+        await loadAllData();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        alert(errJson.error?.message || 'Replacement failed');
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || 'Replacement failed');
+    } finally {
+      setIsReplacing(false);
     }
   };
 
@@ -713,18 +767,41 @@ export const EngineeringAssetCenterView: React.FC = () => {
                     </div>
 
                     <div className="mt-4 pt-3 border-t border-[#E2E8F0] flex items-center justify-between gap-2">
-                      <button
-                        onClick={() => open3dViewerForModel(model)}
-                        disabled={isFailed}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                          isFailed
-                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            : 'bg-[#151C24] hover:bg-black text-white shadow-xs'
-                        }`}
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        Launch 3D Viewer
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => open3dViewerForModel(model)}
+                          disabled={isFailed}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                            isFailed
+                              ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                              : 'bg-[#151C24] hover:bg-black text-white shadow-xs'
+                          }`}
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Launch 3D
+                        </button>
+
+                        {isOwnerOrAdmin && (
+                          <button
+                            onClick={() => {
+                              setReplaceTarget({
+                                type: '3D_MODEL',
+                                id: model.id,
+                                machineId: model.machineId,
+                                title: model.title,
+                                currentRevision: model.modelRevision || '1.0',
+                              });
+                              setReplaceTitle(model.title);
+                              setReplaceRevision('REV-B');
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-[#CBD5E1] hover:bg-slate-50 text-[#1A202C] transition shadow-xs"
+                            title="Replace 3D Model file and bump revision"
+                          >
+                            <RefreshCw className="w-3 h-3 text-blue-600" />
+                            Replace
+                          </button>
+                        )}
+                      </div>
 
                       {isOwnerOrAdmin && model.status === 'NEEDS_REVIEW' && (
                         <div className="flex items-center gap-1">
@@ -816,14 +893,36 @@ export const EngineeringAssetCenterView: React.FC = () => {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-right">
-                      {isOwnerOrAdmin && res.verificationStatus === 'UNVERIFIED' && (
-                        <button
-                          onClick={() => handleVerifyResource(res.id, 'VERIFIED')}
-                          className="px-2.5 py-1 text-xs font-semibold rounded bg-[#151C24] text-white hover:bg-black shadow-xs"
-                        >
-                          Verify Resource
-                        </button>
-                      )}
+                      <div className="flex items-center justify-end gap-1.5">
+                        {isOwnerOrAdmin && (
+                          <button
+                            onClick={() => {
+                              setReplaceTarget({
+                                type: 'RESOURCE',
+                                id: res.id,
+                                machineId: res.machineId,
+                                title: res.title,
+                                currentRevision: res.versionRevision || '1.0',
+                              });
+                              setReplaceTitle(res.title);
+                              setReplaceRevision('2.0');
+                            }}
+                            className="px-2 py-1 text-xs font-semibold rounded bg-white border border-[#CBD5E1] hover:bg-slate-50 text-[#1A202C] shadow-xs flex items-center gap-1"
+                            title="Replace resource file and bump revision"
+                          >
+                            <RefreshCw className="w-3 h-3 text-amber-600" />
+                            Replace
+                          </button>
+                        )}
+                        {isOwnerOrAdmin && res.verificationStatus === 'UNVERIFIED' && (
+                          <button
+                            onClick={() => handleVerifyResource(res.id, 'VERIFIED')}
+                            className="px-2.5 py-1 text-xs font-semibold rounded bg-[#151C24] text-white hover:bg-black shadow-xs"
+                          >
+                            Verify
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -881,13 +980,35 @@ export const EngineeringAssetCenterView: React.FC = () => {
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-[#E2E8F0] flex items-center justify-between">
-                  <button
-                    onClick={() => openPidViewerForDrawing(dwg, undefined)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#151C24] hover:bg-black text-white transition shadow-xs"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    Inspect Schematic
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => openPidViewerForDrawing(dwg, undefined)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#151C24] hover:bg-black text-white transition shadow-xs"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      Schematic
+                    </button>
+                    {isOwnerOrAdmin && (
+                      <button
+                        onClick={() => {
+                          setReplaceTarget({
+                            type: 'DRAWING',
+                            id: dwg.id,
+                            machineId: dwg.machineId,
+                            title: dwg.drawingTitle,
+                            currentRevision: dwg.revision || 'Rev A',
+                          });
+                          setReplaceTitle(dwg.drawingTitle);
+                          setReplaceRevision('Rev B');
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white border border-[#CBD5E1] hover:bg-slate-50 text-[#1A202C] transition shadow-xs"
+                        title="Replace drawing file and bump revision"
+                      >
+                        <RefreshCw className="w-3 h-3 text-purple-600" />
+                        Replace
+                      </button>
+                    )}
+                  </div>
 
                   {isOwnerOrAdmin && dwg.status === 'NEEDS_REVIEW' && (
                     <button
@@ -1337,6 +1458,144 @@ export const EngineeringAssetCenterView: React.FC = () => {
         </div>
       )}
 
+      {/* MODAL: Edit / Replace Engineering File */}
+      {replaceTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white border border-[#E2E8F0] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between p-4 border-b border-[#E2E8F0] bg-[#F8FAFC]">
+              <h3 className="text-sm font-bold text-[#1A202C] flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-[#2563EB]" />
+                Edit / Replace File Revision
+              </h3>
+              <button
+                onClick={() => {
+                  setReplaceTarget(null);
+                  setReplaceFile(null);
+                }}
+                className="text-[#64748B] hover:text-[#1A202C]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleReplaceSubmit} className="p-4 space-y-3.5 text-xs">
+              <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200 text-blue-900 text-xs">
+                <span className="font-semibold block">Single Source of Truth Sync</span>
+                <span className="text-[11px] text-blue-700">
+                  Replacing this {replaceTarget.type === '3D_MODEL' ? '3D CAD Model' : replaceTarget.type === 'DRAWING' ? 'P&ID Drawing' : 'Technical Manual'} will bump its revision, update the engineering viewer, update Knowledge Hub records, and re-index AI recovery claims.
+                </span>
+              </div>
+
+              <div>
+                <label className="text-[#475569] font-medium block mb-1">Document / Asset Title</label>
+                <input
+                  type="text"
+                  required
+                  value={replaceTitle}
+                  onChange={(e) => setReplaceTitle(e.target.value)}
+                  className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#475569] font-medium block mb-1">Current Revision</label>
+                  <input
+                    type="text"
+                    disabled
+                    value={replaceTarget.currentRevision}
+                    className="w-full bg-slate-100 border border-[#CBD5E1] rounded-lg p-2.5 text-[#64748B] outline-none cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="text-[#475569] font-medium block mb-1">New Revision</label>
+                  <input
+                    type="text"
+                    required
+                    value={replaceRevision}
+                    onChange={(e) => setReplaceRevision(e.target.value)}
+                    placeholder="e.g. REV-B or 2.0"
+                    className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[#475569] font-medium block mb-1">New Replacement File</label>
+                <div
+                  onClick={() => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    if (replaceTarget.type === '3D_MODEL') {
+                      input.accept = '.glb,.gltf,.step,.stp,.iges,.igs,.stl,.obj';
+                    } else if (replaceTarget.type === 'DRAWING') {
+                      input.accept = '.pdf,.svg,.png,.jpg,.jpeg';
+                    } else {
+                      input.accept = '.pdf,.docx,.txt';
+                    }
+                    input.onchange = (ev: any) => {
+                      const f = ev.target.files?.[0];
+                      if (f) setReplaceFile(f);
+                    };
+                    input.click();
+                  }}
+                  className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors cursor-pointer ${
+                    replaceFile
+                      ? 'border-emerald-300 bg-emerald-50/20'
+                      : 'border-[#CBD5E1] bg-[#F8FAFC] hover:border-[#2563EB]'
+                  }`}
+                >
+                  <Upload className={`w-7 h-7 mx-auto mb-2 ${replaceFile ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <div className="text-xs font-semibold text-[#1A202C]">
+                    {replaceFile ? (
+                      <span className="text-emerald-700 font-bold flex items-center justify-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" /> {replaceFile.name} ({(replaceFile.size / (1024 * 1024)).toFixed(2)} MB)
+                      </span>
+                    ) : (
+                      'Click to browse new replacement file'
+                    )}
+                  </div>
+                  <div className="text-[10px] text-[#64748B] mt-1">
+                    {replaceTarget.type === '3D_MODEL'
+                      ? 'Supported: GLB, GLTF, STEP, STP, STL, OBJ'
+                      : replaceTarget.type === 'DRAWING'
+                      ? 'Supported: PDF, SVG, PNG, JPG'
+                      : 'Supported: PDF, DOCX'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t border-[#E2E8F0]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReplaceTarget(null);
+                    setReplaceFile(null);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#1A202C] font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!replaceFile || isReplacing}
+                  className="px-4 py-2 rounded-lg bg-[#151C24] hover:bg-black text-white font-semibold shadow-sm disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {isReplacing ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Replacing & Syncing...</span>
+                    </>
+                  ) : (
+                    <span>Upload & Deploy Revision</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Real 3D Viewer Modal */}
       {is3dViewerOpen && (
         <RealThreeDViewerModal
@@ -1373,10 +1632,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
           initialDrawing={viewerDrawing}
           initialDrawingId={viewerDrawing?.id || activeDrawingId}
           fileUrl={viewerDrawing?.fileUrl}
-          plantName={
-            plants.find((p) => p.id === (viewerDrawing?.plantId || viewerMachine?.plantId))?.name ||
-            'Main Production Facility'
-          }
+          plantName="Main Facility"
           mappings={viewerMappings}
           activeTag={activePidTag}
           onOpen3dComponent={(componentId) => {

@@ -516,7 +516,6 @@ export const SopExecutionView: React.FC<{
 
   // Form Field State - Report New Work Order Modal (Zero Pre-Selected Defaults)
   const [newTitle, setNewTitle] = useState('');
-  const [newFacility, setNewFacility] = useState('');
   const [newAssetTag, setNewAssetTag] = useState('');
   const [newMaintenanceType, setNewMaintenanceType] = useState('');
   const [newSeverity, setNewSeverity] = useState<MaintenanceCaseSeverity | ''>('');
@@ -549,7 +548,6 @@ export const SopExecutionView: React.FC<{
 
   const handleOpenNewCaseModal = () => {
     setNewTitle('');
-    setNewFacility('');
     setNewAssetTag('');
     setNewMaintenanceType('');
     setNewSeverity('');
@@ -563,7 +561,6 @@ export const SopExecutionView: React.FC<{
   const handleCloseNewCaseModal = () => {
     setIsNewCaseModalOpen(false);
     setNewTitle('');
-    setNewFacility('');
     setNewAssetTag('');
     setNewMaintenanceType('');
     setNewSeverity('');
@@ -1169,10 +1166,6 @@ export const SopExecutionView: React.FC<{
       toast.error('Validation Error', 'Work order title is required.');
       return;
     }
-    if (!newFacility) {
-      toast.error('Validation Error', 'Please select a facility / plant location.');
-      return;
-    }
     if (!newAssetTag) {
       toast.error('Validation Error', 'Please select an affected asset / machinery.');
       return;
@@ -1199,7 +1192,7 @@ export const SopExecutionView: React.FC<{
       newErrorCode.trim()
         ? `Alarm Code: ${newErrorCode.trim()}`
         : 'Alarm Code: Auto-Detected via AI Diagnostics',
-      `Facility: ${newFacility}`,
+      'Facility: Main Facility',
       `Maintenance Type: ${newMaintenanceType}`,
       `LOTO Mandatory: ${newLotoRequired ? 'Yes (OSHA 1910.147)' : 'No'}`,
       attachedFiles.length > 0 ? `Evidence Attachments: ${attachedFiles.map((f) => f.name).join(', ')}` : null,
@@ -1262,7 +1255,6 @@ export const SopExecutionView: React.FC<{
       setActiveCaseId(enrichedNew.id);
       setIsNewCaseModalOpen(false);
       setNewTitle('');
-      setNewFacility('');
       setNewAssetTag('');
       setNewMaintenanceType('');
       setNewSeverity('');
@@ -1987,62 +1979,38 @@ export const SopExecutionView: React.FC<{
             />
           </div>
 
-          {/* Row 2 (2 Columns): Facility / Plant Location & Affected Asset */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div className="space-y-1.5">
-              <label className="text-slate-700 font-semibold text-xs">Facility / Plant Location</label>
-              <select
-                value={newFacility}
-                onChange={(e) => setNewFacility(e.target.value)}
-                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
-                  !newFacility ? 'text-slate-400' : 'text-slate-900'
-                } focus:outline-none focus:border-blue-600 font-sans text-xs cursor-pointer shadow-xs`}
-              >
-                <option value="">-- Select Facility --</option>
-                <option value="ForgeX Demo Factory - Line 2 (Bay B)">
-                  ForgeX Demo Factory - Line 2 (Bay B)
+          {/* Row 2: Affected Asset / Machinery */}
+          <div className="space-y-1.5">
+            <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
+              <span>Affected Asset / Machinery</span>
+              <span className="text-[10px] text-slate-400 font-sans">Required • Single Facility Mode</span>
+            </label>
+            <select
+              value={newAssetTag}
+              onChange={(e) => setNewAssetTag(e.target.value)}
+              className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
+                !newAssetTag ? 'text-slate-400' : 'text-slate-900'
+              } focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs`}
+            >
+              <option value="">-- Select Asset --</option>
+              <option value="PUMP-CENTRIFUGAL-402 (Main Feed Pump)">
+                PUMP-CENTRIFUGAL-402 (Main Feed Pump)
+              </option>
+              <option value="MOTOR-INDUCTION-104 (500HP Drive Motor)">
+                MOTOR-INDUCTION-104 (500HP Drive Motor)
+              </option>
+              <option value="COMPRESSOR-RECIP-201 (Air System Unit)">
+                COMPRESSOR-RECIP-201 (Air System Unit)
+              </option>
+              <option value="GEARBOX-HELICAL-305 (Main Drive Reducer)">
+                GEARBOX-HELICAL-305 (Main Drive Reducer)
+              </option>
+              {machines.map((m) => (
+                <option key={m.id} value={`${m.assetTag} (${m.name})`}>
+                  {m.assetTag} — {m.name} {m.area ? `(${m.area})` : ''}
                 </option>
-                <option value="Refinery Processing Unit 4 - Distillation Bay">
-                  Refinery Processing Unit 4 - Distillation Bay
-                </option>
-                <option value="Chemical Synthesis Plant 1 - Compounding Line">
-                  Chemical Synthesis Plant 1 - Compounding Line
-                </option>
-                <option value="Offshore Platform Alpha - Gas Compression Skid">
-                  Offshore Platform Alpha - Gas Compression Skid
-                </option>
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-slate-700 font-semibold text-xs">Affected Asset / Machinery</label>
-              <select
-                value={newAssetTag}
-                onChange={(e) => setNewAssetTag(e.target.value)}
-                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
-                  !newAssetTag ? 'text-slate-400' : 'text-slate-900'
-                } focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs`}
-              >
-                <option value="">-- Select Asset --</option>
-                <option value="PUMP-CENTRIFUGAL-402 (Main Feed Pump)">
-                  PUMP-CENTRIFUGAL-402 (Main Feed Pump)
-                </option>
-                <option value="MOTOR-INDUCTION-104 (500HP Drive Motor)">
-                  MOTOR-INDUCTION-104 (500HP Drive Motor)
-                </option>
-                <option value="COMPRESSOR-RECIP-201 (Air System Unit)">
-                  COMPRESSOR-RECIP-201 (Air System Unit)
-                </option>
-                <option value="GEARBOX-HELICAL-305 (Main Drive Reducer)">
-                  GEARBOX-HELICAL-305 (Main Drive Reducer)
-                </option>
-                {machines.map((m) => (
-                  <option key={m.id} value={`${m.assetTag} (${m.name})`}>
-                    {m.assetTag} — {m.name} {m.area ? `(${m.area})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+              ))}
+            </select>
           </div>
 
           {/* Row 3 (2 Columns): Maintenance Type & Operational Priority / Severity */}

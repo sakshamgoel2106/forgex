@@ -90,6 +90,31 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
           reviewNotes: lookupResult.reviewNotes,
         });
 
+        // Automatically populate candidate claims into Machine Recovery ledger
+        if (machineId && orgId && saved.publicSpecs && Object.keys(saved.publicSpecs).length > 0) {
+          for (const [key, val] of Object.entries(saved.publicSpecs)) {
+            try {
+              await dataStore.createEvidenceClaim(orgId, {
+                machineId,
+                fieldName: key,
+                claimValue: String(val),
+                confidence: 'MEDIUM',
+                isSafetyCritical: ['pressure', 'voltage', 'current', 'loto', 'mawp'].some((k) =>
+                  key.toLowerCase().includes(k)
+                ),
+                sourceType: 'MANUFACTURER_DOCUMENT',
+                sourceDocumentId: saved.id,
+                extractionMethod: 'DOCUMENT_PARSER',
+                applicabilityStatus: 'UNCERTAIN',
+                applicabilityRationale: `Candidate spec from Public OEM Lookup (${saved.manufacturer} ${saved.modelNumber})`,
+                submittedByUserId: req.auth?.user?.id || 'system',
+              });
+            } catch {
+              // ignore duplicate
+            }
+          }
+        }
+
         // Determine user-facing safety notice based on actual evidence status
         let notice = 'PUBLIC SOURCE INFORMATION: Not verified by organization plant engineer.';
         if (saved.verificationStatus === 'SOURCE_UNVERIFIED') {
@@ -163,11 +188,37 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
                 if (!isConflicted && currentSpecs[key] === undefined) {
                   mergedSpecs[key] = val;
                 }
+
+                // Populate approved claims into Machine Recovery evidence ledger
+                try {
+                  await dataStore.createEvidenceClaim(orgId, {
+                    machineId,
+                    fieldName: key,
+                    claimValue: String(val),
+                    confidence: 'HIGH',
+                    isSafetyCritical: ['pressure', 'voltage', 'current', 'loto', 'mawp'].some((k) =>
+                      key.toLowerCase().includes(k)
+                    ),
+                    sourceType: 'MANUFACTURER_DOCUMENT',
+                    sourceDocumentId: id,
+                    extractionMethod: 'DOCUMENT_PARSER',
+                    applicabilityStatus: 'APPLICABLE',
+                    applicabilityRationale: `Verified OEM specification from ${updated.manufacturer} ${updated.modelNumber}`,
+                    submittedByUserId: actorUserId,
+                  });
+                } catch {
+                  // ignore duplicate claim
+                }
               }
 
               await dataStore.updateMachine(orgId, machineId, {
                 technicalSpecs: mergedSpecs,
+                manufacturer: machine.manufacturer || updated.manufacturer,
+                modelNumber: machine.modelNumber || updated.modelNumber,
               });
+
+              // Re-evaluate verification status in real-time
+              await dataStore.getMachineVerification(orgId, machineId);
             }
           } catch {
             // Machine update failure non-fatal to approval audit

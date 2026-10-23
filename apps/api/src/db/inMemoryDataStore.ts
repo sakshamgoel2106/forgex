@@ -1164,6 +1164,50 @@ export class InMemoryDataStore implements IDataStore {
     return true;
   }
 
+  public async linkDocumentToAsset(
+    organizationId: string,
+    documentId: string,
+    assetId: string,
+    assetTag?: string
+  ): Promise<void> {
+    let doc = this.documents.get(documentId);
+    if (!doc) {
+      for (const d of this.documents.values()) {
+        if (
+          d.organizationId === organizationId &&
+          (d.id === documentId || d.documentNumber.toLowerCase() === documentId.toLowerCase())
+        ) {
+          doc = d;
+          break;
+        }
+      }
+    }
+    if (!doc || doc.organizationId !== organizationId) return;
+
+    if (!doc.assetIds) doc.assetIds = [];
+    if (!doc.assetIds.includes(assetId)) doc.assetIds.push(assetId);
+    if (!doc.machineId) doc.machineId = assetId;
+
+    if (assetTag && assetTag.trim()) {
+      if (!doc.assetTags) doc.assetTags = [];
+      if (!doc.assetTags.includes(assetTag.trim())) doc.assetTags.push(assetTag.trim());
+    }
+  }
+
+  public async getLinkedMachineIdsForDocument(
+    organizationId: string,
+    documentId: string
+  ): Promise<string[]> {
+    const doc = this.documents.get(documentId);
+    if (!doc || doc.organizationId !== organizationId) return [];
+    const ids = new Set<string>();
+    if (doc.machineId) ids.add(doc.machineId);
+    if (doc.assetIds && Array.isArray(doc.assetIds)) {
+      doc.assetIds.forEach((id) => ids.add(id));
+    }
+    return Array.from(ids);
+  }
+
   // --------------------------------------------------------------------------
   // Document Versions
   // --------------------------------------------------------------------------
@@ -5581,6 +5625,11 @@ export class InMemoryDataStore implements IDataStore {
           (machine as any).identificationConfidence = 'PARTIAL';
         }
         machine.updatedAt = now;
+        try {
+          await this.getMachineVerification(organizationId, machine.id);
+        } catch {
+          // ignore
+        }
       }
     } else if (review.decision === 'REJECT') {
       if (!review.reviewRationale || review.reviewRationale.trim().length < 5) {
