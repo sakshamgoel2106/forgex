@@ -141,6 +141,8 @@ import type {
   ResolveSpecialistTicketDTO,
   ReopenSpecialistTicketDTO,
   ApproveTicketRestartDTO,
+  OutboxEvent,
+  CreateOutboxEventDTO,
 } from './dataStore.interface.js';
 import { sanitizeMachineOrAssetId, toSafeUuidParam } from '../utils/uuid.js';
 import { computeMachineVerification } from '../services/machineVerification.service.js';
@@ -1885,6 +1887,276 @@ export class PgDataStore implements IDataStore {
       return res.rows.map((r) => r.machine_id).filter(Boolean);
     } catch {
       return [];
+    }
+  }
+
+  public async withTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  public async createOutboxEvent(dto: CreateOutboxEventDTO, client?: pg.PoolClient): Promise<OutboxEvent> {
+    const runner = client || this.pool;
+    const id = dto.id || crypto.randomUUID();
+    const res = await runner.query(
+      `INSERT INTO outbox_events (id, organization_id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING')
+       RETURNING id, organization_id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, error_message, created_at, processed_at`,
+      [id, dto.organizationId, dto.aggregateType, dto.aggregateId, dto.eventType, JSON.stringify(dto.payload)]
+    );
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      aggregateType: row.aggregate_type,
+      aggregateId: row.aggregate_id,
+      eventType: row.event_type,
+      payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
+      status: row.status,
+      retryCount: row.retry_count,
+      errorMessage: row.error_message,
+      createdAt: row.created_at.toISOString(),
+      processedAt: row.processed_at ? row.processed_at.toISOString() : null,
+    };
+  }
+
+  public async fetchPendingOutboxEvents(limit = 10): Promise<OutboxEvent[]> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const res = await client.query(
+        `SELECT id, organization_id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, error_message, created_at, processed_at
+         FROM outbox_events
+         WHERE status = 'PENDING'
+         ORDER BY created_at ASC
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED`,
+        [limit]
+      );
+      if (res.rows.length > 0) {
+        const ids = res.rows.map((r: any) => r.id);
+        await client.query(
+          `UPDATE outbox_events SET status = 'PROCESSING' WHERE id = ANY($1::uuid[])`,
+          [ids]
+        );
+      }
+      await client.query('COMMIT');
+      return res.rows.map((row: any) => ({
+        id: row.id,
+        organizationId: row.organization_id,
+        aggregateType: row.aggregate_type,
+        aggregateId: row.aggregate_id,
+        eventType: row.event_type,
+        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
+        status: 'PROCESSING',
+        retryCount: row.retry_count,
+        errorMessage: row.error_message,
+        createdAt: row.created_at.toISOString(),
+        processedAt: row.processed_at ? row.processed_at.toISOString() : null,
+      }));
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  public async markOutboxEventProcessed(id: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE outbox_events SET status = 'PROCESSED', processed_at = NOW() WHERE id = $1`,
+      [id]
+    );
+  }
+
+  public async markOutboxEventFailed(id: string, errorMessage: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE outbox_events SET status = 'FAILED', retry_count = retry_count + 1, error_message = $2 WHERE id = $1`,
+      [id, errorMessage]
+    );
+  }
+
+  public async createDocumentWithOutbox(
+    docDto: CreateDocumentDTO,
+    versionDto: CreateDocumentVersionDTO,
+    eventDto: CreateOutboxEventDTO,
+    assetIds?: string[]
+  ): Promise<{ document: TechnicalDocument; version: DocumentVersion; outboxEvent: OutboxEvent }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const targetAssetIds = Array.from(
+        new Set([...(docDto.assetIds ?? []), ...(assetIds ?? []), ...(docDto.machineId ? [docDto.machineId] : [])])
+      ).filter(Boolean);
+
+      // 1. Insert document
+      const docRes = await client.query(
+        `INSERT INTO documents (
+           organization_id, plant_id, document_number, title, category,
+           asset_tags, asset_ids, machine_id, data_classification, is_confidential, created_by_user_id
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING id, organization_id, plant_id, document_number, title,
+                   category, asset_tags, asset_ids, machine_id, data_classification,
+                   is_confidential, created_by_user_id, created_at, updated_at`,
+        [
+          docDto.organizationId,
+          docDto.plantId,
+          docDto.documentNumber,
+          docDto.title,
+          docDto.category,
+          docDto.assetTags ?? [],
+          targetAssetIds,
+          docDto.machineId ?? null,
+          docDto.dataClassification ?? 'INTERNAL',
+          docDto.isConfidential ?? false,
+          docDto.createdByUserId ?? null,
+        ]
+      );
+      const docRow = docRes.rows[0];
+      const documentId = docRow.id;
+
+      // 2. Insert document version
+      const verRes = await client.query(
+        `INSERT INTO document_versions (
+           document_id, version_number, revision, filename, mime_type,
+           file_size_bytes, checksum_sha256, storage_key, status
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, document_id, version_number, revision, filename,
+                   mime_type, file_size_bytes, checksum_sha256, storage_key,
+                   status, total_pages, total_chunks, error_message, created_at, updated_at`,
+        [
+          documentId,
+          versionDto.versionNumber,
+          versionDto.revision,
+          versionDto.filename,
+          versionDto.mimeType,
+          versionDto.fileSizeBytes,
+          versionDto.checksumSha256,
+          versionDto.storageKey,
+          versionDto.status ?? 'QUEUED',
+        ]
+      );
+      const verRow = verRes.rows[0];
+
+      // 3. Insert relational junction rows in asset_documents
+      for (const aId of targetAssetIds) {
+        await client.query(
+          `INSERT INTO asset_documents (organization_id, asset_id, document_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (organization_id, asset_id, document_id) DO NOTHING`,
+          [docDto.organizationId, aId, documentId]
+        );
+      }
+
+      // 4. Insert transactional outbox event
+      const outboxId = eventDto.id || crypto.randomUUID();
+      const eventPayload = {
+        ...eventDto.payload,
+        documentId,
+        documentVersionId: verRow.id,
+        organizationId: docDto.organizationId,
+        plantId: docDto.plantId,
+        filename: versionDto.filename,
+        storageKey: versionDto.storageKey,
+        category: docDto.category,
+        assetIds: targetAssetIds,
+      };
+
+      const outboxRes = await client.query(
+        `INSERT INTO outbox_events (id, organization_id, aggregate_type, aggregate_id, event_type, payload, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING')
+         RETURNING id, organization_id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, error_message, created_at, processed_at`,
+        [outboxId, docDto.organizationId, 'DOCUMENT', documentId, eventDto.eventType, JSON.stringify(eventPayload)]
+      );
+      const outboxRow = outboxRes.rows[0];
+
+      await client.query('COMMIT');
+
+      const document: TechnicalDocument = {
+        id: docRow.id,
+        organizationId: docRow.organization_id,
+        plantId: docRow.plant_id,
+        documentNumber: docRow.document_number,
+        title: docRow.title,
+        category: docRow.category,
+        assetTags: docRow.asset_tags ?? [],
+        assetIds: docRow.asset_ids ?? [],
+        machineId: docRow.machine_id ?? null,
+        dataClassification: docRow.data_classification,
+        isConfidential: docRow.is_confidential,
+        createdByUserId: docRow.created_by_user_id,
+        createdAt: docRow.created_at.toISOString(),
+        updatedAt: docRow.updated_at.toISOString(),
+        latestVersion: {
+          id: verRow.id,
+          documentId: verRow.document_id,
+          versionNumber: verRow.version_number,
+          revision: verRow.revision,
+          filename: verRow.filename,
+          mimeType: verRow.mime_type,
+          fileSizeBytes: Number(verRow.file_size_bytes),
+          checksumSha256: verRow.checksum_sha256,
+          storageKey: verRow.storage_key,
+          status: verRow.status,
+          totalPages: verRow.total_pages,
+          totalChunks: verRow.total_chunks,
+          errorMessage: verRow.error_message,
+          createdAt: verRow.created_at.toISOString(),
+          updatedAt: verRow.updated_at.toISOString(),
+        },
+      };
+
+      const version: DocumentVersion = {
+        id: verRow.id,
+        documentId: verRow.document_id,
+        versionNumber: verRow.version_number,
+        revision: verRow.revision,
+        filename: verRow.filename,
+        mimeType: verRow.mime_type,
+        fileSizeBytes: Number(verRow.file_size_bytes),
+        checksumSha256: verRow.checksum_sha256,
+        storageKey: verRow.storage_key,
+        status: verRow.status,
+        totalPages: verRow.total_pages,
+        totalChunks: verRow.total_chunks,
+        errorMessage: verRow.error_message,
+        createdAt: verRow.created_at.toISOString(),
+        updatedAt: verRow.updated_at.toISOString(),
+      };
+
+      const outboxEvent: OutboxEvent = {
+        id: outboxRow.id,
+        organizationId: outboxRow.organization_id,
+        aggregateType: outboxRow.aggregate_type,
+        aggregateId: outboxRow.aggregate_id,
+        eventType: outboxRow.event_type,
+        payload: typeof outboxRow.payload === 'string' ? JSON.parse(outboxRow.payload) : outboxRow.payload,
+        status: outboxRow.status,
+        retryCount: outboxRow.retry_count,
+        errorMessage: outboxRow.error_message,
+        createdAt: outboxRow.created_at.toISOString(),
+        processedAt: outboxRow.processed_at ? outboxRow.processed_at.toISOString() : null,
+      };
+
+      return { document, version, outboxEvent };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
   }
 

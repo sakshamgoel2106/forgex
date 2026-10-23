@@ -48,6 +48,25 @@ export function createDocumentRouter(
     controller.upload
   );
 
+  // Pre-Signed S3/MinIO Direct Upload: Bypasses Node.js event loop for 200MB+ PDFs and 500MB+ CAD STEP files
+  router.post(
+    '/presign-upload',
+    requireRole([...ADMIN_ROLES]),
+    controller.presignUpload
+  );
+
+  router.post(
+    '/:id/complete-presign',
+    requireRole([...ADMIN_ROLES]),
+    controller.completePresignUpload
+  );
+
+  // Local dev upload PUT proxy
+  router.put(
+    '/presigned-put-proxy',
+    controller.presignedPutProxy
+  );
+
   // Bulk Ingestion: Admin & Owner only
   router.post(
     '/bulk-upload',

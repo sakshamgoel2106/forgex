@@ -142,6 +142,8 @@ import type {
   ResolveSpecialistTicketDTO,
   ReopenSpecialistTicketDTO,
   ApproveTicketRestartDTO,
+  OutboxEvent,
+  CreateOutboxEventDTO,
 } from './dataStore.interface.js';
 import { sanitizeMachineOrAssetId } from '../utils/uuid.js';
 import { computeMachineVerification } from '../services/machineVerification.service.js';
@@ -1206,6 +1208,98 @@ export class InMemoryDataStore implements IDataStore {
       doc.assetIds.forEach((id) => ids.add(id));
     }
     return Array.from(ids);
+  }
+
+  public async withTransaction<T>(fn: (client: any) => Promise<T>): Promise<T> {
+    return fn(this);
+  }
+
+  private outboxEvents = new Map<string, OutboxEvent>();
+
+  public async createOutboxEvent(dto: CreateOutboxEventDTO): Promise<OutboxEvent> {
+    const id = dto.id || crypto.randomUUID();
+    const event: OutboxEvent = {
+      id,
+      organizationId: dto.organizationId,
+      aggregateType: dto.aggregateType,
+      aggregateId: dto.aggregateId,
+      eventType: dto.eventType,
+      payload: dto.payload,
+      status: 'PENDING',
+      retryCount: 0,
+      errorMessage: null,
+      createdAt: new Date().toISOString(),
+      processedAt: null,
+    };
+    this.outboxEvents.set(id, event);
+    return event;
+  }
+
+  public async fetchPendingOutboxEvents(limit = 10): Promise<OutboxEvent[]> {
+    const pending = Array.from(this.outboxEvents.values())
+      .filter((e) => e.status === 'PENDING')
+      .slice(0, limit);
+    for (const evt of pending) {
+      evt.status = 'PROCESSING';
+    }
+    return pending;
+  }
+
+  public async markOutboxEventProcessed(id: string): Promise<void> {
+    const evt = this.outboxEvents.get(id);
+    if (evt) {
+      evt.status = 'PROCESSED';
+      evt.processedAt = new Date().toISOString();
+    }
+  }
+
+  public async markOutboxEventFailed(id: string, errorMessage: string): Promise<void> {
+    const evt = this.outboxEvents.get(id);
+    if (evt) {
+      evt.status = 'FAILED';
+      evt.retryCount += 1;
+      evt.errorMessage = errorMessage;
+    }
+  }
+
+  public async createDocumentWithOutbox(
+    docDto: CreateDocumentDTO,
+    versionDto: CreateDocumentVersionDTO,
+    eventDto: CreateOutboxEventDTO,
+    assetIds?: string[]
+  ): Promise<{ document: TechnicalDocument; version: DocumentVersion; outboxEvent: OutboxEvent }> {
+    const document = await this.createDocument(docDto);
+    const version = await this.createDocumentVersion({
+      ...versionDto,
+      documentId: document.id,
+    });
+    const targetAssetIds = Array.from(
+      new Set([...(docDto.assetIds ?? []), ...(assetIds ?? []), ...(docDto.machineId ? [docDto.machineId] : [])])
+    ).filter(Boolean);
+    for (const aId of targetAssetIds) {
+      await this.linkDocumentToAsset(docDto.organizationId, document.id, aId);
+    }
+    const outboxEvent = await this.createOutboxEvent({
+      ...eventDto,
+      aggregateId: document.id,
+      payload: {
+        ...eventDto.payload,
+        documentId: document.id,
+        documentVersionId: version.id,
+        organizationId: docDto.organizationId,
+        plantId: docDto.plantId,
+        filename: version.filename,
+        storageKey: version.storageKey,
+        category: docDto.category,
+        assetIds: targetAssetIds,
+      },
+    });
+
+    return {
+      document: this.enrichDocument(document),
+      version,
+      outboxEvent,
+    };
   }
 
   // --------------------------------------------------------------------------

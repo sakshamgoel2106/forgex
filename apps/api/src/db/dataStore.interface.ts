@@ -283,6 +283,29 @@ export interface DocumentFilterOptions {
   assetId?: string;
 }
 
+export interface OutboxEvent {
+  id: string;
+  organizationId: string;
+  aggregateType: string;
+  aggregateId: string;
+  eventType: string;
+  payload: any;
+  status: 'PENDING' | 'PROCESSING' | 'PROCESSED' | 'FAILED';
+  retryCount: number;
+  errorMessage?: string | null;
+  createdAt: string;
+  processedAt?: string | null;
+}
+
+export interface CreateOutboxEventDTO {
+  id?: string;
+  organizationId: string;
+  aggregateType: string;
+  aggregateId: string;
+  eventType: string;
+  payload: any;
+}
+
 export interface IDataStore {
   // Organizations
   createOrganization(dto: CreateOrganizationDTO): Promise<Organization>;
@@ -391,6 +414,19 @@ export interface IDataStore {
     organizationId: string,
     documentId: string
   ): Promise<string[]>;
+  createDocumentWithOutbox(
+    docDto: CreateDocumentDTO,
+    versionDto: CreateDocumentVersionDTO,
+    eventDto: CreateOutboxEventDTO,
+    assetIds?: string[]
+  ): Promise<{ document: TechnicalDocument; version: DocumentVersion; outboxEvent: OutboxEvent }>;
+
+  // Transactional Outbox Pattern
+  createOutboxEvent(dto: CreateOutboxEventDTO, client?: any): Promise<OutboxEvent>;
+  fetchPendingOutboxEvents(limit?: number): Promise<OutboxEvent[]>;
+  markOutboxEventProcessed(id: string): Promise<void>;
+  markOutboxEventFailed(id: string, errorMessage: string): Promise<void>;
+  withTransaction<T>(fn: (client: any) => Promise<T>): Promise<T>;
 
   // Document Versions
   createDocumentVersion(dto: CreateDocumentVersionDTO): Promise<DocumentVersion>;

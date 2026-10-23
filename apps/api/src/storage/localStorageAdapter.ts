@@ -131,4 +131,15 @@ export class LocalStorageAdapter implements IStorageAdapter {
 
     return `/api/v1/engineering/storage-proxy?key=${encodeURIComponent(key)}&expires=${expiresAt}&signature=${signature}`;
   }
+
+  public async getPresignedPutUrl(key: string, contentType: string, expiresInSeconds = 3600): Promise<string> {
+    const expiresAt = Date.now() + expiresInSeconds * 1000;
+    const secret = process.env.JWT_SECRET || 'super_secret_forgex_jwt_key_at_least_32_characters_long_min_change_me';
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(`PUT:${key}:${contentType}:${expiresAt}`)
+      .digest('hex');
+
+    return `/api/v1/documents/presigned-put-proxy?key=${encodeURIComponent(key)}&contentType=${encodeURIComponent(contentType)}&expires=${expiresAt}&signature=${signature}`;
+  }
 }

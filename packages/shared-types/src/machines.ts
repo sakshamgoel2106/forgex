@@ -8,7 +8,7 @@ export type DataClassification = 'PUBLIC' | 'INTERNAL' | 'CONFIDENTIAL' | 'RESTR
 
 export type VerificationState = 'UNVERIFIED' | 'PARTIALLY_VERIFIED' | 'VERIFIED';
 
-export type DocumentationReadiness = 'INCOMPLETE' | 'PENDING_INSPECTION' | 'READY';
+export type DocumentationReadiness = 'INCOMPLETE' | 'PENDING_INSPECTION' | 'PROCESSING' | 'READY' | 'FAILED';
 
 export type MachineAccessScope = 'ORGANIZATION' | 'PLANT' | 'RESTRICTED_TEAM';
 

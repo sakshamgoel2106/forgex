@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Request, Response } from 'express';
-import type { DocumentType } from '@forgex/shared-types';
+import type { DocumentType, TechnicalDocument, DocumentVersion } from '@forgex/shared-types';
 import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
 import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
@@ -158,31 +158,18 @@ export class DocumentController {
         assetTags
       );
 
-      // 3. Find or Create Document record
-      let document = await this.dataStore.getDocumentByNumber(organizationId, documentNumber);
+      // 3. Find or prepare Document details
+      let existingDoc = await this.dataStore.getDocumentByNumber(organizationId, documentNumber);
       let versionNumber = 1;
-
-      if (!document) {
-        document = await this.dataStore.createDocument({
-          organizationId,
-          plantId: plant.id,
-          documentNumber,
-          title,
-          category: category as DocumentType,
-          assetTags: parsedTags,
-          assetIds: parsedAssetIds,
-          machineId: primaryMachineId,
-          createdByUserId: userId,
-        });
-      } else {
-        // Document exists: calculate next version number
-        const existingVersions = await this.dataStore.listDocumentVersions(document.id);
+      if (existingDoc) {
+        const existingVersions = await this.dataStore.listDocumentVersions(existingDoc.id);
         versionNumber = existingVersions.length + 1;
       }
 
       // 4. Generate server-controlled storage key (never trust user input)
       const randomToken = crypto.randomBytes(6).toString('hex');
-      const storageKey = `org_${organizationId}/plant_${plant.id}/${document.id}/v${versionNumber}_${Date.now()}_${randomToken}.${validatedFile.extension}`;
+      const docUuid = existingDoc ? existingDoc.id : crypto.randomUUID();
+      const storageKey = `org_${organizationId}/plant_${plant.id}/${docUuid}/v${versionNumber}_${Date.now()}_${randomToken}.${validatedFile.extension}`;
 
       // 5. Store file in configured object storage adapter
       const putResult = await this.storageAdapter.putObject(
@@ -191,18 +178,79 @@ export class DocumentController {
         validatedFile.detectedMimeType
       );
 
-      // 6. Create document version record
-      const version = await this.dataStore.createDocumentVersion({
-        documentId: document.id,
-        versionNumber,
-        revision,
-        filename: sanitizeFilename(file.originalname),
-        mimeType: validatedFile.detectedMimeType,
-        fileSizeBytes: putResult.sizeBytes,
-        checksumSha256: putResult.checksumSha256,
-        storageKey: putResult.storageKey,
-        status: 'QUEUED',
-      });
+      // 6. Transactional Outbox Pattern: Atomically insert Document, DocumentVersion, AssetDocuments, and OutboxEvent
+      let document: TechnicalDocument;
+      let version: DocumentVersion;
+
+      if (!existingDoc) {
+        const outboxResult = await this.dataStore.createDocumentWithOutbox(
+          {
+            organizationId,
+            plantId: plant.id,
+            documentNumber,
+            title,
+            category: category as DocumentType,
+            assetTags: parsedTags,
+            assetIds: parsedAssetIds,
+            machineId: primaryMachineId,
+            createdByUserId: userId,
+          },
+          {
+            documentId: docUuid,
+            versionNumber: 1,
+            revision,
+            filename: sanitizeFilename(file.originalname),
+            mimeType: validatedFile.detectedMimeType,
+            fileSizeBytes: putResult.sizeBytes,
+            checksumSha256: putResult.checksumSha256,
+            storageKey: putResult.storageKey,
+            status: 'QUEUED',
+          },
+          {
+            organizationId,
+            aggregateType: 'DOCUMENT',
+            aggregateId: docUuid,
+            eventType: 'DOCUMENT_INGESTION_REQUESTED',
+            payload: {
+              organizationId,
+              filename: sanitizeFilename(file.originalname),
+              storageKey: putResult.storageKey,
+            },
+          },
+          parsedAssetIds
+        );
+        document = outboxResult.document;
+        version = outboxResult.version;
+      } else {
+        document = existingDoc;
+        version = await this.dataStore.createDocumentVersion({
+          documentId: document.id,
+          versionNumber,
+          revision,
+          filename: sanitizeFilename(file.originalname),
+          mimeType: validatedFile.detectedMimeType,
+          fileSizeBytes: putResult.sizeBytes,
+          checksumSha256: putResult.checksumSha256,
+          storageKey: putResult.storageKey,
+          status: 'QUEUED',
+        });
+        await this.dataStore.createOutboxEvent({
+          organizationId,
+          aggregateType: 'DOCUMENT',
+          aggregateId: document.id,
+          eventType: 'DOCUMENT_INGESTION_REQUESTED',
+          payload: {
+            organizationId,
+            documentId: document.id,
+            documentVersionId: version.id,
+            filename: sanitizeFilename(file.originalname),
+            storageKey: putResult.storageKey,
+          },
+        });
+        for (const aId of parsedAssetIds) {
+          await this.dataStore.linkDocumentToAsset(organizationId, document.id, aId);
+        }
+      }
 
       // 7. Enqueue processing job via BullMQ / Redis queue
       const job = await this.ingestionQueue.enqueue(organizationId, version.id);
@@ -251,6 +299,220 @@ export class DocumentController {
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to upload document');
       res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  };
+
+  /**
+   * POST /api/v1/documents/presign-upload
+   * Generates a tenant-scoped S3/MinIO pre-signed PUT URL to stream large files (200MB+ PDFs, 500MB+ STEP)
+   * directly to object storage, bypassing the Node.js event loop.
+   */
+  public presignUpload = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth?.organization.id;
+      const userId = req.auth?.user.id;
+
+      if (!organizationId) {
+        res.status(401).json({ success: false, error: 'Unauthorized: Missing tenant context' });
+        return;
+      }
+
+      const {
+        filename,
+        contentType = 'application/pdf',
+        category = 'OEM_MANUAL',
+        title = 'Technical Document',
+        documentNumber: reqDocNumber,
+        revision = '1.0',
+        plantId: requestedPlantId,
+        checksumSha256,
+      } = req.body;
+
+      if (!filename) {
+        res.status(400).json({ success: false, error: 'Validation Error: filename is required' });
+        return;
+      }
+
+      const ext = path.extname(filename).toLowerCase().replace('.', '') || 'pdf';
+
+      // 1. Resolve Plant (Single factory / multi-plant)
+      let plant = requestedPlantId ? await this.dataStore.getPlantById(organizationId, requestedPlantId) : null;
+      if (!plant) {
+        const existingPlants = await this.dataStore.listPlants(organizationId);
+        if (existingPlants.length > 0) {
+          plant = existingPlants[0];
+        } else {
+          plant = await this.dataStore.createPlant(organizationId, {
+            code: config.PLANT_SITE_CODE || 'PLANT-TX-04',
+            name: 'Main Facility',
+            location: 'Single Factory',
+          });
+        }
+      }
+
+      // 2. Resolve target assets
+      const {
+        assetIds: parsedAssetIds,
+        assetTags: parsedTags,
+        machines: resolvedMachines,
+        primaryMachineId,
+      } = await this.resolveAssetsAndTags(
+        organizationId,
+        req.body.assetIds || req.body.asset_ids || req.body.machineIds || req.body.machineId,
+        req.body.assetTags
+      );
+
+      const documentNumber = reqDocNumber || `DOC-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+      const docId = crypto.randomUUID();
+      const sha256Prefix = checksumSha256 ? checksumSha256.substring(0, 16) : crypto.randomBytes(8).toString('hex');
+      const storageKey = `org_${organizationId}/plant_${plant.id}/${docId}/v1_${sha256Prefix}.${ext}`;
+
+      // 3. Generate pre-signed PUT URL from storage adapter
+      let presignedUrl = '';
+      if (this.storageAdapter.getPresignedPutUrl) {
+        presignedUrl = await this.storageAdapter.getPresignedPutUrl(storageKey, contentType, 3600);
+      } else {
+        presignedUrl = await this.storageAdapter.getSignedUrl(storageKey, 3600);
+      }
+
+      // 4. Atomically record document + version + outbox event
+      const { document, version, outboxEvent } = await this.dataStore.createDocumentWithOutbox(
+        {
+          organizationId,
+          plantId: plant.id,
+          documentNumber,
+          title: title || sanitizeFilename(filename),
+          category: category as DocumentType,
+          assetTags: parsedTags,
+          assetIds: parsedAssetIds,
+          machineId: primaryMachineId,
+          createdByUserId: userId,
+        },
+        {
+          documentId: docId,
+          versionNumber: 1,
+          revision,
+          filename: sanitizeFilename(filename),
+          mimeType: contentType,
+          fileSizeBytes: Number(req.body.sizeBytes) || 0,
+          checksumSha256: checksumSha256 || sha256Prefix,
+          storageKey,
+          status: 'QUEUED',
+        },
+        {
+          organizationId,
+          aggregateType: 'DOCUMENT',
+          aggregateId: docId,
+          eventType: 'DOCUMENT_INGESTION_REQUESTED',
+          payload: {
+            organizationId,
+            filename: sanitizeFilename(filename),
+            storageKey,
+          },
+        },
+        parsedAssetIds
+      );
+
+      // Set linked machines to 'PROCESSING' (Strict state machine: NEVER set 'READY' during upload)
+      for (const m of resolvedMachines) {
+        try {
+          await this.dataStore.updateMachine(organizationId, m.id, {
+            documentationReadiness: 'PROCESSING',
+          });
+          await this.dataStore.getMachineVerification(organizationId, m.id);
+        } catch {}
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          presignedUrl,
+          storageKey,
+          uploadMethod: 'PUT',
+          documentId: document.id,
+          versionId: version.id,
+          outboxEventId: outboxEvent.id,
+          headers: {
+            'Content-Type': contentType,
+          },
+        },
+      });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'Failed to generate pre-signed upload URL');
+      res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  };
+
+  /**
+   * POST /api/v1/documents/:id/complete-presign
+   * Client notifies that direct S3 PUT finished; enqueues ingestion job.
+   */
+  public completePresignUpload = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth?.organization.id;
+      const documentId = (Array.isArray(req.params.id) ? req.params.id[0] : req.params.id) as string;
+      const { versionId } = req.body;
+
+      if (!organizationId || !documentId) {
+        res.status(400).json({ success: false, error: 'Document ID is required' });
+        return;
+      }
+
+      const document = await this.dataStore.getDocumentById(organizationId, documentId);
+      if (!document) {
+        res.status(404).json({ success: false, error: 'Document not found' });
+        return;
+      }
+
+      const version = versionId
+        ? await this.dataStore.getDocumentVersionById(versionId)
+        : (await this.dataStore.listDocumentVersions(document.id))[0];
+
+      if (!version) {
+        res.status(404).json({ success: false, error: 'Document version not found' });
+        return;
+      }
+
+      // Enqueue processing job via BullMQ / Redis queue
+      const job = await this.ingestionQueue.enqueue(organizationId, version.id);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          document,
+          version,
+          job,
+        },
+      });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'Failed to complete pre-signed upload');
+      res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  };
+
+  /**
+   * PUT /api/v1/documents/presigned-put-proxy
+   * Local development upload proxy when S3/MinIO is not connected
+   */
+  public presignedPutProxy = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const key = (typeof req.query.key === 'string' ? req.query.key : '') as string;
+      const queryContentType = typeof req.query.contentType === 'string' ? req.query.contentType : '';
+      const contentType: string = queryContentType || (req.headers['content-type'] as string) || 'application/octet-stream';
+      if (!key) {
+        res.status(400).json({ success: false, error: 'Storage key required' });
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', async () => {
+        const buffer = Buffer.concat(chunks);
+        await this.storageAdapter.putObject(key, buffer, contentType);
+        res.status(200).json({ success: true, message: 'Uploaded via local presign proxy' });
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Upload proxy error' });
     }
   };
 
@@ -1150,7 +1412,7 @@ export class DocumentController {
 
         try {
           await this.dataStore.updateMachine(organizationId, m.id, {
-            documentationReadiness: 'READY',
+            documentationReadiness: 'PROCESSING',
           });
           await this.dataStore.getMachineVerification(organizationId, m.id);
         } catch (err: any) {

@@ -204,6 +204,7 @@ export class IngestionProcessor {
       );
 
       // 9b. AI Machine Recovery Nameplate & Operating Limits Extraction
+      const targetMachines: Machine[] = [];
       try {
         const candidateMachineIds: string[] = [];
         if (machineId) candidateMachineIds.push(machineId);
@@ -219,7 +220,6 @@ export class IngestionProcessor {
           // ignore
         }
 
-        const targetMachines: Machine[] = [];
         for (const mId of candidateMachineIds) {
           if (!mId) continue;
           try {
@@ -299,6 +299,21 @@ export class IngestionProcessor {
         null
       );
 
+      // Strict Ingestion State Machine: Transition linked machines to 'READY' only after
+      // indexing into Qdrant finishes AND indexed_chunks_count > 0.
+      if (chunkDrafts.length > 0 && targetMachines.length > 0) {
+        for (const m of targetMachines) {
+          try {
+            await this.dataStore.updateMachine(organizationId, m.id, {
+              documentationReadiness: 'READY',
+            });
+            await this.dataStore.getMachineVerification(organizationId, m.id);
+          } catch (mErr: any) {
+            logger.warn({ err: mErr?.message, machineId: m.id }, 'Notice: machine verification update deferred');
+          }
+        }
+      }
+
       await this.dataStore.updateProcessingJobProgress(
         jobId,
         100,
@@ -347,6 +362,25 @@ export class IngestionProcessor {
         'FAILED',
         errorMsg
       );
+
+      // Transition linked machines to 'FAILED' on worker error
+      try {
+        const ver = await this.dataStore.getDocumentVersionById(documentVersionId);
+        if (ver) {
+          const doc = await this.dataStore.getDocumentById('', ver.documentId);
+          if (doc) {
+            const mIds = await this.dataStore.getLinkedMachineIdsForDocument(doc.organizationId, doc.id);
+            for (const mId of mIds) {
+              await this.dataStore.updateMachine(doc.organizationId, mId, {
+                documentationReadiness: 'FAILED',
+              });
+              await this.dataStore.getMachineVerification(doc.organizationId, mId);
+            }
+          }
+        }
+      } catch {
+        // non-blocking
+      }
     }
   }
 }

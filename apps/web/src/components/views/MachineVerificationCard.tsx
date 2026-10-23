@@ -20,6 +20,7 @@ import type {
   Machine,
   MachineVerificationRecord,
   MachineVerificationWorkflowStatus,
+  DocumentationReadiness,
 } from '@forgex/shared-types';
 import { useToast } from '../../lib/ToastContext';
 
@@ -57,7 +58,7 @@ export const MachineVerificationCard: React.FC<MachineVerificationCardProps> = (
 
   // Evidence Form
   const [evidenceDescription, setEvidenceDescription] = useState('');
-  const [docReadiness, setDocReadiness] = useState<'READY' | 'PENDING_INSPECTION' | 'INCOMPLETE'>(
+  const [docReadiness, setDocReadiness] = useState<DocumentationReadiness>(
     machine.documentationReadiness || 'PENDING_INSPECTION'
   );
   const [serialNumberInput, setSerialNumberInput] = useState(machine.serialNumber || '');
@@ -719,12 +720,14 @@ export const MachineVerificationCard: React.FC<MachineVerificationCardProps> = (
                   </label>
                   <select
                     value={docReadiness}
-                    onChange={(e: any) => setDocReadiness(e.target.value)}
+                    onChange={(e: any) => setDocReadiness(e.target.value as DocumentationReadiness)}
                     className="w-full text-xs p-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:border-[#2563EB]"
                   >
                     <option value="PENDING_INSPECTION">PENDING INSPECTION</option>
+                    <option value="PROCESSING">PROCESSING (Ingesting)</option>
                     <option value="READY">READY (Verified)</option>
                     <option value="INCOMPLETE">INCOMPLETE</option>
+                    <option value="FAILED">FAILED</option>
                   </select>
                 </div>
               </div>

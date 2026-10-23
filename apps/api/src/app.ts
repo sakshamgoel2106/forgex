@@ -42,6 +42,7 @@ import { createEmbeddingAdapter } from './embeddings/embeddingFactory.js';
 import type { IVectorStoreAdapter } from './vector/vectorStore.interface.js';
 import { createVectorStoreAdapter } from './vector/vectorStoreFactory.js';
 import { IngestionQueue } from './jobs/ingestionQueue.js';
+import { OutboxRelayWorker } from './jobs/outboxRelay.js';
 import type { IMultimodalGenerationProvider, IRerankingProvider } from './ai/ai.interface.js';
 import { createGenerationProvider, createRerankingProvider } from './ai/aiProviderFactory.js';
 import type { IVisionProcessingProvider } from './ai/vision.interface.js';
@@ -90,6 +91,10 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   const ingestionQueue =
     deps.ingestionQueue ??
     new IngestionQueue(dataStore, storageAdapter, embeddingAdapter, vectorStore, visionProvider);
+
+  const outboxRelay = new OutboxRelayWorker(dataStore, ingestionQueue);
+  outboxRelay.start();
+  app.locals.outboxRelay = outboxRelay;
 
   const generationProvider = deps.generationProvider ?? createGenerationProvider();
   const rerankingProvider = deps.rerankingProvider ?? createRerankingProvider();

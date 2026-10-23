@@ -28,4 +28,9 @@ export interface IStorageAdapter {
    * Generates a secure URL or download endpoint for accessing the file
    */
   getSignedUrl(key: string, expiresInSeconds?: number): Promise<string>;
+
+  /**
+   * Generates a pre-signed PUT URL for direct client-to-storage upload
+   */
+  getPresignedPutUrl?(key: string, contentType: string, expiresInSeconds?: number): Promise<string>;
 }
