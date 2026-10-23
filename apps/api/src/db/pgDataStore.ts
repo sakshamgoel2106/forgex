@@ -275,15 +275,6 @@ export class PgDataStore implements IDataStore {
       }
     }
 
-    // Pattern 3: check if any param looks like a UUID and query mentions organization_id
-    if (query.toLowerCase().includes('organization_id')) {
-      for (const p of params) {
-        if (typeof p === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p)) {
-          return p;
-        }
-      }
-    }
-
     return undefined;
   }
 

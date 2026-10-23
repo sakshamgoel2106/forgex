@@ -176,20 +176,6 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     next();
   });
 
-  // Tenant context propagation middleware (AsyncLocalStorage)
-  app.use((req, _res, next) => {
-    const tenantHeader = (req.headers['x-organization-id'] || req.headers['x-tenant-id']) as string | undefined;
-    const organizationId =
-      tenantHeader?.trim() ||
-      (req as any).user?.organizationId ||
-      req.auth?.organization?.id;
-
-    if (organizationId && typeof (dataStore as any).withTenantContext === 'function') {
-      return (dataStore as any).withTenantContext(organizationId, () => next());
-    }
-    next();
-  });
-
   // Health and readiness endpoints (Public, unthrottled for cluster orchestrators)
   app.use(healthRouter);
 
