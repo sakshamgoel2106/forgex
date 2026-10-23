@@ -51,6 +51,9 @@ export interface Machine {
   pidUrl?: string | null;
   qrCodeData: string; // Opaque machine routing reference, non-sensitive
   provenance?: string | null;
+  designStandard?: string | null;
+  operatingPressureMax?: number | string | null;
+  operatingTemperatureMax?: number | string | null;
   revision: number;
   createdAt: string;
   updatedAt: string;

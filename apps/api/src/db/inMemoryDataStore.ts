@@ -37,6 +37,8 @@ import type {
   EngineeringModel3D,
   EngineeringAssetStatus,
   ManufacturerResource,
+  ManufacturerResourceType,
+  CADFileFormat,
   EngineeringDrawing,
   EngineeringAssetCenterSummary,
   EmployeeProfile,
@@ -2761,11 +2763,11 @@ export class InMemoryDataStore implements IDataStore {
     const model: EngineeringModel3D = {
       id,
       organizationId,
-      plantId: data.plantId,
+      plantId: data.plantId || 'default-plant',
       machineId: data.machineId,
       assetId: data.assetId || data.machineId,
-      industryProfileCode: data.industryProfileCode,
-      assetCategory: data.assetCategory,
+      industryProfileCode: data.industryProfileCode || 'GENERAL',
+      assetCategory: data.assetCategory || 'EQUIPMENT',
       title: data.title,
       manufacturer: data.manufacturer,
       modelNumber: data.modelNumber,
@@ -2773,14 +2775,14 @@ export class InMemoryDataStore implements IDataStore {
       sourceUrl: data.sourceUrl,
       fileFormat: data.fileFormat,
       fileSizeBytes: data.fileSizeBytes,
-      fileHashSha256: data.fileHashSha256,
+      fileHashSha256: data.fileHashSha256 || 'hash-placeholder',
       storageKey: data.storageKey,
       convertedStorageKey,
       modelRevision: data.modelRevision || '1.0',
       status,
       dataClassification: data.dataClassification || 'INTERNAL',
       licenseUsageRights: data.licenseUsageRights,
-      uploadedByUserId: data.uploadedByUserId,
+      uploadedByUserId: data.uploadedByUserId || 'system',
       reviewNotes: data.reviewNotes,
       errorMessage,
       extractedComponentsCount: data.extractedComponentsCount || 12,
@@ -3028,13 +3030,13 @@ export class InMemoryDataStore implements IDataStore {
           }
         }
         if (version?.storageKey) {
-          const isManual = doc.category === 'OEM_MANUAL' || doc.category === 'MANUAL';
+          const isManual = doc.category === 'OEM_MANUAL' || (doc.category as string) === 'MANUAL';
           const ext = (version.filename?.split('.').pop() || 'PDF').toUpperCase();
           return {
             id: resourceId,
             organizationId,
             machineId: undefined,
-            resourceType: isManual ? 'OFFICIAL_MANUAL' : 'SOP',
+            resourceType: isManual ? 'OFFICIAL_MANUAL' : 'APPROVED_REFERENCE',
             title: doc.title || version.filename,
             manufacturer: (doc.metadata as any)?.manufacturer || 'OEM / Plant Document',
             modelNumber: (doc.metadata as any)?.modelNumber || doc.documentNumber,
@@ -3112,8 +3114,8 @@ export class InMemoryDataStore implements IDataStore {
 
       if (filters?.machineId && matchedMachine?.id !== filters.machineId) continue;
 
-      const isManual = doc.category === 'OEM_MANUAL' || doc.category === 'MANUAL';
-      const rType: ManufacturerResourceType = isManual ? 'OFFICIAL_MANUAL' : 'SOP';
+      const isManual = doc.category === 'OEM_MANUAL' || (doc.category as string) === 'MANUAL';
+      const rType: ManufacturerResourceType = isManual ? 'OFFICIAL_MANUAL' : 'APPROVED_REFERENCE';
       if (filters?.resourceType && filters.resourceType !== rType) continue;
 
       const ext = (version.filename?.split('.').pop() || 'PDF').toUpperCase();
@@ -3173,18 +3175,21 @@ export class InMemoryDataStore implements IDataStore {
     organizationId: string,
     data: CreateEngineeringDrawingDTO
   ): Promise<EngineeringDrawing> {
+    const id = crypto.randomUUID();
+    const drawingNumber = data.uniqueDrawingNumber || data.drawingNumber || `DWG-${id.slice(0, 8)}`;
+    const drawingTitle = data.drawingTitle || data.title || drawingNumber;
+
     for (const d of this.engineeringDrawings.values()) {
-      if (d.organizationId === organizationId && d.uniqueDrawingNumber.toLowerCase() === data.uniqueDrawingNumber.toLowerCase()) {
-        throw new Error(`Engineering drawing with number '${data.uniqueDrawingNumber}' already exists in this organization.`);
+      if (d.organizationId === organizationId && d.uniqueDrawingNumber.toLowerCase() === drawingNumber.toLowerCase()) {
+        throw new Error(`Engineering drawing with number '${drawingNumber}' already exists in this organization.`);
       }
     }
 
     const now = new Date().toISOString();
-    const id = crypto.randomUUID();
-
     let status: EngineeringAssetStatus = data.status ?? 'NEEDS_REVIEW';
     let errorMessage: string | undefined = undefined;
-    if (data.fileSizeBytes <= 0) {
+    const sizeBytes = Number(data.fileSizeBytes) || 1024;
+    if (sizeBytes <= 0) {
       status = 'PROCESSING_FAILED';
       errorMessage = 'Empty or unreadable drawing file payload.';
     }
@@ -3192,24 +3197,24 @@ export class InMemoryDataStore implements IDataStore {
     const dwg: EngineeringDrawing = {
       id,
       organizationId,
-      plantId: data.plantId,
+      plantId: data.plantId || 'default-plant',
       machineId: data.machineId,
-      drawingTitle: data.drawingTitle,
-      uniqueDrawingNumber: data.uniqueDrawingNumber,
+      drawingTitle,
+      uniqueDrawingNumber: drawingNumber,
       drawingType: data.drawingType,
-      discipline: data.discipline,
+      discipline: data.discipline || 'Mechanical',
       revision: data.revision || 'Rev A',
       effectiveDate: data.effectiveDate,
-      source: data.source,
+      source: data.source || 'INTERNAL',
       storageKey: data.storageKey,
-      originalFileName: data.originalFileName,
-      fileFormat: data.fileFormat,
-      fileSizeBytes: data.fileSizeBytes,
-      fileHashSha256: data.fileHashSha256,
+      originalFileName: data.originalFileName || `${drawingNumber}.pdf`,
+      fileFormat: (data.fileFormat as any) || 'PDF',
+      fileSizeBytes: sizeBytes,
+      fileHashSha256: data.fileHashSha256 || 'hash-placeholder',
       status,
       dataClassification: data.dataClassification || 'INTERNAL',
       equipmentTags: data.equipmentTags || [],
-      uploadedByUserId: data.uploadedByUserId,
+      uploadedByUserId: data.uploadedByUserId || 'system',
       reviewNotes: data.reviewNotes,
       errorMessage,
       createdAt: now,

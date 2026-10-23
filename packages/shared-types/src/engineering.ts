@@ -121,7 +121,7 @@ export interface ManufacturerResource {
   verificationStatus: 'UNVERIFIED' | 'VERIFIED' | 'REJECTED';
   accessRequirements?: string;
   usageRightsEvidence?: string;
-  uploadedByUserId: string;
+  uploadedByUserId?: string;
   verifiedByUserId?: string;
   verifiedAt?: string;
   reviewNotes?: string;
@@ -131,6 +131,7 @@ export interface ManufacturerResource {
 
 export type DrawingType =
   | 'PID'
+  | 'P_AND_ID'
   | 'ELECTRICAL_SCHEMATIC'
   | 'WIRING_DIAGRAM'
   | 'HYDRAULIC_PNEUMATIC'

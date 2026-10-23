@@ -30,7 +30,7 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
           privateNotes,
           machineId,
           customSourceUrl,
-          forceRefresh,
+          forceRefresh: _forceRefresh,
         } = req.body;
 
         // Privacy violation guard: strictly block internal private details

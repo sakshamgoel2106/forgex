@@ -1109,15 +1109,15 @@ export class DocumentController {
       if (
         docCat === 'OEM_MANUAL' ||
         docCat === 'SOP' ||
-        docCat === 'MANUAL' ||
+        (docCat as string) === 'MANUAL' ||
         docCat === 'FAULT_CODE_INDEX' ||
         docCat === 'SAFETY_DATA_SHEET'
       ) {
-        const rType = docCat === 'OEM_MANUAL' || docCat === 'MANUAL' ? 'OFFICIAL_MANUAL' : 'SOP';
+        const rType = docCat === 'OEM_MANUAL' || (docCat as string) === 'MANUAL' ? 'OFFICIAL_MANUAL' : 'APPROVED_REFERENCE';
         try {
           await this.dataStore.createManufacturerResource(organizationId, {
             machineId: m.id,
-            resourceType: rType as any,
+            resourceType: rType,
             title: title || `${m.name || m.assetTag} Technical Manual`,
             manufacturer: m.manufacturer || 'OEM / Plant Documentation',
             modelNumber: m.modelNumber || documentNumber,

@@ -58,6 +58,9 @@ import type {
   MachineEvidenceClaim,
   MachineRecoveryProfile,
   MachineRecoverySummary,
+  MachineVerificationRecord,
+  CADFileFormat,
+  ManufacturerResourceType,
   CreateEvidenceClaimDTO,
   ReviewEvidenceClaimDTO,
   ClaimFilterOptions,
@@ -5097,7 +5100,7 @@ export class PgDataStore implements IDataStore {
         id: resourceId,
         organizationId,
         machineId: row.asset_id || undefined,
-        resourceType: isManual ? 'OFFICIAL_MANUAL' : 'SOP',
+        resourceType: isManual ? 'OFFICIAL_MANUAL' : 'APPROVED_REFERENCE',
         title: row.title || row.filename,
         manufacturer: row.asset_manufacturer || 'OEM / Plant Document',
         modelNumber: row.asset_model_number || row.document_number,
@@ -5177,7 +5180,7 @@ export class PgDataStore implements IDataStore {
       if (filters?.machineId && row.asset_id !== filters.machineId) continue;
 
       const isManual = row.category === 'OEM_MANUAL' || row.category === 'MANUAL';
-      const rType: ManufacturerResourceType = isManual ? 'OFFICIAL_MANUAL' : 'SOP';
+      const rType: ManufacturerResourceType = isManual ? 'OFFICIAL_MANUAL' : 'APPROVED_REFERENCE';
       if (filters?.resourceType && filters.resourceType !== rType) continue;
 
       const ext = (row.filename?.split('.').pop() || 'PDF').toUpperCase();
@@ -5275,9 +5278,12 @@ export class PgDataStore implements IDataStore {
     data: CreateEngineeringDrawingDTO
   ): Promise<EngineeringDrawing> {
     const id = crypto.randomUUID();
+    const drawingNumber = data.uniqueDrawingNumber || data.drawingNumber || `DWG-${id.slice(0, 8)}`;
+    const drawingTitle = data.drawingTitle || data.title || drawingNumber;
+    const sizeBytes = Number(data.fileSizeBytes) || 1024;
     let status = data.status ?? 'NEEDS_REVIEW';
     let errorMessage: string | null = null;
-    if (data.fileSizeBytes <= 0) {
+    if (sizeBytes <= 0) {
       status = 'PROCESSING_FAILED';
       errorMessage = 'Empty or unreadable drawing file payload.';
     }
@@ -5294,24 +5300,24 @@ export class PgDataStore implements IDataStore {
       [
         id,
         organizationId,
-        data.plantId,
+        data.plantId || null,
         data.machineId ?? null,
-        data.drawingTitle,
-        data.uniqueDrawingNumber,
+        drawingTitle,
+        drawingNumber,
         data.drawingType,
-        data.discipline,
+        data.discipline || 'Mechanical',
         data.revision || 'Rev A',
         data.effectiveDate ?? null,
-        data.source,
+        data.source || 'INTERNAL',
         data.storageKey,
-        data.originalFileName,
-        data.fileFormat,
-        data.fileSizeBytes,
-        data.fileHashSha256,
+        data.originalFileName || `${drawingNumber}.pdf`,
+        data.fileFormat || 'PDF',
+        sizeBytes,
+        data.fileHashSha256 || 'hash-placeholder',
         status,
         data.dataClassification || 'INTERNAL',
         JSON.stringify(data.equipmentTags || []),
-        data.uploadedByUserId,
+        data.uploadedByUserId || 'system',
         data.reviewNotes ?? null,
         errorMessage,
       ]

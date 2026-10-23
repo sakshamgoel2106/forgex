@@ -16,10 +16,12 @@ export type DocumentType =
   | 'PID_DIAGRAM'
   | '3D_MODEL'
   | 'OEM_MANUAL'
+  | 'MANUAL'
   | 'SCHEMATIC_PID'
   | 'WIRING_DIAGRAM'
   | 'FAULT_CODE_INDEX'
   | 'SAFETY_DATA_SHEET';
+
 
 export type ExtractionMethod =
   | 'NATIVE_TEXT'
@@ -126,6 +128,7 @@ export interface TechnicalDocument {
   totalPages?: number;
   totalChunks?: number;
   revision?: string;
+  metadata?: Record<string, any>;
 }
 
 // Legacy alias

@@ -279,6 +279,8 @@ export interface DocumentFilterOptions {
   plantId?: string;
   category?: DocumentType;
   search?: string;
+  machineId?: string;
+  assetId?: string;
 }
 
 export interface IDataStore {
@@ -855,11 +857,11 @@ export interface CreateIndustryProfileDTO {
 }
 
 export interface CreateEngineeringModel3DDTO {
-  plantId: string;
+  plantId?: string;
   machineId?: string;
   assetId?: string;
-  industryProfileCode: string;
-  assetCategory: string;
+  industryProfileCode?: string;
+  assetCategory?: string;
   title: string;
   manufacturer?: string;
   modelNumber?: string;
@@ -867,16 +869,18 @@ export interface CreateEngineeringModel3DDTO {
   sourceUrl?: string;
   fileFormat: CADFileFormat;
   fileSizeBytes: number;
-  fileHashSha256: string;
+  fileHashSha256?: string;
   storageKey: string;
   convertedStorageKey?: string;
   modelRevision?: string;
   status?: EngineeringAssetStatus;
   dataClassification?: DataClassification;
   licenseUsageRights?: string;
-  uploadedByUserId: string;
+  uploadedByUserId?: string;
   reviewNotes?: string;
   extractedComponentsCount?: number;
+  sourceType?: string;
+  viewerOptimized?: boolean;
 }
 
 export interface EngineeringModelFilterOptions {
@@ -903,7 +907,7 @@ export interface CreateManufacturerResourceDTO {
   verificationStatus?: 'UNVERIFIED' | 'VERIFIED' | 'REJECTED';
   accessRequirements?: string;
   usageRightsEvidence?: string;
-  uploadedByUserId: string;
+  uploadedByUserId?: string;
   reviewNotes?: string;
 }
 
@@ -915,25 +919,30 @@ export interface ManufacturerResourceFilterOptions {
 }
 
 export interface CreateEngineeringDrawingDTO {
-  plantId: string;
+  plantId?: string;
   machineId?: string;
-  drawingTitle: string;
-  uniqueDrawingNumber: string;
+  drawingTitle?: string;
+  title?: string;
+  uniqueDrawingNumber?: string;
+  drawingNumber?: string;
   drawingType: DrawingType;
-  discipline: string;
+  discipline?: string;
   revision?: string;
   effectiveDate?: string;
-  source: string;
+  source?: string;
+  sourceType?: string;
   storageKey: string;
-  originalFileName: string;
-  fileFormat: 'PDF' | 'PNG' | 'JPG' | 'SVG' | 'CAD' | 'DXF';
-  fileSizeBytes: number;
-  fileHashSha256: string;
+  originalFileName?: string;
+  fileFormat: 'PDF' | 'PNG' | 'JPG' | 'SVG' | 'CAD' | 'DXF' | string;
+  fileSizeBytes?: number;
+  fileHashSha256?: string;
   status?: EngineeringAssetStatus;
   dataClassification?: DataClassification;
   equipmentTags?: string[];
-  uploadedByUserId: string;
+  uploadedByUserId?: string;
   reviewNotes?: string;
+  sheetNumber?: string;
+  cadViewerReady?: boolean;
 }
 
 export interface EngineeringDrawingFilterOptions {
