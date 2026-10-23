@@ -59,8 +59,16 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   onMappingVerified,
   onMachineUpdated,
 }) => {
-  const { token, isOwnerOrAdmin, membership } = useAuth();
+  const { token, isOwnerOrAdmin, membership, organization } = useAuth();
   const isEngineer = isOwnerOrAdmin || membership?.role === 'ENGINEER' || membership?.role === 'PLANT_MANAGER';
+
+  const getAuthHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const orgId = organization?.id || (machine as any)?.organizationId || (machine as any)?.organization_id;
+    if (orgId) headers['x-organization-id'] = orgId;
+    return headers;
+  }, [token, organization?.id, machine]);
 
   // Navigation & Zoom State
   const [zoom, setZoom] = useState(1);
@@ -166,8 +174,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
     const fetchDrawings = async () => {
       try {
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const headers = getAuthHeaders();
 
         // 0. If initialDrawingId is provided, query it directly
         if (initialDrawingId) {
@@ -299,8 +306,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
     const fetchContent = async () => {
       try {
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const headers = getAuthHeaders();
 
         const res = await fetch(`/api/v1/engineering/drawings/${drawingRecord.id}/content`, { headers });
 
@@ -495,8 +501,8 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
       const res = await fetch(`/api/v1/machines/${machine.id}/mappings/${mappingId}`, {
         method: 'PATCH',
         headers: {
+          ...getAuthHeaders(),
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ status: 'VERIFIED' }),
       });
@@ -529,19 +535,30 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
   const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !machine) return;
+    const targetMachine = machine || currentMachine;
+    if (!file || !targetMachine) return;
     setIsUploading(true);
     setContentError(null);
     setUnsupportedInfo(null);
+
+    // Instant local preview for immediate visual feedback
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    let localPreviewUrl: string | null = null;
+    if (ext === 'pdf') {
+      localPreviewUrl = URL.createObjectURL(file);
+      setPdfBlobUrl(localPreviewUrl);
+    } else if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'webp') {
+      localPreviewUrl = URL.createObjectURL(file);
+      setImageBlobUrl(localPreviewUrl);
+    }
+
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch(`/api/v1/engineering/machines/${machine.id}/pid/upload`, {
+      const res = await fetch(`/api/v1/engineering/machines/${targetMachine.id}/pid/upload`, {
         method: 'POST',
-        headers,
+        headers: getAuthHeaders(),
         body: formData,
       });
 
@@ -555,7 +572,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
         setDrawingsList((prev) => [drawing, ...prev.filter((d) => d.id !== drawing.id)]);
         setDrawingRecord(drawing);
         onMachineUpdated?.({
-          ...machine,
+          ...targetMachine,
           hasPidDiagram: true,
           pidFile: { name: file.name, size: file.size, type: file.type },
         });
@@ -563,6 +580,11 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     } catch (err: any) {
       console.error('Failed to attach P&ID drawing:', err);
       setContentError(err.message || 'Failed to attach P&ID drawing');
+      if (localPreviewUrl) {
+        URL.revokeObjectURL(localPreviewUrl);
+        setPdfBlobUrl(null);
+        setImageBlobUrl(null);
+      }
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -762,6 +784,14 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                 </span>
               </div>
             </div>
+
+            {/* Error Notification Banner if upload failed */}
+            {contentError && (
+              <div className="w-full max-w-md bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-xs font-mono flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                <span className="truncate">{contentError}</span>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 pt-2">
               <button

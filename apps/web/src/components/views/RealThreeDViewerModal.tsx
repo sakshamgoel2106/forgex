@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import type { Machine, ComponentMapping, EngineeringModel3D } from '@forgex/shared-types';
 import {
   Layers,
@@ -67,8 +67,16 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   onMappingVerified,
   onMachineUpdated,
 }) => {
-  const { isOwnerOrAdmin, membership, token } = useAuth();
+  const { isOwnerOrAdmin, membership, token, organization } = useAuth();
   const isEngineer = isOwnerOrAdmin || membership?.role === 'ENGINEER' || membership?.role === 'PLANT_MANAGER';
+
+  const getAuthHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const orgId = organization?.id || (machine as any)?.organizationId || (machine as any)?.organization_id;
+    if (orgId) headers['x-organization-id'] = orgId;
+    return headers;
+  }, [token, organization?.id, machine]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -116,8 +124,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
 
     const fetchModel = async () => {
       try {
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const headers = getAuthHeaders();
 
         // 0. If initialModelId is provided, query it directly
         if (initialModelId) {
@@ -209,8 +216,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
     let isMounted = true;
     const fetchBlob = async () => {
       try {
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const headers = getAuthHeaders();
 
         const res = await fetch(`/api/v1/engineering/models/${modelRecord.id}/content`, { headers });
         if (res.status === 422) {
@@ -254,8 +260,8 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
       const res = await fetch(`/api/v1/machines/${machine.id}/mappings/${mappingId}`, {
         method: 'PATCH',
         headers: {
+          ...getAuthHeaders(),
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ status: 'VERIFIED' }),
       });
@@ -272,19 +278,28 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
 
   const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !machine) return;
+    const targetMachine = machine || currentMachine;
+    if (!file || !targetMachine) return;
     setIsUploading(true);
     setLoadError(null);
     setUnsupportedFormat(null);
+
+    // Instant local preview for immediate visual feedback
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    const isStep = ext === 'step' || ext === 'stp';
+    let localBlobUrl: string | null = null;
+    if (!isStep) {
+      localBlobUrl = URL.createObjectURL(file);
+      setBlobUrl(localBlobUrl);
+    }
+
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch(`/api/v1/engineering/machines/${machine.id}/3d-model/upload`, {
+      const res = await fetch(`/api/v1/engineering/machines/${targetMachine.id}/3d-model/upload`, {
         method: 'POST',
-        headers,
+        headers: getAuthHeaders(),
         body: formData,
       });
 
@@ -296,9 +311,8 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
       const model = json.data?.model;
       if (model) {
         setModelRecord(model);
-        const ext = file.name.split('.').pop()?.toLowerCase();
         const updatedMachine: Machine = {
-          ...machine,
+          ...targetMachine,
           hasModel3d: true,
           model3dFormat: ext as any,
           model3dFile: { name: file.name, size: file.size, type: file.type },
@@ -308,6 +322,10 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
     } catch (err: any) {
       console.error('Failed to upload 3D model:', err);
       setLoadError(err.message || 'Failed to upload 3D model');
+      if (localBlobUrl) {
+        URL.revokeObjectURL(localBlobUrl);
+        setBlobUrl(null);
+      }
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -429,6 +447,14 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Error Notification Banner if upload failed */}
+            {loadError && (
+              <div className="w-full max-w-md bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-xs font-mono flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                <span className="truncate">{loadError}</span>
+              </div>
+            )}
 
             {/* Action Bar */}
             <div className="flex items-center gap-3 pt-2">
