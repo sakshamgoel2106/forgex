@@ -6,6 +6,7 @@ import { logger } from '../utils/logger.js';
  * Transactional Outbox Relay Worker
  * Reliably dispatches queued asynchronous jobs from PostgreSQL `outbox_events` table to BullMQ/IngestionQueue
  * using `FOR UPDATE SKIP LOCKED` to guarantee exactly-once/at-least-once distributed processing.
+ * Sets strict tenant context from event organizationId for multi-tenant isolation.
  */
 export class OutboxRelayWorker {
   private isRunning = false;
@@ -52,17 +53,25 @@ export class OutboxRelayWorker {
 
     for (const evt of events) {
       try {
-        if (evt.eventType === 'DOCUMENT_INGESTION_REQUESTED') {
-          const { organizationId, documentVersionId } = evt.payload;
-          if (organizationId && documentVersionId) {
-            await this.ingestionQueue.enqueue(organizationId, documentVersionId);
+        const processEvent = async () => {
+          if (evt.eventType === 'DOCUMENT_INGESTION_REQUESTED') {
+            const { organizationId, documentVersionId } = evt.payload;
+            if (organizationId && documentVersionId) {
+              await this.ingestionQueue.enqueue(organizationId, documentVersionId);
+            }
           }
+          await this.dataStore.markOutboxEventProcessed(evt.id);
+          logger.info(
+            { eventId: evt.id, eventType: evt.eventType, aggregateId: evt.aggregateId },
+            'Successfully processed outbox event'
+          );
+        };
+
+        if (typeof (this.dataStore as any).withTenantContext === 'function' && evt.organizationId) {
+          await (this.dataStore as any).withTenantContext(evt.organizationId, processEvent);
+        } else {
+          await processEvent();
         }
-        await this.dataStore.markOutboxEventProcessed(evt.id);
-        logger.info(
-          { eventId: evt.id, eventType: evt.eventType, aggregateId: evt.aggregateId },
-          'Successfully processed outbox event'
-        );
       } catch (err: any) {
         logger.error({ err: err?.message, eventId: evt.id }, 'Failed to dispatch outbox event');
         await this.dataStore.markOutboxEventFailed(evt.id, err?.message || 'Dispatch error');

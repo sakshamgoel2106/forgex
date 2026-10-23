@@ -35,6 +35,14 @@ export class IngestionProcessor {
   }
 
   public async processJob(opts: ProcessDocumentOptions): Promise<void> {
+    const { organizationId } = opts;
+    if (typeof (this.dataStore as any).withTenantContext === 'function' && organizationId) {
+      return (this.dataStore as any).withTenantContext(organizationId, () => this.executeProcessJob(opts));
+    }
+    return this.executeProcessJob(opts);
+  }
+
+  private async executeProcessJob(opts: ProcessDocumentOptions): Promise<void> {
     const { jobId, documentVersionId, organizationId, machineId } = opts;
 
     try {
@@ -117,6 +125,34 @@ export class IngestionProcessor {
       );
       const chunkDrafts = this.chunker.chunkPages(version.id, extracted.pages);
 
+      // Resolve machine and asset tags for contextual hierarchy prefixing
+      const resolvedMachineId =
+        machineId ||
+        (document as any).machineId ||
+        ((document as any).assetIds && (document as any).assetIds.length > 0 ? (document as any).assetIds[0] : undefined) ||
+        (document.assetTags && document.assetTags.length > 0 ? document.assetTags[0] : undefined);
+
+      const linkedAssetIds: string[] = (document as any).assetIds && (document as any).assetIds.length > 0
+        ? (document as any).assetIds
+        : (resolvedMachineId ? [resolvedMachineId] : []);
+
+      const assetTag =
+        (document.assetTags && document.assetTags.length > 0 ? document.assetTags[0] : undefined) ||
+        resolvedMachineId ||
+        'ASSET-GENERAL';
+      const docTitle = document.title || document.documentNumber || 'DOCUMENT';
+
+      // Prepend the contextual hierarchy header to EVERY chunk before generating embeddings and indexing into Qdrant:
+      // [Asset: ${assetTag} | Document: ${docTitle} | Page: ${pageNumber} | Section: ${sectionTitle}]\n
+      for (const chunk of chunkDrafts) {
+        const sectionTitle = chunk.sectionHeading || 'General';
+        const prefix = `[Asset: ${assetTag} | Document: ${docTitle} | Page: ${chunk.pageNumber} | Section: ${sectionTitle}]\n`;
+        if (!chunk.content.startsWith('[Asset:')) {
+          chunk.content = `${prefix}${chunk.content}`;
+          chunk.tokenCount = Math.max(1, Math.ceil(chunk.content.length / 4));
+        }
+      }
+
       // Clear previous chunks and vector records for this version if re-processing
       await this.dataStore.deleteKnowledgeChunks(version.id);
       await this.vectorStore.deleteByFilter(this.collectionName, {
@@ -124,7 +160,7 @@ export class IngestionProcessor {
         organizationId,
       });
 
-      // 7. Generate vector embeddings
+      // 7. Generate vector embeddings on context-prefixed chunks
       await this.dataStore.updateProcessingJobProgress(
         jobId,
         85,
@@ -141,16 +177,6 @@ export class IngestionProcessor {
         'Indexing chunks with authorized metadata into vector database',
         'PROCESSING'
       );
-
-      const resolvedMachineId =
-        machineId ||
-        (document as any).machineId ||
-        ((document as any).assetIds && (document as any).assetIds.length > 0 ? (document as any).assetIds[0] : undefined) ||
-        (document.assetTags && document.assetTags.length > 0 ? document.assetTags[0] : undefined);
-
-      const linkedAssetIds: string[] = (document as any).assetIds && (document as any).assetIds.length > 0
-        ? (document as any).assetIds
-        : (resolvedMachineId ? [resolvedMachineId] : []);
 
       const vectorPoints: VectorPoint[] = chunkDrafts.map((chunk, idx) => ({
         id: chunk.qdrantPointId,
