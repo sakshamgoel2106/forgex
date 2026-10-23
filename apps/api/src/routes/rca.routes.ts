@@ -212,7 +212,7 @@ export function createRcaRouter(
    * GET /api/v1/rca/retention/status
    * Get RCA retention policy configuration and execution status
    */
-  router.get('/retention/status', async (req: Request, res: Response): Promise<void> => {
+  router.get('/retention/status', async (_req: Request, res: Response): Promise<void> => {
     try {
       const status = getRcaRetentionStatus();
       res.status(200).json({

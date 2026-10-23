@@ -858,9 +858,9 @@ Return ONLY a valid JSON object matching this schema:
     const hasFailedStep = steps.some((step) => step.status === 'FAIL');
     const isStepIncomplete = steps.length === 0 || steps.some((step) => step.status !== 'PASS');
     const isHaltedOrAbandoned =
-      session.status === 'FAILED' ||
-      session.status === 'HALTED' ||
-      session.status === 'ABANDONED';
+      (session.status as string) === 'FAILED' ||
+      (session.status as string) === 'HALTED' ||
+      (session.status as string) === 'ABANDONED';
 
     // Strict Conditional Check: An RCA must ONLY be saved to Maintenance History if it has successfully completed all investigation steps (e.g., status is 100% Verified or Completed).
     // If an RCA is incomplete, halted, failed at a specific step, or abandoned, it must NOT be logged into the permanent Maintenance History.
