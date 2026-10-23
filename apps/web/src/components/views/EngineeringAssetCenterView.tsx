@@ -15,6 +15,7 @@ import {
   Shield,
   FileCode,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import type {
@@ -32,7 +33,16 @@ import { RealThreeDViewerModal } from './RealThreeDViewerModal';
 import { PidEngineeringViewerModal } from './PidEngineeringViewerModal';
 
 export const EngineeringAssetCenterView: React.FC = () => {
-  const { token, organization, isOwnerOrAdmin, user } = useAuth();
+  const { token, organization, isOwnerOrAdmin, user, membership } = useAuth();
+
+  const canManage = Boolean(
+    isOwnerOrAdmin ||
+    membership?.role === 'ORGANIZATION_ADMIN' ||
+    membership?.role === 'ORGANIZATION_OWNER' ||
+    membership?.role === 'PLANT_MANAGER' ||
+    membership?.role === 'ENGINEER' ||
+    membership?.role === 'ENGINEER_TECHNICIAN'
+  );
 
   const [activeTab, setActiveTab] = useState<'models' | 'resources' | 'drawings'>('models');
   const [summary, setSummary] = useState<EngineeringAssetCenterSummary | null>(null);
@@ -216,6 +226,81 @@ export const EngineeringAssetCenterView: React.FC = () => {
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleDeleteModel = async (modelId: string, modelTitle: string) => {
+    if (!confirm(`Are you sure you want to permanently delete 3D CAD model "${modelTitle}"? This will safely remove the binary file from storage, the database record, and vector chunks.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/v1/engineering/models/${modelId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-organization-id': organization!.id,
+        },
+      });
+      if (res.ok) {
+        setModels((prev) => prev.filter((m) => m.id !== modelId));
+        await loadAllData();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        alert(errJson.error?.message || errJson.error || 'Failed to delete 3D model');
+      }
+    } catch (err: any) {
+      console.error('Delete 3D model error', err);
+      alert(err?.message || 'Failed to delete 3D model');
+    }
+  };
+
+  const handleDeleteResource = async (resourceId: string, resourceTitle: string) => {
+    if (!confirm(`Are you sure you want to permanently delete manufacturer resource "${resourceTitle}"? This will safely remove the file from storage, the database record, and vector chunks.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/v1/engineering/manufacturer-resources/${resourceId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-organization-id': organization!.id,
+        },
+      });
+      if (res.ok) {
+        setResources((prev) => prev.filter((r) => r.id !== resourceId));
+        await loadAllData();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        alert(errJson.error?.message || errJson.error || 'Failed to delete resource');
+      }
+    } catch (err: any) {
+      console.error('Delete resource error', err);
+      alert(err?.message || 'Failed to delete resource');
+    }
+  };
+
+  const handleDeleteDrawing = async (drawingId: string, drawingTitle: string) => {
+    if (!confirm(`Are you sure you want to permanently delete engineering drawing "${drawingTitle}"? This will safely remove the file from storage, the database record, and vector chunks.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/v1/engineering/drawings/${drawingId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-organization-id': organization!.id,
+        },
+      });
+      if (res.ok) {
+        setDrawings((prev) => prev.filter((d) => d.id !== drawingId));
+        await loadAllData();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        alert(errJson.error?.message || errJson.error || 'Failed to delete drawing');
+      }
+    } catch (err: any) {
+      console.error('Delete drawing error', err);
+      alert(err?.message || 'Failed to delete drawing');
     }
   };
 
@@ -684,7 +769,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
               </select>
             </div>
 
-            {isOwnerOrAdmin && (
+            {canManage && (
               <button
                 onClick={() => setIsUploadModelOpen(true)}
                 className="flex items-center gap-2 bg-[#151C24] hover:bg-black text-white text-xs font-semibold px-4 py-2 rounded-xl transition shadow-sm"
@@ -781,7 +866,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
                           Launch 3D
                         </button>
 
-                        {isOwnerOrAdmin && (
+                        {canManage && (
                           <button
                             onClick={() => {
                               setReplaceTarget({
@@ -799,6 +884,16 @@ export const EngineeringAssetCenterView: React.FC = () => {
                           >
                             <RefreshCw className="w-3 h-3 text-blue-600" />
                             Replace
+                          </button>
+                        )}
+
+                        {canManage && (
+                          <button
+                            onClick={() => handleDeleteModel(model.id, model.title)}
+                            className="p-1.5 rounded-lg text-xs font-semibold bg-white border border-[#CBD5E1] hover:bg-rose-50 text-[#64748B] hover:text-rose-600 transition shadow-xs"
+                            title="Delete 3D CAD model"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         )}
                       </div>
@@ -834,7 +929,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="text-sm font-semibold text-[#1A202C]">Registered OEM Technical Resources & Manuals</h3>
-            {isOwnerOrAdmin && (
+            {canManage && (
               <button
                 onClick={() => setIsAddResourceOpen(true)}
                 className="flex items-center gap-2 bg-[#151C24] hover:bg-black text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-xs"
@@ -894,7 +989,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
                     </td>
                     <td className="py-3 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        {isOwnerOrAdmin && (
+                        {canManage && (
                           <button
                             onClick={() => {
                               setReplaceTarget({
@@ -912,6 +1007,15 @@ export const EngineeringAssetCenterView: React.FC = () => {
                           >
                             <RefreshCw className="w-3 h-3 text-amber-600" />
                             Replace
+                          </button>
+                        )}
+                        {canManage && (
+                          <button
+                            onClick={() => handleDeleteResource(res.id, res.title)}
+                            className="p-1 rounded-lg text-xs font-semibold bg-white border border-[#CBD5E1] hover:bg-rose-50 text-[#64748B] hover:text-rose-600 transition shadow-xs"
+                            title="Delete OEM resource"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         )}
                         {isOwnerOrAdmin && res.verificationStatus === 'UNVERIFIED' && (
@@ -937,7 +1041,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h3 className="text-sm font-semibold text-[#1A202C]">Original Engineering Drawings & Schematics</h3>
-            {isOwnerOrAdmin && (
+            {canManage && (
               <button
                 onClick={() => setIsAddDrawingOpen(true)}
                 className="flex items-center gap-2 bg-[#151C24] hover:bg-black text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-xs"
@@ -988,7 +1092,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
                       <Eye className="w-3.5 h-3.5" />
                       Schematic
                     </button>
-                    {isOwnerOrAdmin && (
+                    {canManage && (
                       <button
                         onClick={() => {
                           setReplaceTarget({
@@ -1006,6 +1110,15 @@ export const EngineeringAssetCenterView: React.FC = () => {
                       >
                         <RefreshCw className="w-3 h-3 text-purple-600" />
                         Replace
+                      </button>
+                    )}
+                    {canManage && (
+                      <button
+                        onClick={() => handleDeleteDrawing(dwg.id, dwg.drawingTitle)}
+                        className="p-1.5 rounded-lg text-xs font-semibold bg-white border border-[#CBD5E1] hover:bg-rose-50 text-[#64748B] hover:text-rose-600 transition shadow-xs"
+                        title="Delete engineering drawing"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>

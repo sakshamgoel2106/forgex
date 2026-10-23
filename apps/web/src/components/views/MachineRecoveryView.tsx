@@ -15,6 +15,7 @@ import {
   Sparkles,
   ClipboardList,
   Upload,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
@@ -128,35 +129,6 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
     }
   }, [token, getHeaders, regPlantId]);
 
-  const handleSyncFromDocuments = async () => {
-    setIsSyncingDocuments(true);
-    try {
-      const res = await fetch('/api/v1/recovery/sync-from-documents', {
-        method: 'POST',
-        headers: getHeaders(),
-      });
-      const json = await res.json();
-      if (res.ok && json.success) {
-        toast.success('Sync Complete', json.message || 'Extracted parameters from Knowledge Hub documents.');
-        setSuccessMessage(json.message);
-        await loadOverviewData();
-        if (selectedMachineId) await loadMachineProfile(selectedMachineId);
-      } else {
-        toast.error('Sync Failed', json.error?.message || 'Could not sync documents.');
-        setErrorMessage(json.error?.message || 'Failed to sync documents.');
-      }
-    } catch (err: any) {
-      toast.error('Sync Error', err?.message);
-      setErrorMessage(err?.message);
-    } finally {
-      setIsSyncingDocuments(false);
-    }
-  };
-
-  useEffect(() => {
-    loadOverviewData();
-  }, [loadOverviewData]);
-
   // Load Selected Machine Profile
   const loadMachineProfile = useCallback(async (machineId: string) => {
     if (!token) return;
@@ -183,11 +155,72 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
     }
   }, [token, getHeaders]);
 
+  const handleSyncFromDocuments = useCallback(async (isBackground: boolean = false) => {
+    if (!token) return;
+    if (!isBackground) setIsSyncingDocuments(true);
+    try {
+      const res = await fetch('/api/v1/recovery/sync-from-documents', {
+        method: 'POST',
+        headers: getHeaders(),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        if (!isBackground) {
+          toast.success('Sync Complete', json.message || 'Extracted parameters from Knowledge Hub documents.');
+          setSuccessMessage(json.message);
+        } else if (json.data?.totalClaimsGenerated > 0) {
+          toast.success(
+            'Knowledge Hub Auto-Sync',
+            `Auto-populated ${json.data.totalClaimsGenerated} parameter claim(s) from indexed manuals.`
+          );
+        }
+        await loadOverviewData();
+        if (selectedMachineId) await loadMachineProfile(selectedMachineId);
+      } else if (!isBackground) {
+        toast.error('Sync Failed', json.error?.message || 'Could not sync documents.');
+        setErrorMessage(json.error?.message || 'Failed to sync documents.');
+      }
+    } catch (err: any) {
+      if (!isBackground) {
+        toast.error('Sync Error', err?.message);
+        setErrorMessage(err?.message);
+      }
+    } finally {
+      if (!isBackground) setIsSyncingDocuments(false);
+    }
+  }, [token, getHeaders, loadOverviewData, selectedMachineId, loadMachineProfile, toast]);
+
+  useEffect(() => {
+    loadOverviewData();
+    // Automatically extract and sync Knowledge Hub indexed documents on component load
+    handleSyncFromDocuments(true);
+  }, [loadOverviewData, handleSyncFromDocuments]);
+
   useEffect(() => {
     if (selectedMachineId) {
       loadMachineProfile(selectedMachineId);
     }
   }, [selectedMachineId, loadMachineProfile]);
+
+  // Global Esc key dismiss handler for modals and detail panel
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isRegisterModalOpen) {
+          setIsRegisterModalOpen(false);
+        } else if (isTaskModalOpen) {
+          setIsTaskModalOpen(false);
+        } else if (reviewingClaimId) {
+          setReviewingClaimId(null);
+        } else if (selectedMachineId) {
+          setSelectedMachineId(null);
+          setProfile(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isRegisterModalOpen, isTaskModalOpen, reviewingClaimId, selectedMachineId]);
 
   // Handle Evidence Ingestion & AI Extraction
   const handleIngestEvidence = async (e: React.FormEvent) => {
@@ -419,9 +452,9 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
 
         <div className="flex items-center gap-2">
           <button
-            onClick={handleSyncFromDocuments}
+            onClick={() => handleSyncFromDocuments(false)}
             disabled={isSyncingDocuments}
-            className="px-3.5 py-1.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded-md text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+            className="px-3.5 py-1.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition disabled:opacity-60"
             title="Automatically scan indexed Knowledge Hub documents and extract nameplate & technical parameters into Recovery"
           >
             <Sparkles className={`w-3.5 h-3.5 ${isSyncingDocuments ? 'animate-spin' : ''}`} />
@@ -430,7 +463,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
           {isSupervisory && (
             <button
               onClick={() => setIsRegisterModalOpen(true)}
-              className="px-3.5 py-1.5 bg-[#151C24] hover:bg-black text-white rounded-md text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+              className="px-3.5 py-1.5 bg-[#151C24] hover:bg-black text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
             >
               <Plus className="w-4 h-4" />
               Register Legacy Asset
@@ -477,56 +510,56 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
 
       {/* Overview Metrics Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 px-6 pt-4">
-        <div className="bg-white border border-[#E2E8F0] p-3 rounded-lg flex flex-col justify-between shadow-xs">
-          <div className="text-[11px] font-medium text-[#64748B]">Total Machinery</div>
+        <div className="bg-white border border-[#E2E8F0] border-t-2 border-t-slate-500 p-3.5 rounded-xl flex flex-col justify-between shadow-xs hover:border-slate-300 transition">
+          <div className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider">Total Machinery</div>
           <div className="text-2xl font-bold text-[#1A202C] mt-1">{summary?.totalMachines ?? 0}</div>
-          <div className="text-[10px] text-[#64748B] mt-1">Monitored plant assets</div>
+          <div className="text-[10px] text-[#64748B] mt-1 font-medium">Monitored plant assets</div>
         </div>
 
-        <div className="bg-white border border-amber-200 p-3 rounded-lg flex flex-col justify-between shadow-xs">
-          <div className="text-[11px] font-medium text-amber-700 flex items-center justify-between">
+        <div className="bg-white border border-amber-200 border-t-2 border-t-amber-500 bg-amber-50/20 p-3.5 rounded-xl flex flex-col justify-between shadow-xs hover:border-amber-300 transition">
+          <div className="text-[11px] font-semibold text-amber-800 flex items-center justify-between uppercase tracking-wider">
             <span>Legacy / Incomplete</span>
-            <AlertTriangle className="w-3.5 h-3.5" />
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
           </div>
           <div className="text-2xl font-bold text-amber-700 mt-1">{summary?.legacyOrIncompleteMachines ?? 0}</div>
-          <div className="text-[10px] text-amber-600 mt-1">Require knowledge recovery</div>
+          <div className="text-[10px] text-amber-700 mt-1 font-medium">Require knowledge recovery</div>
         </div>
 
-        <div className="bg-white border border-blue-200 p-3 rounded-lg flex flex-col justify-between shadow-xs">
-          <div className="text-[11px] font-medium text-[#2563EB] flex items-center justify-between">
+        <div className="bg-white border border-blue-200 border-t-2 border-t-[#2563EB] bg-blue-50/20 p-3.5 rounded-xl flex flex-col justify-between shadow-xs hover:border-blue-300 transition">
+          <div className="text-[11px] font-semibold text-[#2563EB] flex items-center justify-between uppercase tracking-wider">
             <span>Claims For Review</span>
-            <Clock className="w-3.5 h-3.5" />
+            <Clock className="w-3.5 h-3.5 text-blue-600" />
           </div>
           <div className="text-2xl font-bold text-[#2563EB] mt-1">{summary?.claimsAwaitingReview ?? 0}</div>
-          <div className="text-[10px] text-blue-600 mt-1">Pending engineer sign-off</div>
+          <div className="text-[10px] text-blue-700 mt-1 font-medium">Pending engineer sign-off</div>
         </div>
 
-        <div className="bg-white border border-emerald-200 p-3 rounded-lg flex flex-col justify-between shadow-xs">
-          <div className="text-[11px] font-medium text-emerald-700 flex items-center justify-between">
+        <div className="bg-white border border-emerald-200 border-t-2 border-t-emerald-600 bg-emerald-50/20 p-3.5 rounded-xl flex flex-col justify-between shadow-xs hover:border-emerald-300 transition">
+          <div className="text-[11px] font-semibold text-emerald-800 flex items-center justify-between uppercase tracking-wider">
             <span>Approved Knowledge</span>
-            <ShieldCheck className="w-3.5 h-3.5" />
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
           </div>
           <div className="text-2xl font-bold text-emerald-700 mt-1">{summary?.approvedClaimsCount ?? 0}</div>
-          <div className="text-[10px] text-emerald-600 mt-1">Grounded in Copilot KB</div>
+          <div className="text-[10px] text-emerald-700 mt-1 font-medium">Grounded in Copilot KB</div>
         </div>
 
-        <div className="bg-white border border-purple-200 p-3 rounded-lg flex flex-col justify-between shadow-xs">
-          <div className="text-[11px] font-medium text-purple-700 flex items-center justify-between">
+        <div className="bg-white border border-purple-200 border-t-2 border-t-purple-600 bg-purple-50/20 p-3.5 rounded-xl flex flex-col justify-between shadow-xs hover:border-purple-300 transition">
+          <div className="text-[11px] font-semibold text-purple-800 flex items-center justify-between uppercase tracking-wider">
             <span>Collection Tasks</span>
-            <ClipboardList className="w-3.5 h-3.5" />
+            <ClipboardList className="w-3.5 h-3.5 text-purple-600" />
           </div>
           <div className="text-2xl font-bold text-purple-700 mt-1">{summary?.openCollectionTasksCount ?? 0}</div>
-          <div className="text-[10px] text-purple-600 mt-1">
+          <div className="text-[10px] text-purple-700 mt-1 font-medium">
             {summary?.overdueTasksCount ? `${summary.overdueTasksCount} overdue` : 'On track'}
           </div>
         </div>
 
-        <div className="bg-white border border-[#E2E8F0] p-3 rounded-lg flex flex-col justify-between shadow-xs">
-          <div className="text-[11px] font-medium text-[#64748B]">Rejected / Superseded</div>
+        <div className="bg-white border border-[#E2E8F0] border-t-2 border-t-slate-400 p-3.5 rounded-xl flex flex-col justify-between shadow-xs hover:border-slate-300 transition">
+          <div className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider">Rejected / Superseded</div>
           <div className="text-2xl font-bold text-[#475569] mt-1">
             {(summary?.rejectedClaimsCount ?? 0) + (summary?.supersededClaimsCount ?? 0)}
           </div>
-          <div className="text-[10px] text-[#64748B] mt-1">Excluded from current RAG</div>
+          <div className="text-[10px] text-[#64748B] mt-1 font-medium">Excluded from current RAG</div>
         </div>
       </div>
 
@@ -657,7 +690,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                     {onNavigateToCopilot && (
                       <button
                         onClick={() => onNavigateToCopilot(profile.assetTag)}
-                        className="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-[#2563EB] border border-[#CBD5E1] rounded text-xs flex items-center gap-1.5 transition shadow-xs font-medium"
+                        className="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-[#2563EB] border border-[#CBD5E1] rounded-lg text-xs flex items-center gap-1.5 transition shadow-xs font-medium"
                       >
                         <Sparkles className="w-3.5 h-3.5 text-[#2563EB]" />
                         Ask Copilot
@@ -665,10 +698,21 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                     )}
                     <button
                       onClick={() => setIsTaskModalOpen(true)}
-                      className="px-2.5 py-1.5 bg-[#151C24] hover:bg-black text-white rounded text-xs font-semibold flex items-center gap-1 transition shadow-xs"
+                      className="px-2.5 py-1.5 bg-[#151C24] hover:bg-black text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition shadow-xs"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Assign Task
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedMachineId(null);
+                        setProfile(null);
+                      }}
+                      className="p-1.5 bg-white hover:bg-slate-100 text-[#64748B] hover:text-[#1A202C] border border-[#CBD5E1] rounded-lg transition shadow-xs flex items-center gap-1"
+                      title="Close machine details (Esc)"
+                    >
+                      <X className="w-4 h-4" />
+                      <span className="text-xs font-medium hidden sm:inline">Close</span>
                     </button>
                   </div>
                 </div>
@@ -1164,15 +1208,25 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
 
       {/* Register Legacy Machine Modal */}
       {isRegisterModalOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-[#E2E8F0] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsRegisterModalOpen(false);
+          }}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white border border-[#E2E8F0] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
               <h3 className="text-sm font-bold text-[#1A202C] flex items-center gap-2">
                 <Cpu className="w-4 h-4 text-[#2563EB]" />
                 Register Legacy or Poorly Documented Machine
               </h3>
-              <button onClick={() => setIsRegisterModalOpen(false)} className="text-[#64748B] hover:text-[#1A202C]">
-                <XCircle className="w-5 h-5" />
+              <button
+                type="button"
+                onClick={() => setIsRegisterModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+                title="Close modal (Esc)"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -1357,15 +1411,25 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
 
       {/* Assign Collection Task Modal */}
       {isTaskModalOpen && profile && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-[#E2E8F0] rounded-xl w-full max-w-md overflow-hidden shadow-2xl">
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsTaskModalOpen(false);
+          }}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white border border-[#E2E8F0] rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
               <h3 className="text-sm font-bold text-[#1A202C] flex items-center gap-2">
                 <ClipboardList className="w-4 h-4 text-amber-600" />
                 Assign Knowledge Collection Task
               </h3>
-              <button onClick={() => setIsTaskModalOpen(false)} className="text-[#64748B] hover:text-[#1A202C]">
-                <XCircle className="w-5 h-5" />
+              <button
+                type="button"
+                onClick={() => setIsTaskModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+                title="Close modal (Esc)"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
 

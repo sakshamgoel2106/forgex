@@ -1174,13 +1174,32 @@ export function createEngineeringRouter(
    * Admin deletes a 3D model
    */
   router.delete(
-    '/models/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN']),
+    ['/models/:id', '/models-3d/:id'],
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'ENGINEER_TECHNICIAN']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
         const actorUserId = req.auth!.user.id;
-        const deleted = await dataStore.deleteEngineeringModel3D(orgId, String(req.params.id));
+        const modelId = String(req.params.id);
+
+        const model = await dataStore.getEngineeringModel3DById(orgId, modelId);
+        if (model) {
+          if (storageAdapter) {
+            if (model.storageKey) {
+              try { await storageAdapter.deleteObject(model.storageKey); } catch {}
+            }
+            if (model.convertedStorageKey) {
+              try { await storageAdapter.deleteObject(model.convertedStorageKey); } catch {}
+            }
+          }
+          if (_vectorStore) {
+            try {
+              await _vectorStore.deleteByFilter('forgex_knowledge', { modelId, organizationId: orgId });
+            } catch {}
+          }
+        }
+
+        const deleted = await dataStore.deleteEngineeringModel3D(orgId, modelId);
 
         if (!deleted) {
           res.status(404).json({
@@ -1601,13 +1620,27 @@ export function createEngineeringRouter(
    * Delete resource
    */
   router.delete(
-    '/manufacturer-resources/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN']),
+    ['/manufacturer-resources/:id', '/resources/:id'],
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'ENGINEER_TECHNICIAN']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
         const actorUserId = req.auth!.user.id;
-        const deleted = await dataStore.deleteManufacturerResource(orgId, String(req.params.id));
+        const resourceId = String(req.params.id);
+
+        const resource = await dataStore.getManufacturerResourceById(orgId, resourceId);
+        if (resource) {
+          if (storageAdapter && resource.storageKey) {
+            try { await storageAdapter.deleteObject(resource.storageKey); } catch {}
+          }
+          if (_vectorStore) {
+            try {
+              await _vectorStore.deleteByFilter('forgex_knowledge', { resourceId, organizationId: orgId });
+            } catch {}
+          }
+        }
+
+        const deleted = await dataStore.deleteManufacturerResource(orgId, resourceId);
 
         if (!deleted) {
           res.status(404).json({
@@ -2420,13 +2453,27 @@ export function createEngineeringRouter(
    * Admin deletes an engineering drawing
    */
   router.delete(
-    '/drawings/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN']),
+    ['/drawings/:id', '/engineering-drawings/:id'],
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'ENGINEER_TECHNICIAN']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
         const actorUserId = req.auth!.user.id;
-        const deleted = await dataStore.deleteEngineeringDrawing(orgId, String(req.params.id));
+        const drawingId = String(req.params.id);
+
+        const drawing = await dataStore.getEngineeringDrawingById(orgId, drawingId);
+        if (drawing) {
+          if (storageAdapter && drawing.storageKey) {
+            try { await storageAdapter.deleteObject(drawing.storageKey); } catch {}
+          }
+          if (_vectorStore) {
+            try {
+              await _vectorStore.deleteByFilter('forgex_knowledge', { drawingId, organizationId: orgId });
+            } catch {}
+          }
+        }
+
+        const deleted = await dataStore.deleteEngineeringDrawing(orgId, drawingId);
 
         if (!deleted) {
           res.status(404).json({

@@ -1661,17 +1661,29 @@ ${updated.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check:
           }
         }
 
-        // Automatic fallback: check tags or extracted text
+        // Automatic fallback: match by asset tags, name, manufacturer, model, or single-machine fleet
         if (targetMachines.length === 0) {
           const docTags = doc.assetTags || [];
+          const docTitleUpper = (doc.title || '').toUpperCase();
           const pageText = pages.slice(0, 5).map((p) => p.rawText.toUpperCase()).join(' ');
+
           for (const m of allMachines) {
             const tagUpper = m.assetTag.toUpperCase();
-            if (docTags.some((t) => t.toUpperCase() === tagUpper) || pageText.includes(tagUpper)) {
-              if (!targetMachines.some((item) => item.id === m.id)) {
-                targetMachines.push(m);
-                dataStore.linkDocumentToAsset(orgId, doc.id, m.id, m.assetTag).catch(() => {});
-              }
+            const nameUpper = (m.name || '').toUpperCase();
+            const mfrUpper = (m.manufacturer || '').toUpperCase();
+            const modelUpper = (m.modelNumber || '').toUpperCase();
+
+            const isMatched =
+              docTags.some((t) => t.toUpperCase() === tagUpper) ||
+              pageText.includes(tagUpper) ||
+              (nameUpper.length > 3 && (docTitleUpper.includes(nameUpper) || pageText.includes(nameUpper))) ||
+              (modelUpper.length > 2 && (docTitleUpper.includes(modelUpper) || pageText.includes(modelUpper))) ||
+              (mfrUpper.length > 2 && (docTitleUpper.includes(mfrUpper) || pageText.includes(mfrUpper))) ||
+              allMachines.length === 1;
+
+            if (isMatched && !targetMachines.some((item) => item.id === m.id)) {
+              targetMachines.push(m);
+              dataStore.linkDocumentToAsset(orgId, doc.id, m.id, m.assetTag).catch(() => {});
             }
           }
         }

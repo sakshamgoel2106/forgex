@@ -31,18 +31,18 @@ export class InMemoryVectorStoreAdapter implements IVectorStoreAdapter {
 
   public async deleteByFilter(
     collectionName: string,
-    filter: { documentVersionId?: string; organizationId?: string }
+    filter: { documentVersionId?: string; organizationId?: string; [key: string]: unknown }
   ): Promise<void> {
     const col = this.collections.get(collectionName);
     if (!col) return;
 
     for (const [id, pt] of col.entries()) {
       let match = true;
-      if (filter.documentVersionId && pt.payload.documentVersionId !== filter.documentVersionId) {
-        match = false;
-      }
-      if (filter.organizationId && pt.payload.organizationId !== filter.organizationId) {
-        match = false;
+      for (const [key, value] of Object.entries(filter)) {
+        if (value !== undefined && (pt.payload as Record<string, unknown>)[key] !== value) {
+          match = false;
+          break;
+        }
       }
       if (match) {
         col.delete(id);

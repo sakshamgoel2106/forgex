@@ -113,10 +113,10 @@ export function createDocumentRouter(
     controller.retry
   );
 
-  // Delete: Admin & Owner only
+  // Delete: Admin, Owner, Plant Manager & Engineers
   router.delete(
     '/:id',
-    requireRole([...ADMIN_ROLES]),
+    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'PLANT_MANAGER', 'ENGINEER', 'ENGINEER_TECHNICIAN']),
     controller.delete
   );
 

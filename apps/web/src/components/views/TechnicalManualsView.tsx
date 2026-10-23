@@ -228,6 +228,12 @@ export const TechnicalManualsView: React.FC = () => {
     membership?.role === 'ORGANIZATION_ADMIN' ||
     membership?.role === 'ORGANIZATION_OWNER'
   );
+  const canManage = Boolean(
+    isAdmin ||
+    membership?.role === 'PLANT_MANAGER' ||
+    membership?.role === 'ENGINEER' ||
+    membership?.role === 'ENGINEER_TECHNICIAN'
+  );
 
   const [documents, setDocuments] = useState<HubDocument[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -799,7 +805,7 @@ export const TechnicalManualsView: React.FC = () => {
 
   // Handle delete document with real backend API
   const handleDeleteDoc = async (docId: string) => {
-    if (!confirm('Are you sure you want to delete this document and all associated Qdrant vector chunks?')) {
+    if (!confirm('Are you sure you want to permanently delete this document and all associated Qdrant vector chunks? This action will safely remove files from storage, database records, and vector indices.')) {
       return;
     }
 
@@ -817,9 +823,10 @@ export const TechnicalManualsView: React.FC = () => {
         setIsSidePanelOpen(false);
       }
 
+      toast.success('Document Deleted', 'Document, storage file, and vector chunks safely removed.');
       await fetchDocuments();
     } catch (err: any) {
-      alert(`Delete failed: ${err?.message}`);
+      toast.error('Delete Failed', err?.message || 'Could not delete document.');
     }
   };
 
@@ -1514,8 +1521,8 @@ export const TechnicalManualsView: React.FC = () => {
                               </button>
                             )}
 
-                            {/* Delete Action (Admins only) */}
-                            {isAdmin && (
+                            {/* Delete Action (Admins & Engineers) */}
+                            {canManage && (
                               <button
                                 onClick={() => handleDeleteDoc(doc.id)}
                                 title="Delete document & vectors"
@@ -1589,6 +1596,15 @@ export const TechnicalManualsView: React.FC = () => {
                     label={selectedDoc.status}
                     tone={selectedDoc.status === 'FAILED' ? 'critical' : 'healthy'}
                   />
+                  {canManage && (
+                    <button
+                      onClick={() => handleDeleteDoc(selectedDoc.id)}
+                      className="p-1.5 rounded text-[#64748B] hover:text-rose-600 hover:bg-rose-50 transition"
+                      title="Delete document & vector chunks"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setIsSidePanelOpen(false);

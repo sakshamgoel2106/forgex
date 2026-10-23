@@ -40,7 +40,7 @@ export interface IVectorStoreAdapter {
   ensureCollection(collectionName: string, dimensions: number): Promise<void>;
   upsertPoints(collectionName: string, points: VectorPoint[]): Promise<void>;
   deletePoints(collectionName: string, pointIds: string[]): Promise<void>;
-  deleteByFilter(collectionName: string, filter: { documentVersionId?: string; organizationId?: string }): Promise<void>;
+  deleteByFilter(collectionName: string, filter: { documentVersionId?: string; organizationId?: string; [key: string]: unknown }): Promise<void>;
   search(
     collectionName: string,
     vector: number[],

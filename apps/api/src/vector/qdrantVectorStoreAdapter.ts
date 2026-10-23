@@ -229,15 +229,14 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
 
   public async deleteByFilter(
     collectionName: string,
-    filter: { documentVersionId?: string; organizationId?: string }
+    filter: { documentVersionId?: string; organizationId?: string; [key: string]: unknown }
   ): Promise<void> {
     await this.executeWithRetry(async () => {
       const mustClauses: any[] = [];
-      if (filter.documentVersionId) {
-        mustClauses.push({ key: 'documentVersionId', match: { value: filter.documentVersionId } });
-      }
-      if (filter.organizationId) {
-        mustClauses.push({ key: 'organizationId', match: { value: filter.organizationId } });
+      for (const [key, value] of Object.entries(filter)) {
+        if (value !== undefined) {
+          mustClauses.push({ key, match: { value } });
+        }
       }
 
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
