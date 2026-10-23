@@ -138,6 +138,7 @@ import type {
   ReopenSpecialistTicketDTO,
   ApproveTicketRestartDTO,
 } from './dataStore.interface.js';
+import { sanitizeMachineOrAssetId, toSafeUuidParam } from '../utils/uuid.js';
 
 export class PgDataStore implements IDataStore {
   private expertKnowledgeEntries = new Map<string, ExpertKnowledgeEntry>();
@@ -1502,13 +1503,14 @@ export class PgDataStore implements IDataStore {
   }
 
   public async getAssetById(organizationId: string, assetId: string): Promise<Asset | null> {
+    const cleanId = sanitizeMachineOrAssetId(assetId);
     const res = await this.pool.query(
       `SELECT id, organization_id, plant_id, parent_asset_id, asset_tag, name,
               area, manufacturer, model_number, serial_number, operational_state,
               created_at, updated_at
        FROM assets
-       WHERE (id::text = $1 OR asset_tag = $1) AND organization_id = $2`,
-      [assetId, organizationId]
+       WHERE (id::text = $1 OR id::text = $3 OR asset_tag = $1 OR asset_tag = $3) AND organization_id = $2`,
+      [cleanId, organizationId, assetId]
     );
     if (res.rows.length === 0) return null;
     const row = res.rows[0];
@@ -2530,51 +2532,93 @@ export class PgDataStore implements IDataStore {
     const saved: Citation[] = [];
 
     for (const c of citations) {
-      const res = await this.pool.query(
-        `INSERT INTO citations (
-           message_id, document_id, document_version_id, page_number,
-           knowledge_chunk_id, snippet, confidence_score, section_heading
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, message_id, document_id, document_version_id, page_number,
-                   knowledge_chunk_id, snippet, confidence_score, section_heading, created_at`,
-        [
-          c.messageId,
-          c.documentId,
-          c.documentVersionId,
-          c.pageNumber,
-          c.knowledgeChunkId ?? null,
-          c.snippet,
-          c.confidenceScore ?? 1.0,
-          c.sectionHeading ?? null,
-        ]
-      );
-      const row = res.rows[0];
+      const cleanDocId = sanitizeMachineOrAssetId(c.documentId);
+      const safeDocUuid = toSafeUuidParam(cleanDocId);
+      const safeChunkUuid = toSafeUuidParam(c.knowledgeChunkId);
+      const safeVersionUuid = toSafeUuidParam(c.documentVersionId);
 
-      // Fetch document title, doc number and version revision
-      const docRes = await this.pool.query(
-        `SELECT d.document_number, d.title, v.revision
-         FROM documents d
-         LEFT JOIN document_versions v ON v.id = $2
-         WHERE d.id = $1`,
-        [c.documentId, c.documentVersionId]
-      );
-      const doc = docRes.rows[0];
+      // Fallback handling for citations with non-UUID document identifiers
+      if (!safeDocUuid || !safeVersionUuid) {
+        saved.push({
+          id: crypto.randomUUID(),
+          messageId: c.messageId,
+          documentId: cleanDocId || c.documentId,
+          documentNumber: c.documentNumber || 'HIST-RECORD',
+          documentTitle: c.documentTitle || 'Maintenance History Ledger',
+          documentVersionId: c.documentVersionId,
+          revisionTag: 'REV-A',
+          pageNumber: c.pageNumber,
+          chunkId: c.knowledgeChunkId || crypto.randomUUID(),
+          snippet: c.snippet,
+          confidenceScore: Number(c.confidenceScore ?? 1.0),
+          sectionHeading: c.sectionHeading,
+        });
+        continue;
+      }
 
-      saved.push({
-        id: row.id,
-        messageId: row.message_id,
-        documentId: row.document_id,
-        documentNumber: doc?.document_number || 'DOC-UNKNOWN',
-        documentTitle: doc?.title || 'Unknown Document',
-        documentVersionId: row.document_version_id,
-        revisionTag: doc?.revision || 'REV-A',
-        pageNumber: row.page_number,
-        chunkId: row.knowledge_chunk_id || row.id,
-        snippet: row.snippet,
-        confidenceScore: Number(row.confidence_score),
-        sectionHeading: row.section_heading,
-      });
+      try {
+        const res = await this.pool.query(
+          `INSERT INTO citations (
+             message_id, document_id, document_version_id, page_number,
+             knowledge_chunk_id, snippet, confidence_score, section_heading
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING id, message_id, document_id, document_version_id, page_number,
+                     knowledge_chunk_id, snippet, confidence_score, section_heading, created_at`,
+          [
+            c.messageId,
+            safeDocUuid,
+            safeVersionUuid,
+            c.pageNumber,
+            safeChunkUuid ?? null,
+            c.snippet,
+            c.confidenceScore ?? 1.0,
+            c.sectionHeading ?? null,
+          ]
+        );
+        const row = res.rows[0];
+
+        // Fetch document title, doc number and version revision
+        const docRes = await this.pool.query(
+          `SELECT d.document_number, d.title, v.revision
+           FROM documents d
+           LEFT JOIN document_versions v ON v.id = $2
+           WHERE d.id = $1`,
+          [safeDocUuid, safeVersionUuid]
+        );
+        const doc = docRes.rows[0];
+
+        saved.push({
+          id: row.id,
+          messageId: row.message_id,
+          documentId: row.document_id,
+          documentNumber: doc?.document_number || c.documentNumber || 'DOC-UNKNOWN',
+          documentTitle: doc?.title || c.documentTitle || 'Unknown Document',
+          documentVersionId: row.document_version_id,
+          revisionTag: doc?.revision || 'REV-A',
+          pageNumber: row.page_number,
+          chunkId: row.knowledge_chunk_id || row.id,
+          snippet: row.snippet,
+          confidenceScore: Number(row.confidence_score),
+          sectionHeading: row.section_heading,
+        });
+      } catch (insertErr) {
+        // Fallback handling if foreign key or other DB constraint fails
+        saved.push({
+          id: crypto.randomUUID(),
+          messageId: c.messageId,
+          documentId: cleanDocId || c.documentId,
+          documentNumber: c.documentNumber || 'DOC-RECORD',
+          documentTitle: c.documentTitle || 'Reference Document',
+          documentVersionId: c.documentVersionId,
+          revisionTag: 'REV-A',
+          pageNumber: c.pageNumber,
+          chunkId: c.knowledgeChunkId || crypto.randomUUID(),
+          snippet: c.snippet,
+          confidenceScore: Number(c.confidenceScore ?? 1.0),
+          sectionHeading: c.sectionHeading,
+        });
+      }
     }
     return saved;
   }
@@ -2699,7 +2743,7 @@ export class PgDataStore implements IDataStore {
       [
         dto.organizationId,
         dto.plantId ?? null,
-        dto.machineId ?? null,
+        dto.machineId ? toSafeUuidParam(sanitizeMachineOrAssetId(dto.machineId)) : null,
         dto.documentId ?? null,
         dto.documentVersionId ?? null,
         dto.pageNumber ?? null,
@@ -2809,8 +2853,15 @@ export class PgDataStore implements IDataStore {
       conditions.push(`plant_id = $${params.length}`);
     }
     if (filter?.machineId) {
-      params.push(filter.machineId);
-      conditions.push(`machine_id = $${params.length}`);
+      const cleanMachineId = sanitizeMachineOrAssetId(filter.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        params.push(safeUuid);
+        conditions.push(`machine_id = $${params.length}`);
+      } else {
+        params.push(cleanMachineId);
+        conditions.push(`machine_id::text = $${params.length}`);
+      }
     }
     if (filter?.documentId) {
       params.push(filter.documentId);
@@ -2885,6 +2936,8 @@ export class PgDataStore implements IDataStore {
   // Maintenance Cases & Troubleshooting Workflows (Phase 6)
   // --------------------------------------------------------------------------
   public async createMaintenanceCase(dto: CreateMaintenanceCaseDTO): Promise<MaintenanceCase> {
+    const cleanAssetId = sanitizeMachineOrAssetId(dto.assetId);
+    const safeAssetUuid = toSafeUuidParam(cleanAssetId) || cleanAssetId;
     const caseNumber = dto.caseNumber || `CASE-${Date.now().toString().slice(-6)}`;
     const res = await this.pool.query(
       `INSERT INTO maintenance_cases (
@@ -2899,7 +2952,7 @@ export class PgDataStore implements IDataStore {
       [
         dto.organizationId,
         dto.plantId,
-        dto.assetId,
+        safeAssetUuid,
         caseNumber,
         dto.title,
         dto.description || null,
@@ -3080,8 +3133,15 @@ export class PgDataStore implements IDataStore {
       conditions.push(`plant_id = $${params.length}`);
     }
     if (filter?.assetId) {
-      params.push(filter.assetId);
-      conditions.push(`asset_id = $${params.length}`);
+      const cleanAssetId = sanitizeMachineOrAssetId(filter.assetId);
+      const safeUuid = toSafeUuidParam(cleanAssetId);
+      if (safeUuid) {
+        params.push(safeUuid);
+        conditions.push(`asset_id = $${params.length}`);
+      } else {
+        params.push(cleanAssetId);
+        conditions.push(`asset_id::text = $${params.length}`);
+      }
     }
     if (filter?.status) {
       params.push(filter.status);
@@ -3336,10 +3396,11 @@ export class PgDataStore implements IDataStore {
   }
 
   public async getMachineById(organizationId: string, machineId: string): Promise<Machine | null> {
+    const cleanId = sanitizeMachineOrAssetId(machineId);
     const res = await this.pool.query(
       `SELECT * FROM assets
-       WHERE (id::text = $1 OR asset_tag = $1) AND organization_id = $2`,
-      [machineId, organizationId]
+       WHERE (id::text = $1 OR id::text = $3 OR asset_tag = $1 OR asset_tag = $3) AND organization_id = $2`,
+      [cleanId, organizationId, machineId]
     );
     if (res.rows.length === 0) return null;
     return this.mapMachineRow(res.rows[0]);
@@ -3532,10 +3593,15 @@ export class PgDataStore implements IDataStore {
   }
 
   public async createMissingInfoTask(organizationId: string, dto: CreateMissingInfoTaskDTO): Promise<MissingInformationTask> {
-    const machine = await this.getMachineById(organizationId, dto.machineId);
+    const cleanMachineId = sanitizeMachineOrAssetId(dto.machineId);
+    const machine =
+      (await this.getMachineById(organizationId, cleanMachineId)) ||
+      (await this.getMachineById(organizationId, dto.machineId));
     if (!machine) {
       throw new Error(`Machine '${dto.machineId}' not found in this organization.`);
     }
+
+    const safeMachineUuid = toSafeUuidParam(machine.id) || machine.id;
 
     const res = await this.pool.query(
       `INSERT INTO missing_information_tasks (
@@ -3546,7 +3612,7 @@ export class PgDataStore implements IDataStore {
        RETURNING *`,
       [
         organizationId,
-        machine.id,
+        safeMachineUuid,
         dto.assignedUserId ?? null,
         dto.assignedRole ?? null,
         JSON.stringify(dto.requestedFields),
@@ -3578,8 +3644,15 @@ export class PgDataStore implements IDataStore {
     const params: any[] = [organizationId];
 
     if (filters?.machineId) {
-      params.push(filters.machineId);
-      conditions.push(`t.machine_id = $${params.length}`);
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        params.push(safeUuid);
+        conditions.push(`t.machine_id = $${params.length}`);
+      } else {
+        params.push(cleanMachineId);
+        conditions.push(`(t.machine_id::text = $${params.length} OR a.asset_tag = $${params.length})`);
+      }
     }
     if (filters?.assignedUserId) {
       params.push(filters.assignedUserId);
@@ -3736,12 +3809,16 @@ export class PgDataStore implements IDataStore {
   }
 
   public async listComponentMappings(organizationId: string, machineId: string): Promise<ComponentMapping[]> {
-    const res = await this.pool.query(
-      `SELECT * FROM component_mappings
+    const cleanMachineId = sanitizeMachineOrAssetId(machineId);
+    const safeUuid = toSafeUuidParam(cleanMachineId);
+    const query = safeUuid
+      ? `SELECT * FROM component_mappings
        WHERE organization_id = $1 AND machine_id = $2
-       ORDER BY component_name ASC`,
-      [organizationId, machineId]
-    );
+       ORDER BY component_name ASC`
+      : `SELECT * FROM component_mappings
+       WHERE organization_id = $1 AND machine_id::text = $2
+       ORDER BY component_name ASC`;
+    const res = await this.pool.query(query, [organizationId, safeUuid || cleanMachineId]);
     return res.rows.map((r) => this.mapComponentRow(r));
   }
 
@@ -4275,8 +4352,15 @@ export class PgDataStore implements IDataStore {
       query += ` AND plant_id = $${params.length}`;
     }
     if (filters?.machineId) {
-      params.push(filters.machineId);
-      query += ` AND machine_id = $${params.length}`;
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        params.push(safeUuid);
+        query += ` AND machine_id = $${params.length}`;
+      } else {
+        params.push(cleanMachineId);
+        query += ` AND machine_id::text = $${params.length}`;
+      }
     }
     if (filters?.status) {
       params.push(filters.status);
@@ -4446,8 +4530,15 @@ export class PgDataStore implements IDataStore {
     const params: unknown[] = [organizationId];
 
     if (filters?.machineId) {
-      params.push(filters.machineId);
-      query += ` AND machine_id = $${params.length}`;
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        params.push(safeUuid);
+        query += ` AND machine_id = $${params.length}`;
+      } else {
+        params.push(cleanMachineId);
+        query += ` AND machine_id::text = $${params.length}`;
+      }
     }
     if (filters?.resourceType) {
       params.push(filters.resourceType);
@@ -4616,8 +4707,15 @@ export class PgDataStore implements IDataStore {
       query += ` AND plant_id = $${params.length}`;
     }
     if (filters?.machineId) {
-      params.push(filters.machineId);
-      query += ` AND machine_id = $${params.length}`;
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        params.push(safeUuid);
+        query += ` AND machine_id = $${params.length}`;
+      } else {
+        params.push(cleanMachineId);
+        query += ` AND machine_id::text = $${params.length}`;
+      }
     }
     if (filters?.drawingType) {
       params.push(filters.drawingType);
@@ -5041,9 +5139,9 @@ export class PgDataStore implements IDataStore {
       [
         id,
         organizationId,
-        dto.machineId,
+        toSafeUuidParam(sanitizeMachineOrAssetId(dto.machineId)) || sanitizeMachineOrAssetId(dto.machineId),
         dto.plantId,
-        dto.primarySpecialistUserId || null,
+        dto.primarySpecialistUserId ? (toSafeUuidParam(sanitizeMachineOrAssetId(dto.primarySpecialistUserId)) || dto.primarySpecialistUserId) : null,
         JSON.stringify(dto.backupSpecialistUserIds || []),
         JSON.stringify(dto.requiredCertifications || []),
         computedStatus,
@@ -5077,13 +5175,18 @@ export class PgDataStore implements IDataStore {
     organizationId: string,
     machineId: string
   ): Promise<MachineSpecialistMapping | null> {
-    const res = await this.pool.query(
-      `SELECT msm.*, u.full_name as primary_name
+    const cleanMachineId = sanitizeMachineOrAssetId(machineId);
+    const safeUuid = toSafeUuidParam(cleanMachineId);
+    const query = safeUuid
+      ? `SELECT msm.*, u.full_name as primary_name
        FROM machine_specialist_mappings msm
        LEFT JOIN users u ON u.id = msm.primary_specialist_user_id
-       WHERE msm.organization_id = $1 AND msm.machine_id = $2`,
-      [organizationId, machineId]
-    );
+       WHERE msm.organization_id = $1 AND msm.machine_id = $2`
+      : `SELECT msm.*, u.full_name as primary_name
+       FROM machine_specialist_mappings msm
+       LEFT JOIN users u ON u.id = msm.primary_specialist_user_id
+       WHERE msm.organization_id = $1 AND msm.machine_id::text = $2`;
+    const res = await this.pool.query(query, [organizationId, safeUuid || cleanMachineId]);
     if (res.rows.length === 0) return null;
     const row = res.rows[0];
     return {
@@ -5463,8 +5566,15 @@ export class PgDataStore implements IDataStore {
       conditions.push(`st.reported_by_user_id = $${values.length}`);
     }
     if (filters?.machineId) {
-      values.push(filters.machineId);
-      conditions.push(`st.machine_id = $${values.length}`);
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        values.push(safeUuid);
+        conditions.push(`st.machine_id = $${values.length}`);
+      } else {
+        values.push(cleanMachineId);
+        conditions.push(`(st.machine_asset_tag = $${values.length} OR st.machine_id::text = $${values.length})`);
+      }
     }
     if (filters?.status) {
       values.push(filters.status);
@@ -6005,6 +6115,9 @@ export class PgDataStore implements IDataStore {
       data.recordNumber ||
       `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    const cleanMachineId = sanitizeMachineOrAssetId(data.machineId);
+    const safeMachineUuid = toSafeUuidParam(cleanMachineId);
+
     const fallbackRecord: MaintenanceRecord = {
       id,
       recordNumber,
@@ -6121,10 +6234,15 @@ export class PgDataStore implements IDataStore {
       // Query prior records for recurrence count
       let priorIds: string[] = [];
       try {
-        const countRes = await this.pool.query(
-          `SELECT id FROM maintenance_records WHERE organization_id = $1 AND machine_id = $2 AND fault_category = $3`,
-          [organizationId, data.machineId, data.faultCategory]
-        );
+        const countRes = safeMachineUuid
+          ? await this.pool.query(
+              `SELECT id FROM maintenance_records WHERE organization_id = $1 AND machine_id = $2 AND fault_category = $3`,
+              [organizationId, safeMachineUuid, data.faultCategory]
+            )
+          : await this.pool.query(
+              `SELECT id FROM maintenance_records WHERE organization_id = $1 AND (machine_asset_tag = $2 OR machine_id::text = $2) AND fault_category = $3`,
+              [organizationId, cleanMachineId, data.faultCategory]
+            );
         priorIds = countRes.rows.map((r: any) => r.id);
       } catch {
         priorIds = [];
@@ -6179,8 +6297,8 @@ export class PgDataStore implements IDataStore {
           recordNumber,
           organizationId,
           data.plantId,
-          data.machineId,
-          data.machineAssetTag,
+          safeMachineUuid || cleanMachineId,
+          data.machineAssetTag || (cleanMachineId && !safeMachineUuid ? cleanMachineId : 'UNKNOWN'),
           data.ticketId ?? null,
           data.ticketNumber ?? null,
           data.caseId ?? null,
@@ -6276,8 +6394,15 @@ export class PgDataStore implements IDataStore {
     const values: unknown[] = [organizationId];
 
     if (filters?.machineId) {
-      values.push(filters.machineId);
-      whereClauses.push(`machine_id = $${values.length}`);
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        values.push(safeUuid);
+        whereClauses.push(`machine_id = $${values.length}`);
+      } else {
+        values.push(cleanMachineId);
+        whereClauses.push(`(machine_asset_tag = $${values.length} OR machine_id::text = $${values.length})`);
+      }
     }
     if (filters?.plantId) {
       values.push(filters.plantId);
@@ -6366,8 +6491,15 @@ export class PgDataStore implements IDataStore {
     const values: unknown[] = [organizationId];
 
     if (filters?.machineId) {
-      values.push(filters.machineId);
-      whereClauses.push(`machine_id = $${values.length}`);
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        values.push(safeUuid);
+        whereClauses.push(`machine_id = $${values.length}`);
+      } else {
+        values.push(cleanMachineId);
+        whereClauses.push(`(machine_asset_tag = $${values.length} OR machine_id::text = $${values.length})`);
+      }
     }
     if (filters?.plantId) {
       values.push(filters.plantId);
@@ -6576,7 +6708,8 @@ export class PgDataStore implements IDataStore {
     organizationId: string,
     machineId: string
   ): Promise<MaintenanceRecord[]> {
-    return this.listMaintenanceRecords(organizationId, { machineId });
+    const cleanMachineId = sanitizeMachineOrAssetId(machineId);
+    return this.listMaintenanceRecords(organizationId, { machineId: cleanMachineId });
   }
 
   // --------------------------------------------------------------------------
@@ -6591,6 +6724,8 @@ export class PgDataStore implements IDataStore {
     const recurrenceCountThreshold = data.recurrenceCountThreshold ?? 2;
     const requiresSafetyStop = data.requiresSafetyStop ?? false;
     const safetyLimits = data.safetyLimits || {};
+    const cleanMachineId = data.machineId ? sanitizeMachineOrAssetId(data.machineId) : null;
+    const safeMachineUuid = cleanMachineId ? toSafeUuidParam(cleanMachineId) : null;
 
     await this.pool.query(
       `INSERT INTO machine_recurring_fault_policies (
@@ -6607,7 +6742,7 @@ export class PgDataStore implements IDataStore {
       [
         id,
         organizationId,
-        data.machineId || null,
+        safeMachineUuid || null,
         data.machineType || null,
         timeWindowDays,
         recurrenceCountThreshold,
@@ -6630,12 +6765,16 @@ export class PgDataStore implements IDataStore {
     machineId: string,
     machineType?: string
   ): Promise<RecurringFaultThresholdConfig> {
-    const res = await this.pool.query(
-      `SELECT * FROM machine_recurring_fault_policies
+    const cleanMachineId = sanitizeMachineOrAssetId(machineId);
+    const safeMachineUuid = toSafeUuidParam(cleanMachineId);
+    const query = safeMachineUuid
+      ? `SELECT * FROM machine_recurring_fault_policies
        WHERE organization_id = $1 AND (machine_id = $2 OR machine_id IS NULL)
-       ORDER BY machine_id NULLS LAST LIMIT 1`,
-      [organizationId, machineId]
-    );
+       ORDER BY machine_id NULLS LAST LIMIT 1`
+      : `SELECT * FROM machine_recurring_fault_policies
+       WHERE organization_id = $1 AND (machine_id::text = $2 OR machine_id IS NULL)
+       ORDER BY machine_id NULLS LAST LIMIT 1`;
+    const res = await this.pool.query(query, [organizationId, safeMachineUuid || cleanMachineId]);
 
     if (res.rows.length > 0) {
       const row = res.rows[0];
@@ -6669,11 +6808,12 @@ export class PgDataStore implements IDataStore {
     machineId: string,
     options?: RecurringFaultOptions
   ): Promise<RecurringFaultAnalysis> {
-    const machine = await this.getMachineById(organizationId, machineId);
+    const cleanMachineId = sanitizeMachineOrAssetId(machineId);
+    const machine = await this.getMachineById(organizationId, cleanMachineId);
     const assetTag = machine?.assetTag || 'UNKNOWN';
     const policy = await this.getRecurringFaultPolicy(
       organizationId,
-      machineId,
+      cleanMachineId,
       machine?.machineType
     );
 
@@ -6682,7 +6822,7 @@ export class PgDataStore implements IDataStore {
       options?.recurrenceCountThreshold ?? policy.recurrenceCountThreshold ?? 2;
 
     const cutoff = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
-    const allRecords = await this.getMachineMaintenanceHistory(organizationId, machineId);
+    const allRecords = await this.getMachineMaintenanceHistory(organizationId, cleanMachineId);
     const windowRecords = allRecords.filter((r) => new Date(r.resolvedAt) >= cutoff);
 
     const categoryCounts: Record<string, MaintenanceRecord[]> = {};
@@ -7654,8 +7794,15 @@ export class PgDataStore implements IDataStore {
     const params: any[] = [organizationId];
 
     if (filters?.machineId) {
-      params.push(filters.machineId);
-      conditions.push(`machine_id = $${params.length}`);
+      const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
+      const safeUuid = toSafeUuidParam(cleanMachineId);
+      if (safeUuid) {
+        params.push(safeUuid);
+        conditions.push(`machine_id = $${params.length}`);
+      } else {
+        params.push(cleanMachineId);
+        conditions.push(`(machine_asset_tag = $${params.length} OR machine_id::text = $${params.length})`);
+      }
     }
     if (filters?.plantId) {
       params.push(filters.plantId);

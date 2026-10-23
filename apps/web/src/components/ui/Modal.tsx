@@ -46,34 +46,34 @@ export const Modal: React.FC<ModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
       <div
-        className={`w-full ${widthClasses[maxWidth]} bg-industrial-surface border border-industrial-border rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]`}
+        className={`w-full ${widthClasses[maxWidth]} bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]`}
       >
         {/* Modal Header */}
-        <div className="px-5 py-3.5 border-b border-industrial-border flex items-center justify-between bg-industrial-sidebar">
+        <div className="px-6 py-4 border-b border-slate-200/80 flex items-center justify-between bg-white">
           <div>
-            <h3 className="text-sm font-bold font-mono text-industrial-text uppercase tracking-wide">
+            <h3 className="text-sm font-semibold text-slate-900 tracking-tight font-sans">
               {title}
             </h3>
             {subtitle && (
-              <p className="text-[11px] font-mono text-industrial-secondary mt-0.5">{subtitle}</p>
+              <p className="text-xs text-slate-500 mt-1 font-sans leading-relaxed">{subtitle}</p>
             )}
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-industrial-surface text-industrial-secondary hover:text-industrial-text transition"
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 overflow-y-auto flex-1 text-xs text-industrial-text">{children}</div>
+        <div className="p-6 overflow-y-auto flex-1 text-xs text-slate-700 bg-white">{children}</div>
 
         {/* Modal Footer */}
         {footer && (
-          <div className="px-5 py-3 border-t border-industrial-border bg-industrial-sidebar flex items-center justify-end gap-2">
+          <div className="px-6 py-3.5 border-t border-slate-200/80 bg-slate-50/70 flex items-center justify-end gap-2">
             {footer}
           </div>
         )}

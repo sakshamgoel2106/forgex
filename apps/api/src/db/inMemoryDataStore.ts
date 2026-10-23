@@ -139,6 +139,7 @@ import type {
   ReopenSpecialistTicketDTO,
   ApproveTicketRestartDTO,
 } from './dataStore.interface.js';
+import { sanitizeMachineOrAssetId } from '../utils/uuid.js';
 
 export class InMemoryDataStore implements IDataStore {
   private organizations = new Map<string, Organization>();
@@ -984,10 +985,14 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   public async getAssetById(organizationId: string, assetId: string): Promise<Asset | null> {
-    let asset = this.assets.get(assetId) ?? null;
+    const cleanId = sanitizeMachineOrAssetId(assetId);
+    let asset = this.assets.get(assetId) ?? this.assets.get(cleanId) ?? null;
     if (!asset) {
       for (const a of this.assets.values()) {
-        if (a.organizationId === organizationId && a.assetTag === assetId) {
+        if (
+          a.organizationId === organizationId &&
+          (a.id === assetId || a.id === cleanId || a.assetTag === assetId || a.assetTag === cleanId)
+        ) {
           asset = a;
           break;
         }
@@ -1955,10 +1960,14 @@ export class InMemoryDataStore implements IDataStore {
   }
 
   public async getMachineById(organizationId: string, machineId: string): Promise<Machine | null> {
-    let machine = this.machines.get(machineId) ?? null;
+    const cleanId = sanitizeMachineOrAssetId(machineId);
+    let machine = this.machines.get(machineId) ?? this.machines.get(cleanId) ?? null;
     if (!machine) {
       for (const m of this.machines.values()) {
-        if (m.organizationId === organizationId && m.assetTag === machineId) {
+        if (
+          m.organizationId === organizationId &&
+          (m.id === machineId || m.id === cleanId || m.assetTag === machineId || m.assetTag === cleanId)
+        ) {
           machine = m;
           break;
         }
@@ -3048,8 +3057,9 @@ export class InMemoryDataStore implements IDataStore {
     organizationId: string,
     machineId: string
   ): Promise<MachineSpecialistMapping | null> {
+    const cleanId = sanitizeMachineOrAssetId(machineId);
     for (const m of this.machineSpecialists.values()) {
-      if (m.organizationId === organizationId && m.machineId === machineId) {
+      if (m.organizationId === organizationId && (m.machineId === machineId || m.machineId === cleanId)) {
         return m;
       }
     }
@@ -3206,8 +3216,16 @@ export class InMemoryDataStore implements IDataStore {
       if (filters?.reportedByUserId && t.reportedByUserId !== filters.reportedByUserId) {
         continue;
       }
-      if (filters?.machineId && t.machineId !== filters.machineId) {
-        continue;
+      if (filters?.machineId) {
+        const cleanId = sanitizeMachineOrAssetId(filters.machineId);
+        if (
+          t.machineId !== filters.machineId &&
+          t.machineId !== cleanId &&
+          t.machineAssetTag !== filters.machineId &&
+          t.machineAssetTag !== cleanId
+        ) {
+          continue;
+        }
       }
       if (filters?.status && t.status !== filters.status) {
         continue;
@@ -3873,7 +3891,17 @@ export class InMemoryDataStore implements IDataStore {
     let results: MaintenanceRecord[] = [];
     for (const r of this.maintenanceRecords.values()) {
       if (r.organizationId !== organizationId) continue;
-      if (filters?.machineId && r.machineId !== filters.machineId) continue;
+      if (filters?.machineId) {
+        const cleanId = sanitizeMachineOrAssetId(filters.machineId);
+        if (
+          r.machineId !== filters.machineId &&
+          r.machineId !== cleanId &&
+          r.machineAssetTag !== filters.machineId &&
+          r.machineAssetTag !== cleanId
+        ) {
+          continue;
+        }
+      }
       if (filters?.plantId && r.plantId !== filters.plantId) continue;
       if (filters?.ticketId && r.ticketId !== filters.ticketId) continue;
       if (filters?.caseId && r.caseId !== filters.caseId) continue;
@@ -3924,7 +3952,17 @@ export class InMemoryDataStore implements IDataStore {
     let count = 0;
     for (const r of this.maintenanceRecords.values()) {
       if (r.organizationId !== organizationId) continue;
-      if (filters?.machineId && r.machineId !== filters.machineId) continue;
+      if (filters?.machineId) {
+        const cleanId = sanitizeMachineOrAssetId(filters.machineId);
+        if (
+          r.machineId !== filters.machineId &&
+          r.machineId !== cleanId &&
+          r.machineAssetTag !== filters.machineId &&
+          r.machineAssetTag !== cleanId
+        ) {
+          continue;
+        }
+      }
       if (filters?.plantId && r.plantId !== filters.plantId) continue;
       if (filters?.ticketId && r.ticketId !== filters.ticketId) continue;
       if (filters?.caseId && r.caseId !== filters.caseId) continue;
@@ -4019,7 +4057,8 @@ export class InMemoryDataStore implements IDataStore {
     organizationId: string,
     machineId: string
   ): Promise<MaintenanceRecord[]> {
-    return this.listMaintenanceRecords(organizationId, { machineId });
+    const cleanId = sanitizeMachineOrAssetId(machineId);
+    return this.listMaintenanceRecords(organizationId, { machineId: cleanId });
   }
 
   // --------------------------------------------------------------------------
@@ -4854,7 +4893,17 @@ export class InMemoryDataStore implements IDataStore {
     const res: MachineEvidenceClaim[] = [];
     for (const claim of this.evidenceClaims.values()) {
       if (claim.organizationId !== organizationId) continue;
-      if (filters?.machineId && claim.machineId !== filters.machineId) continue;
+      if (filters?.machineId) {
+        const cleanId = sanitizeMachineOrAssetId(filters.machineId);
+        if (
+          claim.machineId !== filters.machineId &&
+          claim.machineId !== cleanId &&
+          claim.machineAssetTag !== filters.machineId &&
+          claim.machineAssetTag !== cleanId
+        ) {
+          continue;
+        }
+      }
       if (filters?.plantId && claim.plantId !== filters.plantId) continue;
       if (filters?.status && claim.status !== filters.status) continue;
       if (filters?.fieldName && claim.fieldName.toLowerCase() !== filters.fieldName.toLowerCase()) continue;

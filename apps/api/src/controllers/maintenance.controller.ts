@@ -3,6 +3,7 @@ import type { IDataStore } from '../db/dataStore.interface.js';
 import type { MaintenanceWorkflowEngine } from '../services/maintenanceWorkflowEngine.js';
 import type { MaintenanceCaseStatus, MaintenanceCaseSeverity } from '@forgex/shared-types';
 import { logger } from '../utils/logger.js';
+import { sanitizeMachineOrAssetId } from '../utils/uuid.js';
 
 export class MaintenanceController {
   private idempotencyStore = new Map<string, { data: any; statusCode: number; timestamp: number }>();
@@ -121,11 +122,13 @@ export class MaintenanceController {
         return;
       }
 
+      const cleanAssetId = sanitizeMachineOrAssetId(assetId.trim());
+
       const result = await this.workflowEngine.createCase(
         {
           plantId,
           plantName,
-          assetId: assetId.trim(),
+          assetId: cleanAssetId,
           assetTag,
           assetName,
           title: title.trim(),
@@ -288,18 +291,26 @@ export class MaintenanceController {
       const organizationId = req.auth?.organization.id;
       const userId = req.auth?.user.id;
       const userRole = req.auth?.membership.role;
-      const id = req.params.id as string;
+      const id = sanitizeMachineOrAssetId(req.params.id as string);
+      const query =
+        typeof req.body?.query === 'string' && req.body.query.trim().length > 0
+          ? req.body.query.trim()
+          : undefined;
 
       if (!organizationId || !userId) {
         res.status(401).json({ success: false, error: 'Unauthorized: Missing auth context' });
         return;
       }
 
-      const result = await this.workflowEngine.diagnoseCase(id, {
-        organizationId,
-        userId,
-        userRole,
-      });
+      const result = await this.workflowEngine.diagnoseCase(
+        id,
+        {
+          organizationId,
+          userId,
+          userRole,
+        },
+        { query }
+      );
 
       res.status(200).json({
         success: true,

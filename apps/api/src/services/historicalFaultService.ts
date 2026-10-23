@@ -9,6 +9,7 @@ import type {
   HistoricalEvidenceType,
   PriorRepairEffectiveness,
 } from '@forgex/shared-types';
+import { sanitizeMachineOrAssetId, sanitizeUuid } from '../utils/uuid.js';
 
 const STOPWORDS = new Set([
   'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an', 'and', 'any', 'are', 'aren',
@@ -89,16 +90,28 @@ export class HistoricalFaultService {
     request: HistoricalFaultMatchRequest,
     userRole?: string
   ): Promise<HistoricalFaultRetrievalResponse> {
-    const { query = '', faultCategory, faultCode, componentId, limit = 10, minScore = 0.15 } = request;
+    const {
+      query,
+      faultCategory,
+      faultCode,
+      componentId,
+      limit = 5,
+      minScore = 0.25,
+    } = request;
+    const cleanMachineId = sanitizeMachineOrAssetId(machineId);
 
     // 1. Validate Machine and Organization Ownership
-    const machine = await this.dataStore.getMachineById(organizationId, machineId);
+    const machine =
+      (await this.dataStore.getMachineById(organizationId, cleanMachineId)) ||
+      (await this.dataStore.getMachineById(organizationId, machineId));
     if (!machine) {
       throw new Error(`Machine '${machineId}' not found in this organization.`);
     }
 
+    const targetMachineId = sanitizeUuid(machine.id) || machine.id || cleanMachineId;
+
     // 2. Retrieve All Persistent Maintenance Records for this Machine
-    const allRecords = await this.dataStore.getMachineMaintenanceHistory(organizationId, machineId);
+    const allRecords = await this.dataStore.getMachineMaintenanceHistory(organizationId, targetMachineId);
 
     // 3. RBAC Enforcement: Exclude internal investigation records from non-privileged roles
     const isPrivileged =
@@ -118,14 +131,14 @@ export class HistoricalFaultService {
     });
 
     if (permittedRecords.length === 0) {
-      const emptyRecurrence = await this.dataStore.detectRecurringFaults(organizationId, machineId, {
+      const emptyRecurrence = await this.dataStore.detectRecurringFaults(organizationId, targetMachineId, {
         timeWindowDays: request.timeWindowDays,
       });
 
       return {
-        machineId,
+        machineId: targetMachineId,
         machineAssetTag: machine.assetTag,
-        query,
+        query: query || '',
         totalHistoryCount: 0,
         matchedCount: 0,
         matches: [],
@@ -138,7 +151,7 @@ export class HistoricalFaultService {
       };
     }
 
-    const queryTokens = this.extractTokens(query);
+    const queryTokens = this.extractTokens(query || '');
     const scoredMatches: HistoricalFaultMatchResult[] = [];
 
     // 4. Score and Rank Each Record
@@ -339,7 +352,7 @@ export class HistoricalFaultService {
     }
 
     // 6. Recurrence Analysis from DataStore
-    const recurrenceAnalysis = await this.dataStore.detectRecurringFaults(organizationId, machineId, {
+    const recurrenceAnalysis = await this.dataStore.detectRecurringFaults(organizationId, targetMachineId, {
       timeWindowDays: request.timeWindowDays,
     });
 
@@ -351,9 +364,9 @@ export class HistoricalFaultService {
       : 'NO_MATCHING_RECORDS';
 
     return {
-      machineId,
+      machineId: targetMachineId,
       machineAssetTag: machine.assetTag,
-      query,
+      query: query || '',
       totalHistoryCount: permittedRecords.length,
       matchedCount: topMatches.length,
       matches: topMatches,

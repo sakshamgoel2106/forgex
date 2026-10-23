@@ -4,6 +4,7 @@ import type {
   EmployeeProfile,
 } from '@forgex/shared-types';
 import { logger } from '../utils/logger.js';
+import { sanitizeMachineOrAssetId, sanitizeUuid } from '../utils/uuid.js';
 
 export interface SpecialistRoutingResult {
   assignedSpecialistUserId: string | null;
@@ -86,13 +87,17 @@ export class SpecialistRoutingService {
       };
     }
 
-    const machine = await this.dataStore.getMachineById(organizationId, machineId);
+    const cleanMachineId = sanitizeMachineOrAssetId(machineId);
+    const machine =
+      (await this.dataStore.getMachineById(organizationId, cleanMachineId)) ||
+      (await this.dataStore.getMachineById(organizationId, machineId));
     const targetPlantId = machine?.plantId || plantId;
+    const targetMachineId = sanitizeUuid(machine?.id || cleanMachineId) || machine?.id || cleanMachineId;
 
-    const mapping = await this.dataStore.getMachineSpecialistMapping(organizationId, machineId);
+    const mapping = await this.dataStore.getMachineSpecialistMapping(organizationId, targetMachineId);
     if (!mapping) {
       logger.info(
-        { organizationId, machineId },
+        { organizationId, machineId: targetMachineId },
         'No specialist mapping configured for machine. Routing to Admin triage.'
       );
       return {

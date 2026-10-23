@@ -711,6 +711,8 @@ export interface CreateCitationDTO {
   snippet: string;
   confidenceScore?: number;
   sectionHeading?: string | null;
+  documentNumber?: string;
+  documentTitle?: string;
 }
 
 export interface CreateFeedbackDTO {

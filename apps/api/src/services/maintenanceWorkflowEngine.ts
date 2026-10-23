@@ -25,6 +25,7 @@ import type {
   MaintenanceRecord,
 } from '@forgex/shared-types';
 import { logger } from '../utils/logger.js';
+import { sanitizeMachineOrAssetId } from '../utils/uuid.js';
 import crypto from 'node:crypto';
 
 export interface WorkflowContext {
@@ -107,13 +108,21 @@ export class MaintenanceWorkflowEngine {
       }
     }
 
-    // Validate plant and asset ownership with support for assetTag and plant inference
-    let resolvedAsset = await this.dataStore.getAssetById(organizationId, assetId);
+    // Validate plant and asset ownership with support for assetTag, pure UUID extraction, and plant inference
+    const sanitizedAssetId = sanitizeMachineOrAssetId(assetId);
+    let resolvedAsset = await this.dataStore.getAssetById(organizationId, sanitizedAssetId);
+    if (!resolvedAsset && sanitizedAssetId !== assetId) {
+      resolvedAsset = await this.dataStore.getAssetById(organizationId, assetId);
+    }
     if (!resolvedAsset) {
       const allAssets = await this.dataStore.listAssets(organizationId);
       resolvedAsset =
         allAssets.find(
-          (a) => a.id === assetId || a.assetTag.toLowerCase() === assetId.toLowerCase()
+          (a) =>
+            a.id === sanitizedAssetId ||
+            a.id === assetId ||
+            a.assetTag.toLowerCase() === assetId.toLowerCase() ||
+            a.assetTag.toLowerCase() === sanitizedAssetId.toLowerCase()
         ) || null;
     }
 
@@ -414,7 +423,8 @@ export class MaintenanceWorkflowEngine {
    */
   public async diagnoseCase(
     caseId: string,
-    context: WorkflowContext
+    context: WorkflowContext,
+    options?: { query?: string }
   ): Promise<MaintenanceCase> {
     const { organizationId, userId } = context;
 
@@ -433,7 +443,12 @@ export class MaintenanceWorkflowEngine {
       throw new Error('Invalid state transition: Cannot run diagnosis while case is pending supervisor approval.');
     }
 
-    const asset = await this.dataStore.getAssetById(organizationId, existing.assetId);
+    // Input sanitization: Strip "machine_" prefix and extract pure UUID for database execution
+    const effectiveAssetId = sanitizeMachineOrAssetId(existing.assetId);
+
+    const asset =
+      (await this.dataStore.getAssetById(organizationId, effectiveAssetId)) ||
+      (await this.dataStore.getAssetById(organizationId, existing.assetId));
     const assetTag = asset?.assetTag || 'EQUIPMENT';
 
     // Transition status to INVESTIGATING
@@ -450,14 +465,16 @@ export class MaintenanceWorkflowEngine {
     });
 
     // 1. Cross-retrieve authorized manual evidence via RAG
-    const query = existing.symptomDescription;
+    const query = (options?.query && options.query.trim().length > 0)
+      ? options.query.trim()
+      : (existing.symptomDescription || existing.title || 'Diagnostic investigation');
 
     let ragResult;
     try {
       ragResult = await this.ragEngine.query(
         {
           plantId: existing.plantId,
-          assetId: existing.assetId,
+          assetId: effectiveAssetId,
           query,
           topK: 4,
         },
@@ -1361,7 +1378,10 @@ export class MaintenanceWorkflowEngine {
     // Retrieve related machine/asset details if available
     let machine = null;
     if (caseData.assetId) {
-      machine = await this.dataStore.getAssetById(organizationId, caseData.assetId);
+      const cleanAssetId = sanitizeMachineOrAssetId(caseData.assetId);
+      machine =
+        (await this.dataStore.getAssetById(organizationId, cleanAssetId)) ||
+        (await this.dataStore.getAssetById(organizationId, caseData.assetId));
     }
 
     // Retrieve assigned technician details if available
@@ -1664,7 +1684,11 @@ export class MaintenanceWorkflowEngine {
     }
 
     // Verify machine / asset exists in this organization
-    const machine = await this.dataStore.getMachineById(organizationId, caseEntity.assetId);
+    const cleanAssetId = sanitizeMachineOrAssetId(caseEntity.assetId);
+    const machine =
+      (await this.dataStore.getMachineById(organizationId, cleanAssetId)) ||
+      (await this.dataStore.getMachineById(organizationId, caseEntity.assetId)) ||
+      (await this.dataStore.getAssetById(organizationId, cleanAssetId));
     if (!machine) {
       throw new Error(
         `Validation failed: Machine asset '${caseEntity.assetId}' does not belong to organization or does not exist.`
@@ -1792,7 +1816,7 @@ export class MaintenanceWorkflowEngine {
     // Create the historical maintenance record
     const record = await this.dataStore.createMaintenanceRecord(organizationId, {
       plantId: caseEntity.plantId,
-      machineId: caseEntity.assetId,
+      machineId: machine.id,
       machineAssetTag: machine.assetTag || 'UNKNOWN',
       caseId: caseEntity.id,
       caseNumber: caseEntity.caseNumber,

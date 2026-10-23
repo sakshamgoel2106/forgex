@@ -25,6 +25,7 @@ import { config } from '../config/env.js';
 import { SecurityEventService } from './securityEvent.service.js';
 import { SpecialistRoutingService } from './specialistRouting.service.js';
 import { HistoricalFaultService } from './historicalFaultService.js';
+import { sanitizeMachineOrAssetId, sanitizeUuid } from '../utils/uuid.js';
 
 export interface RAGContext {
   organizationId: string;
@@ -60,7 +61,12 @@ export class RAGQueryEngine {
     context: RAGContext
   ): Promise<RAGQueryResponse> {
     const { organizationId, userId, userRole } = context;
-    const { plantId, assetId, query, conversationId, imageUrl, topK = 5 } = request;
+    const { plantId, assetId: rawAssetId, query, conversationId, imageUrl, topK = 5 } = request;
+    const rawMachineId = (request as any).machineId;
+    const cleanAssetId = rawAssetId ? sanitizeMachineOrAssetId(rawAssetId) : undefined;
+    const cleanMachineId = rawMachineId ? sanitizeMachineOrAssetId(rawMachineId) : undefined;
+    const assetId = cleanAssetId || (rawAssetId ?? undefined);
+    const machineId = cleanMachineId || (rawMachineId ?? undefined);
 
     // 0a. Backend-enforced plant scope and organization validation
     let plant: Plant | null = null;
@@ -284,12 +290,15 @@ ${generalKnowledgeText}
 
     let assetContext: { assetTag: string; name: string; area: string } | null = null;
     if (assetId) {
-      const asset = await this.dataStore.getAssetById(organizationId, assetId);
+      const asset =
+        (await this.dataStore.getAssetById(organizationId, assetId)) ||
+        (cleanAssetId && cleanAssetId !== assetId ? await this.dataStore.getAssetById(organizationId, cleanAssetId) : null) ||
+        (rawAssetId && rawAssetId !== assetId ? await this.dataStore.getAssetById(organizationId, rawAssetId) : null);
       if (!asset) {
-        throw new Error(`Unauthorized or invalid asset: Asset '${assetId}' does not belong to organization.`);
+        throw new Error(`Unauthorized or invalid asset: Asset '${rawAssetId || assetId}' does not belong to organization.`);
       }
       if (asset.plantId !== plant.id) {
-        throw new Error(`Asset '${assetId}' does not belong to the selected plant '${plantId}'.`);
+        throw new Error(`Asset '${rawAssetId || assetId}' does not belong to the selected plant '${plantId}'.`);
       }
       assetContext = {
         assetTag: asset.assetTag,
@@ -300,13 +309,24 @@ ${generalKnowledgeText}
 
     // 1b. Identify Machine if provided or inferred
     let machine = null;
-    if (request.machineId) {
-      machine = await this.dataStore.getMachineById(organizationId, request.machineId);
+    if (machineId) {
+      machine = await this.dataStore.getMachineById(organizationId, machineId);
+    }
+    if (!machine && rawMachineId && rawMachineId !== machineId) {
+      machine = await this.dataStore.getMachineById(organizationId, rawMachineId);
     }
     if (!machine && assetId) {
       const allMachines = await this.dataStore.listMachines(organizationId);
-      machine = allMachines.find((m) => m.id === assetId || m.parentAssetId === assetId) || null;
+      machine =
+        allMachines.find(
+          (m) =>
+            m.id === assetId ||
+            (cleanAssetId && m.id === cleanAssetId) ||
+            m.parentAssetId === assetId ||
+            (cleanAssetId && m.parentAssetId === cleanAssetId)
+        ) || null;
     }
+    const targetMachineId = machine ? (sanitizeUuid(machine.id) || machine.id) : null;
     if (!machine) {
       const tagMatches = query.match(/\b([A-Z0-9]+-[0-9]+-[A-Z0-9]+|[A-Z]+-[0-9]+)\b/gi);
       if (tagMatches) {
@@ -390,7 +410,7 @@ ${generalKnowledgeText}
       let assignmentStatus: TicketAssignmentStatus = 'NEEDS_SPECIALIST_ASSIGNMENT';
 
       if (machine) {
-        const mapping = await this.dataStore.getMachineSpecialistMapping(organizationId, machine.id);
+        const mapping = await this.dataStore.getMachineSpecialistMapping(organizationId, targetMachineId || machine.id);
         if (mapping?.primarySpecialistUserId) {
           const specialistProfile = await this.dataStore.getEmployeeProfileByUserId(
             organizationId,
@@ -429,7 +449,7 @@ ${generalKnowledgeText}
 
       const createdTicket = await this.dataStore.createSpecialistTicket(organizationId, {
         plantId: plant.id,
-        machineId: machine?.id || null,
+        machineId: targetMachineId || machine?.id || null,
         machineAssetTag: machine?.assetTag || null,
         reportedByUserId: userId,
         originalQuestion: query,
@@ -500,14 +520,14 @@ ${generalKnowledgeText}
       // Historical fault matching & recurrence analysis via HistoricalFaultService
       historicalRetrieval = await this.historicalFaultService.matchHistoricalFaults(
         organizationId,
-        machine.id,
+        targetMachineId || machine.id,
         { query },
         userRole
       );
 
       const allHistory = await this.dataStore.getMachineMaintenanceHistory(
         organizationId,
-        machine.id
+        targetMachineId || machine.id
       );
 
       const isPrivileged =
@@ -527,7 +547,7 @@ ${generalKnowledgeText}
 
       recurringFaultAnalysis = historicalRetrieval.recurrenceAnalysis || await this.dataStore.detectRecurringFaults(
         organizationId,
-        machine.id
+        targetMachineId || machine.id
       );
 
       if (recurringFaultAnalysis) {
@@ -733,7 +753,7 @@ ${generalKnowledgeText}
       if (formattedEvidence.isRelevant) {
         authorizedEvidence.unshift({
           chunkId: `maint_hist_${machine.id}`,
-          documentId: `machine_${machine.id}`,
+          documentId: targetMachineId || machine.id,
           documentNumber: `HIST-${machine.assetTag}`,
           documentTitle: `Maintenance History Ledger for ${machine.assetTag}`,
           documentVersionId: '1.0',
@@ -797,7 +817,7 @@ ${generalKnowledgeText}
 
       authorizedEvidence.unshift({
         chunkId: `maint_hist_${machine.id}`,
-        documentId: `machine_${machine.id}`,
+        documentId: targetMachineId || machine.id,
         documentNumber: `HIST-${machine.assetTag}`,
         documentTitle: `Maintenance History Ledger for ${machine.assetTag}`,
         documentVersionId: '1.0',
@@ -815,7 +835,7 @@ ${generalKnowledgeText}
     if (machine && isMaintenanceHistoryQuery && machineMaintenanceRecords.length === 0) {
       authorizedEvidence.push({
         chunkId: `maint_hist_none_${machine.id}`,
-        documentId: `machine_${machine.id}`,
+        documentId: targetMachineId || machine.id,
         documentNumber: `HIST-${machine.assetTag}`,
         documentTitle: `Maintenance History Ledger for ${machine.assetTag}`,
         documentVersionId: '1.0',
@@ -829,7 +849,7 @@ ${generalKnowledgeText}
     // 6c. Governed Machine Knowledge Recovery: Include Approved Machine Knowledge Base
     if (machine) {
       const approvedClaims = await this.dataStore.listEvidenceClaims(organizationId, {
-        machineId: machine.id,
+        machineId: targetMachineId || machine.id,
         status: 'APPROVED',
       });
 
@@ -841,7 +861,7 @@ ${generalKnowledgeText}
 
         authorizedEvidence.unshift({
           chunkId: `approved_claim_${machine.id}`,
-          documentId: `machine_${machine.id}`,
+          documentId: targetMachineId || machine.id,
           documentNumber: `APPROVED-KB-${machine.assetTag}`,
           documentTitle: `Approved Machine Knowledge Base for ${machine.assetTag}`,
           documentVersionId: '1.0',
@@ -857,7 +877,7 @@ ${generalKnowledgeText}
     // Only APPROVED entries are surfaced as verified evidence; REVOKED or SUPERSEDED are excluded!
     const expertKnowledgeList = await this.dataStore.listExpertKnowledgeEntries(organizationId, {
       plantId: plant.id,
-      machineId: machine?.id,
+      machineId: targetMachineId || machine?.id,
       status: 'APPROVED',
     });
 
@@ -966,7 +986,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
     if (machine && (isOldOrIncompleteMachine || shouldEscalate)) {
       try {
         createdTask = await this.dataStore.createMissingInfoTask(organizationId, {
-          machineId: machine.id,
+          machineId: targetMachineId || machine.id,
           machineAssetTag: machine.assetTag,
           machineName: machine.name,
           requestedFields: [
@@ -991,13 +1011,13 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
       if (machine) {
         const activeDuplicate = await this.dataStore.findActiveDuplicateTicket(
           organizationId,
-          machine.id,
+          targetMachineId || machine.id,
           query
         );
         if (activeDuplicate) {
           createdTicket = activeDuplicate;
           logger.info(
-            { ticketNumber: activeDuplicate.ticketNumber, machineId: machine.id },
+            { ticketNumber: activeDuplicate.ticketNumber, machineId: targetMachineId || machine.id },
             'Prevented duplicate ticket creation: returning active ticket.'
           );
         }
@@ -1008,12 +1028,12 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
         const routing = await this.routingService.routeSpecialist(
           organizationId,
           plant.id,
-          machine?.id || null
+          targetMachineId || machine?.id || null
         );
 
         createdTicket = await this.dataStore.createSpecialistTicket(organizationId, {
           plantId: plant.id,
-          machineId: machine?.id || null,
+          machineId: targetMachineId || machine?.id || null,
           machineAssetTag: machine?.assetTag || null,
           reportedByUserId: userId,
           originalQuestion: query,

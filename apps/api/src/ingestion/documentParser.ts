@@ -90,7 +90,7 @@ export class DocumentParser {
       cadMimes.includes(mimeType.toLowerCase()) ||
       mimeType.startsWith('model/')
     ) {
-      return this.parse3DModel(buffer, ext, filename, metadata);
+      return this.parse3DModel(buffer, ext, filename, _metadata);
     }
 
     if (mimeType === 'application/pdf' || ext === 'pdf') {
