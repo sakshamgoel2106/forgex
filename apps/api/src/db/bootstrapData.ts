@@ -679,63 +679,6 @@ Lubrication oil viscosity requirement: ISO VG 46 synthetic turbine oil.`;
       await dataStore.updateDocumentVersionStatus(version.id, 'INDEXED', 2, chunks.length);
       logger.info({ documentNumber: doc.documentNumber }, 'Bootstrapped SOP-MECH-401 technical manual');
     }
-
-    // 7. Bootstrap Sample Maintenance Case
-    const existingCases = await dataStore.listMaintenanceCases(org.id, { plantId: plant.id });
-    if (existingCases.length === 0) {
-      await dataStore.createMaintenanceCase({
-        organizationId: org.id,
-        plantId: plant.id,
-        assetId: pump.id,
-        caseNumber: 'CASE-2026-0891',
-        title: 'Slurry Pump PUMP-204-B Mechanical Seal Face Weepage & Vibration Advisory',
-        severity: 'MEDIUM',
-        status: 'INVESTIGATING',
-        reportedByUserId: user.id,
-        symptomDescription: 'Audible high-frequency squeal reported from outboard seal cartridge. Barrier fluid pressure fluctuating between 16 and 22 PSI. Radial vibration elevated to 4.8 mm/s RMS.',
-        operatingConditions: {
-          vibrationMmS: 4.8,
-          tempCelsius: 78.4,
-          barrierPressurePsi: 18.2,
-          flowRateGpm: 840,
-        },
-        checklist: [
-          {
-            id: 'step-1',
-            stepNumber: 1,
-            title: 'Verify Barrier Fluid Reservoir & PT-204',
-            instruction: 'Verify barrier fluid reservoir level and pressure transmitter PT-204 calibration.',
-            requiresLoto: false,
-            requiredPpe: ['Safety Glasses', 'Nitrile Gloves'],
-            requiredTools: ['Multimeter', 'Pressure Gauge'],
-            status: 'COMPLETED',
-            technicianNotes: 'Verified: Reservoir level at 65%. Pressure transmitter calibrated within +/- 0.5 PSI tolerance.',
-          },
-          {
-            id: 'step-2',
-            stepNumber: 2,
-            title: 'Inspect & Retorque Gland Follower Bolts',
-            instruction: 'Inspect gland follower bolts and verify 185 ft-lbs torque in star pattern.',
-            requiresLoto: false,
-            requiredPpe: ['Safety Glasses', 'Mechanic Gloves'],
-            requiredTools: ['Torque Wrench (0-250 ft-lbs)'],
-            status: 'IN_PROGRESS',
-            technicianNotes: 'Two bolts found below specification (160 ft-lbs). Retorque in progress.',
-          },
-          {
-            id: 'step-3',
-            stepNumber: 3,
-            title: 'LOTO Isolation & Block/Bleed',
-            instruction: 'Perform zero-energy lockout and isolate suction valve V-101 and discharge valve V-102.',
-            requiresLoto: true,
-            requiredPpe: ['Arc Flash Face Shield', 'Leather Gloves'],
-            requiredTools: ['Padlocks', 'Hasps', 'Danger Tags'],
-            status: 'PENDING',
-          },
-        ],
-      });
-      logger.info('Bootstrapped sample maintenance case CASE-2026-0891');
-    }
   } catch (err: any) {
     logger.error({ err: err?.message }, 'Failed during bootstrapInitialData');
   }

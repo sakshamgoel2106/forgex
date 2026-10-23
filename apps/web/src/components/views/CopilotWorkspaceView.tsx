@@ -186,39 +186,6 @@ export const CopilotWorkspaceView: React.FC = () => {
   const [queryStep, setQueryStep] = useState<string>('');
   const [queryError, setQueryError] = useState<string | null>(null);
 
-  // Ingest RCA Deep-Dive 5-Why handoff from Troubleshooting & RCA module
-  useEffect(() => {
-    const checkHandoff = () => {
-      try {
-        const raw = sessionStorage.getItem('forgex_copilot_handoff');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed.prompt) {
-            setQueryInput(parsed.prompt);
-          }
-          if (parsed.assetTag) {
-            setSelectedAssetId(parsed.assetTag);
-          }
-          sessionStorage.removeItem('forgex_copilot_handoff');
-        }
-      } catch (err) {
-        console.warn('Error reading copilot handoff state:', err);
-      }
-    };
-
-    // Check immediately on mount
-    checkHandoff();
-
-    // Also listen for runtime handoff event
-    const handleHandoffEvent = () => {
-      checkHandoff();
-    };
-
-    window.addEventListener('forgex:copilot-handoff', handleHandoffEvent);
-    return () => {
-      window.removeEventListener('forgex:copilot-handoff', handleHandoffEvent);
-    };
-  }, []);
 
 
   // Feedback Modal State
@@ -499,26 +466,62 @@ export const CopilotWorkspaceView: React.FC = () => {
     }
   };
 
-  // Handle RCA 5-Why and External Deep-Dive Handoffs
+  // Handle RCA 5-Why, Technician Queue Technical Specs, and External Handoffs
   useEffect(() => {
     const processHandoff = () => {
+      let promptText = '';
+      let assetTag = '';
+
       const handoffRaw = sessionStorage.getItem('forgex_copilot_handoff');
       if (handoffRaw) {
         try {
           const handoff = JSON.parse(handoffRaw);
           sessionStorage.removeItem('forgex_copilot_handoff');
           if (handoff.assetTag) {
-            setSelectedAssetId(handoff.assetTag);
+            assetTag = handoff.assetTag;
           }
           if (handoff.prompt) {
-            setQueryInput(handoff.prompt);
-            setTimeout(() => {
-              handleSendQuery(handoff.prompt);
-            }, 350);
+            promptText = handoff.prompt;
+          } else if (handoff.assetTag) {
+            const summary = handoff.issueSummary || 'Equipment Alert';
+            const stepTitle = handoff.activeStepTitle || 'Step Execution';
+            const stepDesc = handoff.activeStepDescription || 'Follow OEM maintenance procedures.';
+            promptText = `Provide exact OEM technical specifications, torque values, clearance tolerances, and safety parameters for ${handoff.assetTag} regarding ${summary} — specifically for executing [${stepTitle}: ${stepDesc}].`;
           }
         } catch (e) {
-          console.warn('Failed to parse copilot handoff:', e);
+          console.warn('Failed to parse copilot handoff from sessionStorage:', e);
         }
+      } else {
+        // Fallback: Read incoming context from URL query params
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const p = params.get('prompt');
+          const tag = params.get('assetTag');
+          const issue = params.get('issueSummary');
+          const stepTitle = params.get('activeStepTitle');
+          const stepDesc = params.get('activeStepDescription');
+
+          if (p) {
+            promptText = p;
+          } else if (tag && (issue || stepTitle)) {
+            promptText = `Provide exact OEM technical specifications, torque values, clearance tolerances, and safety parameters for ${tag} regarding ${issue || 'Equipment Alert'} — specifically for executing [${stepTitle || 'Step Execution'}: ${stepDesc || 'Standard maintenance procedure'}].`;
+          }
+          if (tag) {
+            assetTag = tag;
+          }
+        } catch (e) {
+          console.warn('Failed to read copilot URL params:', e);
+        }
+      }
+
+      if (assetTag) {
+        setSelectedAssetId(assetTag);
+      }
+      if (promptText) {
+        setQueryInput(promptText);
+        setTimeout(() => {
+          handleSendQuery(promptText);
+        }, 350);
       }
     };
 

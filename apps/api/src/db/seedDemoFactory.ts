@@ -14,8 +14,6 @@ import type {
   AssetOperationalState,
   MachineCriticality,
   DataClassification,
-  TicketEscalationReason,
-  TicketAssignmentStatus,
   PartReplaced,
 } from '@forgex/shared-types';
 
@@ -953,55 +951,19 @@ export async function seedDemoFactory(
 
   const workerUser = instantiatedTeam['user-demo-floor-worker'];
 
-  const allExistingCases = await dataStore.listMaintenanceCases(orgA.id);
-
   for (const wo of workOrderCases) {
     const machine = instantiatedMachines[wo.assetTag];
     if (!machine) continue;
 
     const assignedTech = instantiatedTeam[wo.techKey];
-    const existingCase = allExistingCases.find((c: any) => c.caseNumber === wo.caseNumber);
 
-    let caseId = existingCase?.id;
-
-    if (!existingCase) {
-      const createdCase = await dataStore.createMaintenanceCase({
-        organizationId: orgA.id,
-        plantId: plantAlpha.id,
-        assetId: machine.id,
-        caseNumber: wo.caseNumber,
-        title: wo.title,
-        severity: wo.severity,
-        status: wo.status,
-        reportedByUserId: workerUser ? workerUser.id : ownerUser.id,
-        symptomDescription: wo.symptom,
-        operatingConditions: {
-          assetTag: wo.assetTag,
-          machineType: machine.machineType,
-        },
-        findings: wo.obs
-          ? {
-              observations: wo.obs,
-              correctiveActions: wo.actions,
-              resolutionSummary: wo.summary,
-              partsUsed: wo.parts,
-            }
-          : undefined,
-      });
-      caseId = createdCase.id;
-      audit.inserted++;
-      logger.info({ caseNumber: wo.caseNumber }, 'Created Work Order case');
-    } else {
-      audit.reused++;
-    }
-
-    // If case is RESOLVED, create corresponding durable MaintenanceRecord
-    if (wo.status === 'RESOLVED' && caseId && assignedTech) {
-      if (existingCase?.maintenanceRecordId) {
-        audit.reused++;
-      } else {
+    // In clean execution mode, we do NOT seed active or dummy work orders into maintenance_cases.
+    // If case was RESOLVED, create corresponding durable MaintenanceRecord for historical audits:
+    if (wo.status === 'RESOLVED' && assignedTech) {
+      const existingRecords = await dataStore.listMaintenanceRecords(orgA.id, { machineId: machine.id });
+      const alreadyHasRecord = existingRecords.some((r: any) => r.problemStatement === wo.symptom);
+      if (!alreadyHasRecord) {
         const mr = await dataStore.createMaintenanceRecord(orgA.id, {
-          caseId,
           caseNumber: wo.caseNumber,
           plantId: plantAlpha.id,
           machineId: machine.id,
@@ -1030,109 +992,19 @@ export async function seedDemoFactory(
           approvalStatus: 'APPROVED',
           resolvedAt: new Date(Date.now() - Math.floor(Math.random() * 86400000 * 30)).toISOString(),
         });
-        await dataStore.updateMaintenanceCase(orgA.id, caseId, { maintenanceRecordId: mr.id });
         audit.inserted++;
-        logger.info({ recordNumber: mr.recordNumber, caseNumber: wo.caseNumber }, 'Created/linked durable MaintenanceRecord');
+        logger.info({ recordNumber: mr.recordNumber }, 'Created durable MaintenanceRecord');
+      } else {
+        audit.reused++;
       }
     }
   }
 
   // ==========================================================================
-  // 6. SEED TECHNICIAN QUEUE & SPECIALIST TICKETS
+  // 6. TECHNICIAN QUEUE & SPECIALIST TICKETS (Clean state by default)
   // ==========================================================================
-  const ticketScenarios = [
-    {
-      ticketNumber: 'TKT-DEMO-001',
-      machineAssetTag: 'PUMP-CENT-205',
-      techKey: 'user-demo-util-tech',
-      originalQuestion: 'Worker asking: "Centrifugal pump barrier fluid is dropping and squealing. Can I continue running the slurry feed?"',
-      diagnosticDetails: 'Barrier fluid pressure at 17 PSI, vibration elevated. Insufficient evidence to assure safe operation.',
-      escalationReason: 'SAFETY_CRITICAL' as TicketEscalationReason,
-      severity: 'HIGH' as const,
-      assignmentStatus: 'ASSIGNED_PRIMARY' as TicketAssignmentStatus,
-      status: 'OPEN' as const,
-    },
-    {
-      ticketNumber: 'TKT-DEMO-002',
-      machineAssetTag: 'CNC-MILL-501',
-      techKey: 'user-demo-mech-tech',
-      originalQuestion: 'Worker asking: "How do I calibrate Y-axis circularity error on DMG MORI 5-axis mill?"',
-      diagnosticDetails: 'Requires Renishaw ballbar analysis and CNC controller parameter access.',
-      escalationReason: 'MANUAL_ESCALATION' as TicketEscalationReason,
-      severity: 'MEDIUM' as const,
-      assignmentStatus: 'ASSIGNED_PRIMARY' as TicketAssignmentStatus,
-      status: 'IN_PROGRESS' as const,
-    },
-    {
-      ticketNumber: 'TKT-DEMO-003',
-      machineAssetTag: 'ELEC-MTR-701',
-      techKey: 'user-demo-elec-tech',
-      originalQuestion: 'Worker asking: "Grinding motor current reading is fluctuating 15% across phases. Is this an inverter issue?"',
-      diagnosticDetails: 'Requires phase balance measurement and variable frequency drive inverter harmonics audit.',
-      escalationReason: 'MANUAL_ESCALATION' as TicketEscalationReason,
-      severity: 'MEDIUM' as const,
-      assignmentStatus: 'ASSIGNED_PRIMARY' as TicketAssignmentStatus,
-      status: 'OPEN' as const,
-    },
-    {
-      ticketNumber: 'TKT-DEMO-004',
-      machineAssetTag: 'HYD-PRESS-301',
-      techKey: 'user-demo-hyd-tech',
-      originalQuestion: 'Worker asking: "Hydraulic press ram speed suddenly drops at bottom dead center. What is wrong?"',
-      diagnosticDetails: 'Proportional servo valve spool position feedback error detected.',
-      escalationReason: 'SAFETY_CRITICAL' as TicketEscalationReason,
-      severity: 'HIGH' as const,
-      assignmentStatus: 'ASSIGNED_PRIMARY' as TicketAssignmentStatus,
-      status: 'OPEN' as const,
-    },
-    {
-      ticketNumber: 'TKT-DEMO-005',
-      machineAssetTag: 'COMP-AIR-102',
-      techKey: '', // Unassigned / Triage
-      originalQuestion: 'Worker asking: "Air compressor high vibration alarm sounding intermittently with no clear error code in manual."',
-      diagnosticDetails: 'Ambiguous symptom requiring mechanical/instrumentation triage.',
-      escalationReason: 'INSUFFICIENT_EVIDENCE' as TicketEscalationReason,
-      severity: 'MEDIUM' as const,
-      assignmentStatus: 'NEEDS_SPECIALIST_ASSIGNMENT' as TicketAssignmentStatus,
-      status: 'OPEN' as const,
-    },
-  ];
-
-  const allExistingTickets = await dataStore.listSpecialistTickets(orgA.id);
-
-  for (const ts of ticketScenarios) {
-    const machine = instantiatedMachines[ts.machineAssetTag];
-    if (!machine) continue;
-
-    const assignedSpecialist = ts.techKey ? instantiatedTeam[ts.techKey] : null;
-    const existingTicket = allExistingTickets.find((t: any) => t.ticketNumber === ts.ticketNumber);
-
-    if (!existingTicket) {
-      await dataStore.createSpecialistTicket(orgA.id, {
-        ticketNumber: ts.ticketNumber,
-        plantId: plantAlpha.id,
-        machineId: machine.id,
-        machineAssetTag: machine.assetTag,
-        reportedByUserId: workerUser ? workerUser.id : ownerUser.id,
-        originalQuestion: ts.originalQuestion,
-        diagnosticDetails: ts.diagnosticDetails,
-        escalationReason: ts.escalationReason,
-        evidenceCheckResult: {
-          hasApprovedEvidence: false,
-          confidenceScore: 0.0,
-          reason: 'Escalated to specialist',
-        },
-        severity: ts.severity,
-        assignedSpecialistUserId: assignedSpecialist?.id || null,
-        assignmentStatus: ts.assignmentStatus,
-        status: ts.status,
-      });
-      audit.inserted++;
-      logger.info({ ticketNumber: ts.ticketNumber }, 'Created Specialist Ticket');
-    } else {
-      audit.reused++;
-    }
-  }
+  // In clean execution mode, no dummy tickets are seeded into specialist_tickets.
+  const ticketScenarios: any[] = [];
 
   // ==========================================================================
   // 7. SEED VISUAL INTELLIGENCE DEMO DATA (3D Model & P&ID Schematic)

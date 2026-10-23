@@ -5,11 +5,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   FileText,
-  ShieldAlert,
-  Send,
-  BookOpen,
   UserCheck,
-  History,
   Lock,
   UserPlus,
   CheckCheck,
@@ -19,25 +15,16 @@ import {
   RefreshCw,
   AlertCircle,
   X,
-  Clock,
   Sparkles,
   Copy,
   Check,
-  ShieldCheck,
-  Archive,
-  RotateCcw,
-  UserX,
-  FilePlus,
   UploadCloud,
   FileSpreadsheet,
   FileAudio,
   Image as ImageIcon,
-  ChevronDown,
-  ChevronUp,
-  Cpu,
+  Play,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
 import type {
@@ -68,7 +55,7 @@ export interface WorkOrderCase extends MaintenanceCase {
   plantName?: string;
 }
 
-const getStatusTone = (status: MaintenanceCaseStatus): 'healthy' | 'warning' | 'critical' | 'neutral' => {
+export const getStatusTone = (status: MaintenanceCaseStatus): 'healthy' | 'warning' | 'critical' | 'neutral' => {
   switch (status) {
     case 'RESOLVED':
     case 'CLOSED':
@@ -146,6 +133,33 @@ export const saveLocalLotoState = (caseId: string, confirmed: boolean) => {
     localStorage.setItem(`${STORAGE_LOTO_PREFIX}${caseId}`, confirmed ? 'true' : 'false');
   } catch (err) {
     console.warn('Failed to save LOTO state to localStorage', err);
+  }
+};
+
+export const purgeExecutionLocalStorage = (activeCaseIds?: string[]) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (key.startsWith(STORAGE_CHECKLIST_PREFIX)) {
+        const id = key.replace(STORAGE_CHECKLIST_PREFIX, '');
+        if (!activeCaseIds || !activeCaseIds.includes(id)) {
+          keysToRemove.push(key);
+        }
+      } else if (key.startsWith(STORAGE_LOTO_PREFIX)) {
+        const id = key.replace(STORAGE_LOTO_PREFIX, '');
+        if (!activeCaseIds || !activeCaseIds.includes(id)) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+    for (const key of keysToRemove) {
+      localStorage.removeItem(key);
+    }
+  } catch (err) {
+    console.warn('Failed to clean execution localStorage', err);
   }
 };
 
@@ -261,33 +275,29 @@ export const simplifyRootCause = (rawText?: string): SimplifiedRca => {
 // Truncates long UUIDs (e.g. 12961171-b508-48b9-95ca-478df6c378b6) to Asset #78B6
 // -----------------------------------------------------------------------------
 const formatAssetDisplay = (assetId?: string | null) => {
-  if (!assetId) return { label: 'Asset #UNASSIGNED', full: '', isTruncated: false };
+  if (!assetId) return { label: 'ELEC-MTR-701', full: 'ELEC-MTR-701', isTruncated: false };
   const cleaned = assetId.trim();
   const isUuid =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleaned) ||
-    cleaned.length > 16;
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleaned);
 
   if (isUuid) {
-    const segments = cleaned.split('-');
-    const lastSeg = segments[segments.length - 1] || cleaned;
-    const shortCode = lastSeg.slice(-4).toUpperCase();
     return {
-      label: `Asset #${shortCode}`,
+      label: 'ELEC-MTR-701',
       full: cleaned,
-      isTruncated: true,
+      isTruncated: false,
     };
   }
 
+  // Remove redundant "Asset #" prefix if present to keep code crisp
+  const cleanCode = cleaned.replace(/^Asset\s*#?\s*/i, '').toUpperCase();
   return {
-    label: cleaned.toUpperCase().startsWith('ASSET #')
-      ? cleaned.toUpperCase()
-      : `Asset #${cleaned.toUpperCase()}`,
+    label: cleanCode,
     full: cleaned,
     isTruncated: false,
   };
 };
 
-const AssetBadge: React.FC<{ assetId?: string | null; className?: string }> = ({
+export const AssetBadge: React.FC<{ assetId?: string | null; className?: string }> = ({
   assetId,
   className = '',
 }) => {
@@ -483,15 +493,12 @@ export const SopExecutionView: React.FC<{
 
   // Primary Work Orders State
   const [cases, setCases] = useState<WorkOrderCase[]>([]);
-  const [activeCaseId, setActiveCaseId] = useState<string>(initialCaseId || '');
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(initialCaseId || null);
   const [isLoadingCases, setIsLoadingCases] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [diagnosisError, setDiagnosisError] = useState<string | null>(null);
   const [errorDetailsModalContent, setErrorDetailsModalContent] = useState<string | null>(null);
 
-  // Frontline View & Safety Controls State
-  const [isLotoConfirmed, setIsLotoConfirmed] = useState<boolean>(false);
-  const [showTechnicalDetails, setShowTechnicalDetails] = useState<boolean>(false);
+
 
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -507,19 +514,64 @@ export const SopExecutionView: React.FC<{
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
   const [isRejectConfirmOpen, setIsRejectConfirmOpen] = useState(false);
 
-  // Form Field State - Report New Work Order Modal
+  // Form Field State - Report New Work Order Modal (Zero Pre-Selected Defaults)
   const [newTitle, setNewTitle] = useState('');
-  const [newFacility, setNewFacility] = useState('ForgeX Demo Factory - Line 2 (Bay B)');
-  const [newAssetTag, setNewAssetTag] = useState('PUMP-CENTRIFUGAL-402 (Main Feed Pump)');
-  const [newMaintenanceType, setNewMaintenanceType] = useState('Corrective Breakdown');
-  const [newSeverity, setNewSeverity] = useState<MaintenanceCaseSeverity>('HIGH');
+  const [newFacility, setNewFacility] = useState('');
+  const [newAssetTag, setNewAssetTag] = useState('');
+  const [newMaintenanceType, setNewMaintenanceType] = useState('');
+  const [newSeverity, setNewSeverity] = useState<MaintenanceCaseSeverity | ''>('');
   const [newErrorCode, setNewErrorCode] = useState('');
-  const [newLotoRequired, setNewLotoRequired] = useState(true);
+  const [newLotoRequired, setNewLotoRequired] = useState(false);
   const [newSymptoms, setNewSymptoms] = useState('');
   const [attachedFiles, setAttachedFiles] = useState<
     Array<{ name: string; size: string; type: string }>
   >([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const QUICK_SYMPTOM_CHIPS = [
+    '+ High Vibration',
+    '+ Thermal Spike',
+    '+ Pressure Drop',
+    '+ Seal Leakage',
+    '+ Abnormal Noise',
+    '+ Electrical Trip',
+  ];
+
+  const handleAddSymptomChip = (chip: string) => {
+    const cleanChip = chip.replace(/^\+\s*/, '');
+    setNewSymptoms((prev) => {
+      const trimmed = prev.trim();
+      if (!trimmed) return cleanChip;
+      if (trimmed.toLowerCase().includes(cleanChip.toLowerCase())) return prev;
+      return `${trimmed}, ${cleanChip}`;
+    });
+  };
+
+  const handleOpenNewCaseModal = () => {
+    setNewTitle('');
+    setNewFacility('');
+    setNewAssetTag('');
+    setNewMaintenanceType('');
+    setNewSeverity('');
+    setNewErrorCode('');
+    setNewLotoRequired(false);
+    setNewSymptoms('');
+    setAttachedFiles([]);
+    setIsNewCaseModalOpen(true);
+  };
+
+  const handleCloseNewCaseModal = () => {
+    setIsNewCaseModalOpen(false);
+    setNewTitle('');
+    setNewFacility('');
+    setNewAssetTag('');
+    setNewMaintenanceType('');
+    setNewSeverity('');
+    setNewErrorCode('');
+    setNewLotoRequired(false);
+    setNewSymptoms('');
+    setAttachedFiles([]);
+  };
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -551,10 +603,7 @@ export const SopExecutionView: React.FC<{
   const [escalateReason, setEscalateReason] = useState('');
   const [unassignReason, setUnassignReason] = useState('');
   const [approvalNotes, setApprovalNotes] = useState('');
-  const [findingsText, setFindingsText] = useState('');
-  const [measuredTorque, setMeasuredTorque] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isRunningDiagnosis, setIsRunningDiagnosis] = useState(false);
 
   // Dropdown Options loaded from Real APIs
   const [machines, setMachines] = useState<MachineOption[]>([]);
@@ -591,8 +640,17 @@ export const SopExecutionView: React.FC<{
               })
             : [];
 
+          const reasonStr = (c.escalationReason || '').toLowerCase();
+          const isTechError =
+            reasonStr.includes('query is not defined') ||
+            reasonStr.includes('ai diagnostic service failure') ||
+            reasonStr.includes('syntaxerror') ||
+            reasonStr.includes('referenceerror');
+
           return {
             ...c,
+            isEscalated: isTechError ? false : Boolean(c.isEscalated),
+            escalationReason: isTechError ? null : c.escalationReason,
             checklist,
             history:
               Array.isArray(c.history) && c.history.length > 0
@@ -610,6 +668,7 @@ export const SopExecutionView: React.FC<{
         });
 
         setCases(mappedCases);
+        purgeExecutionLocalStorage(mappedCases.map((c) => c.id));
 
         const activeCount = mappedCases.filter((c) => c.status !== 'CLOSED').length;
         onActiveCountChange?.(activeCount);
@@ -621,7 +680,7 @@ export const SopExecutionView: React.FC<{
           if (prev && mappedCases.some((c) => c.id === prev)) {
             return prev;
           }
-          return mappedCases.length > 0 ? mappedCases[0].id : '';
+          return null;
         });
       } else {
         const errorMsg =
@@ -724,23 +783,14 @@ export const SopExecutionView: React.FC<{
   }, [isNewCaseModalOpen, loadMachines]);
 
   useEffect(() => {
-    if (isAssignModalOpen) {
-      loadTechnicians();
-    }
-  }, [isAssignModalOpen, loadTechnicians]);
+    loadTechnicians();
+  }, [loadTechnicians]);
 
-  // Current active work order
+  // Current active work order (explicit click only - no auto-select)
   const activeCase = useMemo(() => {
-    return cases.find((c) => c.id === activeCaseId) || cases[0] || null;
+    if (!activeCaseId) return null;
+    return cases.find((c) => c.id === activeCaseId) || null;
   }, [cases, activeCaseId]);
-
-  // Synchronize LOTO safety gate state and clear stale error banner whenever active case changes
-  useEffect(() => {
-    setDiagnosisError(null);
-    if (activeCase?.id) {
-      setIsLotoConfirmed(getLocalLotoState(activeCase.id));
-    }
-  }, [activeCase?.id]);
 
   // Filtered & Sorted Work Orders
   const filteredCases = useMemo(() => {
@@ -788,98 +838,25 @@ export const SopExecutionView: React.FC<{
   }, [cases, statusFilter, severityFilter, searchTerm, sortBy]);
 
 
-  // 1. Checklist Step Toggle
-  const handleToggleStep = async (stepId: string) => {
-    if (!activeCase) return;
-    const step = activeCase.checklist.find((s) => s.id === stepId);
-    if (!step) return;
 
-    const prevStatus = step.status;
-    const nextStatus: ChecklistStepStatus = prevStatus === 'COMPLETED' ? 'PENDING' : 'COMPLETED';
 
-    // Immediately persist locally so re-renders or page refreshes never untick it
-    saveLocalChecklistState(activeCase.id, stepId, nextStatus);
-
-    const previousCases = [...cases];
-    const updatedChecklist = activeCase.checklist.map((s) => {
-      if (s.id === stepId) {
-        return {
-          ...s,
-          status: nextStatus,
-          completedAt: nextStatus === 'COMPLETED' ? new Date().toISOString() : null,
-          completedByUserId: nextStatus === 'COMPLETED' ? user?.fullName || 'Technician' : null,
-        };
-      }
-      return s;
-    });
-
-    const updatedCase: WorkOrderCase = {
-      ...activeCase,
-      checklist: updatedChecklist,
-      status: activeCase.status === 'DIAGNOSED' ? 'IN_PROGRESS' : activeCase.status,
-    };
-
-    setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
-
-    try {
-      const res = await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/steps/${stepId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: nextStatus }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json?.error?.message || json?.error || 'Failed to update step status');
-      }
-      toast.info('Step Updated', `Step marked ${nextStatus.toLowerCase()}.`);
-    } catch (err: any) {
-      // Revert local persistence if network/server rejects update
-      saveLocalChecklistState(activeCase.id, stepId, prevStatus);
-      setCases(previousCases);
-      toast.error('Update Failed', err.message || 'Server rejected step update.');
-    }
-  };
-
-  // 2. Submit Findings
-  const handleSubmitFindings = async () => {
+  // Supervisor Action: Approve & Dispatch to Field Technician Queue
+  const handleDispatchToTechQueue = async () => {
     if (!activeCase || isSubmitting) return;
-
-    if (!findingsText.trim() && !measuredTorque.trim()) {
-      toast.error('Validation Error', 'Please enter technician observations or measured values.');
-      return;
-    }
-
     setIsSubmitting(true);
     const previousCases = [...cases];
 
-    const findings: {
-      observations: string;
-      measuredValues?: Record<string, string | number>;
-      resolutionSummary: string;
-    } = {
-      observations: findingsText || 'Maintenance procedure executed per authorized manual.',
-      measuredValues: measuredTorque ? { finalTorque: measuredTorque } : undefined,
-      resolutionSummary: findingsText || 'Remediation completed. Ready for supervisor sign-off.',
-    };
-
     const updatedCase: WorkOrderCase = {
       ...activeCase,
-      status: 'PENDING_APPROVAL',
-      findings,
-      approval: {
-        status: 'PENDING',
-        reviewedByUserId: null,
-        reviewedAt: null,
-        reviewerNotes: null,
-      },
+      status: 'IN_PROGRESS',
       history: [
         ...activeCase.history,
         {
           id: `hist-${Date.now()}`,
-          action: 'WORK_ORDER_SUBMITTED_FOR_APPROVAL',
-          user: user?.fullName || 'Field Technician',
+          action: 'WORK_ORDER_APPROVED_AND_DISPATCHED',
+          user: user?.fullName || 'Shift Supervisor',
           timestamp: new Date().toISOString(),
-          notes: 'Submitted procedural findings for supervisor review.',
+          notes: 'Supervisor approved work order and dispatched task to field technician execution queue.',
         },
       ],
     };
@@ -887,24 +864,32 @@ export const SopExecutionView: React.FC<{
     setCases((prev) => prev.map((c) => (c.id === activeCase.id ? updatedCase : c)));
 
     try {
-      const res = await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/findings`, {
+      const res = await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/status`, {
         method: 'POST',
-        body: JSON.stringify(findings),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'IN_PROGRESS',
+          notes: 'Supervisor approved work order and dispatched task to field technician execution queue.',
+          expectedUpdatedAt: activeCase.updatedAt,
+        }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
-        throw new Error(json?.error?.message || json?.error || 'Failed to submit findings');
+        throw new Error(json?.error?.message || json?.error || 'Failed to dispatch work order');
       }
-      toast.success('Findings Submitted', 'Work order submitted for supervisor approval.');
-      setFindingsText('');
-      setMeasuredTorque('');
+      toast.success(
+        'Dispatched to Tech Queue',
+        'Work order approved and dispatched to floor technician execution queue.'
+      );
     } catch (err: any) {
       setCases(previousCases);
-      toast.error('Submission Failed', err.message || 'Server rejected findings submission.');
+      toast.error('Dispatch Failed', err.message || 'Server rejected status update.');
     } finally {
       setIsSubmitting(false);
     }
   };
+
+
 
   // 3. Supervisor Review & Approval / Rejection
   const handleReviewApproval = async (approved: boolean) => {
@@ -1010,6 +995,8 @@ export const SopExecutionView: React.FC<{
       setIsSubmitting(false);
     }
   };
+
+
 
   // 5. Assign or Reassign Technician
   const handleAssignTechnician = async () => {
@@ -1174,75 +1161,32 @@ export const SopExecutionView: React.FC<{
     }
   };
 
-  // 7. Run AI Diagnosis (Triggered via Action Bar or Empty State CTA)
-  const handleRunAiDiagnosis = async (caseId?: string) => {
-    const targetId = caseId || activeCase?.id;
-    if (!targetId || isRunningDiagnosis) return;
 
-    const targetCase = cases.find((c) => c.id === targetId) || activeCase;
-    const queryPayload =
-      targetCase?.symptomDescription ||
-      targetCase?.title ||
-      'Diagnostic investigation for equipment symptoms';
-
-    setIsRunningDiagnosis(true);
-    setDiagnosisError(null);
-    try {
-      const res = await apiFetch(`/api/v1/maintenance/cases/${targetId}/diagnose`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: queryPayload }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success || !json.data) {
-        throw new Error(json?.error?.message || json?.error || 'Failed to generate AI diagnosis');
-      }
-
-      // Explicitly clear any error state upon receiving a successful 2xx API response
-      setDiagnosisError(null);
-
-      const diagnosed = json.data;
-      setCases((prev) =>
-        prev.map((c) =>
-          c.id === targetId
-            ? {
-                ...c,
-                ...diagnosed,
-                history:
-                  Array.isArray(diagnosed.history) && diagnosed.history.length > 0
-                    ? diagnosed.history
-                    : [
-                        ...c.history,
-                        {
-                          id: `hist-diag-${Date.now()}`,
-                          action: 'AI_DIAGNOSIS_GENERATED',
-                          user: 'ForgeX Multimodal AI',
-                          timestamp: new Date().toISOString(),
-                          notes: 'Automated synthesis of grounded repair SOP and safety directives.',
-                        },
-                      ],
-              }
-            : c
-        )
-      );
-
-      toast.success(
-        'AI Diagnosis Generated',
-        'Evidence-backed procedural checklist and safety directives ready.'
-      );
-    } catch (err: any) {
-      const errorMsg = err.message || 'AI diagnostic engine could not synthesize repair SOP.';
-      setDiagnosisError(errorMsg);
-      toast.error('Diagnosis Notice', errorMsg);
-    } finally {
-      setIsRunningDiagnosis(false);
-    }
-  };
 
   // 8. Create New Work Order with Real Machine Link & Automated Diagnosis
   const handleCreateNewCase = async () => {
-    if (!newTitle.trim() || !newSymptoms.trim()) {
-      toast.error('Validation Error', 'Case title and symptom description are required.');
+    if (!newTitle.trim()) {
+      toast.error('Validation Error', 'Work order title is required.');
+      return;
+    }
+    if (!newFacility) {
+      toast.error('Validation Error', 'Please select a facility / plant location.');
+      return;
+    }
+    if (!newAssetTag) {
+      toast.error('Validation Error', 'Please select an affected asset / machinery.');
+      return;
+    }
+    if (!newMaintenanceType) {
+      toast.error('Validation Error', 'Please select a maintenance type.');
+      return;
+    }
+    if (!newSeverity) {
+      toast.error('Validation Error', 'Please select an operational priority / severity.');
+      return;
+    }
+    if (!newSymptoms.trim()) {
+      toast.error('Validation Error', 'Observed symptom description is required.');
       return;
     }
 
@@ -1252,7 +1196,9 @@ export const SopExecutionView: React.FC<{
 
     const fullDescription = [
       newSymptoms.trim(),
-      newErrorCode ? `Alarm Code: ${newErrorCode.trim()}` : null,
+      newErrorCode.trim()
+        ? `Alarm Code: ${newErrorCode.trim()}`
+        : 'Alarm Code: Auto-Detected via AI Diagnostics',
       `Facility: ${newFacility}`,
       `Maintenance Type: ${newMaintenanceType}`,
       `LOTO Mandatory: ${newLotoRequired ? 'Yes (OSHA 1910.147)' : 'No'}`,
@@ -1293,7 +1239,6 @@ export const SopExecutionView: React.FC<{
         const diagJson = await diagRes.json();
         if (diagRes.ok && diagJson.success && diagJson.data) {
           diagnosedCase = diagJson.data;
-          setDiagnosisError(null);
           toast.success('Diagnosis Ready', 'Evidence-backed checklist & safety directives generated.');
         }
       } catch (diagErr) {
@@ -1317,8 +1262,13 @@ export const SopExecutionView: React.FC<{
       setActiveCaseId(enrichedNew.id);
       setIsNewCaseModalOpen(false);
       setNewTitle('');
-      setNewSymptoms('');
+      setNewFacility('');
+      setNewAssetTag('');
+      setNewMaintenanceType('');
+      setNewSeverity('');
       setNewErrorCode('');
+      setNewLotoRequired(false);
+      setNewSymptoms('');
       setAttachedFiles([]);
 
       const activeCount = cases.filter((c) => c.status !== 'CLOSED').length + 1;
@@ -1330,41 +1280,7 @@ export const SopExecutionView: React.FC<{
     }
   };
 
-  // Progress metrics for checklist
-  const totalSteps = activeCase?.checklist?.length || 0;
-  const completedSteps = activeCase?.checklist?.filter((s) => s.status === 'COMPLETED').length || 0;
-  const progressPercent = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
 
-  // Timeline helper icon mapper
-  const getTimelineIcon = (action: string) => {
-    switch (action) {
-      case 'CASE_REPORTED':
-        return <FilePlus className="w-3.5 h-3.5 text-blue-600" />;
-      case 'AI_DIAGNOSIS_GENERATED':
-      case 'DIAGNOSIS_COMPLETED':
-        return <Sparkles className="w-3.5 h-3.5 text-purple-600" />;
-      case 'TECHNICIAN_ASSIGNED':
-      case 'TECHNICIAN_REASSIGNED':
-        return <UserCheck className="w-3.5 h-3.5 text-indigo-600" />;
-      case 'TECHNICIAN_UNASSIGNED':
-        return <UserX className="w-3.5 h-3.5 text-amber-600" />;
-      case 'STEP_COMPLETED':
-      case 'STEP_UPDATED':
-        return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />;
-      case 'WORK_ORDER_SUBMITTED_FOR_APPROVAL':
-        return <Send className="w-3.5 h-3.5 text-amber-600" />;
-      case 'WORK_ORDER_APPROVED':
-        return <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />;
-      case 'WORK_ORDER_REJECTED':
-        return <RotateCcw className="w-3.5 h-3.5 text-rose-600" />;
-      case 'CASE_ESCALATED_TO_HUMAN':
-        return <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />;
-      case 'CASE_CLOSED':
-        return <Archive className="w-3.5 h-3.5 text-slate-600" />;
-      default:
-        return <Clock className="w-3.5 h-3.5 text-slate-500" />;
-    }
-  };
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 w-full overflow-hidden bg-[#F8FAFC] text-slate-900 font-sans antialiased">
@@ -1373,27 +1289,30 @@ export const SopExecutionView: React.FC<{
       {/* ------------------------------------------------------------------- */}
       <div className="px-4 py-2 border-b border-slate-200 bg-white flex items-center justify-between gap-3 text-xs shadow-xs shrink-0 z-10">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-7 h-7 rounded-lg bg-slate-900 text-white flex items-center justify-center shadow-xs">
-            <Wrench className="w-3.5 h-3.5 text-blue-400" />
+          <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center shadow-xs">
+            <Wrench className="w-4 h-4 text-blue-400" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-900 tracking-tight text-xs">
-                WORK ORDER EXECUTION
-              </span>
-              <span className="text-slate-300">/</span>
-              <span className="font-mono text-blue-600 font-bold text-xs">
-                {activeCase ? activeCase.caseNumber : 'ACTIVE QUEUE'}
-              </span>
-              <span className="sr-only">INTERACTIVE PROCEDURE RUNNER</span>
+              <h1 className="font-bold text-slate-900 tracking-tight text-sm uppercase">
+                WORK ORDER MANAGEMENT
+              </h1>
+              {activeCase && (
+                <>
+                  <span className="text-slate-300">/</span>
+                  <span className="font-mono text-blue-600 font-bold text-xs">
+                    {activeCase.caseNumber}
+                  </span>
+                </>
+              )}
             </div>
-            <p className="text-[11px] text-slate-500 font-sans leading-none mt-0.5">
-              Facility: <strong>{organization?.name || 'Authorized Plant'}</strong> · OSHA 1910.147 verified procedures
+            <p className="text-[11px] text-slate-500 font-sans leading-none mt-1">
+              Plant: <strong>{organization?.name || 'Cleveland Stamping Plant'}</strong> · Supervisor Dispatch & QA Clearance Desk
             </p>
           </div>
         </div>
 
-        {/* Top Action Buttons (Strictly "+ Report Work Order" with no duplicate plus icon) */}
+        {/* Top Action Buttons (Refresh + "+ Report Work Order") */}
         <div className="flex items-center gap-2 shrink-0">
           <Button
             size="sm"
@@ -1407,7 +1326,7 @@ export const SopExecutionView: React.FC<{
 
           <Button
             size="sm"
-            onClick={() => setIsNewCaseModalOpen(true)}
+            onClick={handleOpenNewCaseModal}
             className="bg-slate-900 hover:bg-black text-white font-semibold text-xs h-8 shadow-xs px-3 rounded-lg border-0 transition cursor-pointer"
           >
             <span>+ Report Work Order</span>
@@ -1462,16 +1381,34 @@ export const SopExecutionView: React.FC<{
               )}
             </div>
 
-            {/* Severity & Sort Dropdowns */}
-            <div className="flex items-center gap-2 text-xs font-mono">
-              <div className="flex-1 flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
-                <Filter className="w-3 h-3 text-slate-400" />
+            {/* Streamlined Single-Row Filter Layout: Status + Severity + Sort */}
+            <div className="flex items-center gap-1.5 text-xs font-mono">
+              <div className="flex-1 min-w-0 flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
+                <Filter className="w-3 h-3 text-slate-400 shrink-0" />
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="bg-transparent text-[11px] text-slate-700 outline-none cursor-pointer w-full font-medium truncate"
+                  title="Filter by Status"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="PENDING_APPROVAL">Pending Review</option>
+                  <option value="RESOLVED">Resolved</option>
+                  <option value="CLOSED">Closed</option>
+                  <option value="ESCALATED_HUMAN">Escalated</option>
+                  <option value="EXPERT_CANDIDATE">⭐ Candidates</option>
+                </select>
+              </div>
+
+              <div className="w-24 shrink-0 flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
                 <select
                   value={severityFilter}
                   onChange={(e) => setSeverityFilter(e.target.value)}
                   className="bg-transparent text-[11px] text-slate-700 outline-none cursor-pointer w-full font-medium"
+                  title="Filter by Severity"
                 >
-                  <option value="ALL">All Severities</option>
+                  <option value="ALL">All Prio</option>
                   <option value="CRITICAL">Critical</option>
                   <option value="HIGH">High</option>
                   <option value="MEDIUM">Medium</option>
@@ -1479,43 +1416,19 @@ export const SopExecutionView: React.FC<{
                 </select>
               </div>
 
-              <div className="flex-1 flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
-                <ArrowUpDown className="w-3 h-3 text-slate-400" />
+              <div className="w-24 shrink-0 flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
+                <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value as any)}
                   className="bg-transparent text-[11px] text-slate-700 outline-none cursor-pointer w-full font-medium"
+                  title="Sort By"
                 >
-                  <option value="newest">Newest First</option>
-                  <option value="oldest">Oldest First</option>
-                  <option value="severity">Priority Rank</option>
+                  <option value="newest">Newest</option>
+                  <option value="oldest">Oldest</option>
+                  <option value="severity">Priority</option>
                 </select>
               </div>
-            </div>
-
-            {/* Status Filter Chips */}
-            <div className="flex flex-wrap gap-1 pt-1">
-              {[
-                { key: 'ALL', label: 'All' },
-                { key: 'IN_PROGRESS', label: 'In Progress' },
-                { key: 'PENDING_APPROVAL', label: 'Pending Review' },
-                { key: 'RESOLVED', label: 'Resolved' },
-                { key: 'CLOSED', label: 'Closed' },
-                { key: 'ESCALATED_HUMAN', label: 'Escalated' },
-                { key: 'EXPERT_CANDIDATE', label: '⭐ Candidates' },
-              ].map((f) => (
-                <button
-                  key={f.key}
-                  onClick={() => setStatusFilter(f.key)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-mono transition border ${
-                    statusFilter === f.key
-                      ? 'bg-slate-900 text-white border-slate-900 font-semibold shadow-xs'
-                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
             </div>
           </div>
 
@@ -1527,132 +1440,106 @@ export const SopExecutionView: React.FC<{
                 <p className="text-xs font-mono text-slate-500">Loading work orders...</p>
               </div>
             ) : filteredCases.length === 0 ? (
-              <div className="p-6 text-center space-y-2 bg-white rounded-xl border border-dashed border-slate-200 shadow-xs">
-                <Wrench className="w-7 h-7 text-slate-300 mx-auto" />
-                <p className="text-xs font-bold text-slate-700">No Matching Work Orders</p>
-                <p className="text-[11px] text-slate-500 max-w-xs mx-auto font-sans leading-normal">
-                  No records match your active search terms or filters.
-                </p>
-                {(searchTerm || statusFilter !== 'ALL' || severityFilter !== 'ALL') && (
-                  <button
-                    onClick={() => {
-                      setSearchTerm('');
-                      setStatusFilter('ALL');
-                      setSeverityFilter('ALL');
-                    }}
-                    className="text-[11px] text-blue-600 font-mono underline hover:text-blue-800"
-                  >
-                    Reset all filters
-                  </button>
-                )}
-              </div>
+              cases.length === 0 ? (
+                <div className="p-6 text-center space-y-2 bg-white rounded-xl border border-dashed border-slate-200 shadow-xs">
+                  <Wrench className="w-7 h-7 text-slate-300 mx-auto" />
+                  <p className="text-xs font-bold text-slate-700 font-sans">No Active Work Orders</p>
+                  <p className="text-[11px] text-slate-500 max-w-xs mx-auto font-sans leading-relaxed">
+                    Escalate an issue from Troubleshooting & RCA to generate a new work order.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-6 text-center space-y-2 bg-white rounded-xl border border-dashed border-slate-200 shadow-xs">
+                  <Wrench className="w-7 h-7 text-slate-300 mx-auto" />
+                  <p className="text-xs font-bold text-slate-700">No Matching Work Orders</p>
+                  <p className="text-[11px] text-slate-500 max-w-xs mx-auto font-sans leading-normal">
+                    No records match your active search terms or filters.
+                  </p>
+                  {(searchTerm || statusFilter !== 'ALL' || severityFilter !== 'ALL') && (
+                    <button
+                      onClick={() => {
+                        setSearchTerm('');
+                        setStatusFilter('ALL');
+                        setSeverityFilter('ALL');
+                      }}
+                      className="text-[11px] text-blue-600 font-mono underline hover:text-blue-800"
+                    >
+                      Reset all filters
+                    </button>
+                  )}
+                </div>
+              )
             ) : (
               filteredCases.map((c) => {
                 const isSelected = activeCase ? c.id === activeCase.id : false;
-                const formattedDt =
-                  c.createdAtFormatted ||
-                  (c.createdAt
-                    ? new Date(c.createdAt).toLocaleString('en-US', {
-                        day: '2-digit',
-                        month: 'short',
-                        year: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true,
-                      })
-                    : '22 Oct 2026, 09:25 PM');
-                const hasLoto =
-                  Boolean(c.lotoApplied) ||
-                  String(c.description || '').includes('LOTO: YES') ||
-                  String(c.symptomDescription || '').includes('LOTO: Energy Isolated') ||
-                  String(c.description || '').includes('Energy Isolated');
-                const topCause = c.topRootCause || c.diagnosticHypothesis?.primaryHypothesis;
-                const prob = c.probability ?? (c.diagnosticHypothesis?.confidence === 'HIGH' ? 90 : c.diagnosticHypothesis?.confidence === 'MEDIUM' ? 70 : undefined);
+                const shortDate = c.createdAt
+                  ? new Date(c.createdAt).toLocaleDateString('en-GB', {
+                      day: 'numeric',
+                      month: 'short',
+                    })
+                  : '23 Oct';
+
+                const cleanSummary = (c.title || c.symptomDescription || 'Maintenance Work Order')
+                  .replace(/^RCA Corrective Work Order\s*[:-]?\s*/i, '')
+                  .replace(/^Work Order\s*[:-]?\s*/i, '')
+                  .trim();
+
+                const isUUID = (str?: string) =>
+                  Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+
+                let displayTag = c.assetTag || c.assetName || '';
+                if (!displayTag || isUUID(displayTag)) {
+                  displayTag = c.assetId && !isUUID(c.assetId) ? c.assetId : 'ELEC-MTR-701';
+                }
 
                 return (
                   <div
                     key={c.id}
                     onClick={() => setActiveCaseId(c.id)}
-                    className={`p-3.5 rounded-lg border text-xs font-mono cursor-pointer transition space-y-2.5 ${
+                    className={`p-2.5 rounded-lg border text-xs cursor-pointer transition space-y-1.5 ${
                       isSelected
-                        ? 'bg-blue-50/50 border-blue-500 shadow-xs ring-1 ring-blue-500/30'
+                        ? 'bg-blue-50/70 border-blue-500 shadow-xs ring-1 ring-blue-500/30'
                         : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-xs'
                     }`}
                   >
-                    {/* Top Bar: Case ID, Exact Date & Time, Priority */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-[#2563EB]">{c.caseNumber}</span>
-                        <span className="text-[10px] text-gray-500 font-mono flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-gray-400 shrink-0" />
-                          {formattedDt}
+                    {/* Row 1: Case/WO ID (Bold, left) + Priority Pill + Status Badge */}
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="font-mono font-bold text-blue-600 text-xs truncate">
+                        {c.caseNumber}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`font-mono font-bold px-1.5 py-0.2 rounded text-[9px] border ${
+                            c.severity === 'CRITICAL'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : c.severity === 'HIGH'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-blue-50 text-blue-700 border-blue-200'
+                          }`}
+                        >
+                          {c.severity}
                         </span>
+                        <CaseStatusBadge status={c.status} />
                       </div>
-                      <span
-                        className={`font-bold px-1.5 py-0.5 rounded text-[10px] border shrink-0 ${
-                          c.severity === 'CRITICAL'
-                            ? 'bg-rose-50 text-rose-700 border-rose-200'
-                            : c.severity === 'HIGH'
-                            ? 'bg-amber-50 text-amber-700 border-amber-200'
-                            : 'bg-blue-50 text-blue-700 border-blue-200'
-                        }`}
-                      >
-                        {c.severity}
+                    </div>
+
+                    {/* Row 2: Clean Asset Tag (Never UUID) + Short Date */}
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
+                      <span className="bg-slate-100 text-slate-800 border border-slate-200 px-1.5 py-0.2 rounded font-bold text-[10px] shrink-0 truncate max-w-[190px]">
+                        {displayTag}
+                      </span>
+                      <span className="text-[10px] text-slate-400 shrink-0 font-medium">
+                        {shortDate}
                       </span>
                     </div>
 
-                    {/* Machine Tag & Name + Fault Code */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="bg-gray-100 text-gray-900 border border-gray-200 px-1.5 py-0.5 rounded font-bold font-mono text-[10px]">
-                        {c.assetTag || c.assetId}
-                      </span>
-                      <span className="text-gray-700 font-semibold text-xs truncate max-w-[190px]" title={c.assetName || c.title}>
-                        {c.assetName || c.title}
-                      </span>
-                      {c.faultCode && (
-                        <span className="font-mono text-[10px] font-bold px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200">
-                          {c.faultCode}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Reported Symptom / Issue */}
-                    <div className="text-[11px] text-[#475569] font-sans line-clamp-2 leading-relaxed bg-gray-50/70 p-2 rounded border border-gray-100">
-                      <span className="text-[9px] font-bold font-mono text-gray-400 uppercase block mb-0.5">Symptom / Field Issue</span>
-                      {c.symptomDescription || c.description || c.title}
-                    </div>
-
-                    {/* Suspected Root Cause (if present) */}
-                    {topCause && (
-                      <div className="text-[11px] text-blue-900 bg-blue-50/70 border border-blue-100 rounded p-1.5 leading-snug">
-                        <span className="text-[9px] font-bold font-mono uppercase text-blue-600 block">Suspected Root Cause</span>
-                        <span className="font-semibold">{topCause}</span>
-                        {prob && (
-                          <span className="ml-1 text-[10px] font-mono font-bold text-blue-700">({prob}%)</span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Footer: LOTO Status, Specialist / Assigned Tech, Status */}
-                    <div className="flex items-center justify-between text-[10px] font-mono pt-1.5 border-t border-gray-100 text-gray-600">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {hasLoto ? (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-red-100/70 text-red-800 font-bold text-[9px] border border-red-200">
-                            <ShieldAlert className="w-2.5 h-2.5 text-red-600" />
-                            LOTO APPLIED
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold text-[9px] border border-emerald-200">
-                            <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" />
-                            LIVE / ISOLATED
-                          </span>
-                        )}
-                        <span className="text-gray-500 truncate max-w-[110px]" title={c.specialistDiscipline || c.assignedTechnicianName || 'Specialist'}>
-                          {c.specialistDiscipline || c.assignedTechnicianName || 'Specialist'}
-                        </span>
-                      </div>
-                      <StatusBadge label={c.status} tone={getStatusTone(c.status)} />
-                    </div>
+                    {/* Row 3: Strictly 1-Line Truncated Issue Title (line-clamp-1) */}
+                    <p
+                      className="text-xs text-slate-700 font-medium truncate font-sans line-clamp-1"
+                      title={cleanSummary}
+                    >
+                      {cleanSummary}
+                    </p>
                   </div>
                 );
               })
@@ -1661,984 +1548,347 @@ export const SopExecutionView: React.FC<{
         </div>
 
         {/* ================================================================= */}
-        {/* 2. MAIN WORKBENCH CANVAS (RIGHT MAIN VIEW)                        */}
+        {/* 2. SUPERVISOR & QA MANAGEMENT WORKBENCH (RIGHT MAIN VIEW)         */}
         {/* ================================================================= */}
         {activeCase ? (
-          <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-y-auto p-5 sm:p-6 space-y-4 bg-[#F8FAFC]">
-            {/* ------------------------------------------------------------- */}
-            {/* HEADER BAR & CONSOLIDATED ACTION BAR                          */}
-            {/* ------------------------------------------------------------- */}
-            <div className="p-5 bg-white rounded-lg border border-slate-200 shadow-xs space-y-4">
-              {/* Title & Action Bar Row */}
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-100">
-                <div className="space-y-1.5">
+          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto p-5 sm:p-6 bg-[#F8FAFC]">
+            {/* WORK ORDER MANAGEMENT CARD */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-xs divide-y divide-slate-100 overflow-hidden">
+              {/* SECTION A — HEADER */}
+              <div className="p-5 space-y-3">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-sm font-bold tracking-tight text-blue-600">
+                    <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-md shadow-2xs">
                       {activeCase.caseNumber}
                     </span>
-                    <span className="text-gray-300">·</span>
-                    <span className="font-mono text-xs font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded">
-                      ASSET: {activeCase.assetTag || activeCase.assetId}
+                    <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md">
+                      {activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label || 'PUMP-CENTRIFUGAL-402'}
                     </span>
-                    {activeCase.faultCode && (
-                      <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
-                        FAULT: {activeCase.faultCode}
-                      </span>
-                    )}
-                    <StatusBadge label={activeCase.status} tone={getStatusTone(activeCase.status)} />
                     <span
                       className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
                         activeCase.severity === 'CRITICAL'
-                          ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse'
-                          : 'bg-amber-50 text-amber-700 border-amber-200'
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                          : activeCase.severity === 'HIGH'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-blue-50 text-blue-700 border-blue-200'
                       }`}
                     >
-                      PRIORITY: {activeCase.severity}
+                      {activeCase.severity}
                     </span>
-                    {activeCase.isEscalated && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-mono text-[10px] font-bold">
-                        <AlertTriangle className="w-3 h-3 text-rose-600" />
-                        HUMAN ESCALATION
-                      </span>
-                    )}
+                    <CaseStatusBadge status={activeCase.status} />
                   </div>
 
-                  <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-snug tracking-tight font-sans">
-                    {activeCase.title}
-                  </h1>
-                </div>
-
-                {/* Consolidated Action Bar: Primary Blue + Secondary Border + Subtle Text */}
-                <div className="flex items-center gap-2 flex-wrap shrink-0">
-                  {/* Primary Blue Button: "+ Run AI Diagnosis" */}
-                  <Button
-                    size="sm"
-                    onClick={() => handleRunAiDiagnosis(activeCase.id)}
-                    disabled={isRunningDiagnosis}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs px-3.5 py-1.5 rounded-lg border-0 transition inline-flex items-center gap-1.5"
-                    title="Generate evidence-backed procedural SOP and root cause directives"
-                  >
-                    {isRunningDiagnosis && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                    <span>
-                      {isRunningDiagnosis
-                        ? 'Diagnosing...'
-                        : activeCase.diagnosticHypothesis
-                        ? 'Re-run AI Diagnosis'
-                        : '+ Run AI Diagnosis'}
-                    </span>
-                  </Button>
-
-                  {/* Secondary Border Button: "Assign Tech" */}
-                  {activeCase.status !== 'CLOSED' && activeCase.status !== 'RESOLVED' && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setSelectedTechId(activeCase.assignedTechnicianUserId || '');
-                        setSelectedTechName(activeCase.assignedTechnicianName || '');
-                        setIsAssignModalOpen(true);
-                      }}
-                      className="border-slate-300 bg-white text-slate-700 hover:bg-slate-50 font-semibold text-xs px-3 py-1.5 rounded-lg shadow-xs inline-flex items-center gap-1.5"
-                    >
-                      <UserPlus className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{activeCase.assignedTechnicianUserId ? 'Reassign Tech' : 'Assign Tech'}</span>
-                    </Button>
-                  )}
-
-                  {/* Subtle Text Button: "Escalate to Human" */}
-                  {activeCase.status !== 'RESOLVED' &&
-                    activeCase.status !== 'CLOSED' &&
-                    !activeCase.isEscalated && (
-                      <button
-                        type="button"
-                        onClick={() => setIsEscalateModalOpen(true)}
-                        className="text-slate-500 hover:text-rose-600 hover:bg-rose-50 font-medium text-xs px-2.5 py-1.5 rounded-lg transition inline-flex items-center gap-1 focus:outline-none"
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5" />
-                        <span>Escalate to Human</span>
-                      </button>
-                    )}
-
-                  {/* Contextual Action: Formally Close Case */}
-                  {activeCase.status === 'RESOLVED' && (
-                    <Button
-                      size="sm"
-                      onClick={() => setIsCloseConfirmOpen(true)}
-                      className="bg-slate-900 hover:bg-black text-white font-bold text-xs inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg shadow-xs"
-                    >
-                      <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Formally Close Case</span>
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {/* Metadata Sub-bar Chips: Case ID, Asset Tag, Creation Date, Assignee */}
-              <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-slate-600">
-                {/* Asset Tag Chip with 1-click copy */}
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-slate-400 uppercase font-sans">Asset:</span>
-                  <AssetBadge assetId={activeCase.assetId} />
-                </div>
-
-                <span className="text-slate-300">·</span>
-
-                {/* Creation Date Chip */}
-                <div className="flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>
-                    Created {new Date(activeCase.createdAt).toLocaleDateString(undefined, {
-                      year: 'numeric',
-                      month: 'short',
-                      day: 'numeric',
-                    })}
-                  </span>
-                </div>
-
-                <span className="text-slate-300">·</span>
-
-                {/* Assignee Status Chip */}
-                <div className="flex items-center gap-1.5">
-                  <UserCheck className="w-3.5 h-3.5 text-slate-400" />
-                  <span>
-                    Tech:{' '}
-                    <strong className="text-slate-900">
-                      {activeCase.assignedTechnicianName || 'Unassigned'}
-                    </strong>
-                  </span>
-                  {activeCase.assignedTechnicianUserId &&
-                    activeCase.status !== 'CLOSED' &&
-                    activeCase.status !== 'RESOLVED' && (
-                      <button
-                        onClick={() => {
-                          setUnassignReason('');
-                          setIsUnassignConfirmOpen(true);
+                  {/* Action Buttons: Assign Tech dropdown + Dispatch button */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Assign Tech Dropdown */}
+                    <div className="relative inline-flex items-center">
+                      <select
+                        aria-label="Assign Technician"
+                        value={activeCase.assignedTechnicianUserId || selectedTechId || ''}
+                        disabled={isSubmitting || activeCase.status === 'CLOSED'}
+                        onChange={async (e) => {
+                          const techId = e.target.value;
+                          if (!techId) return;
+                          const tech = technicians.find((t) => (t.userId || t.id) === techId);
+                          const techName = tech?.fullName || 'Technician';
+                          setSelectedTechId(techId);
+                          setSelectedTechName(techName);
+                          try {
+                            const res = await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/assign`, {
+                              method: 'POST',
+                              headers: activeCase.updatedAt ? { 'If-Match': activeCase.updatedAt } : undefined,
+                              body: JSON.stringify({
+                                technicianUserId: techId,
+                                technicianName: techName,
+                                expectedUpdatedAt: activeCase.updatedAt,
+                              }),
+                            });
+                            const json = await res.json();
+                            if (res.ok && json.success) {
+                              const serverCase = json.data;
+                              setCases((prev) =>
+                                prev.map((c) =>
+                                  c.id === activeCase.id
+                                    ? {
+                                        ...c,
+                                        ...serverCase,
+                                        assignedTechnicianUserId: techId,
+                                        assignedTechnicianName: techName,
+                                      }
+                                    : c
+                                )
+                              );
+                              toast.success('Technician Assigned', `Work order assigned to ${techName}.`);
+                            } else {
+                              throw new Error(json?.error?.message || 'Assignment failed');
+                            }
+                          } catch (err: any) {
+                            toast.error('Assignment Failed', err.message);
+                          }
                         }}
-                        className="text-[10px] text-rose-600 hover:text-rose-700 underline font-semibold ml-1"
-                        title="Unassign technician"
+                        className="h-8 pl-2.5 pr-7 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:border-slate-400 focus:outline-none focus:border-blue-500 cursor-pointer shadow-xs disabled:opacity-50"
                       >
-                        Unassign
-                      </button>
-                    )}
-                </div>
-
-                <span className="text-gray-300">·</span>
-
-                <div className="flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5 text-gray-400" />
-                  <span>
-                    Created: <strong className="text-gray-800">{activeCase.createdAtFormatted || (activeCase.createdAt ? new Date(activeCase.createdAt).toLocaleString() : '22 Oct 2026, 09:25 PM')}</strong>
-                  </span>
-                </div>
-
-                {activeCase.plantName && (
-                  <>
-                    <span className="text-gray-300">·</span>
-                    <span>Plant: <strong className="text-gray-800">{activeCase.plantName}</strong></span>
-                  </>
-                )}
-
-                {activeCase.resolvedAt && (
-                  <>
-                    <span className="text-slate-300">·</span>
-                    <div className="flex items-center gap-1 text-emerald-600 font-semibold">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>
-                        Resolved{' '}
-                        {new Date(activeCase.resolvedAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
+                        <option value="">
+                          {activeCase.assignedTechnicianName
+                            ? `Tech: ${activeCase.assignedTechnicianName}`
+                            : '-- Assign Tech --'}
+                        </option>
+                        {technicians.map((t) => (
+                          <option key={t.id || t.userId} value={t.userId || t.id}>
+                            {t.fullName} ({t.role || 'Tech'})
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                  </>
-                )}
 
-                {activeCase.closedAt && (
-                  <>
-                    <span className="text-slate-300">·</span>
-                    <div className="flex items-center gap-1 text-slate-500 font-semibold">
-                      <Archive className="w-3.5 h-3.5" />
-                      <span>
-                        Archived{' '}
-                        {new Date(activeCase.closedAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Redesigned Modern Alert Banner: Escalation Notice */}
-            {activeCase.isEscalated && (
-              <div className="p-3.5 rounded-lg bg-amber-50/80 border border-amber-200 text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                <div className="flex items-start gap-2.5">
-                  <ShieldAlert className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                  <div>
-                    <div className="font-bold text-xs font-mono uppercase tracking-wide text-amber-900 flex items-center gap-1.5">
-                      <span>Work Order Escalated to Reliability Engineering</span>
-                      <span className="px-1.5 py-0.2 rounded bg-amber-200/70 text-amber-800 text-[10px] font-mono font-semibold">
-                        SAFETY HALT
-                      </span>
-                    </div>
-                    <p className="text-xs text-amber-800 font-sans leading-relaxed mt-0.5">
-                      {activeCase.escalationReason ||
-                        'Automated procedure execution suspended. Technical boundary condition requires qualified engineer sign-off.'}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      setErrorDetailsModalContent(
-                        activeCase.escalationReason || 'Case escalated for certified engineering review.'
-                      )
-                    }
-                    className="bg-white hover:bg-amber-100 text-amber-800 border border-amber-300 font-semibold text-xs h-7 px-2.5 rounded-lg"
-                  >
-                    View Error Details
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Redesigned Modern Alert Banner: AI Diagnosis Error */}
-            {diagnosisError && (
-              <div className="p-3.5 rounded-lg bg-rose-50/80 border border-rose-200 text-rose-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                <div className="flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                  <div>
-                    <div className="font-bold text-xs font-mono uppercase tracking-wide text-rose-900">
-                      AI Diagnosis Notice
-                    </div>
-                    <p className="text-xs text-rose-800 font-sans leading-relaxed mt-0.5">
-                      {diagnosisError}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button
-                    size="sm"
-                    onClick={() => setErrorDetailsModalContent(diagnosisError)}
-                    className="bg-white hover:bg-rose-100 text-rose-700 border border-rose-300 font-semibold text-xs h-7 px-2.5 rounded-lg"
-                  >
-                    View Error Details
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => handleRunAiDiagnosis()}
-                    disabled={isRunningDiagnosis}
-                    className="bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs h-7 px-3 rounded-lg shadow-xs inline-flex items-center gap-1.5"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${isRunningDiagnosis ? 'animate-spin' : ''}`} />
-                    <span>Retry Diagnosis</span>
-                  </Button>
-                  <button
-                    onClick={() => setDiagnosisError(null)}
-                    className="text-rose-400 hover:text-rose-700 p-1 rounded"
-                    title="Dismiss"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* ------------------------------------------------------------- */}
-            {/* 1. HARD LOTO SAFETY GATE (MANDATORY NON-NEGOTIABLE CONTROLS) */}
-            {/* Moved to the very top in a prominent hazard card              */}
-            {/* ------------------------------------------------------------- */}
-            <div
-              className={`p-5 sm:p-6 rounded-2xl border-2 transition-all duration-200 shadow-sm ${
-                isLotoConfirmed
-                  ? 'bg-emerald-50/70 border-emerald-500/80 text-emerald-950'
-                  : 'bg-rose-50/90 border-rose-500 text-rose-950 ring-4 ring-rose-500/10'
-              }`}
-            >
-              <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
-                <div className="flex items-start gap-4">
-                  <div
-                    className={`p-3 rounded-xl shrink-0 ${
-                      isLotoConfirmed
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'bg-rose-600 text-white shadow-md animate-pulse'
-                    }`}
-                  >
-                    <ShieldAlert className="w-6 h-6 sm:w-7 sm:h-7" />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <span className="text-[10px] sm:text-xs font-black font-mono tracking-wider px-2.5 py-0.5 rounded-full bg-black/10 uppercase">
-                        OSHA 1910.147 COMPLIANT
-                      </span>
-                      <h3 className="text-base sm:text-lg font-black tracking-tight text-slate-900">
-                        SAFETY-CRITICAL CONTROLS (NON-NEGOTIABLE)
-                      </h3>
-                    </div>
-                    <p className="text-xs sm:text-sm text-slate-700 leading-relaxed max-w-2xl">
-                      Hazardous energy isolation required before accessing electrical cabinets or mechanical drive assemblies.
-                      Zero Energy State must be verified via physical multi-point meter check and personal safety padlocks attached.
-                    </p>
-
-                    {activeCase.diagnosticHypothesis?.safetyCriticalWarnings &&
-                      activeCase.diagnosticHypothesis.safetyCriticalWarnings.length > 0 && (
-                        <div className="mt-3 p-3.5 bg-white/80 rounded-xl border border-rose-200/80 space-y-1.5">
-                          <div className="text-[11px] font-mono font-bold text-rose-800 uppercase tracking-wide flex items-center gap-1.5">
-                            <Lock className="w-3.5 h-3.5 text-rose-600" />
-                            <span>Mandatory Directives For This Asset:</span>
-                          </div>
-                          <ul className="space-y-1">
-                            {activeCase.diagnosticHypothesis.safetyCriticalWarnings.map((warn, i) => (
-                              <li key={i} className="text-xs font-mono text-rose-950 flex items-start gap-2">
-                                <span className="text-rose-600 font-bold shrink-0">•</span>
-                                <span>{warn}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                  </div>
-                </div>
-
-                {/* Mandatory Confirmation Checkbox (Touch-Friendly Tablet Target) */}
-                <div className="lg:self-center shrink-0 w-full lg:w-auto">
-                  <label
-                    htmlFor="loto-master-gate"
-                    className={`flex items-center gap-4 p-4 sm:p-5 rounded-xl border-2 cursor-pointer transition-all select-none shadow-xs ${
-                      isLotoConfirmed
-                        ? 'bg-emerald-100/90 border-emerald-600 text-emerald-950 font-bold'
-                        : 'bg-white border-rose-400 hover:border-rose-600 text-rose-950 hover:bg-rose-50/50'
-                    }`}
-                  >
-                    <input
-                      id="loto-master-gate"
-                      type="checkbox"
-                      checked={isLotoConfirmed}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setIsLotoConfirmed(checked);
-                        saveLocalLotoState(activeCase.id, checked);
-                        if (checked) {
-                          toast.success(
-                            'LOTO Verified',
-                            'Zero Energy State confirmed. Troubleshooting checklist unlocked.'
-                          );
-                        } else {
-                          toast.warning(
-                            'LOTO Disengaged',
-                            'Safety gate active: repair troubleshooting steps locked.'
-                          );
-                        }
-                      }}
-                      className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 border-slate-400 text-emerald-600 focus:ring-4 focus:ring-emerald-500/20 cursor-pointer transition"
-                    />
-                    <div className="flex flex-col">
-                      <span className="text-xs sm:text-sm font-bold tracking-tight">
-                        I confirm Zero Energy State and LOTO is applied.
-                      </span>
-                      <span className="text-[11px] text-slate-500 font-mono mt-0.5">
-                        {isLotoConfirmed
-                          ? '✓ Authorization active — floor procedures unlocked'
-                          : '⚠ Mandatory check to unlock troubleshooting steps'}
-                      </span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {/* ------------------------------------------------------------- */}
-            {/* 2. SIMPLIFIED ACTIONABLE DIAGNOSIS (FRONTLINE WORKER VIEW)     */}
-            {/* Replaces complex jargon with plain headers; hides hypotheses  */}
-            {/* ------------------------------------------------------------- */}
-            {activeCase.diagnosticHypothesis && (
-              <Card className="border-slate-200 shadow-xs overflow-hidden">
-                <CardHeader className="bg-gradient-to-r from-blue-50/50 via-slate-50 to-white pb-3 border-b border-slate-100">
-                  <div className="flex items-center justify-between w-full flex-wrap gap-2">
-                    <div className="flex items-center gap-2.5">
-                      <div className="p-1.5 rounded-lg bg-blue-100 text-blue-700">
-                        <Cpu className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <CardTitle className="text-sm sm:text-base font-bold text-slate-900">
-                          Frontline Fault Assessment
-                        </CardTitle>
-                        <p className="text-xs text-slate-500">
-                          Action-oriented summary simplified for floor technicians
-                        </p>
-                      </div>
-                    </div>
-                    <StatusBadge
-                      label={`AI CONFIDENCE: ${activeCase.diagnosticHypothesis.confidence}`}
-                      tone={
-                        activeCase.diagnosticHypothesis.confidence === 'HIGH'
-                          ? 'healthy'
-                          : 'warning'
-                      }
-                    />
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4 pt-4">
-                  {/* Frontline Simplified Header */}
-                  {(() => {
-                    const simplified = simplifyRootCause(activeCase.diagnosticHypothesis.primaryHypothesis);
-                    return (
-                      <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-blue-600 text-white">
-                            Primary Issue
-                          </span>
-                          <span className="text-xs font-mono text-blue-700 font-semibold">
-                            Actionable Floor Directive
-                          </span>
-                        </div>
-                        <h4 className="text-base sm:text-lg font-bold text-slate-900 font-sans">
-                          {simplified.actionHeader}
-                        </h4>
-                        <p className="text-xs sm:text-sm text-slate-700 font-sans leading-relaxed">
-                          {simplified.actionSummary}
-                        </p>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Collapsible Technical Details Accordion */}
-                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
-                    <button
-                      type="button"
-                      onClick={() => setShowTechnicalDetails((prev) => !prev)}
-                      className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-100/70 transition-colors"
-                    >
-                      <div className="flex items-center gap-2">
-                        <BookOpen className="w-4 h-4 text-slate-500" />
-                        <span className="text-xs font-bold font-mono uppercase tracking-wider text-slate-700">
-                          View Technical Details & Engineering Hypotheses
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
-                        <span>{showTechnicalDetails ? 'Collapse' : 'Expand'}</span>
-                        {showTechnicalDetails ? (
-                          <ChevronUp className="w-4 h-4" />
-                        ) : (
-                          <ChevronDown className="w-4 h-4" />
-                        )}
-                      </div>
-                    </button>
-
-                    {showTechnicalDetails && (
-                      <div className="p-4 border-t border-slate-200 space-y-4 bg-white">
-                        {/* Raw Engineering Hypothesis */}
-                        <div className="space-y-1.5">
-                          <div className="text-[10px] font-mono uppercase font-bold text-slate-400">
-                            Raw AI Hypothesis & Root Cause Analysis
-                          </div>
-                          <p className="text-xs font-mono text-slate-800 bg-slate-50 p-3 rounded-lg border border-slate-200 leading-relaxed">
-                            {activeCase.diagnosticHypothesis.primaryHypothesis}
-                          </p>
-                        </div>
-
-                        {/* Root Causes List (Hypothesis 1, 2, 3...) */}
-                        {activeCase.diagnosticHypothesis.rootCauses &&
-                          activeCase.diagnosticHypothesis.rootCauses.length > 0 && (
-                            <div className="space-y-1.5">
-                              <div className="text-[10px] font-mono uppercase font-bold text-slate-400">
-                                Detailed Engineering Hypotheses
-                              </div>
-                              <ul className="space-y-2">
-                                {activeCase.diagnosticHypothesis.rootCauses.map((r, i) => (
-                                  <li
-                                    key={i}
-                                    className="text-xs font-mono text-slate-700 bg-slate-50/80 px-3 py-2 rounded-lg border border-slate-200/60 flex items-start gap-2.5"
-                                  >
-                                    <span className="font-bold text-blue-600 shrink-0">
-                                      Hypothesis {i + 1}:
-                                    </span>
-                                    <span className="leading-relaxed">{r}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-
-                        {/* Evidence Citations */}
-                        {activeCase.diagnosticHypothesis.evidenceCitations &&
-                          activeCase.diagnosticHypothesis.evidenceCitations.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="text-[10px] font-mono uppercase font-bold text-slate-400">
-                                Governing Technical Manual Citations
-                              </div>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                                {activeCase.diagnosticHypothesis.evidenceCitations.map((cit, i) => (
-                                  <div
-                                    key={i}
-                                    className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono space-y-1"
-                                  >
-                                    <div className="flex justify-between items-center text-[10px]">
-                                      <span className="font-bold text-amber-700">
-                                        {cit.documentNumber}
-                                      </span>
-                                      <span className="text-slate-400">Page {cit.pageNumber}</span>
-                                    </div>
-                                    <p className="text-[11px] text-slate-700 font-sans leading-relaxed italic">
-                                      "{cit.snippet}"
-                                    </p>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* ------------------------------------------------------------- */}
-            {/* 3. GUIDED EXECUTION CHECKLIST (GATED BY HARD LOTO SAFETY GATE) */}
-            {/* Touch-Friendly Tablet Checkboxes & Persistent Progress State  */}
-            {/* ------------------------------------------------------------- */}
-            <Card className="border-slate-200 shadow-xs">
-              <CardHeader className="pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-blue-600" />
-                  <CardTitle>Guided Execution Checklist</CardTitle>
-                </div>
-                <div className="flex items-center gap-2 text-xs font-mono text-slate-600">
-                  <span>
-                    Progress:{' '}
-                    <strong className="text-slate-900">
-                      {completedSteps} / {totalSteps} Steps Completed
-                    </strong>
-                  </span>
-                  <span className="text-slate-300">·</span>
-                  <span
-                    className={`font-bold ${
-                      progressPercent === 100 ? 'text-emerald-600' : 'text-blue-600'
-                    }`}
-                  >
-                    {progressPercent}%
-                  </span>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4 pt-4">
-                {/* Visual Progress Bar (When steps exist) */}
-                {totalSteps > 0 && (
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden border border-slate-200">
-                    <div
-                      className={`h-full transition-all duration-500 rounded-full ${
-                        progressPercent === 100
-                          ? 'bg-gradient-to-r from-emerald-500 to-teal-500'
-                          : 'bg-gradient-to-r from-blue-600 to-indigo-600'
-                      }`}
-                      style={{ width: `${progressPercent}%` }}
-                    />
-                  </div>
-                )}
-
-                {/* Hard Safety Lock Gate Barrier: Hide steps until LOTO confirmed */}
-                {!isLotoConfirmed ? (
-                  <div className="p-8 sm:p-10 rounded-xl border-2 border-dashed border-amber-300 bg-amber-50/60 text-center space-y-4">
-                    <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-700 flex items-center justify-center mx-auto shadow-xs">
-                      <Lock className="w-7 h-7" />
-                    </div>
-                    <div className="max-w-md mx-auto space-y-1.5">
-                      <h4 className="text-base font-bold text-slate-900 font-sans">
-                        Troubleshooting Steps Locked
-                      </h4>
-                      <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-sans">
-                        Per OSHA 1910.147 compliance directives, you must physically verify Zero Energy State and check the LOTO confirmation box above before accessing repair troubleshooting steps.
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setIsLotoConfirmed(true);
-                        saveLocalLotoState(activeCase.id, true);
-                        toast.success(
-                          'LOTO Verified',
-                          'Zero Energy State confirmed. Checklist unlocked.'
-                        );
-                      }}
-                      className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs h-9 px-4 rounded-lg shadow-xs inline-flex items-center gap-2"
-                    >
-                      <ShieldCheck className="w-4 h-4" />
-                      <span>Confirm LOTO & Unlock Steps</span>
-                    </Button>
-                  </div>
-                ) : totalSteps === 0 ? (
-                  <div className="p-8 rounded-lg border border-dashed border-slate-300 bg-gradient-to-b from-slate-50 to-white text-center space-y-3.5 shadow-xs">
-                    <div className="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-600 flex items-center justify-center mx-auto shadow-xs">
-                      <Sparkles className="w-6 h-6 animate-pulse" />
-                    </div>
-                    <div className="max-w-md mx-auto space-y-1">
-                      <h4 className="text-sm font-bold text-slate-900 font-sans">
-                        Guided Repair SOP Not Yet Generated
-                      </h4>
-                      <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                        Run ForgeX Multimodal AI diagnosis to ingest technical manuals and equipment telemetry to automatically synthesize an evidence-grounded repair checklist with OSHA 1910.147 LOTO safety directives.
-                      </p>
-                    </div>
-                    <div className="pt-2">
+                    {/* Dispatch to Technician Queue CTA */}
+                    {activeCase.status !== 'IN_PROGRESS' &&
+                    activeCase.status !== 'RESOLVED' &&
+                    activeCase.status !== 'CLOSED' ? (
                       <Button
-                        onClick={() => handleRunAiDiagnosis(activeCase.id)}
-                        disabled={isRunningDiagnosis}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-xs inline-flex items-center gap-2 px-4 py-2 rounded-lg transition"
+                        size="sm"
+                        onClick={handleDispatchToTechQueue}
+                        disabled={isSubmitting}
+                        className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs shadow-xs px-3.5 py-1.5 rounded-lg border-0 transition inline-flex items-center gap-1.5 cursor-pointer"
+                        title="Approve and queue work order for technician execution"
                       >
-                        {isRunningDiagnosis ? (
-                          <>
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                            <span>Synthesizing Repair SOP...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="w-4 h-4 text-blue-200" />
-                            <span>Run AI Diagnosis to Generate SOP</span>
-                          </>
-                        )}
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>Dispatch to Technician Queue</span>
                       </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-3.5">
-                    {activeCase.checklist.map((step) => {
-                      const isDone = step.status === 'COMPLETED';
-                      return (
-                        <label
-                          key={step.id}
-                          className={`p-4 sm:p-5 rounded-xl border-2 transition-all duration-150 flex items-start gap-4 cursor-pointer select-none ${
-                            isDone
-                              ? 'bg-emerald-50/60 border-emerald-300/90 text-slate-900 shadow-xs'
-                              : 'bg-white border-slate-200 text-slate-900 hover:border-blue-400 hover:shadow-sm'
-                          }`}
-                        >
-                          <div className="pt-0.5 shrink-0">
-                            <input
-                              type="checkbox"
-                              checked={isDone}
-                              disabled={activeCase.status === 'CLOSED'}
-                              onChange={() => handleToggleStep(step.id)}
-                              className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 border-slate-300 text-emerald-600 focus:ring-4 focus:ring-emerald-500/20 cursor-pointer transition disabled:opacity-50"
-                            />
-                          </div>
-
-                          <div className="flex-1 min-w-0 space-y-1.5">
-                            <div className="flex items-center justify-between gap-3 flex-wrap">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span
-                                  className={`text-sm sm:text-base font-bold font-sans ${
-                                    isDone ? 'line-through text-slate-400' : 'text-slate-900'
-                                  }`}
-                                >
-                                  Step {step.stepNumber}: {step.title}
-                                </span>
-                                {step.requiresLoto && (
-                                  <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 text-xs font-mono font-bold flex items-center gap-1">
-                                    <Lock className="w-3 h-3" /> LOTO REQUIRED
-                                  </span>
-                                )}
-                              </div>
-                              <StatusBadge
-                                label={step.status}
-                                tone={isDone ? 'healthy' : 'warning'}
-                              />
-                            </div>
-
-                            <p
-                              className={`text-xs sm:text-sm font-sans leading-relaxed ${
-                                isDone ? 'text-slate-500' : 'text-slate-700'
-                              }`}
-                            >
-                              {step.instruction}
-                            </p>
-
-                            {step.citation && (
-                              <div className="pt-1 flex items-center gap-1.5 text-xs font-mono text-blue-600">
-                                <FileText className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                <span>
-                                  Citation: {step.citation.documentNumber} (Page {step.citation.pageNumber})
-                                </span>
-                              </div>
-                            )}
-
-                            {step.technicianNotes && (
-                              <div className="text-xs font-mono text-slate-500 italic pt-1">
-                                Notes: {step.technicianNotes}
-                              </div>
-                            )}
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Technician Findings Submission Card */}
-            {(activeCase.status === 'IN_PROGRESS' || activeCase.status === 'DIAGNOSED') && (
-              <Card className="border-slate-200 shadow-xs">
-                <CardHeader>
-                  <CardTitle>Technician Field Findings & Sign-Off Submission</CardTitle>
-                  <StatusBadge label="READY FOR SUBMISSION" tone="warning" />
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-mono text-slate-700 font-semibold">
-                        Final Measured Values (e.g. Torque ft-lbs, Clearance mm, Temp °C)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. 45 ft-lbs, 0.05mm clearance"
-                        value={measuredTorque}
-                        onChange={(e) => setMeasuredTorque(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 shadow-xs"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-mono text-slate-700 font-semibold">
-                        Corrective Interventions & Observations
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Describe parts replaced, seal alignment, or tests run..."
-                        value={findingsText}
-                        onChange={(e) => setFindingsText(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-600 shadow-xs"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end pt-2">
-                    <Button
-                      onClick={handleSubmitFindings}
-                      disabled={isSubmitting}
-                      className="bg-slate-900 hover:bg-black text-white font-semibold shadow-sm inline-flex items-center gap-1.5 rounded-lg text-xs"
-                    >
-                      <Send className="w-3.5 h-3.5 text-blue-400" />
-                      <span>
-                        {isSubmitting ? 'Submitting...' : 'Submit Work Order for Supervisor Approval'}
+                    ) : activeCase.status === 'IN_PROGRESS' ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg shadow-2xs">
+                        <Play className="w-3.5 h-3.5 fill-current text-blue-600 animate-pulse" />
+                        <span>Dispatched to Tech Queue</span>
                       </span>
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+                    ) : null}
 
-            {/* Supervisor Review & Sign-Off Authorization */}
-            {activeCase.status === 'PENDING_APPROVAL' && (
-              <Card className="border-amber-300 bg-amber-50/20 shadow-xs">
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <UserCheck className="w-4 h-4 text-amber-600" />
-                    <CardTitle>Supervisor Review & Work Order Authorization</CardTitle>
+                    {/* Close case button if already resolved */}
+                    {activeCase.status === 'RESOLVED' && (
+                      <Button
+                        size="sm"
+                        onClick={() => setIsCloseConfirmOpen(true)}
+                        className="bg-slate-900 hover:bg-black text-white font-bold text-xs inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg shadow-xs cursor-pointer"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Formally Close</span>
+                      </Button>
+                    )}
                   </div>
-                  <StatusBadge label="AWAITING SUPERVISOR APPROVAL" tone="warning" pulse />
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="p-3.5 rounded-lg bg-white border border-amber-200 space-y-1 text-xs font-mono">
-                    <div className="text-[10px] text-slate-400 uppercase font-bold">
-                      SUBMITTED TECHNICIAN RESOLUTION
+                </div>
+
+                <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight font-sans">
+                  {activeCase.title}
+                </h1>
+              </div>
+
+              {/* SECTION B — COMPACT INFO GRID (2x2 small cells) */}
+              <div className="p-5">
+                <div className="grid grid-cols-2 gap-3 bg-slate-50/70 p-3.5 rounded-lg border border-slate-200 text-xs">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
+                      Asset Tag
+                    </span>
+                    <p className="font-mono font-bold text-slate-900 text-xs truncate">
+                      {activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label || 'PUMP-CENTRIFUGAL-402'}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
+                      Created Date & Time
+                    </span>
+                    <p className="font-mono text-slate-800 text-xs">
+                      {activeCase.createdAtFormatted ||
+                        (activeCase.createdAt
+                          ? new Date(activeCase.createdAt).toLocaleString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: true,
+                            })
+                          : 'Oct 23, 2026 · 12:07 PM')}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
+                      Assigned Technician
+                    </span>
+                    <p className="font-sans font-semibold text-slate-900 text-xs flex items-center gap-1.5 truncate">
+                      <UserCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                      <span>{activeCase.assignedTechnicianName || 'Unassigned'}</span>
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
+                      Facility / Plant
+                    </span>
+                    <p className="font-sans font-semibold text-slate-900 text-xs truncate">
+                      {activeCase.plantName || organization?.name || 'Cleveland Stamping Plant'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION C — ISSUE & WORK SUMMARY */}
+              <div className="p-5 space-y-3">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-mono text-slate-400 uppercase font-bold block">
+                    Reported Issue / Field Symptom
+                  </span>
+                  <p className="text-xs text-slate-800 font-medium font-sans leading-relaxed">
+                    {activeCase.symptomDescription || activeCase.description || activeCase.title}
+                  </p>
+                </div>
+                <div className="pt-2 border-t border-slate-100 space-y-1">
+                  <span className="text-[10px] font-mono text-blue-600 uppercase font-bold block">
+                    Root Cause (Identified from RCA)
+                  </span>
+                  <p className="text-xs text-slate-900 font-semibold font-sans leading-relaxed">
+                    {activeCase.diagnosticHypothesis?.primaryHypothesis ||
+                      activeCase.topRootCause ||
+                      'Mechanical wear or operational deviation identified during diagnostic root-cause inspection.'}
+                  </p>
+                </div>
+                <div className="pt-2 border-t border-slate-100 space-y-1">
+                  <span className="text-[10px] font-mono text-slate-400 uppercase font-bold block">
+                    Required Repair Summary
+                  </span>
+                  <p className="text-xs text-slate-700 font-sans leading-relaxed">
+                    {activeCase.findings?.resolutionSummary ||
+                      (Array.isArray(activeCase.checklist) && activeCase.checklist.length > 0
+                        ? activeCase.checklist.map((s) => s.title).join(' → ')
+                        : 'Isolate zero-energy LOTO, disassemble assembly housings, replace worn mechanical components to specification, and perform 15-minute diagnostic functional verification.')}
+                  </p>
+                </div>
+              </div>
+
+              {/* SECTION D — SUPERVISOR SIGN-OFF (Only visible when Technician marks work complete) */}
+              {activeCase.status === 'PENDING_APPROVAL' && (
+                <div className="p-5 bg-amber-50/40 border-t border-amber-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <UserCheck className="w-4 h-4 text-amber-600" />
+                      <span className="font-bold text-slate-900 uppercase font-mono text-xs">
+                        Section D — Supervisor Sign-off & Clearance
+                      </span>
                     </div>
-                    <p className="text-slate-900 font-medium font-sans">
+                    <StatusBadge label="AWAITING SUPERVISOR REVIEW" tone="warning" pulse />
+                  </div>
+
+                  <div className="p-3 bg-white rounded-lg border border-amber-200/80 text-xs space-y-1.5">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold block">
+                      Technician Completed Findings & Observations
+                    </span>
+                    <p className="text-slate-800 font-medium font-sans">
                       {activeCase.findings?.resolutionSummary ||
-                        'Procedures verified and executed per standard.'}
+                        activeCase.findings?.observations ||
+                        'Technician has completed execution of repair steps and submitted work for supervisor QA clearance.'}
                     </p>
                     {activeCase.findings?.measuredValues &&
                       Object.keys(activeCase.findings.measuredValues).length > 0 && (
-                        <div className="pt-1 text-[11px] text-slate-600">
-                          Recorded Telemetry: {JSON.stringify(activeCase.findings.measuredValues)}
+                        <div className="flex flex-wrap gap-2 pt-1 border-t border-amber-100">
+                          {Object.entries(activeCase.findings.measuredValues).map(([k, v]) => (
+                            <span
+                              key={k}
+                              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-50 border border-slate-200 font-mono text-[11px]"
+                            >
+                              <span className="text-slate-500">{k}:</span>
+                              <span className="text-slate-900 font-bold">{String(v)}</span>
+                            </span>
+                          ))}
                         </div>
                       )}
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-mono text-slate-700 font-semibold">
-                      Supervisor Sign-off Comments / Quality Notes
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-mono text-slate-600 font-semibold">
+                      Supervisor Review Notes
                     </label>
-                    <input
-                      type="text"
-                      placeholder="Add supervisor notes before final sign-off..."
+                    <textarea
+                      rows={2}
                       value={approvalNotes}
                       onChange={(e) => setApprovalNotes(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:border-blue-600 shadow-xs"
+                      placeholder="Enter supervisor quality sign-off remarks or rework specifications..."
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs font-sans text-slate-900 focus:outline-none focus:border-blue-600 shadow-xs"
                     />
                   </div>
 
-                  <div className="flex items-center justify-end gap-3 pt-2">
+                  <div className="flex items-center justify-end gap-2.5 pt-1">
                     <Button
                       variant="danger"
                       size="sm"
                       disabled={isSubmitting}
                       onClick={() => setIsRejectConfirmOpen(true)}
+                      className="px-3.5 py-1.5 text-xs font-bold"
                     >
-                      Reject Work Order (Request Rework)
+                      Reject (Request Rework)
                     </Button>
                     <Button
                       size="sm"
                       disabled={isSubmitting}
                       onClick={() => handleReviewApproval(true)}
-                      className="bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-1.5 shadow-xs rounded-lg cursor-pointer"
                     >
-                      {isSubmitting ? 'Approving...' : 'Approve Work Order (Mark Resolved)'}
+                      {isSubmitting ? 'Approving...' : 'Approve & Close Work Order'}
                     </Button>
                   </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Resolved Work Order Banner with Close Action */}
-            {activeCase.status === 'RESOLVED' && (
-              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-                <div className="space-y-0.5">
-                  <span className="text-xs font-mono font-bold text-emerald-800 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    WORK ORDER VERIFIED & RESOLVED
-                  </span>
-                  <p className="text-[11px] text-slate-600 font-sans">
-                    Approved by {activeCase.approval?.reviewedByUserId || 'Authorized Supervisor'} at{' '}
-                    {activeCase.resolvedAt
-                      ? new Date(activeCase.resolvedAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })
-                      : 'Recently'}
-                    .
-                    {activeCase.approval?.reviewerNotes &&
-                      ` Comments: "${activeCase.approval.reviewerNotes}"`}
-                  </p>
                 </div>
-                <Button
-                  size="sm"
-                  onClick={() => setIsCloseConfirmOpen(true)}
-                  disabled={isSubmitting}
-                  className="bg-slate-900 hover:bg-black text-white font-bold shrink-0 shadow-sm inline-flex items-center gap-1.5 rounded-lg"
-                >
-                  <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Formally Close Case</span>
-                </Button>
-              </div>
-            )}
+              )}
 
-            {/* Closed Archive Banner */}
-            {activeCase.status === 'CLOSED' && (
-              <div className="p-4 rounded-lg bg-white border border-slate-200 flex items-center justify-between shadow-xs">
-                <div className="flex items-center gap-2 text-xs font-mono text-slate-600">
-                  <CheckCheck className="w-4 h-4 text-emerald-600" />
-                  <span>
-                    Work order formally audited and archived at{' '}
-                    {activeCase.closedAt
-                      ? new Date(activeCase.closedAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })
-                      : 'N/A'}
-                    .
-                  </span>
+              {/* Resolved State Notice */}
+              {activeCase.status === 'RESOLVED' && (
+                <div className="p-4 bg-emerald-50 border-t border-emerald-200 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <div>
+                      <span className="font-bold text-emerald-900 font-mono block">
+                        WORK ORDER VERIFIED & RESOLVED
+                      </span>
+                      <span className="text-emerald-700 text-[11px]">
+                        Cleared by {activeCase.approval?.reviewedByUserId || 'Supervisor'}.
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => setIsCloseConfirmOpen(true)}
+                    disabled={isSubmitting}
+                    className="bg-slate-900 hover:bg-black text-white font-bold text-xs px-3.5 py-1.5 rounded-lg shrink-0 shadow-xs"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Formally Close Case</span>
+                  </Button>
                 </div>
-                <StatusBadge label="CLOSED & ARCHIVED" tone="healthy" />
-              </div>
-            )}
+              )}
 
-            {/* ============================================================= */}
-            {/* 3. CASE HISTORY & AUDIT TRAIL (CLEAN VERTICAL TIMELINE UI)    */}
-            {/* ============================================================= */}
-            <Card className="border-slate-200 shadow-xs">
-              <CardHeader className="pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2">
-                  <History className="w-4 h-4 text-slate-600" />
-                  <CardTitle className="text-xs font-mono uppercase tracking-wider text-slate-800">
-                    Case History & Tamper-Evident Audit Trail
-                  </CardTitle>
+              {/* Closed State Notice */}
+              {activeCase.status === 'CLOSED' && (
+                <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs font-mono">
+                  <div className="flex items-center gap-2 text-slate-600">
+                    <CheckCheck className="w-4 h-4 text-emerald-600" />
+                    <span>Work order formally audited and archived.</span>
+                  </div>
+                  <StatusBadge label="CLOSED & ARCHIVED" tone="healthy" />
                 </div>
-                <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">
-                  CHRONOLOGICAL LEDGER
-                </span>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <div className="relative pl-6 space-y-5 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
-                  {activeCase.history.map((h, idx) => {
-                    const initials = (h.user || 'System')
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .slice(0, 2)
-                      .toUpperCase();
-
-                    return (
-                      <div key={h.id || idx} className="relative group">
-                        {/* Timeline Node Icon */}
-                        <div className="absolute -left-[27px] top-0.5 w-6 h-6 rounded-full bg-white border-2 border-slate-300 flex items-center justify-center shadow-xs group-hover:border-blue-500 transition">
-                          {getTimelineIcon(h.action)}
-                        </div>
-
-                        {/* Event Content Card */}
-                        <div className="bg-slate-50/70 hover:bg-slate-50 border border-slate-200/90 rounded-lg p-3 space-y-2 transition shadow-xs">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-mono text-xs font-bold text-slate-900 tracking-tight">
-                                {h.action.replace(/_/g, ' ')}
-                              </span>
-                              <span className="text-slate-300">·</span>
-                              {/* User Avatar Badge */}
-                              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-mono text-[10px] bg-white border border-slate-200 text-slate-700 shadow-xs">
-                                <span className="w-4 h-4 rounded-full bg-slate-900 text-white flex items-center justify-center text-[9px] font-bold">
-                                  {initials}
-                                </span>
-                                <span className="font-medium">{h.user || 'System'}</span>
-                              </div>
-                            </div>
-
-                            {/* Exact Timestamp */}
-                            <div className="flex items-center gap-1 font-mono text-[11px] text-slate-500">
-                              <Clock className="w-3 h-3 text-slate-400" />
-                              <span>
-                                {new Date(h.timestamp).toLocaleString(undefined, {
-                                  year: 'numeric',
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                  second: '2-digit',
-                                })}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Event Notes / Transition Description */}
-                          {h.notes && (
-                            <div className="p-2.5 rounded-md bg-white border border-slate-200/70 text-xs text-slate-700 font-sans leading-relaxed">
-                              {h.notes}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
+              )}
+            </div>
           </div>
         ) : (
           <div className="flex-1 flex items-center justify-center p-8 bg-[#F8FAFC]">
-            <div className="max-w-md w-full bg-white rounded-lg border border-slate-200 p-8 text-center space-y-3 shadow-sm">
+            <div className="max-w-md w-full bg-white rounded-xl border border-slate-200 p-8 text-center space-y-3 shadow-xs">
               <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
                 <Wrench className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-900 font-sans">No Work Orders Logged</h3>
-              <p className="text-xs text-slate-600 leading-relaxed font-sans">
-                Your company workspace has zero recorded maintenance cases. Click below to log a work order and initiate automated diagnostic checklists.
+              <h3 className="text-base font-bold text-slate-900 font-sans">No Work Order Selected</h3>
+              <p className="text-xs text-slate-500 leading-relaxed font-sans">
+                Select a Work Order from the left list to review details, assign a technician, and dispatch.
               </p>
               <div className="pt-2">
                 <Button
                   size="sm"
-                  onClick={() => setIsNewCaseModalOpen(true)}
-                  className="bg-slate-900 hover:bg-black text-white font-semibold shadow-sm px-3.5 py-1.5 rounded-lg"
+                  onClick={handleOpenNewCaseModal}
+                  className="bg-slate-900 hover:bg-black text-white font-semibold shadow-xs px-3.5 py-1.5 rounded-lg cursor-pointer"
                 >
                   <span>+ Report Work Order</span>
                 </Button>
@@ -2647,6 +1897,7 @@ export const SopExecutionView: React.FC<{
           </div>
         )}
       </div>
+
 
       {/* --------------------------------------------------------------------- */}
       {/* MODALS (100% PRESERVED FUNCTIONALITY)                                 */}
@@ -2684,18 +1935,18 @@ export const SopExecutionView: React.FC<{
       {/* 1. Report New Case Modal (Complete Realistic 6-Row SaaS Dialog) */}
       <Modal
         isOpen={isNewCaseModalOpen}
-        onClose={() => setIsNewCaseModalOpen(false)}
+        onClose={handleCloseNewCaseModal}
         title="Report New Maintenance Work Order"
         subtitle="Capture machinery symptoms, telemetry context, and safety parameters for automated AI diagnosis."
         maxWidth="2xl"
         footer={
-          <div className="flex items-center justify-between w-full">
+          <div className="flex items-center justify-between w-full gap-3 pt-1">
             <Button
               variant="outline"
               size="sm"
               disabled={isSubmitting}
-              onClick={() => setIsNewCaseModalOpen(false)}
-              className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-semibold px-4 py-2 rounded-lg text-xs shadow-xs"
+              onClick={handleCloseNewCaseModal}
+              className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-semibold px-4 py-2 rounded-lg text-xs shadow-xs cursor-pointer"
             >
               Cancel
             </Button>
@@ -2703,7 +1954,7 @@ export const SopExecutionView: React.FC<{
               size="sm"
               onClick={handleCreateNewCase}
               disabled={isSubmitting}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-sm px-4 py-2 rounded-lg inline-flex items-center gap-1.5 transition"
+              className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs shadow-sm px-5 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition whitespace-nowrap cursor-pointer shrink-0"
             >
               {isSubmitting ? (
                 <>
@@ -2712,7 +1963,7 @@ export const SopExecutionView: React.FC<{
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-3.5 h-3.5 text-blue-200" />
+                  <Sparkles className="w-3.5 h-3.5 text-blue-200 shrink-0" />
                   <span>+ Create & Run AI Diagnosis</span>
                 </>
               )}
@@ -2743,8 +1994,11 @@ export const SopExecutionView: React.FC<{
               <select
                 value={newFacility}
                 onChange={(e) => setNewFacility(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 focus:outline-none focus:border-blue-600 font-sans text-xs cursor-pointer shadow-xs"
+                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
+                  !newFacility ? 'text-slate-400' : 'text-slate-900'
+                } focus:outline-none focus:border-blue-600 font-sans text-xs cursor-pointer shadow-xs`}
               >
+                <option value="">-- Select Facility --</option>
                 <option value="ForgeX Demo Factory - Line 2 (Bay B)">
                   ForgeX Demo Factory - Line 2 (Bay B)
                 </option>
@@ -2765,8 +2019,11 @@ export const SopExecutionView: React.FC<{
               <select
                 value={newAssetTag}
                 onChange={(e) => setNewAssetTag(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs"
+                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
+                  !newAssetTag ? 'text-slate-400' : 'text-slate-900'
+                } focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs`}
               >
+                <option value="">-- Select Asset --</option>
                 <option value="PUMP-CENTRIFUGAL-402 (Main Feed Pump)">
                   PUMP-CENTRIFUGAL-402 (Main Feed Pump)
                 </option>
@@ -2795,8 +2052,11 @@ export const SopExecutionView: React.FC<{
               <select
                 value={newMaintenanceType}
                 onChange={(e) => setNewMaintenanceType(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 focus:outline-none focus:border-blue-600 font-sans text-xs cursor-pointer shadow-xs"
+                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
+                  !newMaintenanceType ? 'text-slate-400' : 'text-slate-900'
+                } focus:outline-none focus:border-blue-600 font-sans text-xs cursor-pointer shadow-xs`}
               >
+                <option value="">-- Select Maintenance Type --</option>
                 <option value="Corrective Breakdown">Corrective Breakdown</option>
                 <option value="Preventive Maintenance">Preventive Maintenance</option>
                 <option value="Condition-Based (Sensor Alert)">Condition-Based (Sensor Alert)</option>
@@ -2808,8 +2068,11 @@ export const SopExecutionView: React.FC<{
               <select
                 value={newSeverity}
                 onChange={(e) => setNewSeverity(e.target.value as MaintenanceCaseSeverity)}
-                className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs"
+                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
+                  !newSeverity ? 'text-slate-400' : 'text-slate-900'
+                } focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs`}
               >
+                <option value="">-- Select Priority / Severity --</option>
                 <option value="CRITICAL">CRITICAL - Line Down</option>
                 <option value="HIGH">HIGH - Risk of Failure</option>
                 <option value="MEDIUM">MEDIUM - Degradation</option>
@@ -2820,7 +2083,7 @@ export const SopExecutionView: React.FC<{
 
           {/* Row 4 (2 Columns): Error Code & LOTO Safety Protocol Toggle */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-slate-700 font-semibold text-xs">Error / Alarm Code (Optional)</label>
               <input
                 type="text"
@@ -2829,23 +2092,26 @@ export const SopExecutionView: React.FC<{
                 onChange={(e) => setNewErrorCode(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 font-mono text-xs shadow-xs"
               />
+              <p className="text-[10px] text-slate-500 font-sans">
+                Leave blank for AI auto-detection based on symptoms
+              </p>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
                 <span>LOTO Safety Protocol Required?</span>
                 <span className="text-[10px] text-slate-400 font-mono">OSHA 1910.147</span>
               </label>
-              <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-200">
+              <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 border border-slate-200">
                 <div className="flex items-center gap-1.5">
                   {newLotoRequired ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-700 text-[11px] font-mono font-bold">
-                      <Lock className="w-3 h-3 text-amber-600" />
-                      <span>Yes - Lockout/Tagout Mandatory</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-700 text-[10px] font-mono font-bold">
+                      <Lock className="w-2.5 h-2.5 text-amber-600" />
+                      <span>Yes - Lockout/Tagout</span>
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[11px] font-mono font-medium">
-                      <span>No - Standard PPE Only</span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-mono font-medium">
+                      <span>No - Standard PPE</span>
                     </span>
                   )}
                 </div>
@@ -2882,6 +2148,20 @@ export const SopExecutionView: React.FC<{
               onChange={(e) => setNewSymptoms(e.target.value)}
               className="w-full p-2.5 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 font-sans focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 text-xs shadow-xs"
             />
+            {/* Quick Symptom Chips */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              <span className="text-[10px] font-mono text-slate-400 mr-0.5">Quick Symptoms:</span>
+              {QUICK_SYMPTOM_CHIPS.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => handleAddSymptomChip(chip)}
+                  className="px-2 py-0.5 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 hover:border-blue-300 border border-slate-200 rounded text-[11px] font-sans font-medium transition cursor-pointer"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Row 6 (Full Width): Evidence File Upload Zone */}

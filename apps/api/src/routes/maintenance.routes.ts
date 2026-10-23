@@ -255,5 +255,19 @@ export function createMaintenanceRouter(
     controller.reopenCase
   );
 
+  // Delete maintenance case from active queue (Role-guarded: Admin/Supervisor)
+  router.delete(
+    '/cases/:id',
+    requireRole([
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'SUPERVISOR',
+      'PLANT_MANAGER',
+      'ENGINEER',
+      'TECHNICIAN',
+    ]),
+    controller.deleteCase
+  );
+
   return router;
 }

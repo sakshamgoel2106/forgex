@@ -70,7 +70,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   sidebarCollapsed,
 }) => {
   const { user, organization, membership, memberships, logout, switchOrganization, token } = useAuth();
-  const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
+  const [activeFallbackNotice, setActiveFallbackNotice] = useState<string | null>(null);
   const [plants, setPlants] = useState<any[]>([]);
   const [hasMachines, setHasMachines] = useState<boolean>(false);
 
@@ -390,8 +390,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </header>
 
-      {/* AI Rate Limit Notice Banner (dismissible) */}
-      {!rateLimitDismissed && (
+      {/* AI Model Capacity Notice Banner (hidden unless an active fallback event is reported) */}
+      {activeFallbackNotice && (
         <div
           className="flex items-center justify-between px-4 py-2 text-xs gap-3"
           style={{
@@ -404,11 +404,11 @@ export const TopBar: React.FC<TopBarProps> = ({
             <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
             <span className="font-medium">AI Model Capacity Notice:</span>
             <span className="text-amber-700">
-              If Gemini API quota limits are reached, ForgeX automatically queues your request and retries via fallback models (Gemini Flash → Pro). No data is lost.
+              {activeFallbackNotice}
             </span>
           </div>
           <button
-            onClick={() => setRateLimitDismissed(true)}
+            onClick={() => setActiveFallbackNotice(null)}
             className="shrink-0 p-1 rounded hover:bg-amber-200 transition"
             aria-label="Dismiss"
           >

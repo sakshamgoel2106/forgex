@@ -1850,9 +1850,18 @@ export class InMemoryDataStore implements IDataStore {
 
   public async deleteMaintenanceCase(organizationId: string, id: string): Promise<boolean> {
     const c = this.maintenanceCases.get(id);
-    if (!c || c.organizationId !== organizationId) return false;
-    this.maintenanceCases.delete(id);
-    return true;
+    if (c && c.organizationId === organizationId) {
+      this.maintenanceCases.delete(id);
+      return true;
+    }
+    // Also lookup by caseNumber
+    for (const [key, item] of this.maintenanceCases.entries()) {
+      if (item.organizationId === organizationId && (item.id === id || item.caseNumber === id)) {
+        this.maintenanceCases.delete(key);
+        return true;
+      }
+    }
+    return false;
   }
 
   public async recordCaseHistory(dto: CreateCaseHistoryDTO): Promise<CaseHistoryEntry> {

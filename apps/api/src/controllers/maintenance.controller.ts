@@ -798,9 +798,26 @@ export class MaintenanceController {
             : undefined,
       });
 
+      const retentionDays = Number(req.query.retentionDays) || 30;
+      const retentionCutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+
+      // 30-day auto-retention: filter out resolved/closed tasks older than 30 days from active queue
+      const filteredCases = cases.filter((c) => {
+        if (c.status === 'RESOLVED' || c.status === 'CLOSED') {
+          const finishedAt = c.resolvedAt || c.closedAt || c.updatedAt || c.createdAt;
+          if (finishedAt) {
+            const finishedTime = new Date(finishedAt).getTime();
+            if (!isNaN(finishedTime) && finishedTime < retentionCutoff) {
+              return false;
+            }
+          }
+        }
+        return true;
+      });
+
       res.status(200).json({
         success: true,
-        data: cases,
+        data: filteredCases,
         timestamp: new Date().toISOString(),
       });
     } catch (err: any) {
@@ -947,6 +964,41 @@ export class MaintenanceController {
           error: err?.message || 'Failed to reopen maintenance case.',
           timestamp: new Date().toISOString(),
         });
+    }
+  };
+
+  /**
+   * DELETE /api/v1/maintenance/cases/:id
+   * Removes a maintenance case from the active queue.
+   */
+  public deleteCase = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth?.organization.id;
+      const id = req.params.id as string;
+
+      if (!organizationId) {
+        res.status(401).json({ success: false, error: 'Unauthorized: Missing auth context' });
+        return;
+      }
+
+      const deleted = await this.dataStore.deleteMaintenanceCase(organizationId, id);
+      if (!deleted) {
+        res.status(404).json({ success: false, error: `Maintenance case '${id}' not found` });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Maintenance case deleted from active queue',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      logger.error({ error: err?.message }, 'Failed to delete maintenance case');
+      res.status(500).json({
+        success: false,
+        error: err?.message || 'Failed to delete maintenance case.',
+        timestamp: new Date().toISOString(),
+      });
     }
   };
 }
