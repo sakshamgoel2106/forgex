@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Search,
   Filter,
@@ -264,6 +264,108 @@ export const TechnicalManualsView: React.FC = () => {
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Relational Multi-Select Combobox State for Assets
+  const [singleSelectedAssetIds, setSingleSelectedAssetIds] = useState<string[]>([]);
+  const [bulkSelectedAssetIds, setBulkSelectedAssetIds] = useState<string[]>([]);
+  const [singleAssetSearch, setSingleAssetSearch] = useState('');
+  const [isSingleAssetDropdownOpen, setIsSingleAssetDropdownOpen] = useState(false);
+  const [bulkAssetSearch, setBulkAssetSearch] = useState('');
+  const [isBulkAssetDropdownOpen, setIsBulkAssetDropdownOpen] = useState(false);
+
+  const singleDropdownRef = useRef<HTMLDivElement>(null);
+  const bulkDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (singleDropdownRef.current && !singleDropdownRef.current.contains(event.target as Node)) {
+        setIsSingleAssetDropdownOpen(false);
+      }
+      if (bulkDropdownRef.current && !bulkDropdownRef.current.contains(event.target as Node)) {
+        setIsBulkAssetDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleToggleSingleAsset = (machine: Machine) => {
+    setSingleSelectedAssetIds((prev) => {
+      const updated = prev.includes(machine.id)
+        ? prev.filter((id) => id !== machine.id)
+        : [...prev, machine.id];
+      const linkedTags = machines
+        .filter((m) => updated.includes(m.id))
+        .map((m) => m.assetTag)
+        .join(', ');
+      setUploadForm((f) => ({ ...f, assetTags: linkedTags }));
+      return updated;
+    });
+    setSingleAssetSearch('');
+  };
+
+  const handleRemoveSingleAsset = (machineId: string) => {
+    setSingleSelectedAssetIds((prev) => {
+      const updated = prev.filter((id) => id !== machineId);
+      const linkedTags = machines
+        .filter((m) => updated.includes(m.id))
+        .map((m) => m.assetTag)
+        .join(', ');
+      setUploadForm((f) => ({ ...f, assetTags: linkedTags }));
+      return updated;
+    });
+  };
+
+  const handleToggleBulkAsset = (machine: Machine) => {
+    setBulkSelectedAssetIds((prev) => {
+      const updated = prev.includes(machine.id)
+        ? prev.filter((id) => id !== machine.id)
+        : [...prev, machine.id];
+      const linkedTags = machines
+        .filter((m) => updated.includes(m.id))
+        .map((m) => m.assetTag)
+        .join(', ');
+      setBulkDefaults((d) => ({ ...d, defaultAssetTags: linkedTags }));
+      return updated;
+    });
+    setBulkAssetSearch('');
+  };
+
+  const handleRemoveBulkAsset = (machineId: string) => {
+    setBulkSelectedAssetIds((prev) => {
+      const updated = prev.filter((id) => id !== machineId);
+      const linkedTags = machines
+        .filter((m) => updated.includes(m.id))
+        .map((m) => m.assetTag)
+        .join(', ');
+      setBulkDefaults((d) => ({ ...d, defaultAssetTags: linkedTags }));
+      return updated;
+    });
+  };
+
+  const filteredSingleMachines = machines.filter((m) => {
+    if (!singleAssetSearch.trim()) return true;
+    const q = singleAssetSearch.toLowerCase();
+    const loc = (m.area || (m as any).plantLocation || '').toLowerCase();
+    return (
+      m.assetTag.toLowerCase().includes(q) ||
+      m.name.toLowerCase().includes(q) ||
+      (m.manufacturer && m.manufacturer.toLowerCase().includes(q)) ||
+      loc.includes(q)
+    );
+  });
+
+  const filteredBulkMachines = machines.filter((m) => {
+    if (!bulkAssetSearch.trim()) return true;
+    const q = bulkAssetSearch.toLowerCase();
+    const loc = (m.area || (m as any).plantLocation || '').toLowerCase();
+    return (
+      m.assetTag.toLowerCase().includes(q) ||
+      m.name.toLowerCase().includes(q) ||
+      (m.manufacturer && m.manufacturer.toLowerCase().includes(q)) ||
+      loc.includes(q)
+    );
+  });
 
   // 3D & P&ID Viewer Modals State
   const [is3dViewerOpen, setIs3dViewerOpen] = useState<boolean>(false);
@@ -763,6 +865,7 @@ export const TechnicalManualsView: React.FC = () => {
       formData.append('revision', revision);
       formData.append('plantId', plantId);
       formData.append('assetTags', assetTags);
+      formData.append('assetIds', JSON.stringify(singleSelectedAssetIds));
 
       const res = await apiFetch('/api/v1/documents/upload', {
         method: 'POST',
@@ -791,6 +894,7 @@ export const TechnicalManualsView: React.FC = () => {
       setIsUploading(false);
       setIsUploadModalOpen(false);
       setUploadFile(null);
+      setSingleSelectedAssetIds([]);
       await fetchDocuments();
     } catch (err: any) {
       setIsUploading(false);
@@ -830,6 +934,8 @@ export const TechnicalManualsView: React.FC = () => {
       formData.append('defaultCategory', bulkDefaults.defaultCategory);
       formData.append('defaultRevision', (bulkDefaults.defaultRevision || 'REV-A').trim().toUpperCase());
       formData.append('defaultAssetTags', bulkDefaults.defaultAssetTags.trim());
+      formData.append('defaultAssetIds', JSON.stringify(bulkSelectedAssetIds));
+      formData.append('assetIds', JSON.stringify(bulkSelectedAssetIds));
 
       // Append files
       bulkFiles.forEach((item) => {
@@ -902,6 +1008,7 @@ export const TechnicalManualsView: React.FC = () => {
         setTimeout(() => {
           setIsUploadModalOpen(false);
           setBulkFiles([]);
+          setBulkSelectedAssetIds([]);
           setBulkSummary(null);
         }, 1500);
       }
@@ -1891,18 +1998,124 @@ export const TechnicalManualsView: React.FC = () => {
                       />
                     </div>
 
-                    <div className="col-span-2">
-                      <label className="text-[#64748B] font-semibold uppercase text-[10px]">ASSOCIATED ASSET TAGS</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. PUMP-204-B, VALVE-101 (comma-separated)"
-                        value={uploadForm.assetTags}
-                        onChange={(e) =>
-                          setUploadForm({ ...uploadForm, assetTags: e.target.value })
-                        }
-                        className="w-full mt-1 px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                        disabled={isUploading}
-                      />
+                    <div className="col-span-2 relative" ref={singleDropdownRef}>
+                      <div className="flex items-center justify-between">
+                        <label className="text-[#64748B] font-semibold uppercase text-[10px]">
+                          ASSOCIATED MACHINES & ASSET TAGS
+                        </label>
+                        {singleSelectedAssetIds.length > 0 && (
+                          <span className="text-[10px] text-[#2563EB] font-medium">
+                            {singleSelectedAssetIds.length} machine{singleSelectedAssetIds.length > 1 ? 's' : ''} linked
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Selected Asset Badges */}
+                      {singleSelectedAssetIds.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1.5 p-2 bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg">
+                          {singleSelectedAssetIds.map((id) => {
+                            const m = machines.find((mac) => mac.id === id);
+                            if (!m) return null;
+                            return (
+                              <span
+                                key={id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-white border border-[#94A3B8] text-[#1E293B] text-xs font-medium shadow-sm"
+                              >
+                                <span className="font-mono font-bold text-[#2563EB]">{m.assetTag}</span>
+                                <span className="text-[#64748B] truncate max-w-[140px]">{m.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveSingleAsset(id)}
+                                  disabled={isUploading}
+                                  className="text-[#94A3B8] hover:text-rose-600 ml-0.5 focus:outline-none"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Multi-Select Search Combobox Trigger */}
+                      <div className="relative mt-1">
+                        <div className="flex items-center border border-[#CBD5E1] rounded-lg bg-white px-3 py-1.5 focus-within:border-[#2563EB] focus-within:ring-1 focus-within:ring-[#2563EB]">
+                          <Search className="w-4 h-4 text-[#94A3B8] mr-2 shrink-0" />
+                          <input
+                            type="text"
+                            placeholder={
+                              singleSelectedAssetIds.length === 0
+                                ? 'Search registered machines by asset tag, name, or manufacturer...'
+                                : 'Select additional machine...'
+                            }
+                            value={singleAssetSearch}
+                            onChange={(e) => {
+                              setSingleAssetSearch(e.target.value);
+                              setIsSingleAssetDropdownOpen(true);
+                            }}
+                            onFocus={() => setIsSingleAssetDropdownOpen(true)}
+                            className="w-full bg-transparent text-[#1A202C] text-xs placeholder-[#94A3B8] focus:outline-none"
+                            disabled={isUploading}
+                          />
+                          {singleAssetSearch && (
+                            <button
+                              type="button"
+                              onClick={() => setSingleAssetSearch('')}
+                              className="text-[#94A3B8] hover:text-[#475569] p-0.5"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Dropdown List */}
+                        {isSingleAssetDropdownOpen && (
+                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-52 overflow-y-auto bg-white border border-[#CBD5E1] rounded-lg shadow-xl py-1 text-xs">
+                            {filteredSingleMachines.length === 0 ? (
+                              <div className="px-3 py-2 text-[#94A3B8] text-center italic">
+                                No registered machines matching &quot;{singleAssetSearch}&quot; found
+                              </div>
+                            ) : (
+                              filteredSingleMachines.map((m) => {
+                                const isSelected = singleSelectedAssetIds.includes(m.id);
+                                return (
+                                  <div
+                                    key={m.id}
+                                    onClick={() => handleToggleSingleAsset(m)}
+                                    className={`px-3 py-2 flex items-center justify-between cursor-pointer transition ${
+                                      isSelected ? 'bg-blue-50 text-[#1E3A8A]' : 'hover:bg-slate-50 text-[#1E293B]'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2 truncate">
+                                      <div
+                                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                          isSelected ? 'bg-[#2563EB] border-[#2563EB] text-white' : 'border-[#CBD5E1] bg-white'
+                                        }`}
+                                      >
+                                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                      </div>
+                                      <span className="font-mono font-semibold text-[#2563EB] shrink-0">
+                                        {m.assetTag}
+                                      </span>
+                                      <span className="text-[#334155] truncate font-medium">{m.name}</span>
+                                      {(m.area || (m as any).plantLocation) && (
+                                        <span className="text-[10px] text-[#64748B] bg-slate-100 px-1.5 py-0.5 rounded shrink-0">
+                                          {m.area || (m as any).plantLocation}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {m.manufacturer && (
+                                      <span className="text-[10px] text-[#94A3B8] ml-2 shrink-0">
+                                        {m.manufacturer}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </form>
@@ -1931,70 +2144,176 @@ export const TechnicalManualsView: React.FC = () => {
                   </div>
 
                   {/* Batch Defaults */}
-                  <div className="p-3 bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg grid grid-cols-2 md:grid-cols-4 gap-2.5">
-                    <div>
-                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">TARGET PLANT *</label>
-                      <select
-                        required
-                        value={bulkDefaults.plantCode}
-                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, plantCode: e.target.value })}
-                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                        disabled={isUploading}
-                      >
-                        {validPlantOptions.map((p) => {
-                          const val = p.code || p.id;
-                          const label = p.name ? (p.name.includes(val) ? p.name : `${p.name} (${val})`) : val;
-                          return (
-                            <option key={val} value={val}>
-                              {label}
-                            </option>
-                          );
-                        })}
-                      </select>
+                  <div className="p-3 bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg space-y-2.5">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                      <div>
+                        <label className="text-[10px] font-semibold text-[#64748B] uppercase">TARGET PLANT *</label>
+                        <select
+                          required
+                          value={bulkDefaults.plantCode}
+                          onChange={(e) => setBulkDefaults({ ...bulkDefaults, plantCode: e.target.value })}
+                          className="w-full mt-1 px-2 py-1.5 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+                          disabled={isUploading}
+                        >
+                          {validPlantOptions.map((p) => {
+                            const val = p.code || p.id;
+                            const label = p.name ? (p.name.includes(val) ? p.name : `${p.name} (${val})`) : val;
+                            return (
+                              <option key={val} value={val}>
+                                {label}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT CLASS</label>
+                        <select
+                          value={bulkDefaults.defaultCategory}
+                          onChange={(e) =>
+                            setBulkDefaults({ ...bulkDefaults, defaultCategory: e.target.value as DocumentType })
+                          }
+                          className="w-full mt-1 px-2 py-1.5 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
+                          disabled={isUploading}
+                        >
+                          <option value="SOP">SOP</option>
+                          <option value="PID_DIAGRAM">P&ID Diagram</option>
+                          <option value="3D_MODEL">3D Model / CAD</option>
+                          <option value="OEM_MANUAL">OEM Manual</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT REVISION</label>
+                        <input
+                          type="text"
+                          value={bulkDefaults.defaultRevision}
+                          onChange={(e) =>
+                            setBulkDefaults({ ...bulkDefaults, defaultRevision: e.target.value })
+                          }
+                          className="w-full mt-1 px-2 py-1.5 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono"
+                          disabled={isUploading}
+                        />
+                      </div>
                     </div>
 
-                    <div>
-                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT CLASS</label>
-                      <select
-                        value={bulkDefaults.defaultCategory}
-                        onChange={(e) =>
-                          setBulkDefaults({ ...bulkDefaults, defaultCategory: e.target.value as DocumentType })
-                        }
-                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                        disabled={isUploading}
-                      >
-                        <option value="SOP">SOP</option>
-                        <option value="PID_DIAGRAM">P&ID Diagram</option>
-                        <option value="3D_MODEL">3D Model / CAD</option>
-                        <option value="OEM_MANUAL">OEM Manual</option>
-                      </select>
-                    </div>
+                    {/* Bulk Associated Assets Dropdown */}
+                    <div className="relative" ref={bulkDropdownRef}>
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-semibold text-[#64748B] uppercase">
+                          DEFAULT ASSOCIATED MACHINES & ASSET TAGS
+                        </label>
+                        {bulkSelectedAssetIds.length > 0 && (
+                          <span className="text-[10px] text-[#2563EB] font-medium">
+                            {bulkSelectedAssetIds.length} machine{bulkSelectedAssetIds.length > 1 ? 's' : ''} linked to batch
+                          </span>
+                        )}
+                      </div>
 
-                    <div>
-                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT REVISION</label>
-                      <input
-                        type="text"
-                        value={bulkDefaults.defaultRevision}
-                        onChange={(e) =>
-                          setBulkDefaults({ ...bulkDefaults, defaultRevision: e.target.value })
-                        }
-                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB] font-mono"
-                        disabled={isUploading}
-                      />
-                    </div>
+                      {bulkSelectedAssetIds.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1.5 p-2 bg-white border border-[#CBD5E1] rounded-lg">
+                          {bulkSelectedAssetIds.map((id) => {
+                            const m = machines.find((mac) => mac.id === id);
+                            if (!m) return null;
+                            return (
+                              <span
+                                key={id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#F8FAFC] border border-[#94A3B8] text-[#1E293B] text-xs font-medium shadow-sm"
+                              >
+                                <span className="font-mono font-bold text-[#2563EB]">{m.assetTag}</span>
+                                <span className="text-[#64748B] truncate max-w-[140px]">{m.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveBulkAsset(id)}
+                                  disabled={isUploading}
+                                  className="text-[#94A3B8] hover:text-rose-600 ml-0.5 focus:outline-none"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
 
-                    <div>
-                      <label className="text-[10px] font-semibold text-[#64748B] uppercase">DEFAULT ASSET TAGS</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. TURBINE-01"
-                        value={bulkDefaults.defaultAssetTags}
-                        onChange={(e) =>
-                          setBulkDefaults({ ...bulkDefaults, defaultAssetTags: e.target.value })
-                        }
-                        className="w-full mt-1 px-2 py-1 rounded bg-white border border-[#CBD5E1] text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB]"
-                        disabled={isUploading}
-                      />
+                      <div className="relative mt-1">
+                        <div className="flex items-center border border-[#CBD5E1] rounded-lg bg-white px-3 py-1.5 focus-within:border-[#2563EB] focus-within:ring-1 focus-within:ring-[#2563EB]">
+                          <Search className="w-4 h-4 text-[#94A3B8] mr-2 shrink-0" />
+                          <input
+                            type="text"
+                            placeholder={
+                              bulkSelectedAssetIds.length === 0
+                                ? 'Search registered machines for batch linkage...'
+                                : 'Add another machine to batch...'
+                            }
+                            value={bulkAssetSearch}
+                            onChange={(e) => {
+                              setBulkAssetSearch(e.target.value);
+                              setIsBulkAssetDropdownOpen(true);
+                            }}
+                            onFocus={() => setIsBulkAssetDropdownOpen(true)}
+                            className="w-full bg-transparent text-[#1A202C] text-xs placeholder-[#94A3B8] focus:outline-none"
+                            disabled={isUploading}
+                          />
+                          {bulkAssetSearch && (
+                            <button
+                              type="button"
+                              onClick={() => setBulkAssetSearch('')}
+                              className="text-[#94A3B8] hover:text-[#475569] p-0.5"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        {isBulkAssetDropdownOpen && (
+                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-52 overflow-y-auto bg-white border border-[#CBD5E1] rounded-lg shadow-xl py-1 text-xs">
+                            {filteredBulkMachines.length === 0 ? (
+                              <div className="px-3 py-2 text-[#94A3B8] text-center italic">
+                                No registered machines matching &quot;{bulkAssetSearch}&quot; found
+                              </div>
+                            ) : (
+                              filteredBulkMachines.map((m) => {
+                                const isSelected = bulkSelectedAssetIds.includes(m.id);
+                                return (
+                                  <div
+                                    key={m.id}
+                                    onClick={() => handleToggleBulkAsset(m)}
+                                    className={`px-3 py-2 flex items-center justify-between cursor-pointer transition ${
+                                      isSelected ? 'bg-blue-50 text-[#1E3A8A]' : 'hover:bg-slate-50 text-[#1E293B]'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2 truncate">
+                                      <div
+                                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                          isSelected ? 'bg-[#2563EB] border-[#2563EB] text-white' : 'border-[#CBD5E1] bg-white'
+                                        }`}
+                                      >
+                                        {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                                      </div>
+                                      <span className="font-mono font-semibold text-[#2563EB] shrink-0">
+                                        {m.assetTag}
+                                      </span>
+                                      <span className="text-[#334155] truncate font-medium">{m.name}</span>
+                                      {(m.area || (m as any).plantLocation) && (
+                                        <span className="text-[10px] text-[#64748B] bg-slate-100 px-1.5 py-0.5 rounded shrink-0">
+                                          {m.area || (m as any).plantLocation}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {m.manufacturer && (
+                                      <span className="text-[10px] text-[#94A3B8] ml-2 shrink-0">
+                                        {m.manufacturer}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 

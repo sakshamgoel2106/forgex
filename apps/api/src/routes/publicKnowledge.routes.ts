@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { IDataStore } from '../db/dataStore.interface.js';
 import { requireRole } from '../middleware/auth.middleware.js';
+import { publicOemLookupService } from '../services/publicOemLookup.service.js';
 
 export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
   const router = Router();
@@ -13,16 +14,26 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
    * STRICT PRIVACY BOUNDARY:
    * Rejects if confidential or private fields are submitted (serial number, plant, internal notes).
    * Only manufacturer and generic model/family are queried.
-   * Results are labeled PUBLIC_SUGGESTION and NEVER automatically overwrite verified private facts.
+   * Results are labeled PUBLIC_SUGGESTION / PENDING_ADMIN_APPROVAL and NEVER automatically overwrite verified private facts.
    */
   router.post(
     '/public-lookup',
     requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER']),
     async (req: Request, res: Response): Promise<void> => {
       try {
-        const { manufacturer, modelNumber, productFamily, serialNumber, plantId, privateNotes } = req.body;
+        const {
+          manufacturer,
+          modelNumber,
+          productFamily,
+          serialNumber,
+          plantId,
+          privateNotes,
+          machineId,
+          customSourceUrl,
+          forceRefresh,
+        } = req.body;
 
-        // Privacy violation guard
+        // Privacy violation guard: strictly block internal private details
         if (serialNumber || plantId || privateNotes) {
           res.status(400).json({
             success: false,
@@ -46,63 +57,57 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
           return;
         }
 
-        // Check if we already have a cached public knowledge entry
-        let cached = await dataStore.getPublicMachineKnowledge(manufacturer, modelNumber);
-        if (!cached) {
-          // Curated public manufacturer repository lookup (mocked with realistic OEM specifications)
-          const mfrLower = manufacturer.toLowerCase();
-          const modelLower = modelNumber.toLowerCase();
+        const orgId = req.auth?.organization?.id;
 
-          let publicSpecs: Record<string, string | number> = {
-            design_standard: 'ISO 5199 / ANSI B73.1',
-            operating_temp_range: '-40C to 260C',
-            casing_material: 'ASTM A890 Grade 4A Super Duplex',
-            typical_speed_rpm: 3550,
-          };
-
-          let sourcePublisher = `${manufacturer} Corporation (Public Technical Catalog)`;
-          let sourceUrl = `https://public-catalog.oem-industrial.org/specs?mfr=${encodeURIComponent(manufacturer)}&model=${encodeURIComponent(modelNumber)}`;
-
-          if (mfrLower.includes('flowserve') || modelLower.includes('mark 3')) {
-            publicSpecs = {
-              impeller_type: 'Reverse Vane Semi-Open',
-              flange_rating: 'ANSI Class 150 / 300 RF',
-              shaft_deflection_limit_mm: 0.05,
-              seal_chamber_standard: 'API 682 Plan 11 / 52',
-              maximum_flow_rate_gpm: 450,
-              max_head_ft: 320,
-            };
-            sourcePublisher = 'Flowserve Industrial Pump Division';
-            sourceUrl = 'https://flowserve.com/en/products/pumps/ansi-chemical-process-pumps/mark-3-ansi-pump/';
-          } else if (mfrLower.includes('elliott') || modelLower.includes('29m')) {
-            publicSpecs = {
-              stages: '4-Stage Centrifugal Multi-Stage',
-              casing_type: 'Radially Split Barrel (API 617)',
-              design_pressure_bar: 85,
-              maximum_continuous_speed_rpm: 10400,
-              lube_oil_specification: 'ISO VG 32 Synthetic Turbine Oil',
-            };
-            sourcePublisher = 'Elliott Group Turbomachinery';
-            sourceUrl = 'https://elliott-turbo.com/compressors/barrel-compressors/';
-          }
-
-          cached = await dataStore.savePublicMachineKnowledge({
+        // Perform genuine OEM source classification, model matching, completeness checklist, and conflict detection
+        const lookupResult = await publicOemLookupService.performLookup(
+          {
             manufacturer,
             modelNumber,
-            productFamily: productFamily || undefined,
-            publicSpecs,
-            sourceUrl,
-            sourcePublisher,
-            verificationStatus: 'PUBLIC_SUGGESTION',
-          });
+            productFamily,
+            customSourceUrl,
+            machineId,
+            organizationId: orgId,
+          },
+          dataStore
+        );
+
+        // Persist to database / cache
+        const saved = await dataStore.savePublicMachineKnowledge({
+          manufacturer: lookupResult.manufacturer,
+          modelNumber: lookupResult.modelNumber,
+          productFamily: lookupResult.productFamily,
+          publicSpecs: lookupResult.publicSpecs,
+          sourceUrl: lookupResult.sourceUrl,
+          sourcePublisher: lookupResult.sourcePublisher,
+          verificationStatus: lookupResult.verificationStatus,
+          sourceType: lookupResult.sourceType,
+          matchStatus: lookupResult.matchStatus,
+          missingModelDetails: lookupResult.missingModelDetails,
+          completenessSummary: lookupResult.completenessSummary,
+          evidenceRecords: lookupResult.evidenceRecords,
+          conflicts: lookupResult.conflicts,
+          reviewNotes: lookupResult.reviewNotes,
+        });
+
+        // Determine user-facing safety notice based on actual evidence status
+        let notice = 'PUBLIC SOURCE INFORMATION: Not verified by organization plant engineer.';
+        if (saved.verificationStatus === 'SOURCE_UNVERIFIED') {
+          notice = 'UNVERIFIED SOURCE: External source could not be validated against official OEM records. No specifications inferred.';
+        } else if (saved.verificationStatus === 'MODEL_MISMATCH') {
+          notice = `MODEL MISMATCH: No credible manufacturer specifications found matching model '${modelNumber}'.`;
+        } else if (saved.matchStatus === 'FAMILY_LEVEL_ONLY' || saved.verificationStatus === 'FAMILY_LEVEL_ONLY') {
+          notice = 'PUBLIC SOURCE INFORMATION: Not verified by organization plant engineer. PRODUCT FAMILY ENVELOPE: Broad family characteristics only. Specific model parameters required before confirming specifications.';
+        } else if (saved.verificationStatus === 'CONFLICTING_DATA') {
+          notice = 'DATA CONFLICT DETECTED: Public specifications contradict active machine records or company documentation. Manual engineering review required.';
         }
 
         res.status(200).json({
           success: true,
           message: 'Public knowledge retrieved. Review required before merging into verified record.',
           data: {
-            ...cached,
-            notice: 'PUBLIC SOURCE INFORMATION: Not verified by organization plant engineer.',
+            ...saved,
+            notice,
           },
         });
       } catch (err: any) {
@@ -126,8 +131,15 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
         const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
         const actorUserId = req.auth!.user.id;
         const orgId = req.auth!.organization.id;
+        const { reviewNotes, machineId } = req.body || {};
 
-        const updated = await dataStore.updatePublicMachineKnowledgeStatus(id, 'APPROVED', actorUserId);
+        const updated = await dataStore.updatePublicMachineKnowledgeStatus(
+          id,
+          'APPROVED',
+          actorUserId,
+          reviewNotes || 'Approved by authorized plant administrator.'
+        );
+
         if (!updated) {
           res.status(404).json({
             success: false,
@@ -136,13 +148,44 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
           return;
         }
 
+        // If machineId is supplied, merge approved specs safely without overwriting conflicting fields silently
+        if (machineId) {
+          try {
+            const machine = await dataStore.getMachineById(orgId, machineId);
+            if (machine) {
+              const currentSpecs = (machine.technicalSpecs || {}) as Record<string, any>;
+              const mergedSpecs = { ...currentSpecs };
+
+              // Only copy non-conflicting fields if there are conflicts
+              const conflictKeys = (updated.conflicts || []).map((c) => c.reason.toLowerCase());
+              for (const [key, val] of Object.entries(updated.publicSpecs)) {
+                const isConflicted = conflictKeys.some((ck) => ck.includes(key.replace(/_/g, ' ')));
+                if (!isConflicted && currentSpecs[key] === undefined) {
+                  mergedSpecs[key] = val;
+                }
+              }
+
+              await dataStore.updateMachine(orgId, machineId, {
+                technicalSpecs: mergedSpecs,
+              });
+            }
+          } catch {
+            // Machine update failure non-fatal to approval audit
+          }
+        }
+
         await dataStore.recordAuditEvent({
           organizationId: orgId,
           actorUserId,
           action: 'PUBLIC_KNOWLEDGE_APPROVED',
           resourceType: 'PUBLIC_KNOWLEDGE',
           resourceId: id,
-          metadata: { manufacturer: updated.manufacturer, modelNumber: updated.modelNumber },
+          metadata: {
+            manufacturer: updated.manufacturer,
+            modelNumber: updated.modelNumber,
+            reviewNotes: reviewNotes || 'Approved',
+            machineId,
+          },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent'],
         });
@@ -156,6 +199,64 @@ export function createPublicKnowledgeRouter(dataStore: IDataStore): Router {
         res.status(500).json({
           success: false,
           error: { code: 'FORGEX_APPROVAL_FAILED', message: err?.message || 'Approval failed' },
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/knowledge/public-lookup/:id/reject
+   * Admin or Plant Manager rejects public OEM suggestions
+   */
+  router.post(
+    '/public-lookup/:id/reject',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER']),
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+        const actorUserId = req.auth!.user.id;
+        const orgId = req.auth!.organization.id;
+        const { rejectionReason } = req.body || {};
+
+        const updated = await dataStore.updatePublicMachineKnowledgeStatus(
+          id,
+          'REJECTED',
+          actorUserId,
+          rejectionReason || 'Rejected by authorized plant administrator.'
+        );
+
+        if (!updated) {
+          res.status(404).json({
+            success: false,
+            error: { code: 'FORGEX_NOT_FOUND', message: 'Public knowledge entry not found.' },
+          });
+          return;
+        }
+
+        await dataStore.recordAuditEvent({
+          organizationId: orgId,
+          actorUserId,
+          action: 'PUBLIC_KNOWLEDGE_REJECTED',
+          resourceType: 'PUBLIC_KNOWLEDGE',
+          resourceId: id,
+          metadata: {
+            manufacturer: updated.manufacturer,
+            modelNumber: updated.modelNumber,
+            rejectionReason: rejectionReason || 'Rejected',
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'],
+        });
+
+        res.status(200).json({
+          success: true,
+          message: 'Public technical specifications rejected.',
+          data: updated,
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_REJECTION_FAILED', message: err?.message || 'Rejection failed' },
         });
       }
     }

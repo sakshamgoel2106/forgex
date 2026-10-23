@@ -65,6 +65,23 @@ export class LocalStorageAdapter implements IStorageAdapter {
           path.resolve(this.baseDir, '..', '..', 'data', 'storage', cleanKey),
           path.resolve(this.baseDir, '..', 'data', 'storage', cleanKey),
         ];
+        const basename = path.basename(cleanKey);
+        const dirname = path.dirname(cleanKey);
+        altPaths.push(
+          path.resolve(this.baseDir, dirname, basename),
+          path.resolve(this.baseDir, 'models', basename),
+          path.resolve(this.baseDir, 'schematics', basename),
+          path.resolve(this.baseDir, 'drawings', basename)
+        );
+        if (basename.includes('-')) {
+          const stripped = basename.substring(basename.indexOf('-') + 1);
+          altPaths.push(
+            path.resolve(this.baseDir, dirname, stripped),
+            path.resolve(this.baseDir, 'models', stripped),
+            path.resolve(this.baseDir, 'schematics', stripped),
+            path.resolve(this.baseDir, 'drawings', stripped)
+          );
+        }
         for (const altPath of altPaths) {
           try {
             return await fs.readFile(altPath);

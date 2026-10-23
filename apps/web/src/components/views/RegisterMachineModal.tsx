@@ -1,16 +1,256 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { X, ShieldAlert, Cpu, Layers, CheckCircle2, AlertTriangle, UploadCloud, ChevronDown, ChevronUp, Box, FileCode, Trash2, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { fileToDataUrl, saveMachineFiles } from '../../lib/machineStorage';
-import type { DataClassification, MachineCriticality, DocumentationReadiness } from '@forgex/shared-types';
+import type { DataClassification, MachineCriticality, DocumentationReadiness, Machine } from '@forgex/shared-types';
 import { useToast } from '../../lib/ToastContext';
 
-interface RegisterMachineModalProps {
+export interface MachineTypeKeywordRule {
+  type: string;
+  keywords: string[];
+}
+
+export const MACHINE_TYPE_RULES: MachineTypeKeywordRule[] = [
+  {
+    type: 'Bucket Elevator',
+    keywords: [
+      'bucket elevator',
+      'bucket-elevator',
+      'bucket conveyor',
+      'vertical lift conveyor',
+      'bucket lift',
+      'bucket hoist',
+      'elevator',
+    ],
+  },
+  {
+    type: 'Centrifugal Pump',
+    keywords: [
+      'centrifugal pump',
+      'slurry pump',
+      'submersible pump',
+      'vacuum pump',
+      'chemical pump',
+      'booster pump',
+      'feedwater pump',
+      'feed pump',
+      'sump pump',
+      'water pump',
+      'diaphragm pump',
+      'gear pump',
+      'positive displacement pump',
+      'multistage pump',
+      'chilled water pump',
+      'condensate pump',
+      'circulation pump',
+      'pump',
+    ],
+  },
+  {
+    type: 'Wet Gas Compressor',
+    keywords: [
+      'wet gas compressor',
+      'gas compressor',
+      'air compressor',
+      'screw compressor',
+      'reciprocating compressor',
+      'axial compressor',
+      'centrifugal compressor',
+      'rotary compressor',
+      'booster compressor',
+      'compressor',
+    ],
+  },
+  {
+    type: 'Shell & Tube Heat Exchanger',
+    keywords: [
+      'heat exchanger',
+      'shell & tube',
+      'shell and tube',
+      'plate heat exchanger',
+      'plate and frame',
+      'air-cooled heat exchanger',
+      'reboiler',
+      'condenser',
+      'chiller',
+      'cooler',
+      'economizer',
+      'exchanger',
+    ],
+  },
+  {
+    type: 'Emergency Isolation Valve',
+    keywords: [
+      'emergency isolation valve',
+      'emergency isolation',
+      'emergency shutdown valve',
+      'isolation valve',
+      'control valve',
+      'safety relief valve',
+      'safety valve',
+      'relief valve',
+      'pressure safety valve',
+      'ball valve',
+      'butterfly valve',
+      'gate valve',
+      'globe valve',
+      'check valve',
+      'plug valve',
+      'solenoid valve',
+      'blowdown valve',
+      'esdv',
+      'psv',
+      'prv',
+      'valve',
+    ],
+  },
+  {
+    type: 'Hydraulic Motor',
+    keywords: [
+      'hydraulic motor',
+      'electric motor',
+      'induction motor',
+      'servo motor',
+      'stepper motor',
+      'drive motor',
+      'traction motor',
+      'variable frequency motor',
+      'motor',
+    ],
+  },
+  {
+    type: 'Fractionation Tower',
+    keywords: [
+      'fractionation tower',
+      'distillation tower',
+      'fractionating column',
+      'distillation column',
+      'stripper column',
+      'absorber column',
+      'absorption tower',
+      'scrubber column',
+      'packed column',
+      'tray column',
+      'fractionation',
+      'fractionator',
+      'distillation',
+      'column',
+      'tower',
+    ],
+  },
+  {
+    type: 'Conveyor System',
+    keywords: [
+      'conveyor system',
+      'conveyor belt',
+      'belt conveyor',
+      'roller conveyor',
+      'screw conveyor',
+      'drag conveyor',
+      'pneumatic conveyor',
+      'vibratory feeder',
+      'flight conveyor',
+      'conveyor',
+    ],
+  },
+  {
+    type: 'Industrial Blower / Fan',
+    keywords: [
+      'industrial blower',
+      'industrial fan',
+      'induced draft fan',
+      'forced draft fan',
+      'centrifugal fan',
+      'exhaust fan',
+      'ventilation fan',
+      'cooling fan',
+      'blower fan',
+      'blower',
+      'draft fan',
+      'fan',
+    ],
+  },
+  {
+    type: 'Boiler / Pressure Vessel',
+    keywords: [
+      'steam boiler',
+      'industrial boiler',
+      'water tube boiler',
+      'fire tube boiler',
+      'pressure vessel',
+      'steam generator',
+      'autoclave',
+      'flash drum',
+      'knockout drum',
+      'separator vessel',
+      'reactor vessel',
+      'boiler',
+    ],
+  },
+  {
+    type: 'Industrial Mixer / Agitator',
+    keywords: [
+      'industrial mixer',
+      'agitator tank',
+      'slurry mixer',
+      'chemical mixer',
+      'ribbon blender',
+      'paddle mixer',
+      'homogenizer',
+      'agitator',
+      'blender',
+      'stirrer',
+      'mixer',
+    ],
+  },
+];
+
+// Pre-compiled keyword index sorted by length descending so longer/more specific multi-word matches take precedence
+const SORTED_KEYWORD_ENTRIES = MACHINE_TYPE_RULES.flatMap((rule) =>
+  rule.keywords.map((kw) => ({
+    keyword: kw.toLowerCase().trim(),
+    type: rule.type,
+    length: kw.trim().length,
+  }))
+).sort((a, b) => b.length - a.length);
+
+/**
+ * Dynamically detects the closest matching machine category based on equipment name keywords.
+ */
+export function detectMachineType(equipmentName: string): string | null {
+  if (!equipmentName || !equipmentName.trim()) return null;
+  const clean = equipmentName.toLowerCase().trim();
+
+  // 1. Direct word-boundary / substring match against sorted keyword list
+  for (const entry of SORTED_KEYWORD_ENTRIES) {
+    const escaped = entry.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const wordBoundaryRegex = new RegExp(`(^|\\W)${escaped}($|\\W)`, 'i');
+    if (wordBoundaryRegex.test(clean)) {
+      return entry.type;
+    }
+  }
+
+  // 2. Token set matching (e.g. if name contains both 'bucket' and 'elevator' in any order)
+  const tokens = new Set(clean.split(/\s+/).filter(Boolean));
+  for (const rule of MACHINE_TYPE_RULES) {
+    for (const kw of rule.keywords) {
+      const kwTokens = kw.split(/\s+/).filter(Boolean);
+      if (kwTokens.length > 1 && kwTokens.every((t) => tokens.has(t))) {
+        return rule.type;
+      }
+    }
+  }
+
+  return null;
+}
+
+export interface RegisterMachineModalProps {
   isOpen: boolean;
   onClose: () => void;
   onMachineCreated: () => void;
   token: string | null;
   organizationId?: string;
+  machineToEdit?: Partial<Machine> | null;
 }
 
 export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
@@ -19,6 +259,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
   onMachineCreated,
   token,
   organizationId,
+  machineToEdit,
 }) => {
   const { toast } = useToast();
   const [mode, setMode] = useState<'single' | 'batch'>('single');
@@ -30,11 +271,13 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
   const [assetTag, setAssetTag] = useState('');
   const [name, setName] = useState('');
   const [machineType, setMachineType] = useState('Centrifugal Pump');
+  const [isTypeManuallyOverridden, setIsTypeManuallyOverridden] = useState(false);
+  const [autoDetectedType, setAutoDetectedType] = useState<string | null>(null);
   const [manufacturer, setManufacturer] = useState('');
   const [modelNumber, setModelNumber] = useState('');
   const [serialNumber, setSerialNumber] = useState('');
-  const [building, setBuilding] = useState('Unit-02');
-  const [productionLine, setProductionLine] = useState('Crude Distillation');
+  const [building, setBuilding] = useState('');
+  const [productionLine, setProductionLine] = useState('');
   const [criticality, setCriticality] = useState<MachineCriticality>('HIGH');
   const [dataClassification, setDataClassification] = useState<DataClassification>('CONFIDENTIAL');
   const [documentationReadiness, setDocumentationReadiness] = useState<DocumentationReadiness>('PENDING_INSPECTION');
@@ -63,55 +306,155 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
   const [isDraggingBatch, setIsDraggingBatch] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
 
-  useEffect(() => {
-    if (!isOpen) {
-      setInstallationDate('');
-      setWarrantyExpiryDate('');
-      setOperationalStatus('Active');
-      setVendorSupplier('');
-      setShowAdvanced(false);
-      setModel3dFile(null);
-      setPidFile(null);
-      setHasModel3d(false);
-      setHasPidDiagram(false);
-      setIsDragging3d(false);
-      setIsDraggingPid(false);
-      setBatchFile(null);
-      setParsedBatchMachines([]);
-      setIsDraggingBatch(false);
-      setIsParsing(false);
-      if (model3dInputRef.current) model3dInputRef.current.value = '';
-      if (pidInputRef.current) pidInputRef.current.value = '';
-      if (csvFileInputRef.current) csvFileInputRef.current.value = '';
-      setError(null);
-      setDuplicateWarning(null);
+  // Asynchronous duplicate check cancellation tracking
+  const duplicateCheckRequestIdRef = useRef(0);
+  const duplicateAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Full reset of create-form state to intended initial defaults
+  const resetForm = useCallback(() => {
+    // Invalidate and abort any in-flight asynchronous duplicate checks
+    if (duplicateAbortControllerRef.current) {
+      duplicateAbortControllerRef.current.abort();
+      duplicateAbortControllerRef.current = null;
     }
-  }, [isOpen]);
+    duplicateCheckRequestIdRef.current++;
 
-  if (!isOpen) return null;
+    setMode('single');
+    setSubmitting(false);
+    setError(null);
+    setDuplicateWarning(null);
 
-  const checkDuplicates = async (tag: string, mfg: string, mdl: string) => {
-    if (!tag && !mfg) {
+    setAssetTag('');
+    setName('');
+    setMachineType('Centrifugal Pump');
+    setIsTypeManuallyOverridden(false);
+    setAutoDetectedType(null);
+    setManufacturer('');
+    setModelNumber('');
+    setSerialNumber('');
+    setBuilding('');
+    setProductionLine('');
+    setCriticality('HIGH');
+    setDataClassification('CONFIDENTIAL');
+    setDocumentationReadiness('PENDING_INSPECTION');
+    setInstallationDate('');
+    setWarrantyExpiryDate('');
+    setOperationalStatus('Active');
+    setVendorSupplier('');
+    setShowAdvanced(false);
+
+    setModel3dFile(null);
+    setPidFile(null);
+    setHasModel3d(false);
+    setHasPidDiagram(false);
+    setIsDragging3d(false);
+    setIsDraggingPid(false);
+
+    setBatchFile(null);
+    setParsedBatchMachines([]);
+    setIsDraggingBatch(false);
+    setIsParsing(false);
+
+    if (model3dInputRef.current) model3dInputRef.current.value = '';
+    if (pidInputRef.current) pidInputRef.current.value = '';
+    if (csvFileInputRef.current) csvFileInputRef.current.value = '';
+  }, []);
+
+  // Populate form for editing existing machine record
+  const populateForm = useCallback((m: Partial<Machine>) => {
+    resetForm();
+    setAssetTag(m.assetTag || '');
+    setName(m.name || '');
+    setMachineType(m.machineType || 'Centrifugal Pump');
+    setIsTypeManuallyOverridden(Boolean(m.machineType));
+    setAutoDetectedType(null);
+    setManufacturer(m.manufacturer || '');
+    setModelNumber(m.modelNumber || '');
+    setSerialNumber(m.serialNumber || '');
+    setBuilding(m.building || '');
+    setProductionLine(m.productionLine || '');
+    setCriticality((m.criticality as MachineCriticality) || 'HIGH');
+    setDataClassification((m.dataClassification as DataClassification) || 'CONFIDENTIAL');
+    setDocumentationReadiness((m.documentationReadiness as DocumentationReadiness) || 'PENDING_INSPECTION');
+    setInstallationDate(m.installationDate ? m.installationDate.split('T')[0] : '');
+    const specs = (m.technicalSpecs as Record<string, any>) || {};
+    setWarrantyExpiryDate(specs.warrantyExpiryDate || '');
+    setOperationalStatus(
+      specs.operationalStatus ||
+      (m.operationalState === 'OPTIMAL' ? 'Active' : m.operationalState === 'ADVISORY' ? 'Standby' : 'Under Maintenance')
+    );
+    setVendorSupplier(specs.vendorSupplier || '');
+    setHasModel3d(Boolean(m.hasModel3d));
+    setHasPidDiagram(Boolean(m.hasPidDiagram));
+    if (m.hasModel3d || m.hasPidDiagram || specs.vendorSupplier || m.installationDate || specs.warrantyExpiryDate) {
+      setShowAdvanced(true);
+    }
+  }, [resetForm]);
+
+  // Modal lifecycle: reset on opening in create mode, or load edit machine data
+  const prevIsOpenRef = useRef(false);
+  useEffect(() => {
+    const wasOpen = prevIsOpenRef.current;
+    prevIsOpenRef.current = isOpen;
+
+    if (!wasOpen && isOpen) {
+      // Opening new modal
+      if (machineToEdit) {
+        populateForm(machineToEdit);
+      } else {
+        resetForm();
+      }
+    } else if (wasOpen && !isOpen) {
+      // Closing modal
+      resetForm();
+    }
+  }, [isOpen, machineToEdit, populateForm, resetForm]);
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  const checkDuplicates = async (tag: string, mfg: string, mdl: string, sn?: string) => {
+    if (!tag && !mfg && !sn) {
       setDuplicateWarning(null);
       return;
     }
+
+    if (duplicateAbortControllerRef.current) {
+      duplicateAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    duplicateAbortControllerRef.current = controller;
+    const currentRequestId = ++duplicateCheckRequestIdRef.current;
+
     try {
       const res = await fetch('/api/v1/machines/check-duplicates', {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
           ...(organizationId ? { 'x-organization-id': organizationId } : {}),
         },
-        body: JSON.stringify({ assetTag: tag, manufacturer: mfg, modelNumber: mdl }),
+        body: JSON.stringify({
+          assetTag: tag ? tag.trim().toUpperCase() : undefined,
+          manufacturer: mfg ? mfg.trim() : undefined,
+          modelNumber: mdl ? mdl.trim() : undefined,
+          serialNumber: sn ? sn.trim() : undefined,
+        }),
       });
       const data = await res.json();
+      if (duplicateCheckRequestIdRef.current !== currentRequestId || !isOpen) {
+        return;
+      }
       if (data.isDuplicate) {
-        setDuplicateWarning(data.warning || 'A machine with this tag or OEM model already exists.');
+        setDuplicateWarning(data.warning || 'A machine with this tag, serial number, or OEM model already exists.');
       } else {
         setDuplicateWarning(null);
       }
-    } catch {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
       // Non-blocking warning check
     }
   };
@@ -132,6 +475,8 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
       setHasModel3d(false);
     }
   };
+
+  if (!isOpen) return null;
 
   const handleRemoveModel3d = (e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -369,7 +714,8 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
           type: model3dFile.type,
         };
         payload.model3dStorageKey = `models/${assetTag.trim().toUpperCase()}-${model3dFile.name}`;
-        payload.model3dFormat = model3dFile.name.toLowerCase().endsWith('.glb') ? 'glb' : 'gltf';
+        const mExt = model3dFile.name.split('.').pop()?.toLowerCase() || 'stp';
+        payload.model3dFormat = mExt;
       }
 
       if (hasPidDiagram && pidFile) {
@@ -398,8 +744,11 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
         payload.technicalSpecs = specs;
       }
 
-      const res = await fetch('/api/v1/machines', {
-        method: 'POST',
+      const endpoint = machineToEdit?.id ? `/api/v1/machines/${machineToEdit.id}` : '/api/v1/machines';
+      const method = machineToEdit?.id ? 'PATCH' : 'POST';
+
+      const res = await fetch(endpoint, {
+        method,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
@@ -410,8 +759,46 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
 
       const json = await res.json();
       if (res.ok && json.success) {
-        toast.success('Machine Registered', `Asset ${assetTag.trim().toUpperCase()} successfully added to registry.`);
+        toast.success(
+          machineToEdit ? 'Machine Updated' : 'Machine Registered',
+          `Asset ${assetTag.trim().toUpperCase()} successfully ${machineToEdit ? 'updated' : 'added to registry'}.`
+        );
         const createdMachine = json.data;
+        if (createdMachine?.id) {
+          if (model3dFile) {
+            try {
+              const fd = new FormData();
+              fd.append('file', model3dFile);
+              await fetch(`/api/v1/engineering/machines/${createdMachine.id}/3d-model/upload`, {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  ...(organizationId ? { 'x-organization-id': organizationId } : {}),
+                },
+                body: fd,
+              });
+            } catch (upErr) {
+              console.warn('Failed to upload 3D model to backend storage:', upErr);
+            }
+          }
+          if (pidFile) {
+            try {
+              const fd = new FormData();
+              fd.append('file', pidFile);
+              await fetch(`/api/v1/engineering/machines/${createdMachine.id}/pid/upload`, {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  ...(organizationId ? { 'x-organization-id': organizationId } : {}),
+                },
+                body: fd,
+              });
+            } catch (upErr) {
+              console.warn('Failed to upload P&ID drawing to backend storage:', upErr);
+            }
+          }
+        }
+
         if (model3dFile || pidFile) {
           const filesToStore: any = {};
           if (model3dFile) {
@@ -449,28 +836,16 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
           );
         }
 
-        setInstallationDate('');
-        setWarrantyExpiryDate('');
-        setOperationalStatus('Active');
-        setVendorSupplier('');
-        setShowAdvanced(false);
-        setModel3dFile(null);
-        setPidFile(null);
-        setHasModel3d(false);
-        setHasPidDiagram(false);
-        setIsDragging3d(false);
-        setIsDraggingPid(false);
-        if (model3dInputRef.current) model3dInputRef.current.value = '';
-        if (pidInputRef.current) pidInputRef.current.value = '';
+        resetForm();
         onMachineCreated();
         onClose();
       } else {
-        const errMsg = json.error?.message || 'Failed to register machine.';
+        const errMsg = json.error?.message || (machineToEdit ? 'Failed to update machine.' : 'Failed to register machine.');
         setError(errMsg);
-        toast.error('Registration Failed', errMsg);
+        toast.error(machineToEdit ? 'Update Failed' : 'Registration Failed', errMsg);
       }
     } catch (err: any) {
-      const errMsg = err?.message || 'Network error registering machine.';
+      const errMsg = err?.message || (machineToEdit ? 'Network error updating machine.' : 'Network error registering machine.');
       setError(errMsg);
       toast.error('Network Error', errMsg);
     } finally {
@@ -508,8 +883,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
       const json = await res.json();
       if (res.ok && json.success) {
         toast.success('Batch Enrolled', `Successfully registered ${parsedBatchMachines.length} industrial machines.`);
-        setBatchFile(null);
-        setParsedBatchMachines([]);
+        resetForm();
         onMachineCreated();
         onClose();
       } else {
@@ -535,15 +909,15 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
             <Cpu className="w-5 h-5 text-[#2563EB]" />
             <div>
               <h2 className="text-sm font-bold text-[#1A202C] tracking-wide font-mono uppercase">
-                Machine Registration Ledger
+                {machineToEdit ? `Edit Machine: ${machineToEdit.assetTag || ''}` : 'Machine Registration Ledger'}
               </h2>
               <p className="text-[11px] text-[#64748B]">
-                Authoritative organization asset creation & classification boundary
+                {machineToEdit ? 'Modify verified organization asset records and parameters' : 'Authoritative organization asset creation & classification boundary'}
               </p>
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="p-1 rounded-lg text-[#64748B] hover:text-[#1A202C] hover:bg-[#F1F5F9] transition"
           >
             <X className="w-5 h-5" />
@@ -608,7 +982,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                     value={assetTag}
                     onChange={(e) => {
                       setAssetTag(e.target.value);
-                      checkDuplicates(e.target.value, manufacturer, modelNumber);
+                      checkDuplicates(e.target.value, manufacturer, modelNumber, serialNumber);
                     }}
                     className="w-full px-3 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none uppercase placeholder-[#94A3B8]"
                   />
@@ -622,7 +996,19 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                     required
                     placeholder="Centrifugal Slurry Bottoms Pump"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => {
+                      const newName = e.target.value;
+                      setName(newName);
+                      if (!isTypeManuallyOverridden) {
+                        const detected = detectMachineType(newName);
+                        if (detected) {
+                          setMachineType(detected);
+                          setAutoDetectedType(detected);
+                        } else {
+                          setAutoDetectedType(null);
+                        }
+                      }
+                    }}
                     className="w-full px-3 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none placeholder-[#94A3B8]"
                   />
                 </div>
@@ -630,18 +1016,52 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-[#1A202C] mb-1 font-medium">Machine Type</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[#1A202C] font-medium">Machine Type</label>
+                    {isTypeManuallyOverridden ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsTypeManuallyOverridden(false);
+                          const detected = detectMachineType(name);
+                          if (detected) {
+                            setMachineType(detected);
+                            setAutoDetectedType(detected);
+                          } else {
+                            setAutoDetectedType(null);
+                          }
+                        }}
+                        className="text-[10px] text-amber-600 hover:text-amber-700 underline font-normal transition"
+                        title="Manual selection active. Click to re-enable auto-categorization."
+                      >
+                        Override (Reset)
+                      </button>
+                    ) : autoDetectedType ? (
+                      <span className="text-[10px] text-emerald-600 font-medium bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                        Auto-detected
+                      </span>
+                    ) : null}
+                  </div>
                   <select
                     value={machineType}
-                    onChange={(e) => setMachineType(e.target.value)}
+                    onChange={(e) => {
+                      setIsTypeManuallyOverridden(true);
+                      setMachineType(e.target.value);
+                      setAutoDetectedType(null);
+                    }}
                     className="w-full px-2.5 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none"
                   >
                     <option value="Centrifugal Pump">Centrifugal Pump</option>
                     <option value="Wet Gas Compressor">Wet Gas Compressor</option>
                     <option value="Shell & Tube Heat Exchanger">Heat Exchanger</option>
+                    <option value="Bucket Elevator">Bucket Elevator</option>
                     <option value="Emergency Isolation Valve">Emergency Isolation Valve</option>
                     <option value="Hydraulic Motor">Hydraulic Motor</option>
                     <option value="Fractionation Tower">Fractionation Tower</option>
+                    <option value="Conveyor System">Conveyor System</option>
+                    <option value="Industrial Blower / Fan">Industrial Blower / Fan</option>
+                    <option value="Boiler / Pressure Vessel">Boiler / Pressure Vessel</option>
+                    <option value="Industrial Mixer / Agitator">Industrial Mixer / Agitator</option>
                     <option value="Other / Unknown">Other / Unknown</option>
                   </select>
                 </div>
@@ -653,7 +1073,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                     value={manufacturer}
                     onChange={(e) => {
                       setManufacturer(e.target.value);
-                      checkDuplicates(assetTag, e.target.value, modelNumber);
+                      checkDuplicates(assetTag, e.target.value, modelNumber, serialNumber);
                     }}
                     className="w-full px-3 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none placeholder-[#94A3B8]"
                   />
@@ -666,7 +1086,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                     value={modelNumber}
                     onChange={(e) => {
                       setModelNumber(e.target.value);
-                      checkDuplicates(assetTag, manufacturer, e.target.value);
+                      checkDuplicates(assetTag, manufacturer, e.target.value, serialNumber);
                     }}
                     className="w-full px-3 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none placeholder-[#94A3B8]"
                   />
@@ -680,7 +1100,10 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                     type="text"
                     placeholder="SN-99824-A"
                     value={serialNumber}
-                    onChange={(e) => setSerialNumber(e.target.value)}
+                    onChange={(e) => {
+                      setSerialNumber(e.target.value);
+                      checkDuplicates(assetTag, manufacturer, modelNumber, e.target.value);
+                    }}
                     className="w-full px-3 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none placeholder-[#94A3B8]"
                   />
                 </div>
@@ -688,6 +1111,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                   <label className="block text-[#1A202C] mb-1 font-medium">Building / Complex</label>
                   <input
                     type="text"
+                    placeholder="Unit-02"
                     value={building}
                     onChange={(e) => setBuilding(e.target.value)}
                     className="w-full px-3 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none placeholder-[#94A3B8]"
@@ -697,6 +1121,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                   <label className="block text-[#1A202C] mb-1 font-medium">Production Line</label>
                   <input
                     type="text"
+                    placeholder="Crude Distillation"
                     value={productionLine}
                     onChange={(e) => setProductionLine(e.target.value)}
                     className="w-full px-3 py-2 bg-white border border-[#CBD5E1] focus:border-[#2563EB] rounded-xl text-[#1A202C] outline-none placeholder-[#94A3B8]"
@@ -993,7 +1418,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
               <div className="pt-4 flex justify-end gap-3 border-t border-[#E2E8F0]">
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={handleClose}
                   className="px-4 py-2 rounded-xl text-[#64748B] hover:text-[#1A202C] hover:bg-[#F1F5F9] transition"
                 >
                   Cancel
@@ -1004,7 +1429,11 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
                   className="px-5 py-2 bg-[#151C24] hover:bg-black text-white font-semibold rounded-xl transition shadow-sm disabled:opacity-50 flex items-center gap-2"
                 >
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>{submitting ? 'Registering...' : 'Register Machine'}</span>
+                  <span>
+                    {submitting
+                      ? (machineToEdit ? 'Saving...' : 'Registering...')
+                      : (machineToEdit ? 'Save Changes' : 'Register Machine')}
+                  </span>
                 </button>
               </div>
             </form>
@@ -1165,7 +1594,7 @@ export const RegisterMachineModal: React.FC<RegisterMachineModalProps> = ({
               <div className="pt-3 flex justify-end gap-3 border-t border-[#E2E8F0]">
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={handleClose}
                   className="px-4 py-2 rounded-xl text-[#64748B] hover:text-[#1A202C] hover:bg-[#F1F5F9] transition text-xs font-semibold"
                 >
                   Cancel

@@ -29,7 +29,9 @@ import type {
   ComponentMapping,
   EmployeeBadge,
   MachineLedgerSummary,
+  MachineVerificationRecord,
   PublicMachineKnowledge,
+  SpecVerificationStatus,
   BadgeStatus,
   IndustryProfile,
   EngineeringModel3D,
@@ -140,6 +142,7 @@ import type {
   ApproveTicketRestartDTO,
 } from './dataStore.interface.js';
 import { sanitizeMachineOrAssetId } from '../utils/uuid.js';
+import { computeMachineVerification } from '../services/machineVerification.service.js';
 
 export class InMemoryDataStore implements IDataStore {
   private organizations = new Map<string, Organization>();
@@ -149,6 +152,7 @@ export class InMemoryDataStore implements IDataStore {
   private plants = new Map<string, Plant>();
   private assets = new Map<string, Asset>();
   private machines = new Map<string, Machine>();
+  private machineVerifications = new Map<string, MachineVerificationRecord>();
   private missingInfoTasks = new Map<string, MissingInformationTask>();
   private componentMappings = new Map<string, ComponentMapping>();
   private employeeBadges = new Map<string, EmployeeBadge>();
@@ -956,9 +960,9 @@ export class InMemoryDataStore implements IDataStore {
       assetTag: dto.assetTag,
       name: dto.name,
       area: dto.area,
-      manufacturer: dto.manufacturer,
-      modelNumber: dto.modelNumber,
-      serialNumber: dto.serialNumber,
+      manufacturer: dto.manufacturer ?? null,
+      modelNumber: dto.modelNumber ?? null,
+      serialNumber: dto.serialNumber ?? null,
       operationalState: dto.operationalState ?? 'OPTIMAL',
       createdAt: now,
       updatedAt: now,
@@ -1065,6 +1069,8 @@ export class InMemoryDataStore implements IDataStore {
       title: dto.title,
       category: dto.category,
       assetTags: dto.assetTags ?? [],
+      assetIds: dto.assetIds ?? [],
+      machineId: dto.machineId ?? (dto.assetIds && dto.assetIds.length > 0 ? dto.assetIds[0] : undefined),
       dataClassification: dto.dataClassification || 'INTERNAL',
       isConfidential: dto.isConfidential ?? (dto.dataClassification === 'RESTRICTED_CONFIDENTIAL' || dto.dataClassification === 'RESTRICTED'),
       createdByUserId: dto.createdByUserId ?? null,
@@ -1424,6 +1430,8 @@ export class InMemoryDataStore implements IDataStore {
 
     return {
       ...doc,
+      assetIds: (doc as any).assetIds ?? [],
+      machineId: (doc as any).machineId,
       latestVersion,
       latestJob,
       // Legacy compatibility fields
@@ -1885,9 +1893,24 @@ export class InMemoryDataStore implements IDataStore {
       }
     }
 
+    const cleanTag = dto.assetTag.trim().toUpperCase();
+    const cleanName = dto.name.trim();
+    const cleanSerial = typeof dto.serialNumber === 'string' && dto.serialNumber.trim() ? dto.serialNumber.trim() : null;
+    const cleanMfg = typeof dto.manufacturer === 'string' && dto.manufacturer.trim() ? dto.manufacturer.trim() : null;
+    const cleanModel = typeof dto.modelNumber === 'string' && dto.modelNumber.trim() ? dto.modelNumber.trim() : null;
+
     for (const m of this.machines.values()) {
-      if (m.organizationId === organizationId && m.assetTag.toLowerCase() === dto.assetTag.toLowerCase()) {
-        throw new Error(`Machine with asset tag '${dto.assetTag}' already exists in this organization.`);
+      if (m.organizationId === organizationId && m.assetTag.toLowerCase() === cleanTag.toLowerCase()) {
+        throw new Error(`Machine with asset tag '${cleanTag}' already exists in this organization.`);
+      }
+    }
+
+    if (cleanSerial) {
+      const targetSerial = cleanSerial.toLowerCase();
+      for (const m of this.machines.values()) {
+        if (m.organizationId === organizationId && m.serialNumber && m.serialNumber.trim().toLowerCase() === targetSerial) {
+          throw new Error(`Machine with serial number '${cleanSerial}' already exists in this organization.`);
+        }
       }
     }
 
@@ -1905,23 +1928,23 @@ export class InMemoryDataStore implements IDataStore {
       organizationId,
       plantId: plant.id,
       parentAssetId: dto.parentAssetId ?? null,
-      assetTag: dto.assetTag,
-      name: dto.name,
+      assetTag: cleanTag,
+      name: cleanName,
       machineType: dto.machineType ?? 'Industrial Machinery',
       area: dto.area,
       building: dto.building ?? null,
       productionLine: dto.productionLine ?? null,
       locationDescription: dto.locationDescription ?? null,
-      manufacturer: dto.manufacturer ?? null,
-      modelNumber: dto.modelNumber ?? null,
-      serialNumber: dto.serialNumber ?? null,
+      manufacturer: cleanMfg,
+      modelNumber: cleanModel,
+      serialNumber: cleanSerial,
       installationDate: dto.installationDate ?? null,
       operationalState: dto.operationalState ?? 'OPTIMAL',
       criticality: dto.criticality ?? 'MEDIUM',
       department: dto.department ?? null,
       dataClassification: dto.dataClassification ?? 'INTERNAL',
       authorizedAccessScope: dto.authorizedAccessScope ?? 'ORGANIZATION',
-      verificationState: dto.verificationState ?? (dto.serialNumber ? 'PARTIALLY_VERIFIED' : 'UNVERIFIED'),
+      verificationState: dto.verificationState ?? (cleanSerial ? 'PARTIALLY_VERIFIED' : 'UNVERIFIED'),
       documentationReadiness: dto.documentationReadiness ?? 'INCOMPLETE',
       technicalSpecs: dto.technicalSpecs ?? {},
       hasModel3d: dto.hasModel3d ?? false,
@@ -1955,6 +1978,33 @@ export class InMemoryDataStore implements IDataStore {
       updatedAt: machine.updatedAt,
     };
     this.assets.set(asset.id, asset);
+
+    // Initialize machine verification workflow record
+    const counts = this.getMachineAssetCounts(organizationId, machine);
+    const { checks, overallState, status } = computeMachineVerification(machine, undefined, counts);
+    const verificationRecord: MachineVerificationRecord = {
+      id: crypto.randomUUID(),
+      organizationId,
+      machineId: machine.id,
+      machineAssetTag: machine.assetTag,
+      status: dto.verificationState === 'VERIFIED' ? 'VERIFIED' : status,
+      overallState: dto.verificationState === 'VERIFIED' ? 'VERIFIED' : overallState,
+      checks,
+      assignedUserId: null,
+      assignedRole: null,
+      history: [
+        {
+          action: 'REGISTERED',
+          actorUserId: 'system',
+          actorRole: 'SYSTEM',
+          timestamp: now,
+          notes: 'Machine registered in authoritative ledger. Initial verification checks evaluated.',
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.machineVerifications.set(machine.id, verificationRecord);
 
     return machine;
   }
@@ -2024,6 +2074,27 @@ export class InMemoryDataStore implements IDataStore {
     const m = await this.getMachineById(organizationId, machineId);
     if (!m) return null;
 
+    if (updates.serialNumber !== undefined) {
+      const cleanSerial = typeof updates.serialNumber === 'string' && updates.serialNumber.trim() ? updates.serialNumber.trim() : null;
+      if (cleanSerial) {
+        const target = cleanSerial.toLowerCase();
+        for (const existing of this.machines.values()) {
+          if (existing.organizationId === organizationId && existing.id !== m.id && existing.serialNumber && existing.serialNumber.trim().toLowerCase() === target) {
+            throw new Error(`Machine with serial number '${cleanSerial}' already exists in this organization.`);
+          }
+        }
+      }
+      updates.serialNumber = cleanSerial;
+    }
+
+    if (updates.manufacturer !== undefined) {
+      updates.manufacturer = typeof updates.manufacturer === 'string' && updates.manufacturer.trim() ? updates.manufacturer.trim() : null;
+    }
+
+    if (updates.modelNumber !== undefined) {
+      updates.modelNumber = typeof updates.modelNumber === 'string' && updates.modelNumber.trim() ? updates.modelNumber.trim() : null;
+    }
+
     Object.assign(m, updates, {
       revision: (m.revision || 1) + 1,
       updatedAt: new Date().toISOString(),
@@ -2034,9 +2105,9 @@ export class InMemoryDataStore implements IDataStore {
     if (a) {
       if (updates.name) a.name = updates.name;
       if (updates.area) a.area = updates.area;
-      if (updates.manufacturer !== undefined) a.manufacturer = updates.manufacturer || '';
-      if (updates.modelNumber !== undefined) a.modelNumber = updates.modelNumber || '';
-      if (updates.serialNumber !== undefined) a.serialNumber = updates.serialNumber || '';
+      if (updates.manufacturer !== undefined) a.manufacturer = updates.manufacturer || null as any;
+      if (updates.modelNumber !== undefined) a.modelNumber = updates.modelNumber || null as any;
+      if (updates.serialNumber !== undefined) a.serialNumber = updates.serialNumber || null as any;
       if (updates.operationalState) a.operationalState = updates.operationalState;
       a.updatedAt = m.updatedAt;
     }
@@ -2097,13 +2168,168 @@ export class InMemoryDataStore implements IDataStore {
       return true;
     });
 
+    const pendingVerifications = Array.from(this.machineVerifications.values()).filter((v) => {
+      if (v.organizationId !== organizationId) return false;
+      if (v.status !== 'READY_FOR_APPROVAL') return false;
+      if (plantId) {
+        const m = this.machines.get(v.machineId);
+        if (!m || m.plantId !== plantId) return false;
+      }
+      return true;
+    });
+
     return {
       totalMachines: all.length,
-      incompleteDocumentationCount: all.filter((m) => m.documentationReadiness === 'INCOMPLETE').length,
-      pendingReviewTasksCount: pendingTasks.length,
+      incompleteDocumentationCount: all.filter((m) => m.documentationReadiness !== 'READY').length,
+      pendingReviewTasksCount: pendingTasks.length + pendingVerifications.length,
       with3dModelCount: all.filter((m) => m.hasModel3d).length,
       criticalMachinesCount: all.filter((m) => m.criticality === 'MISSION_CRITICAL' || m.criticality === 'HIGH').length,
+      verifiedSpecsCount: all.filter((m) => m.verificationState === 'VERIFIED').length,
     };
+  }
+
+  private getMachineAssetCounts(organizationId: string, machine: Machine): {
+    documentCount: number;
+    models3dCount: number;
+    drawingsCount: number;
+  } {
+    const assetId = machine.id;
+    const assetTag = machine.assetTag?.toLowerCase();
+    const mfg = machine.manufacturer?.toLowerCase();
+    const mdl = machine.modelNumber?.toLowerCase();
+
+    // 1. Documents & Manuals Count
+    let documentCount = 0;
+    const countedDocIds = new Set<string>();
+
+    for (const doc of this.documents.values()) {
+      if (doc.organizationId !== organizationId) continue;
+      const tags = (doc.assetTags || []).map((t: string) => t.toLowerCase());
+      const docAssetIds = (doc as any).assetIds || [];
+      const meta = (doc.metadata || {}) as any;
+      const matchesAsset =
+        (assetTag && tags.includes(assetTag)) ||
+        (doc as any).machineId === assetId ||
+        docAssetIds.includes(assetId) ||
+        meta.machineId === assetId ||
+        meta.assetId === assetId;
+
+      if (matchesAsset) {
+        countedDocIds.add(doc.id);
+        documentCount++;
+      }
+    }
+
+    // Manufacturer Resources (Manuals, Specs, SOPs)
+    for (const res of this.manufacturerResources.values()) {
+      if (res.organizationId !== organizationId) continue;
+      const matchesMachine =
+        res.machineId === assetId ||
+        (mfg && mdl && res.manufacturer?.toLowerCase() === mfg && res.modelNumber?.toLowerCase() === mdl);
+
+      if (matchesMachine && !countedDocIds.has(res.id)) {
+        countedDocIds.add(res.id);
+        documentCount++;
+      }
+    }
+
+    // Machine Evidence Claims with source document
+    for (const claim of this.evidenceClaims.values()) {
+      if (claim.organizationId !== organizationId || claim.machineId !== assetId) continue;
+      if (claim.sourceDocumentId && !countedDocIds.has(claim.sourceDocumentId)) {
+        countedDocIds.add(claim.sourceDocumentId);
+        documentCount++;
+      } else if (claim.sourceAttachmentKey && !countedDocIds.has(claim.sourceAttachmentKey)) {
+        countedDocIds.add(claim.sourceAttachmentKey);
+        documentCount++;
+      }
+    }
+
+    // Direct manual on machine technicalSpecs
+    if (machine.technicalSpecs?.manualStorageKey || machine.technicalSpecs?.manualFileName || machine.technicalSpecs?.manualUrl) {
+      documentCount++;
+    }
+
+    // 2. 3D Models Count
+    let models3dCount = 0;
+    for (const m of this.engineeringModels.values()) {
+      if (m.organizationId !== organizationId) continue;
+      if (m.machineId === assetId || (m as any).assetId === assetId) {
+        models3dCount++;
+      }
+    }
+    if (machine.model3dStorageKey || machine.model3dUrl || machine.model3dFile) {
+      models3dCount++;
+    }
+
+    // 3. Drawings / P&ID Count
+    let drawingsCount = 0;
+    for (const d of this.engineeringDrawings.values()) {
+      if (d.organizationId !== organizationId) continue;
+      if (d.machineId === assetId) {
+        drawingsCount++;
+      }
+    }
+    if (machine.pidStorageKey || machine.pidUrl || machine.pAndIdUrl || machine.pidFile || machine.pAndIdFile) {
+      drawingsCount++;
+    }
+
+    return { documentCount, models3dCount, drawingsCount };
+  }
+
+  public async getMachineVerification(organizationId: string, machineId: string): Promise<MachineVerificationRecord> {
+    const machine = await this.getMachineById(organizationId, machineId);
+    if (!machine) {
+      throw new Error(`Machine '${machineId}' not found in this organization.`);
+    }
+
+    let record = this.machineVerifications.get(machine.id);
+    const now = new Date().toISOString();
+    const counts = this.getMachineAssetCounts(organizationId, machine);
+
+    if (!record) {
+      const { checks, overallState, status } = computeMachineVerification(machine, undefined, counts);
+      record = {
+        id: crypto.randomUUID(),
+        organizationId,
+        machineId: machine.id,
+        machineAssetTag: machine.assetTag,
+        status: machine.verificationState === 'VERIFIED' ? 'VERIFIED' : status,
+        overallState: machine.verificationState === 'VERIFIED' ? 'VERIFIED' : overallState,
+        checks,
+        history: [
+          {
+            action: 'REGISTERED',
+            actorUserId: 'system',
+            actorRole: 'SYSTEM',
+            timestamp: now,
+            notes: 'Verification profile initialized.',
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.machineVerifications.set(machine.id, record);
+    } else {
+      // Re-evaluate checks dynamically against current machine state and real database asset counts
+      const { checks, overallState, status } = computeMachineVerification(machine, record, counts);
+      record.checks = checks;
+      record.overallState = machine.verificationState === 'VERIFIED' ? 'VERIFIED' : overallState;
+      record.status = machine.verificationState === 'VERIFIED' ? 'VERIFIED' : status;
+      record.machineAssetTag = machine.assetTag;
+    }
+
+    return record;
+  }
+
+  public async updateMachineVerification(
+    organizationId: string,
+    machineId: string,
+    updates: Partial<MachineVerificationRecord>
+  ): Promise<MachineVerificationRecord> {
+    const record = await this.getMachineVerification(organizationId, machineId);
+    Object.assign(record, updates, { updatedAt: new Date().toISOString() });
+    return record;
   }
 
   // --------------------------------------------------------------------------
@@ -2196,11 +2422,11 @@ export class InMemoryDataStore implements IDataStore {
         if (t.submittedValues.manufacturer && typeof t.submittedValues.manufacturer === 'string') {
           machine.manufacturer = t.submittedValues.manufacturer;
         }
-        if (t.submittedValues.modelNumber && typeof t.submittedValues.modelNumber === 'string') {
-          machine.modelNumber = t.submittedValues.modelNumber;
+        // Recompute machine verification based on updated specs
+        const verif = await this.getMachineVerification(organizationId, machine.id);
+        if (verif) {
+          machine.verificationState = verif.overallState;
         }
-        machine.verificationState = 'VERIFIED';
-        machine.documentationReadiness = 'READY';
         machine.revision = (machine.revision || 1) + 1;
         machine.updatedAt = new Date().toISOString();
       }
@@ -2355,6 +2581,13 @@ export class InMemoryDataStore implements IDataStore {
       verificationStatus: data.verificationStatus ?? 'PUBLIC_SUGGESTION',
       approvedByUserId: null,
       approvedAt: null,
+      sourceType: data.sourceType ?? 'UNKNOWN_UNVERIFIED',
+      matchStatus: data.matchStatus ?? 'EXACT_MATCH',
+      missingModelDetails: data.missingModelDetails,
+      completenessSummary: data.completenessSummary,
+      evidenceRecords: data.evidenceRecords,
+      conflicts: data.conflicts,
+      reviewNotes: data.reviewNotes,
     };
     this.publicKnowledge.set(entry.id, entry);
     return entry;
@@ -2362,14 +2595,18 @@ export class InMemoryDataStore implements IDataStore {
 
   public async updatePublicMachineKnowledgeStatus(
     id: string,
-    status: 'APPROVED' | 'REJECTED',
-    approvedByUserId: string
+    status: SpecVerificationStatus,
+    approvedByUserId: string,
+    reviewNotes?: string
   ): Promise<PublicMachineKnowledge | null> {
     const entry = this.publicKnowledge.get(id);
     if (!entry) return null;
     entry.verificationStatus = status;
     entry.approvedByUserId = approvedByUserId;
     entry.approvedAt = new Date().toISOString();
+    if (reviewNotes) {
+      entry.reviewNotes = reviewNotes;
+    }
     return entry;
   }
 
@@ -2569,8 +2806,53 @@ export class InMemoryDataStore implements IDataStore {
 
   public async getEngineeringModel3DById(organizationId: string, modelId: string): Promise<EngineeringModel3D | null> {
     const model = this.engineeringModels.get(modelId);
-    if (!model || model.organizationId !== organizationId) return null;
-    return { ...model };
+    if (model && model.organizationId === organizationId) return { ...model };
+
+    // Fallback: check if modelId refers to an asset model
+    const targetAssetRef = modelId.replace(/^asset-3d-/, '').replace(/^local-/, '');
+    for (const machine of this.machines.values()) {
+      if (machine.organizationId !== organizationId) continue;
+      if (machine.id === targetAssetRef || machine.assetTag?.toLowerCase() === targetAssetRef.toLowerCase()) {
+        const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+        if (machine.hasModel3d || machine.model3dStorageKey || specs.model3dFileName) {
+          const rawFileName = specs.model3dFileName || (machine.model3dStorageKey ? machine.model3dStorageKey.split('/').pop() : `${machine.assetTag}-model.glb`);
+          const ext = (machine.model3dFormat || rawFileName.split('.').pop() || 'GLB').toUpperCase();
+          const storageKey = machine.model3dStorageKey || `models/${machine.assetTag}-${rawFileName}`;
+          let convertedStorageKey: string | undefined;
+          if (['STEP', 'STP', 'IGES', 'IGS'].includes(ext)) {
+            convertedStorageKey = storageKey.replace(/\.[^.]+$/, '.glb');
+          }
+
+          return {
+            id: modelId.startsWith('asset-3d-') ? modelId : `asset-3d-${machine.id}`,
+            organizationId: machine.organizationId,
+            plantId: machine.plantId || 'PLANT-DEFAULT',
+            machineId: machine.id,
+            assetId: machine.id,
+            industryProfileCode: 'GENERAL',
+            assetCategory: machine.machineType || 'Industrial Machinery',
+            title: rawFileName,
+            manufacturer: machine.manufacturer || undefined,
+            modelNumber: machine.modelNumber || undefined,
+            sourceProvider: 'Asset Registry Ledger',
+            fileFormat: ext as CADFileFormat,
+            fileSizeBytes: Number(specs.model3dFileSize) || 4194304,
+            fileHashSha256: 'asset_linked',
+            storageKey,
+            convertedStorageKey,
+            modelRevision: '1.0',
+            status: 'APPROVED',
+            dataClassification: machine.dataClassification || 'INTERNAL',
+            uploadedByUserId: 'system',
+            createdAt: machine.createdAt || new Date().toISOString(),
+            updatedAt: machine.updatedAt || new Date().toISOString(),
+            extractedComponentsCount: 12,
+          };
+        }
+      }
+    }
+
+    return null;
   }
 
   public async listEngineeringModels3D(
@@ -2578,6 +2860,9 @@ export class InMemoryDataStore implements IDataStore {
     filters?: EngineeringModelFilterOptions
   ): Promise<EngineeringModel3D[]> {
     let list: EngineeringModel3D[] = [];
+    const representedMachineIds = new Set<string>();
+    const representedStorageKeys = new Set<string>();
+
     for (const m of this.engineeringModels.values()) {
       if (m.organizationId !== organizationId) continue;
       if (filters?.plantId && m.plantId !== filters.plantId) continue;
@@ -2586,7 +2871,64 @@ export class InMemoryDataStore implements IDataStore {
       if (filters?.fileFormat && m.fileFormat !== filters.fileFormat) continue;
       if (filters?.industryProfileCode && m.industryProfileCode !== filters.industryProfileCode) continue;
       list.push({ ...m });
+      if (m.machineId) representedMachineIds.add(m.machineId);
+      if (m.assetId) representedMachineIds.add(m.assetId);
+      if (m.storageKey) representedStorageKeys.add(m.storageKey);
     }
+
+    // Global File Aggregation: Find models from assets with 3D attachments in this tenant
+    for (const machine of this.machines.values()) {
+      if (machine.organizationId !== organizationId) continue;
+      if (representedMachineIds.has(machine.id)) continue;
+      if (machine.model3dStorageKey && representedStorageKeys.has(machine.model3dStorageKey)) continue;
+
+      if (filters?.plantId && machine.plantId !== filters.plantId) continue;
+      if (filters?.machineId && machine.id !== filters.machineId && machine.assetTag !== filters.machineId) continue;
+
+      const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+      if (!machine.hasModel3d && !machine.model3dStorageKey && !specs.model3dFileName) continue;
+
+      const rawFileName = specs.model3dFileName || (machine.model3dStorageKey ? machine.model3dStorageKey.split('/').pop() : `${machine.assetTag}-model.glb`);
+      const ext = (machine.model3dFormat || rawFileName.split('.').pop() || 'GLB').toUpperCase();
+      const storageKey = machine.model3dStorageKey || `models/${machine.assetTag}-${rawFileName}`;
+
+      if (filters?.fileFormat && ext !== filters.fileFormat) continue;
+      if (filters?.status && filters.status !== 'APPROVED') continue;
+
+      let convertedStorageKey: string | undefined;
+      if (['STEP', 'STP', 'IGES', 'IGS'].includes(ext)) {
+        convertedStorageKey = storageKey.replace(/\.[^.]+$/, '.glb');
+      }
+
+      list.push({
+        id: `asset-3d-${machine.id}`,
+        organizationId: machine.organizationId,
+        plantId: machine.plantId || 'PLANT-DEFAULT',
+        machineId: machine.id,
+        assetId: machine.id,
+        industryProfileCode: 'GENERAL',
+        assetCategory: machine.machineType || 'Industrial Machinery',
+        title: rawFileName,
+        manufacturer: machine.manufacturer || undefined,
+        modelNumber: machine.modelNumber || undefined,
+        sourceProvider: 'Asset Registry Ledger',
+        fileFormat: ext as CADFileFormat,
+        fileSizeBytes: Number(specs.model3dFileSize) || 4194304,
+        fileHashSha256: 'asset_linked',
+        storageKey,
+        convertedStorageKey,
+        modelRevision: '1.0',
+        status: 'APPROVED',
+        dataClassification: machine.dataClassification || 'INTERNAL',
+        uploadedByUserId: 'system',
+        createdAt: machine.createdAt || new Date().toISOString(),
+        updatedAt: machine.updatedAt || new Date().toISOString(),
+        extractedComponentsCount: 12,
+      });
+      representedMachineIds.add(machine.id);
+      if (storageKey) representedStorageKeys.add(storageKey);
+    }
+
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -2672,8 +3014,44 @@ export class InMemoryDataStore implements IDataStore {
 
   public async getManufacturerResourceById(organizationId: string, resourceId: string): Promise<ManufacturerResource | null> {
     const res = this.manufacturerResources.get(resourceId);
-    if (!res || res.organizationId !== organizationId) return null;
-    return { ...res };
+    if (res && res.organizationId === organizationId) return { ...res };
+
+    if (resourceId.startsWith('doc-res-')) {
+      const docId = resourceId.replace(/^doc-res-/, '');
+      const doc = this.documents.get(docId);
+      if (doc && doc.organizationId === organizationId) {
+        let version: DocumentVersion | undefined;
+        for (const v of this.documentVersions.values()) {
+          if (v.documentId === docId) {
+            version = v;
+            break;
+          }
+        }
+        if (version?.storageKey) {
+          const isManual = doc.category === 'OEM_MANUAL' || doc.category === 'MANUAL';
+          const ext = (version.filename?.split('.').pop() || 'PDF').toUpperCase();
+          return {
+            id: resourceId,
+            organizationId,
+            machineId: undefined,
+            resourceType: isManual ? 'OFFICIAL_MANUAL' : 'SOP',
+            title: doc.title || version.filename,
+            manufacturer: (doc.metadata as any)?.manufacturer || 'OEM / Plant Document',
+            modelNumber: (doc.metadata as any)?.modelNumber || doc.documentNumber,
+            sourceType: 'FILE_UPLOAD',
+            storageKey: version.storageKey,
+            fileFormat: ext as any,
+            fileSizeBytes: Number(version.fileSizeBytes) || 1048576,
+            versionRevision: '1.0',
+            verificationStatus: 'VERIFIED',
+            createdAt: doc.createdAt || new Date().toISOString(),
+            updatedAt: doc.updatedAt || new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    return null;
   }
 
   public async listManufacturerResources(
@@ -2681,6 +3059,8 @@ export class InMemoryDataStore implements IDataStore {
     filters?: ManufacturerResourceFilterOptions
   ): Promise<ManufacturerResource[]> {
     let list: ManufacturerResource[] = [];
+    const representedKeys = new Set<string>();
+
     for (const r of this.manufacturerResources.values()) {
       if (r.organizationId !== organizationId) continue;
       if (filters?.machineId && r.machineId !== filters.machineId) continue;
@@ -2688,7 +3068,76 @@ export class InMemoryDataStore implements IDataStore {
       if (filters?.verificationStatus && r.verificationStatus !== filters.verificationStatus) continue;
       if (filters?.manufacturer && !r.manufacturer.toLowerCase().includes(filters.manufacturer.toLowerCase())) continue;
       list.push({ ...r });
+      if (r.storageKey) representedKeys.add(r.storageKey);
     }
+
+    // Global File Aggregation: Find documents from documents + documentVersions
+    for (const doc of this.documents.values()) {
+      if (doc.organizationId !== organizationId) continue;
+      let version: DocumentVersion | undefined;
+      for (const v of this.documentVersions.values()) {
+        if (v.documentId === doc.id) {
+          version = v;
+          break;
+        }
+      }
+      if (!version?.storageKey || representedKeys.has(version.storageKey)) continue;
+
+      // Find matching machine
+      let matchedMachine: any;
+      if ((doc as any).machineId) {
+        matchedMachine = this.machines.get((doc as any).machineId);
+      }
+      if (!matchedMachine && (doc as any).assetIds?.length) {
+        for (const aId of (doc as any).assetIds) {
+          const m = this.machines.get(aId);
+          if (m) {
+            matchedMachine = m;
+            break;
+          }
+        }
+      }
+      if (!matchedMachine && ((doc.assetTags && doc.assetTags.length > 0) || doc.documentNumber)) {
+        for (const m of this.machines.values()) {
+          if (
+            m.organizationId === organizationId &&
+            (((doc.assetTags || []).map((t) => t.toLowerCase())).includes(m.assetTag.toLowerCase()) ||
+              doc.documentNumber.toLowerCase() === m.assetTag.toLowerCase())
+          ) {
+            matchedMachine = m;
+            break;
+          }
+        }
+      }
+
+      if (filters?.machineId && matchedMachine?.id !== filters.machineId) continue;
+
+      const isManual = doc.category === 'OEM_MANUAL' || doc.category === 'MANUAL';
+      const rType: ManufacturerResourceType = isManual ? 'OFFICIAL_MANUAL' : 'SOP';
+      if (filters?.resourceType && filters.resourceType !== rType) continue;
+
+      const ext = (version.filename?.split('.').pop() || 'PDF').toUpperCase();
+
+      list.push({
+        id: `doc-res-${doc.id}`,
+        organizationId,
+        machineId: matchedMachine?.id,
+        resourceType: rType,
+        title: doc.title || version.filename,
+        manufacturer: matchedMachine?.manufacturer || (doc.metadata as any)?.manufacturer || 'OEM / Plant Document',
+        modelNumber: matchedMachine?.modelNumber || (doc.metadata as any)?.modelNumber || doc.documentNumber,
+        sourceType: 'FILE_UPLOAD',
+        storageKey: version.storageKey,
+        fileFormat: ext as any,
+        fileSizeBytes: Number(version.fileSizeBytes) || 1048576,
+        versionRevision: '1.0',
+        verificationStatus: 'VERIFIED',
+        createdAt: doc.createdAt || new Date().toISOString(),
+        updatedAt: doc.updatedAt || new Date().toISOString(),
+      });
+      representedKeys.add(version.storageKey);
+    }
+
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -2784,8 +3233,49 @@ export class InMemoryDataStore implements IDataStore {
 
   public async getEngineeringDrawingById(organizationId: string, drawingId: string): Promise<EngineeringDrawing | null> {
     const dwg = this.engineeringDrawings.get(drawingId);
-    if (!dwg || dwg.organizationId !== organizationId) return null;
-    return { ...dwg };
+    if (dwg && dwg.organizationId === organizationId) return { ...dwg };
+
+    // Fallback: check if drawingId refers to an asset drawing
+    const targetAssetRef = drawingId.replace(/^asset-pid-/, '').replace(/^asset-dwg-/, '').replace(/^local-pid-/, '').replace(/^local-/, '');
+    for (const machine of this.machines.values()) {
+      if (machine.organizationId !== organizationId) continue;
+      if (machine.id === targetAssetRef || machine.assetTag?.toLowerCase() === targetAssetRef.toLowerCase()) {
+        const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+        if (machine.hasPidDiagram || machine.pidStorageKey || specs.pidFileName) {
+          const rawFileName = specs.pidFileName || (machine.pidStorageKey ? machine.pidStorageKey.split('/').pop() : `${machine.assetTag}-drawing.pdf`);
+          const ext = (rawFileName.split('.').pop() || 'PDF').toUpperCase();
+          const format = ext === 'SVG' ? 'SVG' : ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'PDF';
+          const storageKey = machine.pidStorageKey || `schematics/${machine.assetTag}-${rawFileName}`;
+
+          return {
+            id: drawingId.startsWith('asset-') ? drawingId : `asset-pid-${machine.id}`,
+            organizationId: machine.organizationId,
+            plantId: machine.plantId || 'PLANT-DEFAULT',
+            machineId: machine.id,
+            drawingTitle: rawFileName,
+            uniqueDrawingNumber: `PID-${machine.assetTag}`,
+            drawingType: 'PID',
+            discipline: 'Process & Mechanical',
+            revision: 'Rev 1.0',
+            effectiveDate: machine.installationDate ? machine.installationDate.substring(0, 10) : new Date().toISOString().substring(0, 10),
+            source: 'Authoritative Asset Ledger',
+            storageKey,
+            originalFileName: rawFileName,
+            fileFormat: format as any,
+            fileSizeBytes: Number(specs.pidFileSize) || 2097152,
+            fileHashSha256: 'asset_linked',
+            status: 'APPROVED',
+            dataClassification: machine.dataClassification || 'INTERNAL',
+            equipmentTags: [machine.assetTag],
+            uploadedByUserId: 'system',
+            createdAt: machine.createdAt || new Date().toISOString(),
+            updatedAt: machine.updatedAt || new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    return null;
   }
 
   public async listEngineeringDrawings(
@@ -2793,6 +3283,9 @@ export class InMemoryDataStore implements IDataStore {
     filters?: EngineeringDrawingFilterOptions
   ): Promise<EngineeringDrawing[]> {
     let list: EngineeringDrawing[] = [];
+    const representedMachineIds = new Set<string>();
+    const representedStorageKeys = new Set<string>();
+
     for (const d of this.engineeringDrawings.values()) {
       if (d.organizationId !== organizationId) continue;
       if (filters?.plantId && d.plantId !== filters.plantId) continue;
@@ -2801,7 +3294,57 @@ export class InMemoryDataStore implements IDataStore {
       if (filters?.discipline && d.discipline.toLowerCase() !== filters.discipline.toLowerCase()) continue;
       if (filters?.status && d.status !== filters.status) continue;
       list.push({ ...d });
+      if (d.machineId) representedMachineIds.add(d.machineId);
+      if (d.storageKey) representedStorageKeys.add(d.storageKey);
     }
+
+    // Global File Aggregation: Find drawings from assets with P&ID attachments in this tenant
+    for (const machine of this.machines.values()) {
+      if (machine.organizationId !== organizationId) continue;
+      if (representedMachineIds.has(machine.id)) continue;
+      if (machine.pidStorageKey && representedStorageKeys.has(machine.pidStorageKey)) continue;
+
+      if (filters?.plantId && machine.plantId !== filters.plantId) continue;
+      if (filters?.machineId && machine.id !== filters.machineId && machine.assetTag !== filters.machineId) continue;
+      if (filters?.drawingType && filters.drawingType !== 'PID' && filters.drawingType !== 'PROCESS_FLOW') continue;
+      if (filters?.status && filters.status !== 'APPROVED') continue;
+
+      const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+      if (!machine.hasPidDiagram && !machine.pidStorageKey && !specs.pidFileName) continue;
+
+      const rawFileName = specs.pidFileName || (machine.pidStorageKey ? machine.pidStorageKey.split('/').pop() : `${machine.assetTag}-drawing.pdf`);
+      const ext = (rawFileName.split('.').pop() || 'PDF').toUpperCase();
+      const format = ext === 'SVG' ? 'SVG' : ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'PDF';
+      const storageKey = machine.pidStorageKey || `schematics/${machine.assetTag}-${rawFileName}`;
+
+      list.push({
+        id: `asset-pid-${machine.id}`,
+        organizationId: machine.organizationId,
+        plantId: machine.plantId || 'PLANT-DEFAULT',
+        machineId: machine.id,
+        drawingTitle: rawFileName,
+        uniqueDrawingNumber: `PID-${machine.assetTag}`,
+        drawingType: 'PID',
+        discipline: 'Process & Mechanical',
+        revision: 'Rev 1.0',
+        effectiveDate: machine.installationDate ? machine.installationDate.substring(0, 10) : new Date().toISOString().substring(0, 10),
+        source: 'Authoritative Asset Ledger',
+        storageKey,
+        originalFileName: rawFileName,
+        fileFormat: format as any,
+        fileSizeBytes: Number(specs.pidFileSize) || 2097152,
+        fileHashSha256: 'asset_linked',
+        status: 'APPROVED',
+        dataClassification: machine.dataClassification || 'INTERNAL',
+        equipmentTags: [machine.assetTag],
+        uploadedByUserId: 'system',
+        createdAt: machine.createdAt || new Date().toISOString(),
+        updatedAt: machine.updatedAt || new Date().toISOString(),
+      });
+      representedMachineIds.add(machine.id);
+      if (storageKey) representedStorageKeys.add(storageKey);
+    }
+
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -2845,33 +3388,15 @@ export class InMemoryDataStore implements IDataStore {
   // Engineering Asset Center Summary
   // --------------------------------------------------------------------------
   public async getEngineeringAssetCenterSummary(organizationId: string): Promise<EngineeringAssetCenterSummary> {
-    let totalModels3d = 0;
-    let approvedModels3d = 0;
-    let pendingReviewModels3d = 0;
+    const [models, drawings, resources] = await Promise.all([
+      this.listEngineeringModels3D(organizationId),
+      this.listEngineeringDrawings(organizationId),
+      this.listManufacturerResources(organizationId),
+    ]);
 
-    for (const m of this.engineeringModels.values()) {
-      if (m.organizationId === organizationId) {
-        totalModels3d++;
-        if (m.status === 'APPROVED') approvedModels3d++;
-        if (m.status === 'NEEDS_REVIEW') pendingReviewModels3d++;
-      }
-    }
-
-    let totalDrawings = 0;
-    let approvedDrawings = 0;
-    for (const d of this.engineeringDrawings.values()) {
-      if (d.organizationId === organizationId) {
-        totalDrawings++;
-        if (d.status === 'APPROVED') approvedDrawings++;
-      }
-    }
-
-    let totalManufacturerResources = 0;
-    for (const r of this.manufacturerResources.values()) {
-      if (r.organizationId === organizationId) {
-        totalManufacturerResources++;
-      }
-    }
+    const approvedModels3d = models.filter((m) => m.status === 'APPROVED').length;
+    const pendingReviewModels3d = models.filter((m) => m.status === 'NEEDS_REVIEW').length;
+    const approvedDrawings = drawings.filter((d) => d.status === 'APPROVED').length;
 
     let totalProfiles = 0;
     for (const p of this.industryProfiles.values()) {
@@ -2881,12 +3406,12 @@ export class InMemoryDataStore implements IDataStore {
     }
 
     return {
-      totalModels3d,
+      totalModels3d: models.length,
       approvedModels3d,
       pendingReviewModels3d,
-      totalDrawings,
+      totalDrawings: drawings.length,
       approvedDrawings,
-      totalManufacturerResources,
+      totalManufacturerResources: resources.length,
       totalIndustryProfiles: totalProfiles,
       activeIndustryProfileCode: 'OIL_GAS_PETROCHEM',
       supportedFormats: {
@@ -5140,8 +5665,27 @@ export class InMemoryDataStore implements IDataStore {
 
       let status: GapFieldStatus = 'GENUINELY_MISSING';
       let currentApprovedVal: string | number | boolean | null = null;
+      let draftVal: string | number | boolean | null = null;
       let approvedProvenance = null;
       let activeClaimId: string | null = null;
+
+      // Extract drafted value from machine main record or technicalSpecs
+      let draftedVal: any = undefined;
+      const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+      if (req.fieldName === 'manufacturer' && machine.manufacturer && machine.manufacturer !== 'UNKNOWN') {
+        draftedVal = machine.manufacturer;
+      } else if (req.fieldName === 'modelNumber' && machine.modelNumber && machine.modelNumber !== 'UNKNOWN') {
+        draftedVal = machine.modelNumber;
+      } else if (req.fieldName === 'serialNumber' && machine.serialNumber && machine.serialNumber !== 'UNKNOWN') {
+        draftedVal = machine.serialNumber;
+      } else if (specs[req.fieldName] !== undefined && specs[req.fieldName] !== null && String(specs[req.fieldName]).trim() !== '' && specs[req.fieldName] !== 'UNKNOWN') {
+        draftedVal = specs[req.fieldName];
+      } else {
+        const snake = req.fieldName.replace(/([A-Z])/g, '_$1').toLowerCase();
+        if (specs[snake] !== undefined && specs[snake] !== null && String(specs[snake]).trim() !== '' && specs[snake] !== 'UNKNOWN') {
+          draftedVal = specs[snake];
+        }
+      }
 
       if (approved) {
         status = 'APPROVED';
@@ -5156,18 +5700,25 @@ export class InMemoryDataStore implements IDataStore {
           approvedAt: approved.reviewedAt,
         };
         approvedFieldsCount++;
-      } else if (machine.technicalSpecs && machine.technicalSpecs[req.fieldName] !== undefined) {
-        status = 'APPROVED';
-        currentApprovedVal = machine.technicalSpecs[req.fieldName];
-        approvedFieldsCount++;
       } else if (isConflicting) {
         status = 'CONFLICTING';
+        currentApprovedVal = draftedVal ?? null;
         conflictingFieldsCount++;
         if (req.isSafetyCritical) safetyCriticalPendingCount++;
       } else if (activeUnreviewed.length > 0) {
         status = 'AWAITING_REVIEW';
         activeClaimId = activeUnreviewed[0].id;
+        currentApprovedVal = activeUnreviewed[0].claimValue ?? draftedVal ?? null;
         awaitingReviewCount++;
+        if (req.isSafetyCritical) safetyCriticalPendingCount++;
+      } else if (machine.verificationState === 'VERIFIED' && draftedVal !== undefined) {
+        status = 'APPROVED';
+        currentApprovedVal = draftedVal;
+        approvedFieldsCount++;
+      } else if (draftedVal !== undefined && draftedVal !== null && String(draftedVal).trim() !== '') {
+        status = 'PENDING_EVIDENCE';
+        currentApprovedVal = draftedVal;
+        draftVal = draftedVal;
         if (req.isSafetyCritical) safetyCriticalPendingCount++;
       } else if (fieldClaims.some((c) => c.status === 'SUPERSEDED')) {
         status = 'SUPERSEDED';
@@ -5195,6 +5746,7 @@ export class InMemoryDataStore implements IDataStore {
         isSafetyCritical: req.isSafetyCritical,
         status,
         currentApprovedValue: currentApprovedVal,
+        draftValue: draftVal,
         unit: req.unit || null,
         pendingClaimsCount: activeUnreviewed.length,
         conflictingClaimsCount: isConflicting ? nonRejected.length : 0,
@@ -5209,15 +5761,27 @@ export class InMemoryDataStore implements IDataStore {
       unresolvedIdentityQuestions.push(
         'Manufacturer identity unverified: OEM nameplate missing, damaged, or unconfirmed.'
       );
+    } else if (machine.verificationState !== 'VERIFIED') {
+      unresolvedIdentityQuestions.push(
+        `Manufacturer '${machine.manufacturer}' is recorded from registry ledger but lacks certified physical nameplate evidence.`
+      );
     }
     if (!machine.modelNumber || machine.modelNumber === 'UNKNOWN') {
       unresolvedIdentityQuestions.push(
         'Model number unknown: Part catalog, tolerance specs, and OEM curves cannot be validated.'
       );
+    } else if (machine.verificationState !== 'VERIFIED') {
+      unresolvedIdentityQuestions.push(
+        `Model '${machine.modelNumber}' is recorded from registry ledger but lacks certified physical nameplate evidence.`
+      );
     }
     if (!machine.serialNumber || machine.serialNumber === 'UNKNOWN') {
       unresolvedIdentityQuestions.push(
         'Asset serial number unconfirmed: Individual manufacturing batch and historical rework records cannot be definitively correlated.'
+      );
+    } else if (machine.verificationState !== 'VERIFIED') {
+      unresolvedIdentityQuestions.push(
+        `Serial '${machine.serialNumber}' is recorded from registry ledger but lacks certified physical nameplate evidence.`
       );
     }
     if (safetyCriticalPendingCount > 0) {

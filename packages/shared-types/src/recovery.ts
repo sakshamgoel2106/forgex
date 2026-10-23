@@ -91,6 +91,8 @@ export interface MachineEvidenceClaim {
 
 export type GapFieldStatus =
   | 'GENUINELY_MISSING'
+  | 'PENDING_EVIDENCE'
+  | 'UNVERIFIED'
   | 'NOT_APPLICABLE'
   | 'AWAITING_REVIEW'
   | 'CONFLICTING'
@@ -104,6 +106,7 @@ export interface RecoveryGapField {
   isSafetyCritical: boolean;
   status: GapFieldStatus;
   currentApprovedValue?: string | number | boolean | null;
+  draftValue?: string | number | boolean | null;
   unit?: string | null;
   pendingClaimsCount: number;
   conflictingClaimsCount: number;

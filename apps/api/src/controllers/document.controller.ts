@@ -142,17 +142,17 @@ export class DocumentController {
         }
       }
 
-      // Parse asset tags
-      let parsedTags: string[] = [];
-      if (Array.isArray(assetTags)) {
-        parsedTags = assetTags;
-      } else if (typeof assetTags === 'string') {
-        try {
-          parsedTags = JSON.parse(assetTags);
-        } catch {
-          parsedTags = assetTags.split(',').map((t) => t.trim()).filter(Boolean);
-        }
-      }
+      // Parse and resolve relational asset IDs and asset tags
+      const {
+        assetIds: parsedAssetIds,
+        assetTags: parsedTags,
+        machines: resolvedMachines,
+        primaryMachineId,
+      } = await this.resolveAssetsAndTags(
+        organizationId,
+        req.body.assetIds || req.body.asset_ids || req.body.machineIds || req.body.machineId,
+        assetTags
+      );
 
       // 3. Find or Create Document record
       let document = await this.dataStore.getDocumentByNumber(organizationId, documentNumber);
@@ -166,6 +166,8 @@ export class DocumentController {
           title,
           category: category as DocumentType,
           assetTags: parsedTags,
+          assetIds: parsedAssetIds,
+          machineId: primaryMachineId,
           createdByUserId: userId,
         });
       } else {
@@ -215,7 +217,23 @@ export class DocumentController {
           mimeType: version.mimeType,
           sizeBytes: version.fileSizeBytes,
           sha256: version.checksumSha256,
+          assetIds: parsedAssetIds,
+          assetTags: parsedTags,
         },
+      });
+
+      // 9. Propagate document to Engineering Workspace and update Machine Verification status
+      await this.linkAndPropagateDocument({
+        organizationId,
+        document,
+        version,
+        category: category as DocumentType,
+        putResult,
+        resolvedMachines,
+        title,
+        documentNumber,
+        revision,
+        extension: validatedFile.extension,
       });
 
       res.status(201).json({
@@ -368,17 +386,17 @@ export class DocumentController {
         }
       }
 
-      // Parse default asset tags
-      let parsedDefaultTags: string[] = [];
-      if (Array.isArray(defaultAssetTags)) {
-        parsedDefaultTags = defaultAssetTags;
-      } else if (typeof defaultAssetTags === 'string' && defaultAssetTags.trim()) {
-        try {
-          parsedDefaultTags = JSON.parse(defaultAssetTags);
-        } catch {
-          parsedDefaultTags = defaultAssetTags.split(',').map((t) => t.trim()).filter(Boolean);
-        }
-      }
+      // Parse default asset tags and relational asset IDs
+      const {
+        assetIds: parsedDefaultAssetIds,
+        assetTags: parsedDefaultTags,
+        machines: defaultResolvedMachines,
+        primaryMachineId: defaultPrimaryMachineId,
+      } = await this.resolveAssetsAndTags(
+        organizationId,
+        req.body.defaultAssetIds || req.body.default_asset_ids || req.body.assetIds,
+        defaultAssetTags
+      );
 
       const uploadedResults: any[] = [];
       const failedResults: any[] = [];
@@ -444,7 +462,23 @@ export class DocumentController {
             baseName.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
 
           const resolvedRevision = (overrides.revision || defaultRevision || 'REV-A').trim();
-          const resolvedTags = overrides.assetTags || parsedDefaultTags;
+          
+          let fileAssetIds = parsedDefaultAssetIds;
+          let fileAssetTags = parsedDefaultTags;
+          let fileResolvedMachines = defaultResolvedMachines;
+          let filePrimaryMachineId = defaultPrimaryMachineId;
+
+          if (overrides.assetTags || (overrides as any).assetIds) {
+            const resolved = await this.resolveAssetsAndTags(
+              organizationId,
+              (overrides as any).assetIds,
+              overrides.assetTags
+            );
+            fileAssetIds = resolved.assetIds;
+            fileAssetTags = resolved.assetTags;
+            fileResolvedMachines = resolved.machines;
+            filePrimaryMachineId = resolved.primaryMachineId;
+          }
 
           // Find or create document
           let document = await this.dataStore.getDocumentByNumber(
@@ -460,7 +494,9 @@ export class DocumentController {
               documentNumber: resolvedDocNumber,
               title: resolvedTitle,
               category: resolvedCategory,
-              assetTags: resolvedTags,
+              assetTags: fileAssetTags,
+              assetIds: fileAssetIds,
+              machineId: filePrimaryMachineId,
               createdByUserId: userId,
             });
           } else {
@@ -510,7 +546,23 @@ export class DocumentController {
               sizeBytes: version.fileSizeBytes,
               sha256: version.checksumSha256,
               batch: true,
+              assetIds: fileAssetIds,
+              assetTags: fileAssetTags,
             },
+          });
+
+          // Propagate linked document to Engineering Workspace and update Machine Verification status
+          await this.linkAndPropagateDocument({
+            organizationId,
+            document,
+            version,
+            category: resolvedCategory,
+            putResult,
+            resolvedMachines: fileResolvedMachines,
+            title: resolvedTitle,
+            documentNumber: resolvedDocNumber,
+            revision: resolvedRevision,
+            extension: validatedFile.extension,
           });
 
           uploadedResults.push({
@@ -942,4 +994,216 @@ export class DocumentController {
       res.status(500).json({ success: false, error: 'Internal server error' });
     }
   };
+
+  /**
+   * Helper: Resolves machine records, relational asset IDs, and authoritative asset tags
+   */
+  private async resolveAssetsAndTags(
+    organizationId: string,
+    rawAssetIds: any,
+    rawAssetTags: any
+  ): Promise<{ assetIds: string[]; assetTags: string[]; machines: any[]; primaryMachineId?: string }> {
+    let parsedTags: string[] = [];
+    if (Array.isArray(rawAssetTags)) {
+      parsedTags = rawAssetTags.filter((t) => typeof t === 'string' && t.trim().length > 0);
+    } else if (typeof rawAssetTags === 'string' && rawAssetTags.trim()) {
+      try {
+        const parsed = JSON.parse(rawAssetTags);
+        if (Array.isArray(parsed)) {
+          parsedTags = parsed.filter((t) => typeof t === 'string' && t.trim().length > 0);
+        } else if (typeof parsed === 'string' && parsed.trim()) {
+          parsedTags = [parsed.trim()];
+        }
+      } catch {
+        parsedTags = rawAssetTags.split(',').map((t) => t.trim()).filter(Boolean);
+      }
+    }
+
+    let parsedAssetIds: string[] = [];
+    if (Array.isArray(rawAssetIds)) {
+      parsedAssetIds = rawAssetIds.filter((id) => typeof id === 'string' && id.trim().length > 0);
+    } else if (typeof rawAssetIds === 'string' && rawAssetIds.trim()) {
+      try {
+        const parsed = JSON.parse(rawAssetIds);
+        if (Array.isArray(parsed)) {
+          parsedAssetIds = parsed.filter((id) => typeof id === 'string' && id.trim().length > 0);
+        } else if (typeof parsed === 'string' && parsed.trim()) {
+          parsedAssetIds = [parsed.trim()];
+        }
+      } catch {
+        parsedAssetIds = rawAssetIds.split(',').map((t) => t.trim()).filter(Boolean);
+      }
+    }
+
+    const resolvedMachines: any[] = [];
+    for (const aId of parsedAssetIds) {
+      try {
+        const m = await this.dataStore.getMachineById(organizationId, aId);
+        if (m) {
+          resolvedMachines.push(m);
+          if (m.assetTag && !parsedTags.includes(m.assetTag)) {
+            parsedTags.push(m.assetTag);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (resolvedMachines.length === 0 && parsedTags.length > 0) {
+      try {
+        const allMachines = await this.dataStore.listMachines(organizationId);
+        for (const tag of parsedTags) {
+          const m = allMachines.find(
+            (item) => item.assetTag?.toLowerCase() === tag.toLowerCase() || item.id === tag
+          );
+          if (m && !parsedAssetIds.includes(m.id)) {
+            parsedAssetIds.push(m.id);
+            resolvedMachines.push(m);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const primaryMachineId = resolvedMachines[0]?.id || (parsedAssetIds.length > 0 ? parsedAssetIds[0] : undefined);
+    return {
+      assetIds: parsedAssetIds,
+      assetTags: parsedTags,
+      machines: resolvedMachines,
+      primaryMachineId,
+    };
+  }
+
+  /**
+   * Helper: Propagates ingested document to Engineering Workspace and triggers Machine Verification recomputation
+   */
+  private async linkAndPropagateDocument(params: {
+    organizationId: string;
+    document: any;
+    version: any;
+    category: DocumentType;
+    putResult: any;
+    resolvedMachines: any[];
+    title: string;
+    documentNumber: string;
+    revision: string;
+    extension: string;
+  }): Promise<void> {
+    const {
+      organizationId,
+      category,
+      putResult,
+      resolvedMachines,
+      title,
+      documentNumber,
+      revision,
+      extension,
+    } = params;
+
+    const docCat = category;
+    const ext = (extension || 'pdf').toUpperCase();
+
+    for (const m of resolvedMachines) {
+      if (
+        docCat === 'OEM_MANUAL' ||
+        docCat === 'SOP' ||
+        docCat === 'MANUAL' ||
+        docCat === 'FAULT_CODE_INDEX' ||
+        docCat === 'SAFETY_DATA_SHEET'
+      ) {
+        const rType = docCat === 'OEM_MANUAL' || docCat === 'MANUAL' ? 'OFFICIAL_MANUAL' : 'SOP';
+        try {
+          await this.dataStore.createManufacturerResource(organizationId, {
+            machineId: m.id,
+            resourceType: rType as any,
+            title: title || `${m.name || m.assetTag} Technical Manual`,
+            manufacturer: m.manufacturer || 'OEM / Plant Documentation',
+            modelNumber: m.modelNumber || documentNumber,
+            sourceType: 'FILE_UPLOAD',
+            storageKey: putResult.storageKey,
+            fileFormat: ext as any,
+            fileSizeBytes: putResult.sizeBytes,
+            versionRevision: revision || '1.0',
+            verificationStatus: 'VERIFIED',
+          });
+        } catch {
+          // ignore duplicate resource
+        }
+
+        try {
+          await this.dataStore.updateMachine(organizationId, m.id, {
+            documentationReadiness: 'READY',
+          });
+          await this.dataStore.getMachineVerification(organizationId, m.id);
+        } catch (err: any) {
+          logger.warn(
+            { err: err?.message, machineId: m.id },
+            'Failed to refresh machine verification after manual ingestion'
+          );
+        }
+      } else if (docCat === 'PID_DIAGRAM' || docCat === 'SCHEMATIC_PID') {
+        try {
+          await this.dataStore.createEngineeringDrawing(organizationId, {
+            machineId: m.id,
+            drawingType: 'P_AND_ID',
+            drawingNumber: documentNumber,
+            title: title || `${m.name || m.assetTag} P&ID Diagram`,
+            sheetNumber: '1',
+            revision: revision || 'REV-A',
+            fileFormat: ext as any,
+            sourceType: 'FILE_UPLOAD',
+            storageKey: putResult.storageKey,
+            cadViewerReady: true,
+          });
+        } catch {
+          // ignore
+        }
+
+        try {
+          await this.dataStore.updateMachine(organizationId, m.id, {
+            pidStorageKey: putResult.storageKey,
+            hasPidDiagram: true,
+            pAndIdUrl: putResult.storageKey,
+          });
+          await this.dataStore.getMachineVerification(organizationId, m.id);
+        } catch (err: any) {
+          logger.warn(
+            { err: err?.message, machineId: m.id },
+            'Failed to refresh machine verification after PID ingestion'
+          );
+        }
+      } else if (docCat === '3D_MODEL') {
+        try {
+          await this.dataStore.createEngineeringModel3D(organizationId, {
+            machineId: m.id,
+            assetId: m.id,
+            title: title || `${m.name || m.assetTag} 3D Model`,
+            fileFormat: ext as any,
+            sourceType: 'FILE_UPLOAD',
+            storageKey: putResult.storageKey,
+            fileSizeBytes: putResult.sizeBytes,
+            viewerOptimized: true,
+          });
+        } catch {
+          // ignore
+        }
+
+        try {
+          await this.dataStore.updateMachine(organizationId, m.id, {
+            model3dStorageKey: putResult.storageKey,
+            hasModel3d: true,
+            model3dUrl: putResult.storageKey,
+          });
+          await this.dataStore.getMachineVerification(organizationId, m.id);
+        } catch (err: any) {
+          logger.warn(
+            { err: err?.message, machineId: m.id },
+            'Failed to refresh machine verification after 3D model ingestion'
+          );
+        }
+      }
+    }
+  }
 }

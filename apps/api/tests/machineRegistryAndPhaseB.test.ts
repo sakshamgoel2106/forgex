@@ -250,7 +250,8 @@ describe('ForgeX AI — Phase B: Secure Industrial Machine Registry & Knowledge 
       .set('Authorization', `Bearer ${orgAdminToken}`)
       .set('x-organization-id', testOrgId);
 
-    expect(verifiedMachRes.body.data.verificationState).toBe('VERIFIED');
+    // Ordinary task approval promotes technical specs without blindly marking the machine VERIFIED
+    expect(verifiedMachRes.body.data.verificationState).toBe('PARTIALLY_VERIFIED');
     expect(verifiedMachRes.body.data.technicalSpecs.impellerDiameterMm).toBe(215);
     expect(verifiedMachRes.body.data.revision).toBe(2);
   });

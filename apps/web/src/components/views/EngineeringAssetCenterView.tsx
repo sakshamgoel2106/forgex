@@ -14,18 +14,13 @@ import {
   ExternalLink,
   Shield,
   FileCode,
-  Settings2,
   RefreshCw,
-  Building2,
-  Globe,
-  Sliders,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import type {
   EngineeringModel3D,
   EngineeringDrawing,
   ManufacturerResource,
-  IndustryProfile,
   EngineeringAssetCenterSummary,
   Machine,
   ComponentMapping,
@@ -39,14 +34,13 @@ import { PidEngineeringViewerModal } from './PidEngineeringViewerModal';
 export const EngineeringAssetCenterView: React.FC = () => {
   const { token, organization, isOwnerOrAdmin, user } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'models' | 'resources' | 'drawings' | 'configuration'>('models');
+  const [activeTab, setActiveTab] = useState<'models' | 'resources' | 'drawings'>('models');
   const [summary, setSummary] = useState<EngineeringAssetCenterSummary | null>(null);
-  const [profiles, setProfiles] = useState<IndustryProfile[]>([]);
-  const [activeProfileCode, setActiveProfileCode] = useState<string>('OIL_GAS_PETROCHEM');
   const [models, setModels] = useState<EngineeringModel3D[]>([]);
   const [resources, setResources] = useState<ManufacturerResource[]>([]);
   const [drawings, setDrawings] = useState<EngineeringDrawing[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
+  const [plants, setPlants] = useState<{ id: string; name: string }[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Search & filter
@@ -57,10 +51,11 @@ export const EngineeringAssetCenterView: React.FC = () => {
   const [isUploadModelOpen, setIsUploadModelOpen] = useState<boolean>(false);
   const [isAddResourceOpen, setIsAddResourceOpen] = useState<boolean>(false);
   const [isAddDrawingOpen, setIsAddDrawingOpen] = useState<boolean>(false);
-  const [isAddProfileOpen, setIsAddProfileOpen] = useState<boolean>(false);
 
   // 3D / P&ID Viewer modal state
   const [viewerMachine, setViewerMachine] = useState<Machine | null>(null);
+  const [viewerModel, setViewerModel] = useState<EngineeringModel3D | null>(null);
+  const [viewerDrawing, setViewerDrawing] = useState<EngineeringDrawing | null>(null);
   const [viewerMappings, setViewerMappings] = useState<ComponentMapping[]>([]);
   const [is3dViewerOpen, setIs3dViewerOpen] = useState<boolean>(false);
   const [isPidViewerOpen, setIsPidViewerOpen] = useState<boolean>(false);
@@ -97,24 +92,15 @@ export const EngineeringAssetCenterView: React.FC = () => {
     title: '',
     manufacturer: '',
     modelNumber: '',
+    machineId: '',
     resourceType: 'OFFICIAL_MANUAL' as ManufacturerResourceType,
-    sourceType: 'OFFICIAL_URL' as 'FILE_UPLOAD' | 'OFFICIAL_URL',
+    sourceType: 'FILE_UPLOAD' as 'FILE_UPLOAD' | 'OFFICIAL_URL',
     sourceUrl: 'https://',
     storageKey: 'resources/manual.pdf',
     versionRevision: '1.0',
+    file: null as File | null,
   });
-
-  const [profileForm, setProfileForm] = useState({
-    code: '',
-    name: '',
-    description: '',
-    assetCategories: 'Rotary Tools, Automation Cells, Skids',
-    tagLabel: 'Asset Tag',
-    assetLabel: 'Equipment',
-    plantLabel: 'Facility',
-    lineLabel: 'Line',
-    drawingTypes: 'P&ID, Electrical Schematic, Layout',
-  });
+  const [isDraggingResourceFile, setIsDraggingResourceFile] = useState<boolean>(false);
 
   useEffect(() => {
     loadAllData();
@@ -129,22 +115,18 @@ export const EngineeringAssetCenterView: React.FC = () => {
         'x-organization-id': organization.id,
       };
 
-      const [sumRes, profRes, modRes, resRes, dwgRes, machRes] = await Promise.all([
+      const [sumRes, modRes, resRes, dwgRes, machRes, plantRes] = await Promise.all([
         fetch('/api/v1/engineering/summary', { headers }),
-        fetch('/api/v1/engineering/industry-profiles', { headers }),
         fetch('/api/v1/engineering/models', { headers }),
         fetch('/api/v1/engineering/manufacturer-resources', { headers }),
         fetch('/api/v1/engineering/drawings', { headers }),
         fetch('/api/v1/machines', { headers }),
+        fetch('/api/v1/plants', { headers }),
       ]);
 
       if (sumRes.ok) {
         const sumData = await sumRes.json();
         setSummary(sumData.data);
-      }
-      if (profRes.ok) {
-        const profData = await profRes.json();
-        setProfiles(profData.data || []);
       }
       if (modRes.ok) {
         const modData = await modRes.json();
@@ -161,6 +143,10 @@ export const EngineeringAssetCenterView: React.FC = () => {
       if (machRes.ok) {
         const mData = await machRes.json();
         setMachines(mData.data || []);
+      }
+      if (plantRes.ok) {
+        const pData = await plantRes.json();
+        setPlants(pData.data || []);
       }
     } catch (err) {
       console.error('Failed to load engineering data', err);
@@ -238,7 +224,6 @@ export const EngineeringAssetCenterView: React.FC = () => {
         },
         body: JSON.stringify({
           ...modelForm,
-          industryProfileCode: activeProfileCode,
         }),
       });
       if (res.ok) {
@@ -281,63 +266,121 @@ export const EngineeringAssetCenterView: React.FC = () => {
   const submitResource = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/v1/engineering/manufacturer-resources', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'x-organization-id': organization!.id,
-        },
-        body: JSON.stringify(resourceForm),
-      });
-      if (res.ok) {
-        setIsAddResourceOpen(false);
-        await loadAllData();
+      if (resourceForm.sourceType === 'FILE_UPLOAD' && resourceForm.file) {
+        const formData = new FormData();
+        formData.append('file', resourceForm.file);
+        formData.append('title', resourceForm.title);
+        formData.append('manufacturer', resourceForm.manufacturer);
+        if (resourceForm.modelNumber) formData.append('modelNumber', resourceForm.modelNumber);
+        if (resourceForm.machineId) formData.append('machineId', resourceForm.machineId);
+        formData.append('resourceType', resourceForm.resourceType);
+        formData.append('versionRevision', resourceForm.versionRevision);
+        formData.append('sourceType', 'FILE_UPLOAD');
+
+        const res = await fetch('/api/v1/engineering/manufacturer-resources', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'x-organization-id': organization!.id,
+          },
+          body: formData,
+        });
+        if (res.ok) {
+          setIsAddResourceOpen(false);
+          setResourceForm({
+            title: '',
+            manufacturer: '',
+            modelNumber: '',
+            machineId: '',
+            resourceType: 'OFFICIAL_MANUAL',
+            sourceType: 'FILE_UPLOAD',
+            sourceUrl: 'https://',
+            storageKey: 'resources/manual.pdf',
+            versionRevision: '1.0',
+            file: null,
+          });
+          await loadAllData();
+        }
+      } else {
+        const body: any = {
+          title: resourceForm.title,
+          manufacturer: resourceForm.manufacturer,
+          modelNumber: resourceForm.modelNumber || undefined,
+          machineId: resourceForm.machineId || undefined,
+          resourceType: resourceForm.resourceType,
+          sourceType: 'OFFICIAL_URL',
+          sourceUrl: resourceForm.sourceUrl,
+          versionRevision: resourceForm.versionRevision,
+        };
+
+        const res = await fetch('/api/v1/engineering/manufacturer-resources', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            'x-organization-id': organization!.id,
+          },
+          body: JSON.stringify(body),
+        });
+        if (res.ok) {
+          setIsAddResourceOpen(false);
+          setResourceForm({
+            title: '',
+            manufacturer: '',
+            modelNumber: '',
+            machineId: '',
+            resourceType: 'OFFICIAL_MANUAL',
+            sourceType: 'FILE_UPLOAD',
+            sourceUrl: 'https://',
+            storageKey: 'resources/manual.pdf',
+            versionRevision: '1.0',
+            file: null,
+          });
+          await loadAllData();
+        }
       }
     } catch (err) {
       console.error(err);
     }
   };
 
-  const submitProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const categories = profileForm.assetCategories.split(',').map((s) => s.trim()).filter(Boolean);
-      const dwgTypes = profileForm.drawingTypes.split(',').map((s) => s.trim()).filter(Boolean);
-      const res = await fetch('/api/v1/engineering/industry-profiles', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'x-organization-id': organization!.id,
-        },
-        body: JSON.stringify({
-          code: profileForm.code.toUpperCase().replace(/\s+/g, '_'),
-          name: profileForm.name,
-          description: profileForm.description,
-          assetCategories: categories,
-          drawingTypes: dwgTypes,
-          terminology: {
-            tagLabel: profileForm.tagLabel,
-            assetLabel: profileForm.assetLabel,
-            plantLabel: profileForm.plantLabel,
-            lineLabel: profileForm.lineLabel,
-          },
-        }),
-      });
-      if (res.ok) {
-        setIsAddProfileOpen(false);
-        await loadAllData();
-      }
-    } catch (err) {
-      console.error(err);
+  const open3dViewerForModel = async (model: EngineeringModel3D) => {
+    setViewerModel(model);
+    let target = machines.find((m) => m.id === model.machineId);
+    if (!target && model.id.startsWith('asset-3d-')) {
+      const assetId = model.id.replace('asset-3d-', '');
+      target = machines.find((m) => m.id === assetId);
     }
+    if (!target) {
+      target = machines[0] || null;
+    }
+    setViewerMachine(target);
+    if (target) {
+      try {
+        const mRes = await fetch(`/api/v1/machines/${target.id}/mappings`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'x-organization-id': organization!.id,
+          },
+        });
+        if (mRes.ok) {
+          const mData = await mRes.json();
+          setViewerMappings(mData.data || []);
+        }
+      } catch {
+        setViewerMappings([]);
+      }
+    }
+    setIs3dViewerOpen(true);
   };
 
   const open3dViewerForMachine = async (machId?: string, _componentId?: string) => {
     const target = machines.find((m) => m.id === machId) || machines[0];
     if (target) {
       setViewerMachine(target);
+      // Fetch corresponding model if available
+      const existingModel = models.find((m) => m.machineId === target.id || m.id === `asset-3d-${target.id}`);
+      setViewerModel(existingModel || null);
       // Fetch mappings if available
       try {
         const mRes = await fetch(`/api/v1/machines/${target.id}/mappings`, {
@@ -357,12 +400,46 @@ export const EngineeringAssetCenterView: React.FC = () => {
     }
   };
 
+  const openPidViewerForDrawing = async (dwg: EngineeringDrawing, tag?: string) => {
+    setViewerDrawing(dwg);
+    setActiveDrawingId(dwg.id);
+    setActivePidTag(tag || (dwg.equipmentTags && dwg.equipmentTags[0]) || null);
+    let target = machines.find((m) => m.id === dwg.machineId);
+    if (!target && (dwg.id.startsWith('asset-dwg-') || dwg.id.startsWith('asset-pid-'))) {
+      const assetId = dwg.id.replace('asset-dwg-', '').replace('asset-pid-', '');
+      target = machines.find((m) => m.id === assetId);
+    }
+    if (!target) {
+      target = machines[0] || null;
+    }
+    setViewerMachine(target);
+    if (target) {
+      try {
+        const mRes = await fetch(`/api/v1/machines/${target.id}/mappings`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'x-organization-id': organization!.id,
+          },
+        });
+        if (mRes.ok) {
+          const mData = await mRes.json();
+          setViewerMappings(mData.data || []);
+        }
+      } catch {
+        setViewerMappings([]);
+      }
+    }
+    setIsPidViewerOpen(true);
+  };
+
   const openPidViewerForMachine = async (machId?: string, tag?: string, drawingId?: string) => {
     const target = machines.find((m) => m.id === machId) || machines[0];
     if (target) {
       setViewerMachine(target);
       setActivePidTag(tag || 'P-204-SEAL');
       setActiveDrawingId(drawingId || null);
+      const existingDwg = drawings.find((d) => d.id === drawingId || d.machineId === target.id || d.id === `asset-pid-${target.id}`);
+      setViewerDrawing(existingDwg || null);
       try {
         const mRes = await fetch(`/api/v1/machines/${target.id}/mappings`, {
           headers: {
@@ -381,7 +458,6 @@ export const EngineeringAssetCenterView: React.FC = () => {
     }
   };
 
-  const activeProfile = profiles.find((p) => p.code === activeProfileCode) || profiles[0];
 
   return (
     <div className="space-y-6">
@@ -400,30 +476,14 @@ export const EngineeringAssetCenterView: React.FC = () => {
                 </span>
               </h1>
               <p className="text-xs text-[#64748B] mt-0.5">
-                Official machine CAD models, original engineering drawings, OEM manufacturer resources, and industry configurations
+                Official machine CAD models, original engineering drawings, and OEM manufacturer resources across all organization assets
               </p>
             </div>
           </div>
         </div>
 
-        {/* Global Controls & Industry Switcher */}
+        {/* Global Controls */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-[#CBD5E1] shadow-xs">
-            <Globe className="w-4 h-4 text-[#2563EB] shrink-0" />
-            <span className="text-xs text-[#64748B] font-medium">Industry:</span>
-            <select
-              value={activeProfileCode}
-              onChange={(e) => setActiveProfileCode(e.target.value)}
-              className="bg-transparent text-xs text-[#1A202C] font-semibold outline-none cursor-pointer"
-            >
-              {profiles.map((p) => (
-                <option key={p.id} value={p.code} className="bg-white text-[#1A202C]">
-                  {p.name} {p.isCustom ? '(Custom)' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-
           <button
             onClick={() => loadAllData()}
             className="p-2 text-[#1A202C] hover:text-black rounded-lg bg-white border border-[#CBD5E1] hover:bg-slate-50 transition disabled:opacity-50 shadow-xs"
@@ -441,11 +501,11 @@ export const EngineeringAssetCenterView: React.FC = () => {
           <div>
             <span className="text-xs text-[#64748B] font-medium uppercase tracking-wider">3D CAD Models</span>
             <div className="text-2xl font-bold text-[#1A202C] mt-1">
-              {summary?.totalModels3d ?? models.length}
+              {Math.max(summary?.totalModels3d || 0, models.length)}
             </div>
             <div className="text-xs text-emerald-700 font-medium mt-0.5 flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" />
-              {summary?.approvedModels3d ?? 0} Verified & Approved
+              {Math.max(summary?.approvedModels3d || 0, models.filter((m) => m.status === 'APPROVED').length)} Verified & Approved
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-[#2563EB]">
@@ -457,11 +517,11 @@ export const EngineeringAssetCenterView: React.FC = () => {
           <div>
             <span className="text-xs text-[#64748B] font-medium uppercase tracking-wider">Engineering Drawings</span>
             <div className="text-2xl font-bold text-[#1A202C] mt-1">
-              {summary?.totalDrawings ?? drawings.length}
+              {Math.max(summary?.totalDrawings || 0, drawings.length)}
             </div>
             <div className="text-xs text-emerald-700 font-medium mt-0.5 flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" />
-              {summary?.approvedDrawings ?? 0} P&ID / Schematics
+              {Math.max(summary?.approvedDrawings || 0, drawings.filter((d) => d.status === 'APPROVED').length)} P&ID / Schematics
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-purple-50 border border-purple-200 flex items-center justify-center text-purple-700">
@@ -473,11 +533,11 @@ export const EngineeringAssetCenterView: React.FC = () => {
           <div>
             <span className="text-xs text-[#64748B] font-medium uppercase tracking-wider">Manufacturer Resources</span>
             <div className="text-2xl font-bold text-[#1A202C] mt-1">
-              {summary?.totalManufacturerResources ?? resources.length}
+              {Math.max(summary?.totalManufacturerResources || 0, resources.length)}
             </div>
             <div className="text-xs text-amber-700 font-medium mt-0.5 flex items-center gap-1">
               <Shield className="w-3.5 h-3.5" />
-              OEM Datasheets & IOMs
+              {resources.filter((r) => r.verificationStatus === 'VERIFIED').length} Verified OEM
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700">
@@ -487,17 +547,17 @@ export const EngineeringAssetCenterView: React.FC = () => {
 
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 flex items-center justify-between shadow-xs">
           <div>
-            <span className="text-xs text-[#64748B] font-medium uppercase tracking-wider">Industry Profiles</span>
+            <span className="text-xs text-[#64748B] font-medium uppercase tracking-wider">Asset File Coverage</span>
             <div className="text-2xl font-bold text-[#1A202C] mt-1">
-              {profiles.length}
+              {machines.filter((m) => m.hasModel3d || m.hasPidDiagram).length}
             </div>
             <div className="text-xs text-[#2563EB] font-medium mt-0.5 flex items-center gap-1">
-              <Sliders className="w-3.5 h-3.5" />
-              Universal Modular Config
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              {machines.length} Total Machines
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700">
-            <Building2 className="w-5 h-5" />
+            <Layers className="w-5 h-5" />
           </div>
         </div>
       </div>
@@ -538,18 +598,6 @@ export const EngineeringAssetCenterView: React.FC = () => {
         >
           <FileText className="w-4 h-4" />
           Manufacturer Resources ({resources.length})
-        </button>
-
-        <button
-          onClick={() => setActiveTab('configuration')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-lg transition border-b-2 ${
-            activeTab === 'configuration'
-              ? 'border-[#2563EB] text-[#2563EB] bg-blue-50/50'
-              : 'border-transparent text-[#64748B] hover:text-[#1A202C] hover:bg-slate-100'
-          }`}
-        >
-          <Settings2 className="w-4 h-4" />
-          Industry & Asset Configuration
         </button>
       </div>
 
@@ -666,7 +714,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
 
                     <div className="mt-4 pt-3 border-t border-[#E2E8F0] flex items-center justify-between gap-2">
                       <button
-                        onClick={() => open3dViewerForMachine(model.machineId)}
+                        onClick={() => open3dViewerForModel(model)}
                         disabled={isFailed}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                           isFailed
@@ -823,7 +871,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
                     {dwg.equipmentTags.map((tag) => (
                       <span
                         key={tag}
-                        onClick={() => openPidViewerForMachine(dwg.machineId, tag, dwg.id)}
+                        onClick={() => openPidViewerForDrawing(dwg, tag)}
                         className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-[#1A202C] hover:text-[#2563EB] font-mono text-[10px] border border-[#CBD5E1] cursor-pointer transition font-medium"
                       >
                         {tag}
@@ -834,7 +882,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
 
                 <div className="mt-4 pt-3 border-t border-[#E2E8F0] flex items-center justify-between">
                   <button
-                    onClick={() => openPidViewerForMachine(dwg.machineId, undefined, dwg.id)}
+                    onClick={() => openPidViewerForDrawing(dwg, undefined)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#151C24] hover:bg-black text-white transition shadow-xs"
                   >
                     <Eye className="w-3.5 h-3.5" />
@@ -852,123 +900,6 @@ export const EngineeringAssetCenterView: React.FC = () => {
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* TAB D: Industry & Asset Configuration */}
-      {activeTab === 'configuration' && (
-        <div className="space-y-6">
-          <div className="flex justify-between items-center">
-            <div>
-              <h3 className="text-sm font-semibold text-[#1A202C]">Configured Industry Profiles & Field Terminology</h3>
-              <p className="text-xs text-[#64748B] mt-0.5">
-                Universal agnostic platform profiles with customizable categories, tags, and standards
-              </p>
-            </div>
-
-            {isOwnerOrAdmin && (
-              <button
-                onClick={() => setIsAddProfileOpen(true)}
-                className="flex items-center gap-2 bg-[#151C24] hover:bg-black text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-xs"
-              >
-                <Plus className="w-4 h-4" />
-                Create Custom Profile
-              </button>
-            )}
-          </div>
-
-          {activeProfile && (
-            <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-blue-100 border border-blue-200 text-[#2563EB]">
-                  <Sliders className="w-4 h-4" />
-                </div>
-                <div>
-                  <span className="text-[10px] text-[#2563EB] font-bold uppercase tracking-wider block">Active Workspace Industry Profile</span>
-                  <div className="text-sm font-bold text-[#1A202C] flex items-center gap-2">
-                    {activeProfile.name}
-                    <span className="text-xs font-mono text-[#2563EB] font-normal">({activeProfile.code})</span>
-                    {activeProfile.isCustom && (
-                      <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-semibold border border-purple-200">
-                        Custom Sector
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="text-xs text-[#64748B] font-mono">
-                Asset: <span className="text-[#2563EB] font-semibold">{activeProfile.terminology.assetLabel}</span> | Tag: <span className="text-[#2563EB] font-semibold">{activeProfile.terminology.tagLabel}</span> | Facility: <span className="text-[#2563EB] font-semibold">{activeProfile.terminology.plantLabel}</span>
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {profiles.map((p) => {
-              const isSelected = p.code === activeProfileCode;
-              return (
-                <div
-                  key={p.id}
-                  className={`bg-white border rounded-xl p-5 transition shadow-xs ${
-                    isSelected ? 'border-[#2563EB] ring-1 ring-[#2563EB]' : 'border-[#E2E8F0]'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold font-mono text-[#2563EB]">{p.code}</span>
-                    <div className="flex items-center gap-2">
-                      {p.isCustom && (
-                        <span className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-semibold border border-purple-200">
-                          Custom Sector
-                        </span>
-                      )}
-                      <button
-                        onClick={() => setActiveProfileCode(p.code)}
-                        className={`px-2.5 py-1 text-xs font-semibold rounded transition shadow-xs ${
-                          isSelected
-                            ? 'bg-[#2563EB] text-white'
-                            : 'bg-slate-100 text-[#1A202C] hover:bg-slate-200'
-                        }`}
-                      >
-                        {isSelected ? 'Active Profile' : 'Select'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <h4 className="text-base font-bold text-[#1A202C] mt-2">{p.name}</h4>
-                  <p className="text-xs text-[#64748B] mt-1">{p.description}</p>
-
-                  <div className="mt-4 pt-3 border-t border-[#E2E8F0] grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-[#64748B] block text-[10px] uppercase font-bold">Equipment Tag Label:</span>
-                      <span className="text-[#1A202C] font-semibold">{p.terminology.tagLabel}</span>
-                    </div>
-                    <div>
-                      <span className="text-[#64748B] block text-[10px] uppercase font-bold">Asset Label:</span>
-                      <span className="text-[#1A202C] font-semibold">{p.terminology.assetLabel}</span>
-                    </div>
-                    <div>
-                      <span className="text-[#64748B] block text-[10px] uppercase font-bold">Facility Label:</span>
-                      <span className="text-[#1A202C] font-semibold">{p.terminology.plantLabel}</span>
-                    </div>
-                    <div>
-                      <span className="text-[#64748B] block text-[10px] uppercase font-bold">Line Label:</span>
-                      <span className="text-[#1A202C] font-semibold">{p.terminology.lineLabel}</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <span className="text-[#64748B] block text-[10px] uppercase font-bold mb-1">Standard Categories:</span>
-                    <div className="flex flex-wrap gap-1">
-                      {p.assetCategories.map((c) => (
-                        <span key={c} className="px-2 py-0.5 rounded bg-slate-100 text-[#475569] text-[10px] border border-[#CBD5E1]">
-                          {c}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
@@ -1221,14 +1152,169 @@ export const EngineeringAssetCenterView: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="text-[#475569] font-medium block mb-1">Source URL (Must begin with https://)</label>
-                <input
-                  type="url"
-                  value={resourceForm.sourceUrl}
-                  onChange={(e) => setResourceForm({ ...resourceForm, sourceUrl: e.target.value })}
-                  className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#475569] font-medium block mb-1">Associate Machine (Optional)</label>
+                  <select
+                    value={resourceForm.machineId}
+                    onChange={(e) => {
+                      const mId = e.target.value;
+                      const selectedMach = machines.find((m) => m.id === mId);
+                      setResourceForm({
+                        ...resourceForm,
+                        machineId: mId,
+                        manufacturer: selectedMach?.manufacturer || resourceForm.manufacturer,
+                        modelNumber: selectedMach?.modelNumber || resourceForm.modelNumber,
+                      });
+                    }}
+                    className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
+                  >
+                    <option value="">Select Machine (Optional)</option>
+                    {machines.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.assetTag} - {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[#475569] font-medium block mb-1">Model / Part Number (Optional)</label>
+                  <input
+                    type="text"
+                    value={resourceForm.modelNumber}
+                    onChange={(e) => setResourceForm({ ...resourceForm, modelNumber: e.target.value })}
+                    placeholder="e.g. Model X-200"
+                    className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <label className="text-[#475569] font-medium block">Source Type</label>
+                  <div className="flex bg-slate-100 p-1 rounded-lg border border-[#CBD5E1]">
+                    <button
+                      type="button"
+                      onClick={() => setResourceForm({ ...resourceForm, sourceType: 'FILE_UPLOAD' })}
+                      className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
+                        resourceForm.sourceType === 'FILE_UPLOAD' ? 'bg-white text-[#2563EB] shadow-sm' : 'text-[#64748B] hover:text-[#1A202C]'
+                      }`}
+                    >
+                      File Upload (PDF / Manual)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResourceForm({ ...resourceForm, sourceType: 'OFFICIAL_URL' })}
+                      className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
+                        resourceForm.sourceType === 'OFFICIAL_URL' ? 'bg-white text-[#2563EB] shadow-sm' : 'text-[#64748B] hover:text-[#1A202C]'
+                      }`}
+                    >
+                      Official URL
+                    </button>
+                  </div>
+                </div>
+
+                {resourceForm.sourceType === 'OFFICIAL_URL' ? (
+                  <div>
+                    <label className="text-[#475569] font-medium block mb-1">Source URL (Must begin with https://)</label>
+                    <input
+                      type="url"
+                      value={resourceForm.sourceUrl}
+                      onChange={(e) => setResourceForm({ ...resourceForm, sourceUrl: e.target.value })}
+                      placeholder="https://..."
+                      className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-[#475569] font-medium block mb-1">Physical PDF / Manual File</label>
+                    <div
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setIsDraggingResourceFile(true);
+                      }}
+                      onDragEnter={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setIsDraggingResourceFile(true);
+                      }}
+                      onDragLeave={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setIsDraggingResourceFile(false);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setIsDraggingResourceFile(false);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) {
+                          setResourceForm((prev) => ({
+                            ...prev,
+                            file,
+                            title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
+                          }));
+                        }
+                      }}
+                      onClick={() => {
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = '.pdf,.doc,.docx,.txt';
+                        input.onchange = (ev: any) => {
+                          const file = ev.target.files?.[0];
+                          if (file) {
+                            setResourceForm((prev) => ({
+                              ...prev,
+                              file,
+                              title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
+                            }));
+                          }
+                        };
+                        input.click();
+                      }}
+                      className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors cursor-pointer group ${
+                        isDraggingResourceFile
+                          ? 'border-[#2563EB] bg-blue-50/50'
+                          : resourceForm.file
+                          ? 'border-emerald-300 bg-emerald-50/20'
+                          : 'border-[#CBD5E1] bg-[#F8FAFC] hover:border-[#2563EB]'
+                      }`}
+                    >
+                      <Upload className={`w-8 h-8 mx-auto mb-2 transition-colors ${
+                        resourceForm.file ? 'text-emerald-600' : 'text-slate-400 group-hover:text-[#2563EB]'
+                      }`} />
+                      <div className="text-xs font-semibold text-[#1A202C]">
+                        {resourceForm.file ? (
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-emerald-700 font-bold flex items-center justify-center gap-1.5">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" /> {resourceForm.file.name}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {(resourceForm.file.size / (1024 * 1024)).toFixed(2)} MB
+                            </span>
+                          </div>
+                        ) : (
+                          'Drag & drop manual/datasheet PDF here, or click to browse'
+                        )}
+                      </div>
+                      <div className="text-[10px] text-[#64748B] mt-1.5">
+                        Supported file formats: PDF, DOCX (Up to 50MB)
+                      </div>
+                    </div>
+                    {resourceForm.file && (
+                      <div className="mt-1.5 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setResourceForm((prev) => ({ ...prev, file: null }))}
+                          className="text-[11px] text-rose-600 hover:text-rose-700 font-medium flex items-center gap-1"
+                        >
+                          <X className="w-3.5 h-3.5" /> Remove attached file
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="pt-3 flex justify-end gap-2 border-t border-[#E2E8F0]">
@@ -1251,125 +1337,51 @@ export const EngineeringAssetCenterView: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL: Create Custom Industry Profile */}
-      {isAddProfileOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
-          <div className="bg-white border border-[#E2E8F0] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl">
-            <div className="flex items-center justify-between p-4 border-b border-[#E2E8F0] bg-[#F8FAFC]">
-              <h3 className="text-sm font-bold text-[#1A202C] flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-[#2563EB]" />
-                Create Custom Industry Profile
-              </h3>
-              <button onClick={() => setIsAddProfileOpen(false)} className="text-[#64748B] hover:text-[#1A202C]">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={submitProfile} className="p-4 space-y-3 text-xs">
-              <div>
-                <label className="text-[#475569] font-medium block mb-1">Industry Name</label>
-                <input
-                  type="text"
-                  required
-                  value={profileForm.name}
-                  onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })}
-                  placeholder="e.g. Semiconductor Wafer Fabrication"
-                  className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[#475569] font-medium block mb-1">Code (Uppercase Identifier)</label>
-                  <input
-                    type="text"
-                    required
-                    value={profileForm.code}
-                    onChange={(e) => setProfileForm({ ...profileForm, code: e.target.value })}
-                    placeholder="SEMICONDUCTOR_FAB"
-                    className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
-                  />
-                </div>
-                <div>
-                  <label className="text-[#475569] font-medium block mb-1">Equipment Tag Label</label>
-                  <input
-                    type="text"
-                    value={profileForm.tagLabel}
-                    onChange={(e) => setProfileForm({ ...profileForm, tagLabel: e.target.value })}
-                    placeholder="Tool ID / SECS-GEM Node"
-                    className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[#475569] font-medium block mb-1">Description</label>
-                <textarea
-                  rows={2}
-                  value={profileForm.description}
-                  onChange={(e) => setProfileForm({ ...profileForm, description: e.target.value })}
-                  placeholder="Sub-micron photolithography, ion implanters, CMP polishing cells."
-                  className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
-                />
-              </div>
-
-              <div>
-                <label className="text-[#475569] font-medium block mb-1">Asset Categories (comma-separated)</label>
-                <input
-                  type="text"
-                  value={profileForm.assetCategories}
-                  onChange={(e) => setProfileForm({ ...profileForm, assetCategories: e.target.value })}
-                  placeholder="EUV Steppers, Dry Etchers, CMP Tools"
-                  className="w-full bg-white border border-[#CBD5E1] rounded-lg p-2.5 text-[#1A202C] outline-none focus:border-[#2563EB]"
-                />
-              </div>
-
-              <div className="pt-3 flex justify-end gap-2 border-t border-[#E2E8F0]">
-                <button
-                  type="button"
-                  onClick={() => setIsAddProfileOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#1A202C] font-semibold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-lg bg-[#151C24] hover:bg-black text-white font-semibold shadow-sm"
-                >
-                  Create Profile
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Real 3D Viewer Modal */}
-      {is3dViewerOpen && viewerMachine && (
+      {is3dViewerOpen && (
         <RealThreeDViewerModal
           isOpen={is3dViewerOpen}
-          onClose={() => setIs3dViewerOpen(false)}
+          onClose={() => {
+            setIs3dViewerOpen(false);
+            setViewerModel(null);
+          }}
           machine={viewerMachine}
+          initialModel={viewerModel}
+          initialModelId={viewerModel?.id}
           mappings={viewerMappings}
           onOpenPid={(tag) => {
             setIs3dViewerOpen(false);
-            openPidViewerForMachine(viewerMachine.id, tag);
+            if (viewerDrawing) {
+              openPidViewerForDrawing(viewerDrawing, tag);
+            } else if (viewerMachine) {
+              openPidViewerForMachine(viewerMachine.id, tag);
+            }
           }}
         />
       )}
 
       {/* P&ID Schematic Viewer Modal */}
-      {isPidViewerOpen && viewerMachine && (
+      {isPidViewerOpen && (
         <PidEngineeringViewerModal
           isOpen={isPidViewerOpen}
-          onClose={() => setIsPidViewerOpen(false)}
+          onClose={() => {
+            setIsPidViewerOpen(false);
+            setViewerDrawing(null);
+          }}
           machine={viewerMachine}
+          initialDrawing={viewerDrawing}
+          initialDrawingId={viewerDrawing?.id || activeDrawingId}
+          plantName={
+            plants.find((p) => p.id === (viewerDrawing?.plantId || viewerMachine?.plantId))?.name ||
+            'Main Production Facility'
+          }
           mappings={viewerMappings}
           activeTag={activePidTag}
-          initialDrawingId={activeDrawingId}
           onOpen3dComponent={(componentId) => {
             setIsPidViewerOpen(false);
-            open3dViewerForMachine(viewerMachine.id, componentId);
+            if (viewerMachine) {
+              open3dViewerForMachine(viewerMachine.id, componentId);
+            }
           }}
         />
       )}

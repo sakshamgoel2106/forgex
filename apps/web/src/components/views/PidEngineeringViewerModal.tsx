@@ -21,7 +21,6 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
-import { getMachineFiles, attachFileToMachine } from '../../lib/machineStorage';
 
 interface PidEngineeringViewerModalProps {
   isOpen: boolean;
@@ -30,6 +29,8 @@ interface PidEngineeringViewerModalProps {
   mappings: ComponentMapping[];
   activeTag?: string | null;
   initialDrawingId?: string | null;
+  initialDrawing?: EngineeringDrawing | null;
+  plantName?: string | null;
   onSelectTag?: (tag: string) => void;
   onOpen3dComponent?: (componentId: string) => void;
   onOpenManual?: (pageNumber: number) => void;
@@ -44,6 +45,8 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   mappings,
   activeTag,
   initialDrawingId,
+  initialDrawing,
+  plantName,
   onSelectTag,
   onOpen3dComponent,
   onOpenManual,
@@ -85,7 +88,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   // 1. Fetch Drawings for Machine
   // --------------------------------------------------------------------------
   useEffect(() => {
-    if (!isOpen || !machine) {
+    if (!isOpen) {
       setDrawingsList([]);
       setDrawingRecord(null);
       setSvgContent(null);
@@ -97,6 +100,25 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
       return;
     }
 
+    if (initialDrawing) {
+      setDrawingsList([initialDrawing]);
+      setDrawingRecord(initialDrawing);
+      if (initialDrawing.equipmentTags && initialDrawing.equipmentTags.length > 0) {
+        setSelectedTag(activeTag || initialDrawing.equipmentTags[0]);
+      }
+      setContentError(null);
+      setUnsupportedInfo(null);
+      setIsLoadingMetadata(false);
+      return;
+    }
+
+    if (!machine && !initialDrawingId) {
+      setDrawingsList([]);
+      setDrawingRecord(null);
+      setIsLoadingMetadata(false);
+      return;
+    }
+
     let isMounted = true;
     setIsLoadingMetadata(true);
     setContentError(null);
@@ -104,45 +126,62 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
     const fetchDrawings = async () => {
       try {
-        const stored = getMachineFiles(machine);
-        const localPidUrl = stored.pAndIdUrl || stored.pidUrl;
-        if (localPidUrl) {
-          const fileName = stored.pidFile?.name || stored.pAndIdFile?.name || `${machine.assetTag}-schematic.svg`;
-          const ext = fileName.split('.').pop()?.toUpperCase() || 'SVG';
-          const localDrawing: EngineeringDrawing = {
-            id: `local-pid-${machine.id}`,
-            organizationId: machine.organizationId,
-            plantId: machine.plantId || 'default',
-            machineId: machine.id,
-            uniqueDrawingNumber: `PID-${machine.assetTag}`,
-            drawingTitle: fileName,
-            drawingType: 'PID',
-            discipline: 'Process',
-            revision: '1.0',
-            source: 'CLIENT_UPLOAD',
-            storageKey: `local/${machine.id}/pid`,
-            fileUrl: localPidUrl,
-            originalFileName: fileName,
-            fileFormat: (ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'SVG') as any,
-            fileSizeBytes: stored.pidFile?.size || stored.pAndIdFile?.size || 0,
-            fileHashSha256: 'local',
-            status: 'APPROVED',
-            dataClassification: machine.dataClassification || 'CONFIDENTIAL',
-            equipmentTags: ['P-204-IMP', 'P-204-SEAL', 'M-204-DRV', 'PT-204', 'FT-204'],
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        // 0. If initialDrawingId is provided, query it directly
+        if (initialDrawingId) {
+          const directRes = await fetch(`/api/v1/engineering/drawings/${initialDrawingId}`, { headers });
+          if (directRes.ok) {
+            const directJson = await directRes.json();
+            if (directJson.success && directJson.data) {
+              if (isMounted) {
+                const d = directJson.data;
+                setDrawingsList([d]);
+                setDrawingRecord(d);
+                if (d.equipmentTags && d.equipmentTags.length > 0) {
+                  setSelectedTag(activeTag || d.equipmentTags[0]);
+                }
+                setIsLoadingMetadata(false);
+              }
+              return;
+            }
+          }
+        }
+
+        if (!machine) {
           if (isMounted) {
-            setDrawingsList([localDrawing]);
-            setDrawingRecord(localDrawing);
+            setDrawingsList([]);
+            setDrawingRecord(null);
             setIsLoadingMetadata(false);
           }
           return;
         }
 
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        // 1. Dedicated machine P&ID endpoint that auto-links verified drawings
+        const machRes = await fetch(`/api/v1/engineering/machines/${machine.id}/pid`, { headers });
+        if (machRes.ok) {
+          const machJson = await machRes.json();
+          if (machJson.success && machJson.data) {
+            const list: EngineeringDrawing[] = machJson.data.drawings || [];
+            if (isMounted) {
+              setDrawingsList(list);
+              let chosen = list.find((d) => d.id === initialDrawingId) ||
+                machJson.data.primaryDrawing ||
+                list.find((d) => d.status === 'APPROVED') ||
+                list[0] ||
+                null;
+              setDrawingRecord(chosen);
+              if (chosen?.equipmentTags && chosen.equipmentTags.length > 0) {
+                setSelectedTag(activeTag || chosen.equipmentTags[0]);
+              }
+              setIsLoadingMetadata(false);
+            }
+            return;
+          }
+        }
 
+        // 2. Fall back to listing drawings by machineId
         const res = await fetch(`/api/v1/engineering/drawings?machineId=${machine.id}`, { headers });
         if (!res.ok) {
           if (isMounted) {
@@ -159,10 +198,9 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
             const list: EngineeringDrawing[] = json.data;
             setDrawingsList(list);
 
-            // Select initial drawing if requested, else prefer approved P&ID, else first drawing
             let chosen = list.find((d) => d.id === initialDrawingId);
             if (!chosen) {
-              chosen = list.find((d) => d.status === 'APPROVED' && (d.drawingType === 'PID' || d.fileFormat === 'SVG')) ||
+              chosen = list.find((d) => d.status === 'APPROVED' && (d.drawingType === 'PID' || d.fileFormat === 'SVG' || d.fileFormat === 'PDF')) ||
                 list.find((d) => d.status === 'APPROVED') ||
                 list[0];
             }
@@ -453,53 +491,52 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     const file = e.target.files?.[0];
     if (!file || !machine) return;
     setIsUploading(true);
+    setContentError(null);
+    setUnsupportedInfo(null);
     try {
-      const attached = await attachFileToMachine(machine.id, machine.assetTag, 'pid', file);
-      const url = attached.url;
-      const updatedMachine: Machine = {
-        ...machine,
-        hasPidDiagram: true,
-        pidFile: { name: file.name, size: file.size, type: file.type },
-        pidUrl: url,
-        pAndIdFile: { name: file.name, size: file.size, type: file.type },
-        pAndIdUrl: url,
-      };
-      onMachineUpdated?.(updatedMachine);
-      const ext = file.name.split('.').pop()?.toUpperCase() || 'SVG';
-      const localDrawing: EngineeringDrawing = {
-        id: `local-pid-${machine.id}`,
-        organizationId: machine.organizationId,
-        plantId: machine.plantId || 'default',
-        machineId: machine.id,
-        uniqueDrawingNumber: `PID-${machine.assetTag}`,
-        drawingTitle: file.name,
-        drawingType: 'PID',
-        discipline: 'Process',
-        revision: '1.0',
-        source: 'CLIENT_UPLOAD',
-        storageKey: `local/${machine.id}/pid`,
-        fileUrl: url,
-        originalFileName: file.name,
-        fileFormat: (ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'SVG') as any,
-        fileSizeBytes: file.size,
-        fileHashSha256: 'local',
-        status: 'APPROVED',
-        dataClassification: machine.dataClassification || 'CONFIDENTIAL',
-        equipmentTags: ['P-204-IMP', 'P-204-SEAL', 'M-204-DRV', 'PT-204', 'FT-204'],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setDrawingsList([localDrawing]);
-      setDrawingRecord(localDrawing);
-    } catch (err) {
+      const formData = new FormData();
+      formData.append('file', file);
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/v1/engineering/machines/${machine.id}/pid/upload`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error?.message || 'Failed to upload P&ID drawing');
+      }
+
+      const drawing: EngineeringDrawing = json.data?.drawing;
+      if (drawing) {
+        setDrawingsList((prev) => [drawing, ...prev.filter((d) => d.id !== drawing.id)]);
+        setDrawingRecord(drawing);
+        onMachineUpdated?.({
+          ...machine,
+          hasPidDiagram: true,
+          pidFile: { name: file.name, size: file.size, type: file.type },
+        });
+      }
+    } catch (err: any) {
       console.error('Failed to attach P&ID drawing:', err);
+      setContentError(err.message || 'Failed to attach P&ID drawing');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  if (!isOpen || !machine) return null;
+  const currentMachine: Machine = machine || ({
+    id: drawingRecord?.machineId || initialDrawing?.machineId || 'pid-asset',
+    assetTag: drawingRecord?.uniqueDrawingNumber || initialDrawing?.uniqueDrawingNumber || 'PID-ASSET',
+    name: drawingRecord?.drawingTitle || initialDrawing?.drawingTitle || 'Engineering Drawing',
+    plantId: drawingRecord?.plantId || initialDrawing?.plantId || 'PLANT-DEFAULT',
+  } as Machine);
+
+  if (!isOpen || (!machine && !drawingRecord && !initialDrawing && !initialDrawingId)) return null;
 
   const equipmentTags = drawingRecord?.equipmentTags || [];
   const filteredTags = equipmentTags.filter((tag) =>
@@ -532,9 +569,9 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
               <div id="drawing-viewer-title" className="text-xs font-mono font-bold text-[#1A202C] uppercase tracking-wider flex items-center gap-2">
                 <span>P&ID Engineering Viewer</span>
                 <span className="text-[#64748B]">•</span>
-                <span className="text-[#2563EB]">{machine.assetTag}</span>
+                <span className="text-[#2563EB]">{currentMachine.assetTag}</span>
                 <span className="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono font-normal">
-                  {machine.name}
+                  {currentMachine.name}
                 </span>
               </div>
               <div className="text-[10px] text-[#64748B] font-sans mt-0.5 flex items-center gap-2">
@@ -543,7 +580,15 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     <span className="font-semibold text-slate-800">{drawingRecord.drawingTitle}</span>
                     <span>({drawingRecord.uniqueDrawingNumber} • {drawingRecord.revision})</span>
                     <span className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 font-mono text-[9px] font-bold border border-emerald-200">
-                      {drawingRecord.status}
+                      Governance: {drawingRecord.status}
+                    </span>
+                    <span className={`px-1.5 py-0.2 rounded font-mono text-[9px] font-bold border ${
+                      isLoadingContent ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                      contentError ? 'bg-red-50 text-red-700 border-red-200' :
+                      (svgContent || pdfBlobUrl || imageBlobUrl) ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                      'bg-slate-50 text-slate-700 border-slate-200'
+                    }`}>
+                      Viewer: {isLoadingContent ? 'LOADING' : contentError ? 'LOAD_ERROR' : (svgContent || pdfBlobUrl || imageBlobUrl) ? 'RENDERED' : 'READY'}
                     </span>
                   </>
                 ) : (
@@ -637,7 +682,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
         {isLoadingMetadata ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-[#F8FAFC] text-[#64748B]">
             <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
-            <div className="text-xs font-mono">Retrieving Verified Engineering Schematics for {machine.assetTag}...</div>
+            <div className="text-xs font-mono">Retrieving Verified Engineering Schematics for {currentMachine.assetTag}...</div>
           </div>
         ) : !drawingRecord ? (
           /* Honest Missing-Drawing Empty State */
@@ -658,15 +703,17 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
             <div className="w-full max-w-md bg-white border border-[#E2E8F0] rounded-xl p-4 text-left text-xs font-sans space-y-2 shadow-sm">
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
                 <span className="text-[#64748B] font-mono">Asset Tag:</span>
-                <span className="font-bold text-[#1A202C] font-mono">{machine.assetTag}</span>
+                <span className="font-bold text-[#1A202C] font-mono">{currentMachine.assetTag}</span>
               </div>
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
                 <span className="text-[#64748B] font-mono">Machine Name:</span>
-                <span className="text-[#1A202C]">{machine.name}</span>
+                <span className="text-[#1A202C]">{currentMachine.name}</span>
               </div>
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
                 <span className="text-[#64748B] font-mono">Plant Location:</span>
-                <span className="text-[#1A202C]">{machine.plantId}</span>
+                <span className="text-[#1A202C]">
+                  {plantName || (currentMachine.plantId && !currentMachine.plantId.includes('-') ? currentMachine.plantId : 'Main Production Facility')}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-[#64748B] font-mono">P&ID Source State:</span>
@@ -838,19 +885,12 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
                     {/* 3. PDF Document Rendering */}
                     {pdfBlobUrl && (
-                      <div className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl overflow-hidden w-[780px] h-[520px]">
-                        <object
-                          data={`${pdfBlobUrl}#toolbar=0&navpanes=0`}
-                          type="application/pdf"
-                          className="w-full h-full"
-                        >
-                          <p className="p-4 text-xs text-slate-600">
-                            PDF preview unavailable in this browser.{' '}
-                            <a href={pdfBlobUrl} download className="text-blue-600 underline">
-                              Download PDF
-                            </a>
-                          </p>
-                        </object>
+                      <div className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl overflow-hidden w-[850px] h-[600px] max-w-full">
+                        <iframe
+                          src={`${pdfBlobUrl}#toolbar=0&navpanes=0`}
+                          title={drawingRecord.drawingTitle}
+                          className="w-full h-full border-0"
+                        />
                       </div>
                     )}
                   </div>
@@ -954,7 +994,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                         <div className="text-xs font-bold text-[#1A202C] font-mono mt-0.5">{selectedTag}</div>
                       </div>
                       <span className="text-[10px] font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-bold">
-                        {machine.assetTag}
+                        {currentMachine.assetTag}
                       </span>
                     </div>
 

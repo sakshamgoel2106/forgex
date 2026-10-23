@@ -58,6 +58,75 @@ export interface Machine {
 
 export type PublicLookupPolicy = 'DISABLED' | 'APPROVED_OEM_ONLY' | 'PERMISSIVE';
 
+export type OemSourceType =
+  | 'OFFICIAL_MANUFACTURER'
+  | 'AUTHORIZED_DISTRIBUTOR'
+  | 'THIRD_PARTY'
+  | 'UNKNOWN_UNVERIFIED';
+
+export type ModelMatchStatus =
+  | 'EXACT_MATCH'
+  | 'FAMILY_LEVEL_ONLY'
+  | 'MODEL_MISMATCH';
+
+export type SpecVerificationStatus =
+  | 'VERIFIED'
+  | 'PENDING_ADMIN_APPROVAL'
+  | 'SOURCE_UNVERIFIED'
+  | 'MODEL_MISMATCH'
+  | 'CONFLICTING_DATA'
+  | 'MISSING_DATA'
+  | 'FAMILY_LEVEL_ONLY'
+  | 'PUBLIC_SUGGESTION'
+  | 'APPROVED'
+  | 'REJECTED';
+
+export interface SpecConflictInfo {
+  existingValue: string | number;
+  existingSource: string;
+  publicValue: string | number;
+  publicSource: string;
+  reason: string;
+}
+
+export interface SpecEvidenceRecord {
+  fieldName: string;
+  displayName: string;
+  value: string | number;
+  unit?: string;
+  originalValue?: string | number;
+  originalUnit?: string;
+  sourceUrl: string;
+  sourceType: OemSourceType;
+  sourcePublisher: string;
+  supportingText?: string;
+  matchStatus: ModelMatchStatus;
+  verificationStatus: SpecVerificationStatus;
+  retrievalTimestamp: string;
+  conflictInfo?: SpecConflictInfo | null;
+}
+
+export interface MissingSpecField {
+  fieldName: string;
+  displayName: string;
+  category: string;
+  requirementLevel: 'REQUIRED' | 'RECOMMENDED';
+  reason: string;
+}
+
+export interface CompletenessSummary {
+  machineType: string;
+  totalApplicableRequired: number;
+  presentRequired: number;
+  totalApplicableRecommended: number;
+  presentRecommended: number;
+  completenessScore: number;
+  isComplete: boolean;
+  missingRequiredFields: MissingSpecField[];
+  missingRecommendedFields: MissingSpecField[];
+  notice: string;
+}
+
 export interface PublicMachineKnowledge {
   id: string;
   manufacturer: string;
@@ -67,9 +136,16 @@ export interface PublicMachineKnowledge {
   sourceUrl: string;
   sourcePublisher: string;
   retrievalDate: string;
-  verificationStatus: 'PUBLIC_SUGGESTION' | 'APPROVED' | 'REJECTED';
+  verificationStatus: SpecVerificationStatus;
   approvedByUserId?: string | null;
   approvedAt?: string | null;
+  sourceType?: OemSourceType;
+  matchStatus?: ModelMatchStatus;
+  missingModelDetails?: string[];
+  completenessSummary?: CompletenessSummary;
+  evidenceRecords?: Record<string, SpecEvidenceRecord>;
+  conflicts?: SpecConflictInfo[];
+  reviewNotes?: string | null;
 }
 
 export type TaskStatus =
@@ -148,6 +224,75 @@ export interface MachineLedgerSummary {
   pendingReviewTasksCount: number;
   with3dModelCount: number;
   criticalMachinesCount: number;
+  verifiedSpecsCount?: number;
+}
+
+export type VerificationCheckKey =
+  | 'identity'
+  | 'documentation'
+  | 'technicalSpecs'
+  | 'engineeringAttachments';
+
+export type VerificationCheckStatus = 'PASSED' | 'PENDING' | 'FAILED' | 'NOT_APPLICABLE';
+
+export interface VerificationCheck {
+  key: VerificationCheckKey;
+  label: string;
+  status: VerificationCheckStatus;
+  required: boolean;
+  details: string;
+  failureReason?: string | null;
+  correctiveAction?: string | null;
+}
+
+export type MachineVerificationWorkflowStatus =
+  | 'PENDING'
+  | 'IN_PROGRESS'
+  | 'READY_FOR_APPROVAL'
+  | 'VERIFIED'
+  | 'REJECTED';
+
+export interface VerificationHistoryEntry {
+  id?: string;
+  action:
+    | 'REGISTERED'
+    | 'CHECK_UPDATED'
+    | 'TASK_ASSIGNED'
+    | 'EVIDENCE_SUBMITTED'
+    | 'APPROVAL_REQUESTED'
+    | 'APPROVED'
+    | 'REJECTED'
+    | 'CHANGES_REQUESTED';
+  actorUserId: string;
+  actorRole: string;
+  timestamp: string;
+  notes?: string | null;
+  rejectionReason?: string | null;
+  correctiveActions?: string | null;
+}
+
+export interface MachineVerificationRecord {
+  id: string;
+  organizationId: string;
+  machineId: string;
+  machineAssetTag: string;
+  status: MachineVerificationWorkflowStatus;
+  overallState: VerificationState;
+  checks: VerificationCheck[];
+  assignedUserId?: string | null;
+  assignedRole?: OrgRole | null;
+  assignedUserName?: string | null;
+  lastSubmittedByUserId?: string | null;
+  lastSubmittedAt?: string | null;
+  evidenceDescription?: string | null;
+  evidenceAttachmentKeys?: string[];
+  approvedByUserId?: string | null;
+  approvedAt?: string | null;
+  rejectionReason?: string | null;
+  correctiveActions?: string | null;
+  history: VerificationHistoryEntry[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface MachinePosterData {

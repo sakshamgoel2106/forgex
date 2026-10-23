@@ -39,7 +39,14 @@ import type {
   ComponentMapping,
   EmployeeBadge,
   MachineLedgerSummary,
+  MachineVerificationRecord,
   PublicMachineKnowledge,
+  OemSourceType,
+  ModelMatchStatus,
+  SpecVerificationStatus,
+  SpecEvidenceRecord,
+  SpecConflictInfo,
+  CompletenessSummary,
   DataClassification,
   MachineCriticality,
   MachineAccessScope,
@@ -218,6 +225,8 @@ export interface CreateDocumentDTO {
   title: string;
   category: DocumentType;
   assetTags?: string[];
+  assetIds?: string[];
+  machineId?: string;
   dataClassification?: string;
   isConfidential?: boolean;
   createdByUserId?: string | null;
@@ -444,6 +453,8 @@ export interface IDataStore {
   deleteMachine(organizationId: string, machineId: string): Promise<boolean>;
   detectPotentialDuplicates(organizationId: string, params: { manufacturer?: string; modelNumber?: string; serialNumber?: string }): Promise<Machine[]>;
   getMachineLedgerSummary(organizationId: string, plantId?: string): Promise<MachineLedgerSummary>;
+  getMachineVerification(organizationId: string, machineId: string): Promise<MachineVerificationRecord>;
+  updateMachineVerification(organizationId: string, machineId: string, updates: Partial<MachineVerificationRecord>): Promise<MachineVerificationRecord>;
 
   // Missing Information & Technician Tasks (Phase B)
   createMissingInfoTask(organizationId: string, data: CreateMissingInfoTaskDTO): Promise<MissingInformationTask>;
@@ -466,7 +477,12 @@ export interface IDataStore {
   // Public Machine Knowledge (Phase B)
   getPublicMachineKnowledge(manufacturer: string, modelNumber: string): Promise<PublicMachineKnowledge | null>;
   savePublicMachineKnowledge(data: SavePublicKnowledgeDTO): Promise<PublicMachineKnowledge>;
-  updatePublicMachineKnowledgeStatus(id: string, status: 'APPROVED' | 'REJECTED', approvedByUserId: string): Promise<PublicMachineKnowledge | null>;
+  updatePublicMachineKnowledgeStatus(
+    id: string,
+    status: SpecVerificationStatus,
+    approvedByUserId: string,
+    reviewNotes?: string
+  ): Promise<PublicMachineKnowledge | null>;
 
   // Industry Profiles (Universal Industry Support)
   listIndustryProfiles(organizationId: string): Promise<IndustryProfile[]>;
@@ -811,7 +827,14 @@ export interface SavePublicKnowledgeDTO {
   publicSpecs: Record<string, string | number>;
   sourceUrl: string;
   sourcePublisher: string;
-  verificationStatus?: 'PUBLIC_SUGGESTION' | 'APPROVED' | 'REJECTED';
+  verificationStatus?: SpecVerificationStatus;
+  sourceType?: OemSourceType;
+  matchStatus?: ModelMatchStatus;
+  missingModelDetails?: string[];
+  completenessSummary?: CompletenessSummary;
+  evidenceRecords?: Record<string, SpecEvidenceRecord>;
+  conflicts?: SpecConflictInfo[];
+  reviewNotes?: string | null;
 }
 
 export interface CreateIndustryProfileDTO {

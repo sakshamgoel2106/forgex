@@ -2,6 +2,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import multer from 'multer';
 import type {
   IDataStore,
   CreateIndustryProfileDTO,
@@ -15,9 +16,28 @@ import type { CADFileFormat, DrawingType } from '@forgex/shared-types';
 import { config } from '../config/env.js';
 import { SvgSanitizer } from '../utils/svgSanitizer.js';
 import { isValidGlbHeader } from '../utils/glbBuilder.js';
+import { cadConversionService } from '../services/cadConversion.service.js';
+import { logger } from '../utils/logger.js';
 
 export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: IStorageAdapter): Router {
   const router = Router();
+
+  const engineeringUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 50 * 1024 * 1024,
+      files: 1,
+    },
+    fileFilter: (_req, file, cb) => {
+      const ext = (file.originalname.split('.').pop() || '').toLowerCase();
+      const dangerous = ['exe', 'bat', 'cmd', 'sh', 'ps1', 'vbs', 'js', 'jar', 'msi', 'scr', 'dll'];
+      if (dangerous.includes(ext)) {
+        cb(new Error(`Security Violation: Upload of executable format '.${ext}' is prohibited.`));
+        return;
+      }
+      cb(null, true);
+    },
+  });
 
   // ==========================================================================
   // SECTION D: Industry & Asset Configuration (Universal Industry Support)
@@ -453,7 +473,15 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
   router.get('/models/:id/download', async (req: Request, res: Response): Promise<void> => {
     try {
       const orgId = req.auth!.organization.id;
-      const model = await dataStore.getEngineeringModel3DById(orgId, String(req.params.id));
+      let model = await dataStore.getEngineeringModel3DById(orgId, String(req.params.id));
+      if (!model && String(req.params.id).startsWith('local-')) {
+        const machineIdOrTag = String(req.params.id).replace(/^local-/, '');
+        const machine = await dataStore.getMachineById(orgId, machineIdOrTag);
+        if (machine) {
+          const models = await dataStore.listEngineeringModels3D(orgId, { machineId: machine.id });
+          if (models.length > 0) model = models[0];
+        }
+      }
 
       if (!model) {
         res.status(404).json({
@@ -525,7 +553,38 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         return;
       }
 
-      const model = await dataStore.getEngineeringModel3DById(orgId, modelId);
+      let model = await dataStore.getEngineeringModel3DById(orgId, modelId);
+      if (!model && (modelId.startsWith('local-') || modelId.startsWith('asset-3d-') || modelId.startsWith('asset-'))) {
+        const machineIdOrTag = modelId.replace(/^local-/, '').replace(/^asset-3d-/, '').replace(/^asset-/, '');
+        const machine = await dataStore.getMachineById(orgId, machineIdOrTag);
+        if (machine) {
+          const models = await dataStore.listEngineeringModels3D(orgId, { machineId: machine.id });
+          if (models.length > 0) {
+            model = models[0];
+          } else if (machine.hasModel3d || machine.model3dStorageKey || (machine.technicalSpecs as any)?.model3dFileName) {
+            const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+            const rawFileName = specs.model3dFileName || (machine.model3dStorageKey ? machine.model3dStorageKey.split('/').pop() : 'model.stp');
+            const storageKey = machine.model3dStorageKey || `models/${machine.assetTag}-${rawFileName}`;
+            const format = (machine.model3dFormat || rawFileName.split('.').pop() || 'STEP').toUpperCase();
+            model = await dataStore.createEngineeringModel3D(orgId, {
+              plantId: machine.plantId || 'PLANT-TX-04',
+              machineId: machine.id,
+              industryProfileCode: 'GENERAL',
+              assetCategory: 'MACHINERY',
+              title: rawFileName,
+              fileHashSha256: 'auto_linked',
+              storageKey,
+              fileFormat: format as any,
+              fileSizeBytes: Number(specs.model3dFileSize) || 4085657,
+              modelRevision: '1.0',
+              status: 'APPROVED',
+              dataClassification: machine.dataClassification || 'INTERNAL',
+              uploadedByUserId: req.auth!.user.id,
+            });
+          }
+        }
+      }
+
       if (!model) {
         res.status(404).json({
           success: false,
@@ -536,14 +595,31 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
 
       // Check if format is a raw B-Rep CAD format (STEP, STP, IGES, IGS) without converted GLB in storage
       const rawBrepFormats = ['STEP', 'STP', 'IGES', 'IGS'];
+      let hasConvertedGlb = false;
       if (rawBrepFormats.includes(model.fileFormat)) {
-        let hasConvertedGlb = false;
         if (model.convertedStorageKey && storageAdapter) {
           try {
             await storageAdapter.getObject(model.convertedStorageKey);
             hasConvertedGlb = true;
           } catch {
             hasConvertedGlb = false;
+          }
+        }
+
+        // On-demand conversion for genuine STEP/STP mechanical models
+        if (!hasConvertedGlb && storageAdapter) {
+          try {
+            const rawBuffer = await storageAdapter.getObject(model.storageKey);
+            const convRes = await cadConversionService.convertStepToGlb(rawBuffer, model.title);
+            if (convRes.success && convRes.glbBuffer) {
+              const convertedKey = `models/converted/${model.id}.glb`;
+              await storageAdapter.putObject(convertedKey, convRes.glbBuffer, 'model/gltf-binary');
+              model.convertedStorageKey = convertedKey;
+              await dataStore.updateEngineeringModel3D(orgId, model.id, { convertedStorageKey: convertedKey });
+              hasConvertedGlb = true;
+            }
+          } catch (convErr: any) {
+            logger.warn({ err: convErr?.message, modelId: model.id }, 'On-demand CAD conversion encountered error');
           }
         }
 
@@ -636,6 +712,125 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
   });
 
   /**
+   * POST /api/v1/engineering/machines/:machineId/3d-model/upload
+   * Upload and associate a genuine 3D CAD model directly to an industrial machine
+   */
+  router.post(
+    '/machines/:machineId/3d-model/upload',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    (req, res, next) => {
+      engineeringUpload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_UPLOAD_FILTER_REJECTED', message: err.message },
+          });
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const orgId = req.auth!.organization.id;
+        const machineId = String(req.params.machineId);
+        const machine = await dataStore.getMachineById(orgId, machineId);
+        if (!machine) {
+          res.status(404).json({
+            success: false,
+            error: { code: 'FORGEX_MACHINE_NOT_FOUND', message: `Machine '${machineId}' not found.` },
+          });
+          return;
+        }
+
+        const file = req.file;
+        if (!file || !file.buffer || file.buffer.length === 0) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_EMPTY_FILE', message: 'A non-empty 3D CAD model file is required.' },
+          });
+          return;
+        }
+
+        const ext = (file.originalname.split('.').pop() || '').toUpperCase();
+        const allowed = ['STEP', 'STP', 'GLB', 'GLTF', 'STL', 'OBJ', 'IGES', 'IGS'];
+        if (!allowed.includes(ext)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_UNSUPPORTED_FORMAT',
+              message: `Unsupported 3D CAD format '.${ext}'. Supported formats: STEP, STP, GLB, GLTF, STL, OBJ.`,
+            },
+          });
+          return;
+        }
+
+        if (!storageAdapter) {
+          res.status(500).json({
+            success: false,
+            error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+          });
+          return;
+        }
+
+        const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const randomId = crypto.randomUUID();
+        const storageKey = `models/${machine.assetTag}-${randomId}-${sanitizedName}`;
+
+        await storageAdapter.putObject(storageKey, file.buffer, file.mimetype || 'application/octet-stream');
+
+        let convertedStorageKey: string | undefined;
+        if (cadConversionService.isBrepFormat(ext)) {
+          try {
+            const convRes = await cadConversionService.convertStepToGlb(file.buffer, sanitizedName);
+            if (convRes.success && convRes.glbBuffer) {
+              convertedStorageKey = `models/converted/${machine.assetTag}-${randomId}.glb`;
+              await storageAdapter.putObject(convertedStorageKey, convRes.glbBuffer, 'model/gltf-binary');
+            }
+          } catch (convErr: any) {
+            logger.warn({ err: convErr?.message }, 'CAD conversion during upload encountered error');
+          }
+        }
+
+        const model = await dataStore.createEngineeringModel3D(orgId, {
+          plantId: machine.plantId || 'PLANT-TX-04',
+          machineId: machine.id,
+          industryProfileCode: 'GENERAL',
+          assetCategory: 'MACHINERY',
+          title: sanitizedName,
+          fileHashSha256: crypto.createHash('sha256').update(file.buffer).digest('hex'),
+          storageKey,
+          convertedStorageKey,
+          fileFormat: ext as any,
+          fileSizeBytes: file.size,
+          modelRevision: '1.0',
+          status: 'APPROVED',
+          dataClassification: machine.dataClassification || 'CONFIDENTIAL',
+          uploadedByUserId: req.auth!.user.id,
+        });
+
+        await dataStore.updateMachine(orgId, machine.id, {
+          hasModel3d: true,
+          model3dStorageKey: storageKey,
+          model3dFormat: ext.toLowerCase(),
+        });
+
+        res.json({
+          success: true,
+          data: {
+            model,
+            converted: !!convertedStorageKey,
+          },
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to upload 3D model' },
+        });
+      }
+    }
+  );
+
+  /**
    * GET /api/v1/engineering/machines/:machineId/3d-model
    * Retrieves primary 3D engineering model and component mappings for an industrial machine.
    * Enforces machine existence and organization boundary checks.
@@ -654,7 +849,31 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         return;
       }
 
-      const models = await dataStore.listEngineeringModels3D(orgId, { machineId });
+      let models = await dataStore.listEngineeringModels3D(orgId, { machineId });
+      if (models.length === 0 && (machine.hasModel3d || machine.model3dStorageKey || (machine.technicalSpecs as any)?.model3dFileName)) {
+        const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+        const rawFileName = specs.model3dFileName || (machine.model3dStorageKey ? machine.model3dStorageKey.split('/').pop() : 'model.stp');
+        const storageKey = machine.model3dStorageKey || `models/${machine.assetTag}-${rawFileName}`;
+        const format = (machine.model3dFormat || rawFileName.split('.').pop() || 'STEP').toUpperCase();
+
+        const created = await dataStore.createEngineeringModel3D(orgId, {
+          plantId: machine.plantId || 'PLANT-TX-04',
+          machineId: machine.id,
+          industryProfileCode: 'GENERAL',
+          assetCategory: 'MACHINERY',
+          title: rawFileName,
+          fileHashSha256: 'auto_linked',
+          storageKey,
+          fileFormat: format as any,
+          fileSizeBytes: Number(specs.model3dFileSize) || 4085657,
+          modelRevision: '1.0',
+          status: 'APPROVED',
+          dataClassification: machine.dataClassification || 'INTERNAL',
+          uploadedByUserId: req.auth!.user.id,
+        });
+        models = [created];
+      }
+
       const primaryModel = models.find((m) => m.status === 'APPROVED') || models[0] || null;
       const mappings = await dataStore.listComponentMappings(orgId, machineId);
 
@@ -791,12 +1010,23 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
    */
   router.post(
     '/manufacturer-resources',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    (req, res, next) => {
+      engineeringUpload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_UPLOAD_FILTER_REJECTED', message: err.message },
+          });
+        }
+        next();
+      });
+    },
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
         const actorUserId = req.auth!.user.id;
-        const {
+        let {
           machineId,
           resourceType,
           title,
@@ -814,12 +1044,51 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
           reviewNotes,
         } = req.body;
 
-        if (!title || !manufacturer || !resourceType || !sourceType) {
+        const file = req.file;
+        if (file && file.buffer && file.buffer.length > 0) {
+          if (!storageAdapter) {
+            res.status(500).json({
+              success: false,
+              error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+            });
+            return;
+          }
+
+          const ext = (file.originalname.split('.').pop() || 'PDF').toUpperCase();
+          const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_');
+          const randomId = crypto.randomUUID();
+          storageKey = `resources/${randomId}-${sanitizedName}`;
+
+          const mimeType = ext === 'PDF' ? 'application/pdf' : 'application/octet-stream';
+          await storageAdapter.putObject(storageKey, file.buffer, mimeType);
+
+          fileFormat = ext;
+          fileSizeBytes = file.buffer.length;
+          fileHashSha256 = crypto.createHash('sha256').update(file.buffer).digest('hex');
+          sourceType = 'FILE_UPLOAD';
+          sourceUrl = sourceUrl || `/api/v1/engineering/storage-proxy?key=${encodeURIComponent(storageKey)}`;
+
+          if (!title) {
+            title = file.originalname.replace(/\.[^/.]+$/, '');
+          }
+        }
+
+        if (machineId && (!manufacturer || manufacturer.trim() === '')) {
+          const machine = await dataStore.getMachineById(orgId, machineId);
+          if (machine?.manufacturer) {
+            manufacturer = machine.manufacturer;
+          }
+          if (machine?.modelNumber && !modelNumber) {
+            modelNumber = machine.modelNumber;
+          }
+        }
+
+        if (!title || !manufacturer || !resourceType || (!sourceType && !file)) {
           res.status(400).json({
             success: false,
             error: {
               code: 'FORGEX_VALIDATION_ERROR',
-              message: 'title, manufacturer, resourceType, and sourceType are required.',
+              message: 'title, manufacturer, resourceType, and sourceType (or uploaded file) are required.',
             },
           });
           return;
@@ -1197,7 +1466,16 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
   router.get('/drawings/:id/download', async (req: Request, res: Response): Promise<void> => {
     try {
       const orgId = req.auth!.organization.id;
-      const dwg = await dataStore.getEngineeringDrawingById(orgId, String(req.params.id));
+      let dwg = await dataStore.getEngineeringDrawingById(orgId, String(req.params.id));
+      const reqId = String(req.params.id);
+      if (!dwg && (reqId.startsWith('local-pid-') || reqId.startsWith('local-') || reqId.startsWith('asset-dwg-') || reqId.startsWith('asset-pid-') || reqId.startsWith('asset-'))) {
+        const machineIdOrTag = reqId.replace(/^local-pid-/, '').replace(/^local-/, '').replace(/^asset-dwg-/, '').replace(/^asset-pid-/, '').replace(/^asset-/, '');
+        const machine = await dataStore.getMachineById(orgId, machineIdOrTag);
+        if (machine) {
+          const drawings = await dataStore.listEngineeringDrawings(orgId, { machineId: machine.id });
+          if (drawings.length > 0) dwg = drawings[0];
+        }
+      }
 
       if (!dwg) {
         res.status(404).json({
@@ -1268,7 +1546,43 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         return;
       }
 
-      const dwg = await dataStore.getEngineeringDrawingById(orgId, drawingId);
+      let dwg = await dataStore.getEngineeringDrawingById(orgId, drawingId);
+      if (!dwg && (drawingId.startsWith('local-pid-') || drawingId.startsWith('local-') || drawingId.startsWith('asset-dwg-') || drawingId.startsWith('asset-pid-') || drawingId.startsWith('asset-'))) {
+        const machineIdOrTag = drawingId.replace(/^local-pid-/, '').replace(/^local-/, '').replace(/^asset-dwg-/, '').replace(/^asset-pid-/, '').replace(/^asset-/, '');
+        const machine = await dataStore.getMachineById(orgId, machineIdOrTag);
+        if (machine) {
+          const drawings = await dataStore.listEngineeringDrawings(orgId, { machineId: machine.id });
+          if (drawings.length > 0) {
+            dwg = drawings.find((d) => d.status === 'APPROVED') || drawings[0];
+          } else if (machine.hasPidDiagram || machine.pidStorageKey || (machine.technicalSpecs as any)?.pidFileName) {
+            const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+            const rawFileName = specs.pidFileName || (machine.pidStorageKey ? machine.pidStorageKey.split('/').pop() : 'drawing.pdf');
+            const storageKey = machine.pidStorageKey || `schematics/${machine.assetTag}-${rawFileName}`;
+            const ext = (rawFileName.split('.').pop() || 'PDF').toUpperCase();
+            const format = ext === 'SVG' ? 'SVG' : ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'PDF';
+            const mappings = await dataStore.listComponentMappings(orgId, machine.id);
+            dwg = await dataStore.createEngineeringDrawing(orgId, {
+              plantId: machine.plantId || 'PLANT-TX-04',
+              machineId: machine.id,
+              drawingTitle: rawFileName,
+              uniqueDrawingNumber: `PID-${machine.assetTag}`,
+              drawingType: 'PID',
+              discipline: 'Process',
+              revision: '1.0',
+              source: 'Engineering Archive',
+              storageKey,
+              originalFileName: rawFileName,
+              fileFormat: format as any,
+              fileSizeBytes: Number(specs.pidFileSize) || 3136182,
+              fileHashSha256: 'auto_linked',
+              dataClassification: machine.dataClassification || 'INTERNAL',
+              equipmentTags: mappings.map((m) => m.pidTag).filter(Boolean),
+              uploadedByUserId: req.auth!.user.id,
+            });
+          }
+        }
+      }
+
       if (!dwg) {
         res.status(404).json({
           success: false,
@@ -1387,6 +1701,114 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
   });
 
   /**
+   * POST /api/v1/engineering/machines/:machineId/pid/upload
+   * Upload and associate a genuine P&ID engineering drawing directly to an industrial machine
+   */
+  router.post(
+    '/machines/:machineId/pid/upload',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    (req, res, next) => {
+      engineeringUpload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_UPLOAD_FILTER_REJECTED', message: err.message },
+          });
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const orgId = req.auth!.organization.id;
+        const machineId = String(req.params.machineId);
+        const machine = await dataStore.getMachineById(orgId, machineId);
+        if (!machine) {
+          res.status(404).json({
+            success: false,
+            error: { code: 'FORGEX_MACHINE_NOT_FOUND', message: `Machine '${machineId}' not found.` },
+          });
+          return;
+        }
+
+        const file = req.file;
+        if (!file || !file.buffer || file.buffer.length === 0) {
+          res.status(400).json({
+            success: false,
+            error: { code: 'FORGEX_EMPTY_FILE', message: 'A non-empty drawing file is required.' },
+          });
+          return;
+        }
+
+        const ext = (file.originalname.split('.').pop() || '').toUpperCase();
+        const allowed = ['PDF', 'SVG', 'PNG', 'JPG', 'JPEG', 'DWG', 'DXF'];
+        if (!allowed.includes(ext)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_UNSUPPORTED_FORMAT',
+              message: `Unsupported drawing format '.${ext}'. Supported formats: PDF, SVG, PNG, JPG.`,
+            },
+          });
+          return;
+        }
+
+        if (!storageAdapter) {
+          res.status(500).json({
+            success: false,
+            error: { code: 'FORGEX_STORAGE_UNAVAILABLE', message: 'Storage adapter is not configured.' },
+          });
+          return;
+        }
+
+        const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const randomId = crypto.randomUUID();
+        const storageKey = `schematics/${machine.assetTag}-${randomId}-${sanitizedName}`;
+
+        const mimeType = ext === 'PDF' ? 'application/pdf' : ext === 'SVG' ? 'image/svg+xml' : ext === 'PNG' ? 'image/png' : 'image/jpeg';
+        await storageAdapter.putObject(storageKey, file.buffer, mimeType);
+
+        const mappings = await dataStore.listComponentMappings(orgId, machine.id);
+        const equipmentTags = mappings.map((m) => m.pidTag).filter(Boolean);
+
+        const drawing = await dataStore.createEngineeringDrawing(orgId, {
+          plantId: machine.plantId || 'PLANT-TX-04',
+          machineId: machine.id,
+          drawingTitle: sanitizedName,
+          uniqueDrawingNumber: `PID-${machine.assetTag}`,
+          drawingType: 'PID',
+          discipline: 'Process',
+          revision: '1.0',
+          source: 'Engineering Upload',
+          storageKey,
+          originalFileName: sanitizedName,
+          fileFormat: (ext === 'JPEG' ? 'JPG' : ext) as any,
+          fileSizeBytes: file.size,
+          fileHashSha256: crypto.createHash('sha256').update(file.buffer).digest('hex'),
+          dataClassification: machine.dataClassification || 'CONFIDENTIAL',
+          equipmentTags,
+          uploadedByUserId: req.auth!.user.id,
+        });
+
+        await dataStore.updateMachine(orgId, machine.id, {
+          hasPidDiagram: true,
+          pidStorageKey: storageKey,
+        });
+
+        res.json({
+          success: true,
+          data: { drawing },
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_INTERNAL_ERROR', message: err instanceof Error ? err.message : 'Failed to upload drawing' },
+        });
+      }
+    }
+  );
+
+  /**
    * GET /api/v1/engineering/machines/:machineId/pid
    * Retrieves primary P&ID drawing and component mappings for an industrial machine.
    * Enforces machine existence and organization boundary checks.
@@ -1405,13 +1827,41 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
         return;
       }
 
-      const drawings = await dataStore.listEngineeringDrawings(orgId, { machineId });
+      let drawings = await dataStore.listEngineeringDrawings(orgId, { machineId });
+      const mappings = await dataStore.listComponentMappings(orgId, machineId);
+
+      if (drawings.length === 0 && (machine.hasPidDiagram || machine.pidStorageKey || (machine.technicalSpecs as any)?.pidFileName)) {
+        const specs = (machine.technicalSpecs || {}) as Record<string, any>;
+        const rawFileName = specs.pidFileName || (machine.pidStorageKey ? machine.pidStorageKey.split('/').pop() : 'drawing.pdf');
+        const storageKey = machine.pidStorageKey || `schematics/${machine.assetTag}-${rawFileName}`;
+        const ext = (rawFileName.split('.').pop() || 'PDF').toUpperCase();
+        const format = ext === 'SVG' ? 'SVG' : ext === 'PDF' ? 'PDF' : ext === 'PNG' ? 'PNG' : ext === 'JPG' || ext === 'JPEG' ? 'JPG' : 'PDF';
+
+        const created = await dataStore.createEngineeringDrawing(orgId, {
+          plantId: machine.plantId || 'PLANT-TX-04',
+          machineId: machine.id,
+          drawingTitle: rawFileName,
+          uniqueDrawingNumber: `PID-${machine.assetTag}`,
+          drawingType: 'PID',
+          discipline: 'Process',
+          revision: '1.0',
+          source: 'Engineering Archive',
+          storageKey,
+          originalFileName: rawFileName,
+          fileFormat: format as any,
+          fileSizeBytes: Number(specs.pidFileSize) || 3136182,
+          fileHashSha256: 'auto_linked',
+          dataClassification: machine.dataClassification || 'INTERNAL',
+          equipmentTags: mappings.map((m) => m.pidTag).filter(Boolean),
+          uploadedByUserId: req.auth!.user.id,
+        });
+        drawings = [created];
+      }
+
       const pidDrawings = drawings.filter(
-        (d) => d.drawingType === 'PID' || d.drawingType === 'PROCESS_FLOW' || d.fileFormat === 'SVG'
+        (d) => d.drawingType === 'PID' || d.drawingType === 'PROCESS_FLOW' || d.fileFormat === 'SVG' || d.fileFormat === 'PDF'
       );
       const primaryDrawing = pidDrawings.find((d) => d.status === 'APPROVED') || pidDrawings[0] || drawings[0] || null;
-
-      const mappings = await dataStore.listComponentMappings(orgId, machineId);
 
       res.json({
         success: true,
@@ -1696,7 +2146,7 @@ export function createEngineeringRouter(dataStore: IDataStore, storageAdapter?: 
           res.status(403).json({
             success: false,
             error: {
-              code: 'FORGEX_RBAC_FORBIDDEN',
+              code: 'FORGEX_CROSS_TENANT_FORBIDDEN',
               message: 'Access denied: Storage object is outside tenant namespace or unauthorized.',
             },
           });

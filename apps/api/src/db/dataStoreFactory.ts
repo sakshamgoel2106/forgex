@@ -19,17 +19,22 @@ export interface DataStoreInitResult {
 export async function createDataStore(cfg: EnvConfig): Promise<DataStoreInitResult> {
   if (cfg.DATABASE_URL && cfg.DATABASE_URL.startsWith('postgres')) {
     try {
+      let connString = cfg.DATABASE_URL;
+      if (connString.includes('pooler.supabase.com:5432')) {
+        connString = connString.replace('pooler.supabase.com:5432', 'pooler.supabase.com:6543');
+      }
+
       const isSsl =
-        cfg.DATABASE_URL.includes('sslmode=require') ||
-        cfg.DATABASE_URL.includes('supabase') ||
-        cfg.DATABASE_URL.includes('rds.amazonaws.com');
+        connString.includes('sslmode=require') ||
+        connString.includes('supabase') ||
+        connString.includes('rds.amazonaws.com');
 
       const pool = new pg.Pool({
-        connectionString: cfg.DATABASE_URL,
+        connectionString: connString,
         ssl: isSsl ? { rejectUnauthorized: false } : false,
         max: 20,
         idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        connectionTimeoutMillis: 10000,
       });
 
       pool.on('connect', (client) => {

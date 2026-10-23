@@ -118,9 +118,12 @@ export function createRecoveryRouter(
           modelNumber,
           serialNumber,
           manufacturingYear,
+          estimatedVintage,
+          nameplateImage,
           locationDescription,
           criticality,
           unresolvedIdentityQuestions,
+          technicalSpecs,
         } = req.body;
 
         if (!plantId || !assetTag || !name) {
@@ -155,6 +158,17 @@ export function createRecoveryRouter(
         const existing = await dataStore.getMachineByAssetTag(orgId, assetTag);
         let machine;
 
+        const mergedSpecs: Record<string, any> = {
+          ...(existing?.technicalSpecs || {}),
+          ...(technicalSpecs || {}),
+          ...(estimatedVintage ? { estimatedVintage } : {}),
+          ...(nameplateImage ? {
+            nameplateImageName: typeof nameplateImage === 'string' ? nameplateImage : nameplateImage.filename || nameplateImage.name,
+            nameplateImageDataUrl: typeof nameplateImage === 'object' ? nameplateImage.dataUrl || nameplateImage.preview : undefined,
+            hasNameplateImage: true,
+          } : {}),
+        };
+
         if (existing) {
           machine = await dataStore.updateMachine(orgId, existing.id, {
             name,
@@ -167,6 +181,7 @@ export function createRecoveryRouter(
             criticality: criticality || existing.criticality,
             verificationState,
             documentationReadiness: verificationState === 'VERIFIED' ? 'READY' : 'INCOMPLETE',
+            technicalSpecs: mergedSpecs,
             ...(manufacturingYear ? { manufacturingYear: Number(manufacturingYear) } as any : {}),
             ...(unresolvedIdentityQuestions ? { unresolvedIdentityQuestions } as any : {}),
           });
@@ -184,11 +199,13 @@ export function createRecoveryRouter(
             criticality: criticality || 'MEDIUM',
             dataClassification: 'INTERNAL',
             authorizedAccessScope: 'ORGANIZATION',
+            technicalSpecs: mergedSpecs,
           });
 
           machine = await dataStore.updateMachine(orgId, machine.id, {
             verificationState,
             documentationReadiness: verificationState === 'VERIFIED' ? 'READY' : 'INCOMPLETE',
+            technicalSpecs: mergedSpecs,
             ...(manufacturingYear ? { manufacturingYear: Number(manufacturingYear) } : {}),
             ...(unresolvedIdentityQuestions ? { unresolvedIdentityQuestions } : {}),
           } as any);

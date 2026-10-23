@@ -141,7 +141,12 @@ export class IngestionProcessor {
       const resolvedMachineId =
         machineId ||
         (document as any).machineId ||
+        ((document as any).assetIds && (document as any).assetIds.length > 0 ? (document as any).assetIds[0] : undefined) ||
         (document.assetTags && document.assetTags.length > 0 ? document.assetTags[0] : undefined);
+
+      const linkedAssetIds: string[] = (document as any).assetIds && (document as any).assetIds.length > 0
+        ? (document as any).assetIds
+        : (resolvedMachineId ? [resolvedMachineId] : []);
 
       const vectorPoints: VectorPoint[] = chunkDrafts.map((chunk, idx) => ({
         id: chunk.qdrantPointId,
@@ -150,6 +155,10 @@ export class IngestionProcessor {
           organizationId: document.organizationId,
           plantId: document.plantId,
           machineId: resolvedMachineId,
+          assetId: resolvedMachineId,
+          asset_id: resolvedMachineId,
+          assetIds: linkedAssetIds,
+          asset_ids: linkedAssetIds,
           documentId: document.id,
           documentNumber: document.documentNumber,
           documentTitle: document.title,

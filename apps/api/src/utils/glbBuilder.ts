@@ -142,8 +142,10 @@ export function buildGlbFromParts(parts: GlbPartDefinition[], sceneName = 'Indus
     binBuffers.push(Buffer.from(normArr.buffer));
     byteOffset += normByteLength;
 
-    // 3. Indices: uint16
-    const indArr = new Uint16Array(part.data.indices);
+    // 3. Indices: uint16 or uint32 depending on vertex count
+    const maxIndex = part.data.indices.reduce((max, val) => (val > max ? val : max), 0);
+    const useUint32 = maxIndex > 65535;
+    const indArr = useUint32 ? new Uint32Array(part.data.indices) : new Uint16Array(part.data.indices);
     const indOffset = byteOffset;
     const indByteLength = indArr.byteLength;
     const padding = (4 - (indByteLength % 4)) % 4;
@@ -158,7 +160,7 @@ export function buildGlbFromParts(parts: GlbPartDefinition[], sceneName = 'Indus
     accessors.push({
       bufferView: indBvIdx,
       byteOffset: 0,
-      componentType: 5123, // UNSIGNED_SHORT
+      componentType: useUint32 ? 5125 : 5123, // UNSIGNED_INT or UNSIGNED_SHORT
       count: indArr.length,
       type: 'SCALAR',
     });

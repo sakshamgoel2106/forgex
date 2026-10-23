@@ -105,6 +105,8 @@ export interface TechnicalDocument {
   title: string;
   category: DocumentType;
   assetTags: string[];
+  assetIds?: string[];
+  machineId?: string;
   dataClassification?: string;
   isConfidential?: boolean;
   createdByUserId?: string | null;

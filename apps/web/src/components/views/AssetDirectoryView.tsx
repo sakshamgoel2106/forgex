@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   Loader2,
   X,
+  Pencil,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import { StatusBadge } from '../ui/StatusBadge';
@@ -24,6 +25,7 @@ import { MachinePosterModal } from './MachinePosterModal';
 import { RegisterMachineModal } from './RegisterMachineModal';
 import { PublicLookupModal } from './PublicLookupModal';
 import { TaskManagementModal } from './TaskManagementModal';
+import { MachineVerificationCard } from './MachineVerificationCard';
 import type { Machine, MachineLedgerSummary, DataClassification, ComponentMapping } from '@forgex/shared-types';
 import { enrichMachinesWithStoredFiles } from '../../lib/machineStorage';
 
@@ -33,7 +35,7 @@ interface AssetDirectoryViewProps {
 }
 
 export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
-  const { token, organization, isOwnerOrAdmin } = useAuth();
+  const { token, organization, isOwnerOrAdmin, membership } = useAuth();
 
   const [machines, setMachines] = useState<Machine[]>([]);
   const [summary, setSummary] = useState<MachineLedgerSummary | null>(null);
@@ -47,6 +49,7 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
 
   // Modals state
   const [isRegisterOpen, setIsRegisterOpen] = useState(false);
+  const [machineToEdit, setMachineToEdit] = useState<Machine | null>(null);
   const [isPublicLookupOpen, setIsPublicLookupOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isThreeDOpen, setIsThreeDOpen] = useState(false);
@@ -316,7 +319,7 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
           <div>
             <div className="text-[10px] text-[#64748B] uppercase font-semibold">Verified Specs</div>
             <div className="text-lg font-bold text-emerald-600 tabular-nums">
-              {machines.filter((m) => m.verificationState === 'VERIFIED').length}
+              {summary?.verifiedSpecsCount !== undefined ? summary.verifiedSpecsCount : machines.filter((m) => m.verificationState === 'VERIFIED').length}
             </div>
           </div>
           <ShieldCheck className="w-5 h-5 text-emerald-600" />
@@ -369,7 +372,10 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
 
           <button
             type="button"
-            onClick={() => setIsRegisterOpen(true)}
+            onClick={() => {
+              setMachineToEdit(null);
+              setIsRegisterOpen(true);
+            }}
             className="px-3.5 py-1.5 bg-[#151C24] hover:bg-black text-white rounded-lg flex items-center gap-1.5 transition text-xs font-semibold shadow-sm cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -623,6 +629,19 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
               </button>
             </div>
 
+            {/* Edit Machine Record */}
+            <button
+              type="button"
+              onClick={() => {
+                setMachineToEdit(selectedAsset);
+                setIsRegisterOpen(true);
+              }}
+              className="w-full py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+            >
+              <Pencil className="w-3.5 h-3.5 text-slate-600" />
+              <span>Edit Machine Record</span>
+            </button>
+
             {/* Delete Asset Record */}
             <button
               type="button"
@@ -632,6 +651,21 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
               <Trash2 className="w-3.5 h-3.5 text-rose-500" />
               <span>Delete Asset Record</span>
             </button>
+
+            {/* Authoritative Engineering Verification Workflow Card */}
+            <MachineVerificationCard
+              machine={selectedAsset}
+              token={token}
+              organizationId={organization?.id}
+              isOwnerOrAdmin={isOwnerOrAdmin}
+              userRole={membership?.role}
+              onMachineUpdated={(updated) => {
+                setSelectedAsset(updated);
+                setMachines((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+                fetchLedger();
+              }}
+              onOpenManageTasks={() => setIsTaskModalOpen(true)}
+            />
 
             {/* Machine Specs Box */}
             <div className="p-4 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
@@ -737,10 +771,14 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
       {/* Register Machine Modal */}
       <RegisterMachineModal
         isOpen={isRegisterOpen}
-        onClose={() => setIsRegisterOpen(false)}
+        onClose={() => {
+          setIsRegisterOpen(false);
+          setMachineToEdit(null);
+        }}
         onMachineCreated={fetchLedger}
         token={token}
         organizationId={organization?.id}
+        machineToEdit={machineToEdit}
       />
 
       {/* Public OEM Lookup Modal */}
@@ -759,8 +797,8 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
       <TaskManagementModal
         isOpen={isTaskModalOpen}
         onClose={() => setIsTaskModalOpen(false)}
-        machineId={selectedMachine?.id}
-        machineTag={selectedMachine?.assetTag}
+        machineId={selectedAsset?.id || selectedMachine?.id}
+        machineTag={selectedAsset?.assetTag || selectedMachine?.assetTag}
         token={token}
         organizationId={organization?.id}
         isOwnerOrAdmin={isOwnerOrAdmin}

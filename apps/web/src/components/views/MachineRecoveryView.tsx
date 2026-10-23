@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Sparkles,
   ClipboardList,
+  Upload,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
@@ -89,6 +90,9 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
   const [regMfr, setRegMfr] = useState('');
   const [regModel, setRegModel] = useState('');
   const [regSerial, setRegSerial] = useState('');
+  const [regVintage, setRegVintage] = useState<string>('Unknown');
+  const [regNameplateFile, setRegNameplateFile] = useState<File | null>(null);
+  const [regNameplateBase64, setRegNameplateBase64] = useState<string | null>(null);
   const [submittingRegister, setSubmittingRegister] = useState(false);
 
   // Headers helper
@@ -321,6 +325,12 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
           manufacturer: regMfr.trim() ? regMfr.trim() : null,
           modelNumber: regModel.trim() ? regModel.trim() : null,
           serialNumber: regSerial.trim() ? regSerial.trim() : null,
+          estimatedVintage: regVintage !== 'Unknown' ? regVintage : undefined,
+          nameplateImage: regNameplateFile ? {
+            filename: regNameplateFile.name,
+            fileSizeBytes: regNameplateFile.size,
+            dataUrl: regNameplateBase64 || undefined,
+          } : undefined,
         }),
       });
 
@@ -337,6 +347,9 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
       setRegMfr('');
       setRegModel('');
       setRegSerial('');
+      setRegVintage('Unknown');
+      setRegNameplateFile(null);
+      setRegNameplateBase64(null);
       await loadOverviewData();
     } catch (err: any) {
       setErrorMessage(err.message);
@@ -760,16 +773,20 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                                       ? 'bg-blue-50 text-[#2563EB] border-blue-200'
                                       : f.status === 'CONFLICTING'
                                       ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : f.status === 'PENDING_EVIDENCE' || f.status === 'UNVERIFIED'
+                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
                                       : 'bg-slate-100 text-[#64748B] border-[#E2E8F0]'
                                   }`}
                                 >
-                                  {f.status.replace('_', ' ')}
+                                  {f.status.replace(/_/g, ' ')}
                                 </span>
                               </td>
 
                               <td className="p-2.5 font-mono text-[#1A202C]">
-                                {f.currentApprovedValue !== undefined && f.currentApprovedValue !== null
+                                {f.currentApprovedValue !== undefined && f.currentApprovedValue !== null && String(f.currentApprovedValue).trim() !== ''
                                   ? `${f.currentApprovedValue} ${f.unit || ''}`
+                                  : f.draftValue !== undefined && f.draftValue !== null && String(f.draftValue).trim() !== ''
+                                  ? `${f.draftValue} ${f.unit || ''}`
                                   : <span className="text-[#94A3B8] italic">Unknown</span>}
                               </td>
 
@@ -781,12 +798,17 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                                       Verified: {f.approvedProvenance.reviewerQualifications || 'PE'}
                                     </div>
                                   </div>
+                                ) : f.status === 'PENDING_EVIDENCE' || f.status === 'UNVERIFIED' ? (
+                                  <div className="text-amber-700 text-[10px] font-medium flex items-center gap-1">
+                                    <Clock className="w-3 h-3 text-amber-600 shrink-0 inline" />
+                                    <span>Asset Ledger Draft (Unverified)</span>
+                                  </div>
                                 ) : f.status === 'CONFLICTING' && f.conflictDetails ? (
                                   <div className="text-rose-600 text-[10px] font-medium">
                                     Conflicting values collected across {f.conflictDetails.length} sources. Engineering resolution needed.
                                   </div>
                                 ) : (
-                                  <span className="text-[#94A3B8] italic">Not approved</span>
+                                  <span className="text-[#94A3B8] italic">Genuinely missing</span>
                                 )}
                               </td>
                             </tr>
@@ -1240,6 +1262,70 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                       onChange={(e) => setRegSerial(e.target.value)}
                       className="w-full bg-white border border-[#CBD5E1] p-1.5 text-xs text-[#1A202C] rounded focus:border-[#2563EB]"
                     />
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <label className="block text-[10px] text-[#64748B] mb-1 font-medium">Estimated Vintage / Decade (Optional)</label>
+                  <select
+                    value={regVintage}
+                    onChange={(e) => setRegVintage(e.target.value)}
+                    className="w-full bg-white border border-[#CBD5E1] p-1.5 text-xs text-[#1A202C] rounded focus:border-[#2563EB]"
+                  >
+                    <option value="Unknown">Unknown</option>
+                    <option value="1970s or Earlier">1970s or Earlier</option>
+                    <option value="1980s">1980s</option>
+                    <option value="1990s">1990s</option>
+                    <option value="2000s">2000s</option>
+                    <option value="2010s">2010s</option>
+                    <option value="2020s">2020s</option>
+                  </select>
+                </div>
+
+                <div className="pt-2 border-t border-[#E2E8F0] space-y-1.5">
+                  <label className="block text-xs font-semibold text-[#1A202C]">
+                    Nameplate Image / Machine Photo
+                    <span className="ml-1 text-[10px] font-normal text-[#64748B]">(For AI Extraction)</span>
+                  </label>
+                  <p className="text-[11px] text-[#64748B]">
+                    Upload a physical nameplate photograph or machine rating tag for subsequent automated AI extraction.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <label className="cursor-pointer px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-[#2563EB] border border-blue-200 rounded text-xs font-medium flex items-center gap-1.5 transition">
+                      <Upload className="w-3.5 h-3.5" />
+                      {regNameplateFile ? 'Change Image' : 'Select Nameplate Image'}
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setRegNameplateFile(file);
+                            const reader = new FileReader();
+                            reader.onload = () => setRegNameplateBase64(reader.result as string);
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                      />
+                    </label>
+                    {regNameplateFile && (
+                      <div className="flex items-center gap-2 text-xs bg-slate-50 border border-slate-200 px-2 py-1 rounded">
+                        <span className="font-mono text-[11px] truncate max-w-[200px] text-[#1A202C]">{regNameplateFile.name}</span>
+                        <span className="text-[10px] text-[#64748B]">({(regNameplateFile.size / 1024).toFixed(1)} KB)</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRegNameplateFile(null);
+                            setRegNameplateBase64(null);
+                          }}
+                          className="text-slate-400 hover:text-rose-600"
+                          title="Remove file"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

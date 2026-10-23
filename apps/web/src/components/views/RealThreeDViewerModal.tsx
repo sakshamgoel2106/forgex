@@ -23,13 +23,14 @@ import {
   Info,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
-import { getMachineFiles, attachFileToMachine } from '../../lib/machineStorage';
 
 interface RealThreeDViewerModalProps {
   isOpen: boolean;
   onClose: () => void;
   machine: Machine | null;
   mappings: ComponentMapping[];
+  initialModel?: EngineeringModel3D | null;
+  initialModelId?: string | null;
   onOpenPid?: (tag: string) => void;
   onOpenManual?: (pageNumber: number) => void;
   onMappingVerified?: () => void;
@@ -60,6 +61,8 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   onClose,
   machine,
   mappings,
+  initialModel,
+  initialModelId,
   onOpenPid,
   onOpenManual,
   onMappingVerified,
@@ -95,7 +98,23 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
 
   // 1. Fetch approved model record for this machine
   useEffect(() => {
-    if (!isOpen || !machine) {
+    if (!isOpen) {
+      setModelRecord(null);
+      setIsLoading(false);
+      setLoadError(null);
+      setUnsupportedFormat(null);
+      return;
+    }
+
+    if (initialModel) {
+      setModelRecord(initialModel);
+      setIsLoading(false);
+      setLoadError(null);
+      setUnsupportedFormat(null);
+      return;
+    }
+
+    if (!machine && !initialModelId) {
       setModelRecord(null);
       setIsLoading(false);
       setLoadError(null);
@@ -110,37 +129,46 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
 
     const fetchModel = async () => {
       try {
-        const stored = getMachineFiles(machine);
-        if (stored.model3dUrl) {
-          const ext = stored.model3dFile?.format?.toUpperCase() || stored.model3dFile?.name?.split('.').pop()?.toUpperCase() || 'GLB';
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        // 0. If initialModelId is provided, query it directly
+        if (initialModelId) {
+          const directRes = await fetch(`/api/v1/engineering/models/${initialModelId}`, { headers });
+          if (directRes.ok) {
+            const directJson = await directRes.json();
+            if (directJson.success && directJson.data) {
+              if (isMounted) {
+                setModelRecord(directJson.data);
+                setIsLoading(false);
+              }
+              return;
+            }
+          }
+        }
+
+        if (!machine) {
           if (isMounted) {
-            setModelRecord({
-              id: `local-${machine.id}`,
-              organizationId: machine.organizationId,
-              plantId: machine.plantId || 'default',
-              machineId: machine.id,
-              industryProfileCode: 'GENERAL',
-              assetCategory: 'MACHINERY',
-              title: stored.model3dFile?.name || `${machine.name} 3D Asset`,
-              fileHashSha256: 'local',
-              storageKey: `local/${machine.id}/model`,
-              fileUrl: stored.model3dUrl,
-              fileFormat: ext as any,
-              fileSizeBytes: stored.model3dFile?.size || 0,
-              modelRevision: '1.0',
-              status: 'APPROVED',
-              dataClassification: machine.dataClassification || 'CONFIDENTIAL',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
+            setModelRecord(null);
             setIsLoading(false);
           }
           return;
         }
 
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        // 1. First attempt to fetch the machine's primary model from the dedicated endpoint
+        const machRes = await fetch(`/api/v1/engineering/machines/${machine.id}/3d-model`, { headers });
+        if (machRes.ok) {
+          const machJson = await machRes.json();
+          if (machJson.success && machJson.data?.primaryModel) {
+            if (isMounted) {
+              setModelRecord(machJson.data.primaryModel);
+              setIsLoading(false);
+            }
+            return;
+          }
+        }
 
+        // 2. Fall back to listing models by machineId
         const res = await fetch(`/api/v1/engineering/models?machineId=${machine.id}`, { headers });
         if (!res.ok) {
           if (isMounted) {
@@ -395,8 +423,10 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
         }
 
         const format = modelRecord.fileFormat.toUpperCase();
+        const isGlbMagic = arrayBuffer.byteLength >= 12 && new DataView(arrayBuffer).getUint32(0, true) === 0x46546C67;
+        const isGlbOrConverted = isGlbMagic || format === 'GLB' || format === 'GLTF' || format === 'STEP' || format === 'STP';
 
-        if (format === 'GLB' || format === 'GLTF') {
+        if (isGlbOrConverted) {
           const gltfLoader = new GLTFLoader();
           gltfLoader.parse(
             arrayBuffer,
@@ -406,7 +436,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             },
             (err) => {
               console.error('GLTF parse error:', err);
-              setLoadError(`Failed to parse 3D glTF/GLB model: ${err.message || 'Corrupted file'}`);
+              setLoadError(`Failed to parse 3D CAD model: ${err.message || 'Corrupted file'}`);
               setIsLoadingGeometry(false);
             }
           );
@@ -557,46 +587,54 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
     const file = e.target.files?.[0];
     if (!file || !machine) return;
     setIsUploading(true);
+    setLoadError(null);
+    setUnsupportedFormat(null);
     try {
-      const attached = await attachFileToMachine(machine.id, machine.assetTag, '3d', file);
-      const url = attached.url;
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      const updatedMachine: Machine = {
-        ...machine,
-        hasModel3d: true,
-        model3dFormat: ext as any,
-        model3dFile: { name: file.name, size: file.size, type: file.type },
-        model3dUrl: url,
-      };
-      onMachineUpdated?.(updatedMachine);
-      setModelRecord({
-        id: `local-${machine.id}`,
-        organizationId: machine.organizationId,
-        plantId: machine.plantId || 'default',
-        machineId: machine.id,
-        industryProfileCode: 'GENERAL',
-        assetCategory: 'MACHINERY',
-        title: file.name,
-        fileHashSha256: 'local',
-        storageKey: `local/${machine.id}/model`,
-        fileUrl: url,
-        fileFormat: (ext?.toUpperCase() || 'GLB') as any,
-        fileSizeBytes: file.size,
-        modelRevision: '1.0',
-        status: 'APPROVED',
-        dataClassification: machine.dataClassification || 'CONFIDENTIAL',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      const formData = new FormData();
+      formData.append('file', file);
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/v1/engineering/machines/${machine.id}/3d-model/upload`, {
+        method: 'POST',
+        headers,
+        body: formData,
       });
-    } catch (err) {
-      console.error('Failed to attach 3D model:', err);
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error?.message || 'Failed to upload 3D model');
+      }
+
+      const model = json.data?.model;
+      if (model) {
+        setModelRecord(model);
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        const updatedMachine: Machine = {
+          ...machine,
+          hasModel3d: true,
+          model3dFormat: ext as any,
+          model3dFile: { name: file.name, size: file.size, type: file.type },
+        };
+        onMachineUpdated?.(updatedMachine);
+      }
+    } catch (err: any) {
+      console.error('Failed to upload 3D model:', err);
+      setLoadError(err.message || 'Failed to upload 3D model');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  if (!isOpen || !machine) return null;
+  const currentMachine: Machine = machine || ({
+    id: modelRecord?.machineId || initialModel?.machineId || '3d-asset',
+    assetTag: modelRecord?.title || initialModel?.title || '3D-ASSET',
+    name: modelRecord?.title || initialModel?.title || 'Industrial Machine',
+    plantId: modelRecord?.plantId || initialModel?.plantId || 'PLANT-DEFAULT',
+  } as Machine);
+
+  if (!isOpen || (!machine && !modelRecord && !initialModel && !initialModelId)) return null;
 
   const selectedMapping = mappings.find(
     (m) => m.componentId === selectedComponentId || m.componentName.toLowerCase().includes(selectedComponentId || '')
@@ -616,7 +654,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             <BoxSelect className="w-5 h-5 text-[#2563EB]" />
             <div>
               <div id="viewer-title" className="text-xs font-mono font-bold text-[#1A202C] uppercase tracking-wider">
-                Genuine 3D CAD Engineering Viewer • {machine.assetTag}
+                Genuine 3D CAD Engineering Viewer • {currentMachine.assetTag}
               </div>
               <div className="text-[10px] text-[#64748B] font-sans">
                 {modelRecord ? `${modelRecord.title} (${modelRecord.fileFormat})` : 'Authorized Model Verification Check'}
@@ -656,7 +694,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
         {isLoading ? (
           <div className="h-[520px] flex flex-col items-center justify-center gap-3 bg-[#F8FAFC] text-[#64748B]">
             <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
-            <div className="text-xs font-mono">Verifying Authorized 3D CAD Artifacts for {machine.assetTag}...</div>
+            <div className="text-xs font-mono">Verifying Authorized 3D CAD Artifacts for {currentMachine.assetTag}...</div>
           </div>
         ) : !modelRecord ? (
           /* Honest Missing-Model State */
@@ -678,16 +716,16 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             <div className="w-full max-w-md bg-white border border-[#E2E8F0] rounded-xl p-4 text-left text-xs font-sans space-y-2 shadow-sm">
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
                 <span className="text-[#64748B] font-mono">Asset Tag:</span>
-                <span className="font-bold text-[#1A202C] font-mono">{machine.assetTag}</span>
+                <span className="font-bold text-[#1A202C] font-mono">{currentMachine.assetTag}</span>
               </div>
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
                 <span className="text-[#64748B] font-mono">Equipment:</span>
-                <span className="text-[#1A202C]">{machine.name}</span>
+                <span className="text-[#1A202C]">{currentMachine.name}</span>
               </div>
               <div className="flex justify-between border-b border-[#E2E8F0] pb-1.5">
                 <span className="text-[#64748B] font-mono">Manufacturer / Model:</span>
                 <span className="text-[#1A202C]">
-                  {machine.manufacturer || 'Unknown'} / {machine.modelNumber || 'Legacy'}
+                  {currentMachine.manufacturer || 'Unknown'} / {currentMachine.modelNumber || 'Legacy'}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -810,7 +848,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             <div className="relative flex-1 h-full overflow-hidden flex flex-col bg-[#F1F5F9]">
               {/* Overlay Controls */}
               <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-[#CBD5E1] shadow-sm">
-                <span className="text-[11px] font-mono font-bold text-[#1A202C] uppercase">{machine.assetTag}</span>
+                <span className="text-[11px] font-mono font-bold text-[#1A202C] uppercase">{currentMachine.assetTag}</span>
                 <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded font-mono font-bold">
                   {modelRecord.fileFormat} GEOMETRY
                 </span>
