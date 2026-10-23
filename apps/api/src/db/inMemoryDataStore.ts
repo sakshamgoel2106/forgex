@@ -194,6 +194,10 @@ export class InMemoryDataStore implements IDataStore {
   // Root Cause Analysis (RCA) Sessions
   private rcaSessions = new Map<string, RcaSession>();
 
+  public async withTenantContext<T>(_organizationId: string, callback: () => Promise<T>): Promise<T> {
+    return callback();
+  }
+
   constructor() {
     this.seedDefaultIndustryProfiles();
   }

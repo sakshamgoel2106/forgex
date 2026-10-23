@@ -24,6 +24,7 @@ import {
 } from '../ui/dropdown-menu';
 import type { NavModule } from './Sidebar';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
 
 interface TopBarProps {
   activeModule: NavModule;
@@ -60,8 +61,8 @@ const MODULE_LABELS: Record<NavModule, string> = {
 
 export const TopBar: React.FC<TopBarProps> = ({
   activeModule,
-  plantSite: _plantSite,
-  onPlantChange: _onPlantChange,
+  plantSite,
+  onPlantChange,
   onOpenSearch,
   onOpenNotifications,
   onOpenMobileNav,
@@ -70,8 +71,21 @@ export const TopBar: React.FC<TopBarProps> = ({
   sidebarCollapsed,
 }) => {
   const { user, organization, membership, memberships, logout, switchOrganization, token } = useAuth();
+  const { plants, activePlant, setActivePlant } = usePlant();
   const [activeFallbackNotice, setActiveFallbackNotice] = useState<string | null>(null);
   const [hasMachines, setHasMachines] = useState<boolean>(false);
+
+  // If organization's plants list has 1 plant, auto-resolve plants[0].id silently
+  useEffect(() => {
+    if (plants.length === 1 && plants[0]?.id && activePlant !== plants[0].id) {
+      setActivePlant(plants[0].id);
+      onPlantChange?.(plants[0].id);
+    }
+  }, [plants, activePlant, setActivePlant, onPlantChange]);
+
+  const currentPlant =
+    plants.find((p) => p.id === (plantSite || activePlant) || p.code === (plantSite || activePlant)) ||
+    plants[0];
 
   useEffect(() => {
     if (!token || !organization?.id) return;
@@ -196,19 +210,86 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Right: Plant + Alerts + User */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Single-Factory Facility Context */}
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-white border border-gray-200 text-left shadow-sm">
-            <Building2 className="w-3.5 h-3.5 shrink-0 text-[#1D4ED8]" />
-            <div className="min-w-0 flex items-center gap-1.5 text-xs font-mono">
-              <span className="font-semibold text-gray-800 truncate max-w-[130px]">
-                {organization?.name || 'Company'}
-              </span>
-              <span className="text-gray-300">|</span>
-              <span className="truncate max-w-[130px] text-gray-600 font-medium">
-                Main Facility
-              </span>
+          {/* Adaptive Multi-Plant Context Switcher:
+              - If plants.length === 1, auto-resolve plants[0].id silently and keep dropdown hidden.
+              - If plants.length > 1, render an active Plant Context Switcher dropdown.
+          */}
+          {plants.length > 1 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-white border border-gray-200 hover:border-[#1D4ED8] text-left shadow-sm transition group outline-none"
+                  aria-label="Switch operational facility"
+                >
+                  <Building2 className="w-3.5 h-3.5 shrink-0 text-[#1D4ED8]" />
+                  <div className="min-w-0 flex items-center gap-1.5 text-xs font-mono">
+                    <span className="font-semibold text-gray-800 truncate max-w-[110px]">
+                      {currentPlant?.code || currentPlant?.name || 'Facility'}
+                    </span>
+                    <span className="text-gray-300">|</span>
+                    <span className="truncate max-w-[120px] text-gray-600 font-medium hidden lg:inline">
+                      {currentPlant?.name || 'Plant'}
+                    </span>
+                  </div>
+                  <ChevronDown className="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 transition" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72 bg-white border-gray-200 shadow-xl">
+                <DropdownMenuLabel className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 py-2">
+                  Operational Facilities ({plants.length})
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {plants.map((plant) => {
+                  const isSelected = plant.id === (plantSite || activePlant) || plant.code === (plantSite || activePlant);
+                  return (
+                    <DropdownMenuItem
+                      key={plant.id || plant.code}
+                      onClick={() => {
+                        setActivePlant(plant.id);
+                        onPlantChange?.(plant.id);
+                      }}
+                      className={`px-3 py-2 cursor-pointer flex flex-col items-start gap-0.5 ${
+                        isSelected ? 'bg-blue-50 text-[#1D4ED8]' : 'hover:bg-gray-50 text-gray-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="text-xs font-bold font-mono">
+                          {plant.code || plant.name}
+                        </span>
+                        {isSelected && (
+                          <span className="text-[10px] font-bold text-[#1D4ED8] bg-blue-100 px-1.5 py-0.5 rounded">
+                            ACTIVE
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-gray-500 truncate w-full">
+                        {plant.name}
+                      </span>
+                      {plant.sub && (
+                        <span className="text-[10px] text-gray-400">
+                          {plant.sub}
+                        </span>
+                      )}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            /* Single-Facility Display (Dropdown hidden when plants.length <= 1) */
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md bg-white border border-gray-200 text-left shadow-sm">
+              <Building2 className="w-3.5 h-3.5 shrink-0 text-[#1D4ED8]" />
+              <div className="min-w-0 flex items-center gap-1.5 text-xs font-mono">
+                <span className="font-semibold text-gray-800 truncate max-w-[130px]">
+                  {organization?.name || 'Company'}
+                </span>
+                <span className="text-gray-300">|</span>
+                <span className="truncate max-w-[130px] text-gray-600 font-medium">
+                  {currentPlant?.name || 'Main Facility'}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Notification Bell */}
           <button

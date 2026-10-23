@@ -1,10 +1,11 @@
 /**
  * Centralized Authenticated API Client for ForgeX AI
- * Automatically injects active JWT token and x-organization-id headers.
+ * Automatically injects active JWT token, x-organization-id, and x-plant-id headers.
  */
 
 const TOKEN_KEY = 'forgex_token';
 const ORG_ID_KEY = 'forgex_active_org_id';
+const PLANT_ID_KEY = 'forgex_active_plant';
 
 export function getAuthToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -16,13 +17,20 @@ export function getActiveOrgId(): string | null {
   return localStorage.getItem(ORG_ID_KEY) || null;
 }
 
+export function getActivePlantId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(PLANT_ID_KEY) || null;
+}
+
 export interface ApiFetchOptions extends RequestInit {
   orgId?: string;
+  plantId?: string;
 }
 
 export async function apiFetch(url: string, options: ApiFetchOptions = {}): Promise<Response> {
   const token = getAuthToken();
   const orgId = options.orgId || getActiveOrgId();
+  const plantId = options.plantId || getActivePlantId();
 
   const headers = new Headers(options.headers || {});
 
@@ -32,6 +40,10 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
 
   if (orgId && !headers.has('x-organization-id')) {
     headers.set('x-organization-id', orgId);
+  }
+
+  if (plantId && !headers.has('x-plant-id')) {
+    headers.set('x-plant-id', plantId);
   }
 
   // Set default JSON Content-Type if body is a string and Content-Type not specified

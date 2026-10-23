@@ -1,5 +1,6 @@
 import pg from 'pg';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type {
   Organization,
   User,
@@ -154,7 +155,62 @@ export class PgDataStore implements IDataStore {
   private fallbackSpecialistTickets = new Map<string, SpecialistTicket>();
   private fallbackMaintenanceRecords = new Map<string, MaintenanceRecord>();
 
-  constructor(private pool: pg.Pool) {}
+  private pool: pg.Pool;
+  private rawPool: pg.Pool;
+  private tenantContextStorage = new AsyncLocalStorage<{ client: pg.PoolClient; organizationId: string }>();
+
+  constructor(pool: pg.Pool) {
+    this.rawPool = pool;
+    this.pool = new Proxy(pool, {
+      get: (target, prop, receiver) => {
+        if (prop === 'query') {
+          return (...args: any[]) => {
+            const context = this.tenantContextStorage.getStore();
+            if (context?.client) {
+              return (context.client.query as any)(...args);
+            }
+            return (target.query as any)(...args);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  }
+
+  /**
+   * Executes a callback within a strict PostgreSQL Row-Level Security tenant context.
+   * Runs inside a transaction with `app.current_tenant_id` and `app.current_organization_id` set,
+   * guaranteeing fail-closed isolation across all queries executed by this PgDataStore instance.
+   */
+  public async withTenantContext<T>(organizationId: string, callback: () => Promise<T>): Promise<T> {
+    const active = this.tenantContextStorage.getStore();
+    if (active && active.organizationId === organizationId) {
+      return callback();
+    }
+
+    const client = await this.rawPool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [organizationId]);
+      await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [organizationId]);
+
+      const result = await this.tenantContextStorage.run(
+        { client, organizationId },
+        () => callback()
+      );
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // ignore rollback errors
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 
   // --------------------------------------------------------------------------
   // Organizations

@@ -651,6 +651,9 @@ export interface IDataStore {
     deletedMaintenanceRecords: number;
     cutoffDate: string;
   }>;
+
+  // Tenant Isolation Context Manager (Strict PostgreSQL RLS)
+  withTenantContext?<T>(organizationId: string, callback: () => Promise<T>): Promise<T>;
 }
 
 export interface CreateMaintenanceCaseDTO {
