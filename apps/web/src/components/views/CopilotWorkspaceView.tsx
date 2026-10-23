@@ -34,6 +34,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
 import { apiFetch } from '../../lib/api';
 import { useAuth } from '../../lib/AuthContext';
+import { useToast } from '../../lib/ToastContext';
 import { createWakeWordProvider, type IWakeWordProvider, type WakeWordStatus } from '../../lib/voice/wakeWordProvider';
 import { releaseAllAudioTracks } from '../../lib/voice/audioCapture';
 import { VADService } from '../../lib/voice/vadService';
@@ -80,6 +81,35 @@ const PRESET_QUERIES: PresetPrompt[] = [
 
 export const CopilotWorkspaceView: React.FC = () => {
   const { user, organization } = useAuth();
+  const { toast } = useToast();
+
+  const handleRaiseTicketForRca = (msg: CopilotMessage) => {
+    const userInquiry = messages.slice().reverse().find((m) => m.senderType === 'USER')?.content || queryInput || 'Abnormal Machinery Condition';
+    const activeAsset = selectedAssetId || (assets.length > 0 ? (assets[0].assetTag || assets[0].id) : 'PUMP-CENTRIFUGAL-402');
+
+    const rcaTicketPayload = {
+      assetTag: activeAsset,
+      symptom: userInquiry,
+      query: userInquiry,
+      copilotSummary: msg.content.slice(0, 350),
+      timestamp: Date.now(),
+      reportedBy: user?.fullName || 'Technician',
+    };
+
+    try {
+      sessionStorage.setItem('forgex_rca_ticket', JSON.stringify(rcaTicketPayload));
+    } catch {}
+
+    toast.warning(
+      'RCA Ticket Raised',
+      `Anomaly on ${activeAsset} routed to Troubleshooting & RCA for Higher Officer / Engineer evaluation.`
+    );
+
+    window.history.pushState({}, '', '/troubleshooting');
+    window.dispatchEvent(
+      new CustomEvent('forgex:navigate', { detail: { module: 'troubleshooting' } })
+    );
+  };
 
   // Session & Context State
   const [plantId, setPlantId] = useState('');
@@ -1220,9 +1250,21 @@ export const CopilotWorkspaceView: React.FC = () => {
                       )}
                     </div>
 
-                    <span className="text-[10px] text-[#64748B] font-mono">
-                      ID: {msg.id.slice(0, 16)}...
-                    </span>
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => handleRaiseTicketForRca(msg)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 text-amber-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                        title="Unresolved issue? Raise ticket and route to Troubleshooting & RCA for Higher Officer / Engineer"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>🚨 Unresolved? Raise Ticket for RCA</span>
+                      </button>
+
+                      <span className="text-[10px] text-[#64748B] font-mono">
+                        ID: {msg.id.slice(0, 16)}...
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}

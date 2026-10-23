@@ -89,6 +89,7 @@ const AppContent: React.FC = () => {
   };
 
   const [activeModule, setActiveModule] = useState<NavModule>(getInitialModule());
+  const [navTargetId, setNavTargetId] = useState<string | undefined>(undefined);
 
   const role = membership?.role || 'VIEWER';
 
@@ -106,8 +107,11 @@ const AppContent: React.FC = () => {
   // Global cross-module navigation and popstate event listener
   useEffect(() => {
     const handleNavEvent = (e: Event) => {
-      const customEvent = e as CustomEvent<{ module: string; caseId?: string }>;
+      const customEvent = e as CustomEvent<{ module: string; caseId?: string; ticketId?: string }>;
       if (customEvent.detail?.module) {
+        if (customEvent.detail.caseId || customEvent.detail.ticketId) {
+          setNavTargetId(customEvent.detail.ticketId || customEvent.detail.caseId);
+        }
         setActiveModule(customEvent.detail.module as NavModule);
       }
     };
@@ -187,7 +191,7 @@ const AppContent: React.FC = () => {
       case 'expert':
         return <ExpertKnowledgeView />;
       case 'maintenance':
-        return <MaintenanceWorkspaceView />;
+        return <MaintenanceWorkspaceView initialCaseId={navTargetId} />;
       case 'history':
         return (
           <MaintenanceHistoryView
@@ -200,6 +204,7 @@ const AppContent: React.FC = () => {
       case 'tech':
         return (
           <TechnicianWorkspaceView
+            initialTicketId={navTargetId}
             onLaunchSop={() => setActiveModule('maintenance')}
             onNavigateToCopilot={(_tag) => setActiveModule('copilot')}
           />

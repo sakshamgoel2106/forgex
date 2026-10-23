@@ -47,7 +47,7 @@ const MODULE_LABELS: Record<NavModule, string> = {
   copilot: 'AI Copilot',
   troubleshooting: 'Troubleshooting & RCA',
   expert: 'Expert Knowledge',
-  maintenance: 'Work Orders',
+  maintenance: 'Raised Tickets',
   history: 'Maintenance History',
   visual: 'Visual Intelligence',
   tech: 'Technician Queue',

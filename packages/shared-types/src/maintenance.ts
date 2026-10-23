@@ -9,6 +9,7 @@ export type MaintenanceCaseStatus =
   | 'RESOLVED'
   | 'CLOSED'
   | 'ESCALATED_HUMAN'
+  | 'ESCALATED_TO_OEM'
   | 'REJECTED';
 
 export type MaintenanceCaseSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
