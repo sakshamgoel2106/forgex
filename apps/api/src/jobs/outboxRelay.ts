@@ -48,35 +48,42 @@ export class OutboxRelayWorker {
   }
 
   public async pollAndDispatch(): Promise<number> {
-    const events = await this.dataStore.fetchPendingOutboxEvents(10);
-    if (!events || events.length === 0) return 0;
+    const poll = async (): Promise<number> => {
+      const events = await this.dataStore.fetchPendingOutboxEvents(10);
+      if (!events || events.length === 0) return 0;
 
-    for (const evt of events) {
-      try {
-        const processEvent = async () => {
-          if (evt.eventType === 'DOCUMENT_INGESTION_REQUESTED') {
-            const { organizationId, documentVersionId } = evt.payload;
-            if (organizationId && documentVersionId) {
-              await this.ingestionQueue.enqueue(organizationId, documentVersionId);
+      for (const evt of events) {
+        try {
+          const processEvent = async () => {
+            if (evt.eventType === 'DOCUMENT_INGESTION_REQUESTED') {
+              const { organizationId, documentVersionId } = evt.payload;
+              if (organizationId && documentVersionId) {
+                await this.ingestionQueue.enqueue(organizationId, documentVersionId);
+              }
             }
-          }
-          await this.dataStore.markOutboxEventProcessed(evt.id);
-          logger.info(
-            { eventId: evt.id, eventType: evt.eventType, aggregateId: evt.aggregateId },
-            'Successfully processed outbox event'
-          );
-        };
+            await this.dataStore.markOutboxEventProcessed(evt.id);
+            logger.info(
+              { eventId: evt.id, eventType: evt.eventType, aggregateId: evt.aggregateId },
+              'Successfully processed outbox event'
+            );
+          };
 
-        if (typeof (this.dataStore as any).withTenantContext === 'function' && evt.organizationId) {
-          await (this.dataStore as any).withTenantContext(evt.organizationId, processEvent);
-        } else {
-          await processEvent();
+          if (typeof this.dataStore.withTenantContext === 'function' && evt.organizationId) {
+            await this.dataStore.withTenantContext(evt.organizationId, processEvent);
+          } else {
+            await processEvent();
+          }
+        } catch (err: any) {
+          logger.error({ err: err?.message, eventId: evt.id }, 'Failed to dispatch outbox event');
+          await this.dataStore.markOutboxEventFailed(evt.id, err?.message || 'Dispatch error');
         }
-      } catch (err: any) {
-        logger.error({ err: err?.message, eventId: evt.id }, 'Failed to dispatch outbox event');
-        await this.dataStore.markOutboxEventFailed(evt.id, err?.message || 'Dispatch error');
       }
+      return events.length;
+    };
+
+    if (typeof this.dataStore.withSystemWorkerContext === 'function') {
+      return this.dataStore.withSystemWorkerContext(poll);
     }
-    return events.length;
+    return poll();
   }
 }

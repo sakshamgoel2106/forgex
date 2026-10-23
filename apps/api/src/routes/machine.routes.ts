@@ -5,6 +5,7 @@ import { requireRole } from '../middleware/auth.middleware.js';
 import crypto from 'crypto';
 import type { OrgRole, VerificationHistoryEntry } from '@forgex/shared-types';
 import { HistoricalFaultService } from '../services/historicalFaultService.js';
+import { logger } from '../utils/logger.js';
 
 export function createMachineRouter(dataStore: IDataStore): Router {
   const router = Router();
@@ -65,7 +66,15 @@ export function createMachineRouter(dataStore: IDataStore): Router {
         }
 
         const orgPlants = await dataStore.listPlants(orgId);
-        const resolvedPlantId = plantId || (assignedPlants.length > 0 ? assignedPlants[0] : null) || orgPlants[0]?.id || 'default-plant';
+        const matchingPlant = orgPlants.find(
+          (p) => p.id === plantId || p.code === plantId || p.name === plantId
+        );
+        const resolvedPlantId =
+          matchingPlant?.id ||
+          (assignedPlants.length > 0 ? assignedPlants[0] : null) ||
+          orgPlants[0]?.id ||
+          plantId ||
+          'default-plant';
 
         // Plant scoping enforcement (only if explicitly specifying a different plant and restricted)
         if (plantId && !isSuperAdmin && assignedPlants.length > 0 && !assignedPlants.includes(resolvedPlantId)) {
@@ -131,7 +140,12 @@ export function createMachineRouter(dataStore: IDataStore): Router {
           serialNumber: cleanSerial,
           installationDate: installationDate || null,
           operationalState: operationalState || 'OPTIMAL',
-          criticality: criticality || 'MEDIUM',
+          criticality:
+            criticality === 'CRITICAL'
+              ? 'MISSION_CRITICAL'
+              : ['LOW', 'MEDIUM', 'HIGH', 'MISSION_CRITICAL'].includes(criticality)
+                ? criticality
+                : 'MEDIUM',
           department: department || null,
           dataClassification: dataClassification || 'INTERNAL',
           authorizedAccessScope: authorizedAccessScope || 'ORGANIZATION',
@@ -173,6 +187,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
       } catch (err: any) {
         const message = String(err?.message || '');
         const code = String(err?.code || '');
+        logger.error({ err: err?.message, code, stack: err?.stack }, 'Machine registration failed');
 
         if (code === '23505' || message.includes('uq_organization_asset_tag') || message.includes('already exists')) {
           if (message.toLowerCase().includes('serial')) {
@@ -200,7 +215,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
             success: false,
             error: {
               code: 'FORGEX_VALIDATION_ERROR',
-              message: 'A required field was missing or invalid during machine registration.',
+              message: `A required field was missing or invalid: ${message}`,
             },
           });
           return;
@@ -211,7 +226,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
             success: false,
             error: {
               code: 'FORGEX_REFERENCE_ERROR',
-              message: 'Referenced plant or parent asset does not exist in this organization.',
+              message: `Referenced plant or parent asset does not exist: ${message}`,
             },
           });
           return;
@@ -221,7 +236,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
           success: false,
           error: {
             code: 'FORGEX_MACHINE_CREATION_FAILED',
-            message: 'Failed to register machine. Please review your input and try again.',
+            message: err?.message || 'Failed to register machine. Please review your input and try again.',
           },
         });
       }

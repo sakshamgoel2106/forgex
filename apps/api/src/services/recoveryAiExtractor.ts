@@ -562,6 +562,23 @@ Return ONLY valid JSON matching this schema:
       });
     }
 
+    // 13. Torque / Bolt Tightening Torque
+    const torqueMatch = text.match(
+      /\b(?:Torque|Bolt Torque|Tightening Torque|Rated Torque)[\s:#]+([0-9.]+)\s*(Nm|N-m|ft-lbs?|in-lbs?)\b/i
+    );
+    if (torqueMatch) {
+      candidates.push({
+        fieldName: 'tighteningTorque',
+        displayName: 'Tightening Torque',
+        claimValue: parseFloat(torqueMatch[1]),
+        unit: torqueMatch[2],
+        confidence: 'HIGH',
+        isSafetyCritical: true,
+        sourcePageNumber: findPageForSnippet(torqueMatch[0]),
+        applicabilityStatus: 'APPLICABLE',
+      });
+    }
+
     return candidates;
   }
 }

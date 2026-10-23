@@ -544,6 +544,34 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
                           >
                             <QrCode className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Row Edit Machine Button */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedAsset(m);
+                              setMachineToEdit(m);
+                              setIsRegisterOpen(true);
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-[#1A202C] border border-slate-200 transition cursor-pointer"
+                            title={`Edit Machine ${m.assetTag}`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Row Delete Machine Button */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenDeleteModal([m]);
+                            }}
+                            className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition cursor-pointer"
+                            title={`Delete Machine ${m.assetTag}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
                     </tr>

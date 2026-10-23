@@ -270,6 +270,18 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
     fetchBlob();
   }, [isOpen, modelRecord?.id, fetchBlob]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   const handleVerifyCrossLink = async (mappingId: string) => {
     if (!token || !machine) return;
     try {
@@ -372,6 +384,9 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
       aria-modal="true"
       aria-labelledby="viewer-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div className="relative w-full max-w-5xl bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
         {/* Top Header */}

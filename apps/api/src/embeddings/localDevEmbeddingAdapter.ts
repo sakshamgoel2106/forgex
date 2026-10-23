@@ -6,7 +6,10 @@ export class LocalDevEmbeddingAdapter implements IEmbeddingAdapter {
   private modelName: string;
   private shouldFailNext: boolean = false;
 
-  constructor(dimensions = 1024, modelName = 'bge-m3-local-dev') {
+  constructor(
+    dimensions = parseInt(process.env.EMBEDDING_DIMENSION || process.env.EMBEDDING_DIMENSIONS || '768', 10),
+    modelName = process.env.EMBEDDING_MODEL || 'gemini-embedding-001'
+  ) {
     this.dimensions = dimensions;
     this.modelName = modelName;
   }

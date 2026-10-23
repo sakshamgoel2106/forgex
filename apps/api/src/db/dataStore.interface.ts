@@ -427,6 +427,8 @@ export interface IDataStore {
   markOutboxEventProcessed(id: string): Promise<void>;
   markOutboxEventFailed(id: string, errorMessage: string): Promise<void>;
   withTransaction<T>(fn: (client: any) => Promise<T>): Promise<T>;
+  withTenantContext?<T>(organizationId: string, callback: () => Promise<T> | T): Promise<T> | T;
+  withSystemWorkerContext?<T>(callback: () => Promise<T> | T): Promise<T> | T;
 
   // Document Versions
   createDocumentVersion(dto: CreateDocumentVersionDTO): Promise<DocumentVersion>;

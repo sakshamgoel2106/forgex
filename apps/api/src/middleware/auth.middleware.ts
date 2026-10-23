@@ -225,6 +225,10 @@ export function createAuthMiddleware(authAdapter: IAuthAdapter, dataStore: IData
         organization,
       };
 
+      if (typeof (dataStore as any).withTenantContext === 'function') {
+        return (dataStore as any).withTenantContext(organization.id, () => next());
+      }
+
       next();
     } catch (err) {
       logger.warn({ err }, 'Authentication failed');

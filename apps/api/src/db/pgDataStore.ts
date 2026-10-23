@@ -157,59 +157,162 @@ export class PgDataStore implements IDataStore {
 
   private pool: pg.Pool;
   private rawPool: pg.Pool;
-  private tenantContextStorage = new AsyncLocalStorage<{ client: pg.PoolClient; organizationId: string }>();
+  private tenantContextStorage = new AsyncLocalStorage<{
+    organizationId?: string;
+    isSystemWorker?: boolean;
+    isAdmin?: boolean;
+    userId?: string;
+  }>();
 
   constructor(pool: pg.Pool) {
     this.rawPool = pool;
     this.pool = new Proxy(pool, {
       get: (target, prop, receiver) => {
         if (prop === 'query') {
-          return (...args: any[]) => {
+          return async (...args: any[]) => {
             const context = this.tenantContextStorage.getStore();
-            if (context?.client) {
-              return (context.client.query as any)(...args);
+            let orgId = context?.organizationId;
+            const isWorker = context?.isSystemWorker;
+            const isAdmin = context?.isAdmin;
+
+            if (!orgId && !isWorker && !isAdmin) {
+              orgId = this.extractOrgIdFromParams(args);
             }
-            return (target.query as any)(...args);
+
+            const client = await this.rawPool.connect();
+            try {
+              if (isWorker || isAdmin) {
+                await client.query(`SELECT set_config('app.current_system_worker', 'true', false), set_config('app.is_admin', 'true', false)`);
+              } else if (orgId) {
+                await client.query(`SELECT set_config('app.current_tenant_id', $1, false), set_config('app.current_organization_id', $1, false)`, [orgId]);
+              }
+              const result = await (client.query as any)(...args);
+              return result;
+            } finally {
+              if (isWorker || isAdmin || orgId) {
+                try {
+                  await client.query(`RESET app.current_tenant_id; RESET app.current_organization_id; RESET app.current_system_worker; RESET app.is_admin;`);
+                } catch {
+                  // ignore reset errors
+                }
+              }
+              client.release();
+            }
           };
         }
+
+        if (prop === 'connect') {
+          return async (...connectArgs: any[]) => {
+            const client = await (target.connect as any)(...connectArgs);
+            const context = this.tenantContextStorage.getStore();
+            const orgId = context?.organizationId;
+            const isWorker = context?.isSystemWorker;
+            const isAdmin = context?.isAdmin;
+
+            try {
+              if (isWorker || isAdmin) {
+                await client.query(`SELECT set_config('app.current_system_worker', 'true', false), set_config('app.is_admin', 'true', false)`);
+              } else if (orgId) {
+                await client.query(`SELECT set_config('app.current_tenant_id', $1, false), set_config('app.current_organization_id', $1, false)`, [orgId]);
+              }
+            } catch (e) {
+              client.release();
+              throw e;
+            }
+
+            const originalRelease = client.release.bind(client);
+            let released = false;
+            client.release = (err?: any) => {
+              if (released) return;
+              released = true;
+              if (isWorker || isAdmin || orgId) {
+                client.query(`RESET app.current_tenant_id; RESET app.current_organization_id; RESET app.current_system_worker; RESET app.is_admin;`)
+                  .catch(() => {})
+                  .finally(() => originalRelease(err));
+              } else {
+                originalRelease(err);
+              }
+            };
+
+            return client;
+          };
+        }
+
         return Reflect.get(target, prop, receiver);
       },
     });
   }
 
+  private extractOrgIdFromParams(args: any[]): string | undefined {
+    if (!args || args.length === 0) return undefined;
+    const query = typeof args[0] === 'string' ? args[0] : (args[0]?.text as string);
+    const params = Array.isArray(args[1]) ? args[1] : undefined;
+    if (!query || !params || params.length === 0) return undefined;
+
+    // Pattern 1: WHERE organization_id = $1, WHERE o.organization_id = $2, WHERE org_id = $1
+    const match = query.match(/(?:organization_id|org_id)\s*=\s*\$(\d+)/i);
+    if (match && match[1]) {
+      const idx = parseInt(match[1], 10) - 1;
+      if (params[idx] && typeof params[idx] === 'string' && params[idx].length > 10) {
+        return params[idx];
+      }
+    }
+
+    // Pattern 2: INSERT INTO table (... organization_id ...) VALUES (... $3 ...)
+    const insertMatch = query.match(/INSERT\s+INTO\s+[^(]+\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+    if (insertMatch && insertMatch[1] && insertMatch[2]) {
+      const cols = insertMatch[1].split(',').map((c) => c.trim().toLowerCase());
+      const vals = insertMatch[2].split(',').map((v) => v.trim());
+      const orgColIdx = cols.findIndex((c) => c === 'organization_id' || c === 'org_id');
+      if (orgColIdx !== -1 && vals[orgColIdx]) {
+        const valPlaceholder = vals[orgColIdx].match(/\$(\d+)/);
+        if (valPlaceholder && valPlaceholder[1]) {
+          const idx = parseInt(valPlaceholder[1], 10) - 1;
+          if (params[idx] && typeof params[idx] === 'string' && params[idx].length > 10) {
+            return params[idx];
+          }
+        }
+      }
+    }
+
+    // Pattern 3: check if any param looks like a UUID and query mentions organization_id
+    if (query.toLowerCase().includes('organization_id')) {
+      for (const p of params) {
+        if (typeof p === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(p)) {
+          return p;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
   /**
    * Executes a callback within a strict PostgreSQL Row-Level Security tenant context.
-   * Runs inside a transaction with `app.current_tenant_id` and `app.current_organization_id` set,
-   * guaranteeing fail-closed isolation across all queries executed by this PgDataStore instance.
+   * Runs inside Node's AsyncLocalStorage context so every controller DB query automatically
+   * sets `app.current_tenant_id` and `app.current_organization_id` in PostgreSQL.
    */
-  public async withTenantContext<T>(organizationId: string, callback: () => Promise<T>): Promise<T> {
+  public withTenantContext<T>(organizationId: string, callback: () => Promise<T> | T): Promise<T> | T {
     const active = this.tenantContextStorage.getStore();
-    if (active && active.organizationId === organizationId) {
+    if (active?.organizationId === organizationId) {
       return callback();
     }
+    return this.tenantContextStorage.run(
+      { ...active, organizationId },
+      () => callback()
+    );
+  }
 
-    const client = await this.rawPool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [organizationId]);
-      await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [organizationId]);
-
-      const result = await this.tenantContextStorage.run(
-        { client, organizationId },
-        () => callback()
-      );
-      await client.query('COMMIT');
-      return result;
-    } catch (err) {
-      try {
-        await client.query('ROLLBACK');
-      } catch {
-        // ignore rollback errors
-      }
-      throw err;
-    } finally {
-      client.release();
-    }
+  /**
+   * Executes a callback with system worker permissions (bypassing tenant restrictions
+   * for cross-tenant operations like outbox polling and scheduled workers).
+   */
+  public withSystemWorkerContext<T>(callback: () => Promise<T> | T): Promise<T> | T {
+    const active = this.tenantContextStorage.getStore();
+    return this.tenantContextStorage.run(
+      { ...active, isSystemWorker: true, isAdmin: true },
+      () => callback()
+    );
   }
 
   // --------------------------------------------------------------------------
@@ -1947,16 +2050,29 @@ export class PgDataStore implements IDataStore {
   }
 
   public async withTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
+    const client = await this.rawPool.connect();
+    const context = this.tenantContextStorage.getStore();
+    const orgId = context?.organizationId;
+    const isWorker = context?.isSystemWorker;
+    const isAdmin = context?.isAdmin;
+
     try {
+      if (isWorker || isAdmin) {
+        await client.query(`SELECT set_config('app.current_system_worker', 'true', false), set_config('app.is_admin', 'true', false)`);
+      } else if (orgId) {
+        await client.query(`SELECT set_config('app.current_tenant_id', $1, false), set_config('app.current_organization_id', $1, false)`, [orgId]);
+      }
       await client.query('BEGIN');
       const result = await fn(client);
       await client.query('COMMIT');
       return result;
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
+      if (isWorker || isAdmin || orgId) {
+        await client.query(`RESET app.current_tenant_id; RESET app.current_organization_id; RESET app.current_system_worker; RESET app.is_admin;`).catch(() => {});
+      }
       client.release();
     }
   }
@@ -1987,9 +2103,10 @@ export class PgDataStore implements IDataStore {
   }
 
   public async fetchPendingOutboxEvents(limit = 10): Promise<OutboxEvent[]> {
-    const client = await this.pool.connect();
+    const client = await this.rawPool.connect();
     try {
       await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_system_worker', 'true', false), set_config('app.is_admin', 'true', false)`);
       const res = await client.query(
         `SELECT id, organization_id, aggregate_type, aggregate_id, event_type, payload, status, retry_count, error_message, created_at, processed_at
          FROM outbox_events
@@ -2021,25 +2138,40 @@ export class PgDataStore implements IDataStore {
         processedAt: row.processed_at ? row.processed_at.toISOString() : null,
       }));
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
+      await client.query(`RESET app.current_system_worker; RESET app.is_admin;`).catch(() => {});
       client.release();
     }
   }
 
   public async markOutboxEventProcessed(id: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE outbox_events SET status = 'PROCESSED', processed_at = NOW() WHERE id = $1`,
-      [id]
-    );
+    const client = await this.rawPool.connect();
+    try {
+      await client.query(`SELECT set_config('app.current_system_worker', 'true', false), set_config('app.is_admin', 'true', false)`);
+      await client.query(
+        `UPDATE outbox_events SET status = 'PROCESSED', processed_at = NOW() WHERE id = $1`,
+        [id]
+      );
+    } finally {
+      await client.query(`RESET app.current_system_worker; RESET app.is_admin;`).catch(() => {});
+      client.release();
+    }
   }
 
   public async markOutboxEventFailed(id: string, errorMessage: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE outbox_events SET status = 'FAILED', retry_count = retry_count + 1, error_message = $2 WHERE id = $1`,
-      [id, errorMessage]
-    );
+    const client = await this.rawPool.connect();
+    try {
+      await client.query(`SELECT set_config('app.current_system_worker', 'true', false), set_config('app.is_admin', 'true', false)`);
+      await client.query(
+        `UPDATE outbox_events SET status = 'FAILED', retry_count = retry_count + 1, error_message = $2 WHERE id = $1`,
+        [id, errorMessage]
+      );
+    } finally {
+      await client.query(`RESET app.current_system_worker; RESET app.is_admin;`).catch(() => {});
+      client.release();
+    }
   }
 
   public async createDocumentWithOutbox(
@@ -2048,8 +2180,12 @@ export class PgDataStore implements IDataStore {
     eventDto: CreateOutboxEventDTO,
     assetIds?: string[]
   ): Promise<{ document: TechnicalDocument; version: DocumentVersion; outboxEvent: OutboxEvent }> {
-    const client = await this.pool.connect();
+    const client = await this.rawPool.connect();
+    const orgId = docDto.organizationId || this.tenantContextStorage.getStore()?.organizationId;
     try {
+      if (orgId) {
+        await client.query(`SELECT set_config('app.current_tenant_id', $1, false), set_config('app.current_organization_id', $1, false)`, [orgId]);
+      }
       await client.query('BEGIN');
 
       const targetAssetIds = Array.from(
@@ -2209,9 +2345,12 @@ export class PgDataStore implements IDataStore {
 
       return { document, version, outboxEvent };
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
+      if (orgId) {
+        await client.query(`RESET app.current_tenant_id; RESET app.current_organization_id;`).catch(() => {});
+      }
       client.release();
     }
   }
@@ -2662,7 +2801,7 @@ export class PgDataStore implements IDataStore {
     const params: unknown[] = [jobId, progressPercent];
 
     if (currentStep) {
-      params.push(currentStep);
+      params.push(currentStep.slice(0, 64));
       updates.push(`current_step = $${params.length}`);
     }
 
@@ -3810,7 +3949,7 @@ export class PgDataStore implements IDataStore {
         dto.assetTag,
         dto.name,
         dto.machineType ?? 'Industrial Machinery',
-        dto.area,
+        dto.area ?? 'Main Production',
         dto.building ?? null,
         dto.productionLine ?? null,
         dto.locationDescription ?? null,

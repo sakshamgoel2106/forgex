@@ -1,6 +1,6 @@
 import type { IDataStore } from '../db/dataStore.interface.js';
 import type { ITextEmbeddingProvider } from '../ai/ai.interface.js';
-import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
+import type { IVectorStoreAdapter, VectorSearchResult } from '../vector/vectorStore.interface.js';
 import type {
   IMultimodalGenerationProvider,
   IRerankingProvider,
@@ -502,6 +502,8 @@ ${generalKnowledgeText}
     let deterministicLotoProcedure: string | null = null;
     let deterministicMawpLimit: string | number | null = machine?.operatingPressureMax ?? null;
     let deterministicVoltageLimit: string | number | null = null;
+    let deterministicTorqueLimit: string | number | null = null;
+    let deterministicRpmLimit: string | number | null = null;
     const deterministicSafetyAlerts: string[] = [];
 
     if (
@@ -514,8 +516,8 @@ ${generalKnowledgeText}
       isSafetyCritical = true;
     }
 
-    if (deterministicHazards.length > 0 && machine) {
-      // Query PostgreSQL directly for machine's verified LOTO isolation procedure & operating limits
+    if (machine) {
+      // Query PostgreSQL / technicalSpecs directly for machine's verified LOTO isolation procedure & operating limits
       if (machine.technicalSpecs) {
         const specs = machine.technicalSpecs as Record<string, any>;
         if (specs.lotoIsolationProcedure) deterministicLotoProcedure = String(specs.lotoIsolationProcedure);
@@ -528,6 +530,12 @@ ${generalKnowledgeText}
         }
         if (specs.ratedVoltage || specs.voltage || specs.operatingVoltage) {
           deterministicVoltageLimit = specs.ratedVoltage || specs.voltage || specs.operatingVoltage;
+        }
+        if (specs.tighteningTorque || specs.torque || specs.boltTorque) {
+          deterministicTorqueLimit = specs.tighteningTorque || specs.torque || specs.boltTorque;
+        }
+        if (specs.nameplateRpm || specs.rpm || specs.ratedSpeed) {
+          deterministicRpmLimit = specs.nameplateRpm || specs.rpm || specs.ratedSpeed;
         }
       }
 
@@ -547,24 +555,48 @@ ${generalKnowledgeText}
           if (!deterministicVoltageLimit && (f.includes('voltage') || f.includes('volt'))) {
             deterministicVoltageLimit = `${claim.claimValue} ${claim.unit || ''}`.trim();
           }
+          if (!deterministicTorqueLimit && (f.includes('torque') || f.includes('tightening'))) {
+            deterministicTorqueLimit = `${claim.claimValue} ${claim.unit || ''}`.trim();
+          }
+          if (!deterministicRpmLimit && (f.includes('rpm') || f.includes('speed'))) {
+            deterministicRpmLimit = `${claim.claimValue} ${claim.unit || ''}`.trim();
+          }
         }
       } catch {
         // non-blocking
       }
 
-      const hazardsList = deterministicHazards.join(', ');
-      let lotoAlert = `[MANDATORY LOCKOUT/TAGOUT PROTOCOL — HAZARD: ${hazardsList}] Mandatory Zero Energy State verification required before physical contact.`;
-      if (deterministicLotoProcedure) {
-        lotoAlert += ` Verified Isolation Procedure: "${deterministicLotoProcedure}".`;
-      } else {
-        lotoAlert += ` Lockout/tagout primary energy feeder, de-energize electrical breakers, close suction/discharge isolation valves, and vent stored pressure.`;
+      if (deterministicHazards.length > 0) {
+        const hazardsList = deterministicHazards.join(', ');
+        let lotoAlert = `[MANDATORY LOCKOUT/TAGOUT PROTOCOL — HAZARD: ${hazardsList}] Mandatory Zero Energy State verification required before physical contact.`;
+        if (deterministicLotoProcedure) {
+          lotoAlert += ` Verified Isolation Procedure: "${deterministicLotoProcedure}".`;
+        } else {
+          lotoAlert += ` Lockout/tagout primary energy feeder, de-energize electrical breakers, close suction/discharge isolation valves, and vent stored pressure.`;
+        }
+        deterministicSafetyAlerts.push(lotoAlert);
       }
-      deterministicSafetyAlerts.push(lotoAlert);
 
-      let limitsAlert = `[VERIFIED OPERATING LIMITS] `;
-      limitsAlert += `MAWP: ${deterministicMawpLimit ? deterministicMawpLimit : 'Refer to stamped machine nameplate — do not exceed OEM limits'}. `;
-      limitsAlert += `Rated Voltage: ${deterministicVoltageLimit ? deterministicVoltageLimit : 'Verify zero electrical energy with calibrated multimeter'}.`;
-      deterministicSafetyAlerts.push(limitsAlert);
+      const asksForOperatingLimits =
+        deterministicHazards.length > 0 ||
+        /\b(mawp|torque|rpm|pressure|voltage|limit|limits|spec|specs|specification|operating limits)\b/i.test(query);
+
+      if (asksForOperatingLimits && (deterministicMawpLimit || deterministicTorqueLimit || deterministicVoltageLimit || deterministicRpmLimit)) {
+        let limitsAlert = `[VERIFIED OPERATING LIMITS] `;
+        if (deterministicMawpLimit) {
+          limitsAlert += `MAWP: ${deterministicMawpLimit}. `;
+        }
+        if (deterministicTorqueLimit) {
+          limitsAlert += `Tightening Torque: ${deterministicTorqueLimit}. `;
+        }
+        if (deterministicRpmLimit) {
+          limitsAlert += `Rated Speed: ${deterministicRpmLimit}. `;
+        }
+        if (deterministicVoltageLimit) {
+          limitsAlert += `Rated Voltage: ${deterministicVoltageLimit}. `;
+        }
+        deterministicSafetyAlerts.push(limitsAlert.trim());
+      }
     }
 
     let machineMaintenanceRecords: MaintenanceRecord[] = [];
@@ -647,19 +679,26 @@ ${generalKnowledgeText}
     });
 
     // 4. Retrieve Candidate Chunks (Qdrant Hybrid Search Dense 768-dim + BM25 Sparse with RRF)
-    const queryVector = await this.embeddingProvider.generateEmbedding(query);
-
-    const vectorHits = await this.vectorStore.search(
-      this.collectionName,
-      queryVector,
-      {
-        organizationId,
-        plantId: plant.id,
-        machineId: machine?.id,
-      },
-      25,
-      query
-    );
+    let vectorHits: VectorSearchResult[] = [];
+    try {
+      const queryVector = await this.embeddingProvider.generateEmbedding(query);
+      vectorHits = await this.vectorStore.search(
+        this.collectionName,
+        queryVector,
+        {
+          organizationId,
+          plantId: plant.id,
+          machineId: machine?.id,
+        },
+        25,
+        query
+      );
+    } catch (vErr: any) {
+      logger.warn(
+        { err: vErr?.message },
+        'Vector store search encountered an error, falling back to PostgreSQL knowledge chunks retrieval'
+      );
+    }
 
     // 5. Pre-Generation Authorization Verification: Ensure every candidate belongs to an active tenant document
     const candidates: RerankCandidate[] = [];
@@ -746,7 +785,52 @@ ${generalKnowledgeText}
       });
     }
 
-    // 5b. Hybrid Keyword Matching: Boost candidate chunks matching exact equipment tags, SOP numbers, or critical parameters
+    // 5b. Resilient Database Fallback: If vector store returned < 3 candidates, load from PostgreSQL knowledge_chunks
+    if (candidates.length < 3) {
+      try {
+        const orgDocs = await this.dataStore.listDocuments(organizationId, {
+          plantId: plant.id,
+          machineId: machine?.id,
+        });
+        for (const doc of orgDocs) {
+          const isDocLinked =
+            !machine ||
+            (doc.assetTags && doc.assetTags.includes(machine.assetTag)) ||
+            (doc.assetIds && doc.assetIds.includes(machine.id)) ||
+            doc.machineId === machine.id;
+
+          const versionId =
+            doc.latestVersion?.id ||
+            (await this.dataStore.listDocumentVersions(doc.id))[0]?.id;
+
+          if (isDocLinked && versionId) {
+            const docChunks = await this.dataStore.listKnowledgeChunks(versionId);
+            for (const ch of docChunks) {
+              if (!candidates.some((c) => c.chunkId === ch.id)) {
+                candidates.push({
+                  chunkId: ch.id,
+                  documentId: doc.id,
+                  documentNumber: doc.documentNumber,
+                  documentTitle: doc.title,
+                  documentVersionId: versionId,
+                  pageNumber: ch.pageNumber,
+                  content: ch.content,
+                  sectionHeading: ch.sectionHeading,
+                  initialScore: 0.9,
+                  isTable: ch.isTable,
+                  isFigure: ch.isFigure,
+                  extractionMethod: ch.extractionMethod,
+                });
+              }
+            }
+          }
+        }
+      } catch (dbFallbackErr: any) {
+        logger.warn({ err: dbFallbackErr?.message }, 'PostgreSQL chunk fallback encountered error');
+      }
+    }
+
+    // 5c. Hybrid Keyword Matching: Boost candidate chunks matching exact equipment tags, SOP numbers, or critical parameters
     const exactTagOrSpecTokens =
       query.match(
         /\b([A-Z0-9]+-[0-9]+-[A-Z0-9]+|[A-Z]+-[0-9]+|SOP-[A-Z]+-[0-9]+|\d+(?:\.\d+)?\s*(?:PSI|ft-lbs|Nm|RPM|PSIG|GPM|HP))\b/gi
@@ -909,19 +993,31 @@ ${generalKnowledgeText}
       });
     }
 
-    // 6c. Governed Machine Knowledge Recovery: Include Approved Machine Knowledge Base
+    // 6c. Governed Machine Knowledge Recovery: Include Approved Machine Knowledge Base & Master Specs
     if (machine) {
       const approvedClaims = await this.dataStore.listEvidenceClaims(organizationId, {
         machineId: targetMachineId || machine.id,
         status: 'APPROVED',
       });
 
+      const specLines: string[] = [];
+      if (machine.manufacturer) specLines.push(`- Manufacturer / OEM: ${machine.manufacturer}`);
+      if (machine.modelNumber) specLines.push(`- Model Number: ${machine.modelNumber}`);
+      if (machine.serialNumber) specLines.push(`- Serial Number: ${machine.serialNumber}`);
+      if (machine.technicalSpecs && typeof machine.technicalSpecs === 'object') {
+        for (const [k, v] of Object.entries(machine.technicalSpecs)) {
+          specLines.push(`- [PROMOTED SPECIFICATION] ${k}: ${v}`);
+        }
+      }
       if (approvedClaims.length > 0) {
-        const approvedClaimLines = approvedClaims.map(
-          (c) =>
+        for (const c of approvedClaims) {
+          specLines.push(
             `- [VERIFIED MACHINE SPECIFICATION] ${c.displayName || c.fieldName}: ${c.claimValue} ${c.unit || ''} (Provenance: ${c.sourceType}, Rev: ${c.sourceRevision || 'N/A'}, Approved by: ${c.reviewedByEmail || c.reviewedByUserId}, Rationale: "${c.reviewRationale || 'Engineering verified'}")`
-        );
+          );
+        }
+      }
 
+      if (specLines.length > 0) {
         authorizedEvidence.unshift({
           chunkId: `approved_claim_${machine.id}`,
           documentId: targetMachineId || machine.id,
@@ -929,7 +1025,7 @@ ${generalKnowledgeText}
           documentTitle: `Approved Machine Knowledge Base for ${machine.assetTag}`,
           documentVersionId: '1.0',
           pageNumber: 1,
-          content: `Governed Machine Knowledge Base for ${machine.assetTag} (${machine.name}):\n${approvedClaimLines.join('\n')}`,
+          content: `Governed Machine Knowledge Base for ${machine.assetTag} (${machine.name}):\n${specLines.join('\n')}`,
           sectionHeading: 'Verified Machine Specific Knowledge',
           score: 0.99,
         });
@@ -1322,6 +1418,26 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
               });
             }
           }
+        }
+      }
+
+      if (citationsToSave.length === 0 && authorizedEvidence.length > 0) {
+        for (const evidenceMatch of authorizedEvidence.slice(0, 3)) {
+          const firstLine = evidenceMatch.content.split('\n')[0] || evidenceMatch.content;
+          const verbatimQuote = firstLine.slice(0, Math.min(firstLine.length, 120)).trim();
+          citationsToSave.push({
+            messageId: assistantMessage.id,
+            documentId: evidenceMatch.documentId,
+            documentNumber: evidenceMatch.documentNumber,
+            documentTitle: evidenceMatch.documentTitle,
+            documentVersionId: evidenceMatch.documentVersionId,
+            pageNumber: evidenceMatch.pageNumber,
+            knowledgeChunkId: evidenceMatch.chunkId,
+            snippet: evidenceMatch.content.slice(0, 280),
+            exactVerbatimQuote: verbatimQuote,
+            confidenceScore: evidenceMatch.score,
+            sectionHeading: evidenceMatch.sectionHeading,
+          });
         }
       }
     }

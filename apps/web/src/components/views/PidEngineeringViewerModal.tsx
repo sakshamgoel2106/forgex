@@ -612,6 +612,9 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
       aria-modal="true"
       aria-labelledby="drawing-viewer-title"
       className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div
         className={`relative w-full bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl overflow-hidden flex flex-col transition-all duration-200 ${

@@ -194,9 +194,6 @@ export class InMemoryDataStore implements IDataStore {
   // Root Cause Analysis (RCA) Sessions
   private rcaSessions = new Map<string, RcaSession>();
 
-  public async withTenantContext<T>(_organizationId: string, callback: () => Promise<T>): Promise<T> {
-    return callback();
-  }
 
   constructor() {
     this.seedDefaultIndustryProfiles();
@@ -1216,6 +1213,14 @@ export class InMemoryDataStore implements IDataStore {
 
   public async withTransaction<T>(fn: (client: any) => Promise<T>): Promise<T> {
     return fn(this);
+  }
+
+  public withTenantContext<T>(_organizationId: string, callback: () => Promise<T> | T): Promise<T> | T {
+    return callback();
+  }
+
+  public withSystemWorkerContext<T>(callback: () => Promise<T> | T): Promise<T> | T {
+    return callback();
   }
 
   private outboxEvents = new Map<string, OutboxEvent>();

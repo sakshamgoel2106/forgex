@@ -169,6 +169,24 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
           });
         }
       }
+
+      // Ensure keyword payload indexes exist for tenant & entity scoping
+      const fieldsToIndex = ['organizationId', 'plantId', 'documentVersionId', 'documentId', 'machineId'];
+      for (const field of fieldsToIndex) {
+        try {
+          await fetch(`${this.endpoint}/collections/${collectionName}/index`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({
+              field_name: field,
+              field_schema: 'keyword',
+            }),
+            signal: AbortSignal.timeout(this.requestTimeoutMs),
+          });
+        } catch {
+          // ignore if already indexed
+        }
+      }
     }, 'ensureCollection');
   }
 
@@ -202,7 +220,8 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
       });
 
       if (!res.ok) {
-        throw new Error(`Qdrant upsert points failed: ${res.status} ${res.statusText}`);
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Qdrant upsert points failed: ${res.status} ${res.statusText} - ${errText}`);
       }
     }, 'upsertPoints');
   }
@@ -249,8 +268,30 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
         signal: AbortSignal.timeout(this.requestTimeoutMs),
       });
 
+      if (res.status === 404) {
+        return;
+      }
+
       if (!res.ok) {
-        throw new Error(`Qdrant deleteByFilter failed: ${res.status} ${res.statusText}`);
+        const errText = await res.text().catch(() => '');
+        if (errText.includes('Index required but not found')) {
+          for (const key of Object.keys(filter)) {
+            await fetch(`${this.endpoint}/collections/${collectionName}/index`, {
+              method: 'PUT',
+              headers,
+              body: JSON.stringify({ field_name: key, field_schema: 'keyword' }),
+              signal: AbortSignal.timeout(this.requestTimeoutMs),
+            }).catch(() => {});
+          }
+          const retryRes = await fetch(`${this.endpoint}/collections/${collectionName}/points/delete?wait=true`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ filter: { must: mustClauses } }),
+            signal: AbortSignal.timeout(this.requestTimeoutMs),
+          });
+          if (retryRes.ok || retryRes.status === 404) return;
+        }
+        throw new Error(`Qdrant deleteByFilter failed: ${res.status} ${res.statusText} - ${errText}`);
       }
     }, 'deleteByFilter');
   }
@@ -299,7 +340,7 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
         searchBody.filter = { must: mustClauses };
       }
 
-      const res = await fetch(`${this.endpoint}/collections/${collectionName}/points/search`, {
+      let res = await fetch(`${this.endpoint}/collections/${collectionName}/points/search`, {
         method: 'POST',
         headers,
         body: JSON.stringify(searchBody),
@@ -307,7 +348,29 @@ export class QdrantVectorStoreAdapter implements IVectorStoreAdapter {
       });
 
       if (!res.ok) {
-        throw new Error(`Qdrant search error: ${res.status} ${res.statusText}`);
+        const errBody = await res.text().catch(() => '');
+        if (errBody.includes('Index required but not found')) {
+          for (const clause of mustClauses) {
+            if (clause.key) {
+              await fetch(`${this.endpoint}/collections/${collectionName}/index`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify({ field_name: clause.key, field_schema: 'keyword' }),
+                signal: AbortSignal.timeout(this.requestTimeoutMs),
+              }).catch(() => {});
+            }
+          }
+          res = await fetch(`${this.endpoint}/collections/${collectionName}/points/search`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(searchBody),
+            signal: AbortSignal.timeout(this.requestTimeoutMs),
+          });
+        }
+        if (!res.ok) {
+          const finalErr = await res.text().catch(() => '');
+          throw new Error(`Qdrant search error: ${res.status} ${res.statusText} - ${finalErr}`);
+        }
       }
 
       const data = (await res.json()) as {
