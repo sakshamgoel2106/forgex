@@ -1,9 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Machine, ComponentMapping, EngineeringModel3D } from '@forgex/shared-types';
 import {
   Layers,
@@ -17,20 +12,21 @@ import {
   Upload,
   CheckCircle2,
   Sliders,
-  Maximize2,
   Download,
   AlertTriangle,
   Info,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
+import { ThreeDModelViewer } from './ThreeDModelViewer';
 
-interface RealThreeDViewerModalProps {
+export interface RealThreeDViewerModalProps {
   isOpen: boolean;
   onClose: () => void;
   machine: Machine | null;
   mappings: ComponentMapping[];
   initialModel?: EngineeringModel3D | null;
   initialModelId?: string | null;
+  fileUrl?: string | null;
   onOpenPid?: (tag: string) => void;
   onOpenManual?: (pageNumber: number) => void;
   onMappingVerified?: () => void;
@@ -40,7 +36,6 @@ interface RealThreeDViewerModalProps {
 interface ComponentNode {
   id: string;
   name: string;
-  mesh: THREE.Mesh;
   vertexCount?: number;
 }
 
@@ -63,6 +58,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   mappings,
   initialModel,
   initialModelId,
+  fileUrl,
   onOpenPid,
   onOpenManual,
   onMappingVerified,
@@ -71,30 +67,18 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   const { isOwnerOrAdmin, membership, token } = useAuth();
   const isEngineer = isOwnerOrAdmin || membership?.role === 'ENGINEER' || membership?.role === 'PLANT_MANAGER';
 
-  const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
   const [componentList, setComponentList] = useState<ComponentNode[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingGeometry, setIsLoadingGeometry] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [unsupportedFormat, setUnsupportedFormat] = useState<UnsupportedFormatState | null>(null);
   const [modelRecord, setModelRecord] = useState<EngineeringModel3D | null>(null);
   const [modelStats, setModelStats] = useState<ModelStats | null>(null);
   const [wireframe, setWireframe] = useState(false);
   const [verifyingMappingId, setVerifyingMappingId] = useState<string | null>(null);
-
-  const meshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
-  const originalMaterialsRef = useRef<Map<string, THREE.Material | THREE.Material[]>>(new Map());
-  const controlsRef = useRef<OrbitControls | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
-  const modelGroupRef = useRef<THREE.Object3D | null>(null);
-  const gridHelperRef = useRef<THREE.GridHelper | null>(null);
-  const defaultCameraStateRef = useRef<{ position: THREE.Vector3; target: THREE.Vector3 } | null>(null);
-  const animFrameIdRef = useRef<number | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
   // 1. Fetch approved model record for this machine
   useEffect(() => {
@@ -202,363 +186,63 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, machine, token]);
+  }, [isOpen, machine, initialModel, initialModelId, token]);
 
-  // 2. Setup Three.js scene and load genuine model geometry
-  const initScene = useCallback(() => {
-    const container = containerRef.current;
-    if (!container || !modelRecord) return;
+  // 2. Fetch authenticated binary blob stream if no direct storage URL is available
+  useEffect(() => {
+    if (!isOpen || !modelRecord) {
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+        setBlobUrl(null);
+      }
+      return;
+    }
 
-    const width = container.clientWidth || 600;
-    const height = container.clientHeight || 450;
+    // If direct Supabase Storage URL is already provided, skip proxy fetch
+    if (fileUrl || modelRecord.fileUrl || machine?.model3dUrl) {
+      return;
+    }
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf1f5f9);
-    sceneRef.current = scene;
+    let isMounted = true;
+    const fetchBlob = async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.set(4, 3.5, 5);
-    cameraRef.current = camera;
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    rendererRef.current = renderer;
-
-    container.replaceChildren(renderer.domElement);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.maxDistance = 50;
-    controls.minDistance = 0.5;
-    controlsRef.current = controls;
-
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
-    scene.add(ambientLight);
-
-    const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight1.position.set(10, 15, 10);
-    dirLight1.castShadow = true;
-    scene.add(dirLight1);
-
-    const dirLight2 = new THREE.DirectionalLight(0x94a3b8, 0.6);
-    dirLight2.position.set(-10, -5, -10);
-    scene.add(dirLight2);
-
-    // Floor Grid
-    const gridHelper = new THREE.GridHelper(10, 20, 0x94a3b8, 0xe2e8f0);
-    gridHelper.position.y = -1.2;
-    scene.add(gridHelper);
-    gridHelperRef.current = gridHelper;
-
-    meshesRef.current.clear();
-    originalMaterialsRef.current.clear();
-
-    // Helper to process loaded 3D model hierarchy
-    const setupLoadedModel = (modelGroup: THREE.Object3D) => {
-      const extractedMeshes: ComponentNode[] = [];
-      let totalVertices = 0;
-
-      modelGroup.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-
-          // Default fallback material if none exists
-          if (!mesh.material) {
-            mesh.material = new THREE.MeshStandardMaterial({
-              color: 0x64748b,
-              metalness: 0.5,
-              roughness: 0.3,
+        const res = await fetch(`/api/v1/engineering/models/${modelRecord.id}/content`, { headers });
+        if (res.status === 422) {
+          const errData = await res.json().catch(() => ({}));
+          if (isMounted) {
+            setUnsupportedFormat({
+              format: modelRecord.fileFormat,
+              message: errData.error?.message || 'Unsupported format for direct browser rendering.',
+              downloadUrl: errData.error?.downloadUrl,
             });
           }
-
-          // Store clone of original material for highlight resets
-          if (Array.isArray(mesh.material)) {
-            originalMaterialsRef.current.set(mesh.id.toString(), mesh.material.map((m) => m.clone()));
-          } else {
-            originalMaterialsRef.current.set(mesh.id.toString(), mesh.material.clone());
-          }
-
-          const compId = mesh.name && mesh.name.trim() !== '' ? mesh.name : `component_${extractedMeshes.length + 1}`;
-          mesh.name = compId;
-          meshesRef.current.set(compId, mesh);
-
-          const vCount = mesh.geometry?.attributes?.position?.count || 0;
-          totalVertices += vCount;
-
-          extractedMeshes.push({
-            id: compId,
-            name: compId,
-            mesh,
-            vertexCount: vCount,
-          });
-        }
-      });
-
-      if (extractedMeshes.length === 0) {
-        setLoadError('Empty 3D model: The source file parsed successfully but contains 0 renderable 3D meshes.');
-        setIsLoadingGeometry(false);
-        return;
-      }
-
-      // Calculate Bounding Box and Center Model at Origin
-      const box = new THREE.Box3().setFromObject(modelGroup);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-
-      modelGroup.position.x -= center.x;
-      modelGroup.position.y -= center.y;
-      modelGroup.position.z -= center.z;
-
-      scene.add(modelGroup);
-      modelGroupRef.current = modelGroup;
-      setComponentList(extractedMeshes);
-
-      // Auto-frame Camera
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const fov = camera.fov * (Math.PI / 180);
-      let cameraDist = Math.abs((maxDim / 2) / Math.tan(fov / 2));
-      cameraDist = Math.max(cameraDist * 1.8, 2.5);
-
-      const defaultPos = new THREE.Vector3(cameraDist * 0.7, cameraDist * 0.5, cameraDist * 0.9);
-      const defaultTarget = new THREE.Vector3(0, 0, 0);
-
-      camera.position.copy(defaultPos);
-      camera.lookAt(defaultTarget);
-      controls.target.copy(defaultTarget);
-      controls.maxDistance = cameraDist * 6;
-      controls.minDistance = Math.max(cameraDist * 0.15, 0.2);
-      controls.update();
-
-      defaultCameraStateRef.current = {
-        position: defaultPos.clone(),
-        target: defaultTarget.clone(),
-      };
-
-      gridHelper.position.y = -size.y / 2 - 0.05;
-
-      setModelStats({
-        vertexCount: totalVertices,
-        meshCount: extractedMeshes.length,
-        dimensions: `${size.x.toFixed(2)}m × ${size.y.toFixed(2)}m × ${size.z.toFixed(2)}m`,
-      });
-
-      setIsLoadingGeometry(false);
-    };
-
-    // Raycaster for click selection
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
-
-    const handleCanvasClick = (e: MouseEvent) => {
-      if (!modelGroupRef.current) return;
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-      raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects(modelGroupRef.current.children, true);
-
-      if (intersects.length > 0) {
-        const hit = intersects[0].object as THREE.Mesh;
-        if (hit && hit.name) {
-          setSelectedComponentId(hit.name);
-        }
-      }
-    };
-
-    renderer.domElement.addEventListener('click', handleCanvasClick);
-
-    // Animation Loop
-    const animate = () => {
-      animFrameIdRef.current = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    };
-    animate();
-
-    // 3. Fetch model binary stream from backend
-    setIsLoadingGeometry(true);
-    setLoadError(null);
-    setUnsupportedFormat(null);
-
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    fetch(`/api/v1/engineering/models/${modelRecord.id}/content`, { headers })
-      .then(async (res) => {
-        if (res.status === 422) {
-          const errData = await res.json();
-          setUnsupportedFormat({
-            format: modelRecord.fileFormat,
-            message: errData.error?.message || 'B-Rep CAD format requires native conversion to GLB.',
-            downloadUrl: errData.error?.downloadUrl,
-          });
-          setIsLoadingGeometry(false);
-          return null;
-        }
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
-          setLoadError(errData.error?.message || 'Failed to download 3D model content.');
-          setIsLoadingGeometry(false);
-          return null;
-        }
-
-        return res.arrayBuffer();
-      })
-      .then((arrayBuffer) => {
-        if (!arrayBuffer) return;
-
-        if (arrayBuffer.byteLength === 0) {
-          setLoadError('3D model file is empty (0 bytes).');
-          setIsLoadingGeometry(false);
           return;
         }
 
-        const format = modelRecord.fileFormat.toUpperCase();
-        const isGlbMagic = arrayBuffer.byteLength >= 12 && new DataView(arrayBuffer).getUint32(0, true) === 0x46546C67;
-        const isGlbOrConverted = isGlbMagic || format === 'GLB' || format === 'GLTF' || format === 'STEP' || format === 'STP';
-
-        if (isGlbOrConverted) {
-          const gltfLoader = new GLTFLoader();
-          gltfLoader.parse(
-            arrayBuffer,
-            '',
-            (gltf) => {
-              setupLoadedModel(gltf.scene);
-            },
-            (err) => {
-              console.error('GLTF parse error:', err);
-              setLoadError(`Failed to parse 3D CAD model: ${err.message || 'Corrupted file'}`);
-              setIsLoadingGeometry(false);
-            }
-          );
-        } else if (format === 'STL') {
-          try {
-            const stlLoader = new STLLoader();
-            const geometry = stlLoader.parse(arrayBuffer);
-            const material = new THREE.MeshStandardMaterial({
-              color: 0x38bdf8,
-              metalness: 0.6,
-              roughness: 0.3,
-            });
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.name = modelRecord.title;
-            const group = new THREE.Group();
-            group.add(mesh);
-            setupLoadedModel(group);
-          } catch (err: any) {
-            console.error('STL parse error:', err);
-            setLoadError(`Failed to parse STL geometry: ${err.message || 'Corrupted STL file'}`);
-            setIsLoadingGeometry(false);
+        if (res.ok) {
+          const blob = await res.blob();
+          const objUrl = URL.createObjectURL(blob);
+          if (isMounted) {
+            setBlobUrl(objUrl);
           }
-        } else if (format === 'OBJ') {
-          try {
-            const objLoader = new OBJLoader();
-            const text = new TextDecoder().decode(arrayBuffer);
-            const objGroup = objLoader.parse(text);
-            setupLoadedModel(objGroup);
-          } catch (err: any) {
-            console.error('OBJ parse error:', err);
-            setLoadError(`Failed to parse Wavefront OBJ geometry: ${err.message || 'Corrupted OBJ file'}`);
-            setIsLoadingGeometry(false);
-          }
-        } else {
-          setUnsupportedFormat({
-            format: modelRecord.fileFormat,
-            message: `Format '${modelRecord.fileFormat}' cannot be rendered directly in browser. Download original CAD file for desktop CAD tools.`,
-            downloadUrl: `/api/v1/engineering/models/${modelRecord.id}/download`,
-          });
-          setIsLoadingGeometry(false);
         }
-      })
-      .catch((err) => {
-        console.error('Error loading model content:', err);
-        setLoadError(`Network error while loading 3D model: ${err.message}`);
-        setIsLoadingGeometry(false);
-      });
+      } catch (err: any) {
+        console.warn('Failed to stream model content blob:', err);
+      }
+    };
+
+    fetchBlob();
 
     return () => {
-      if (animFrameIdRef.current) cancelAnimationFrame(animFrameIdRef.current);
-      renderer.domElement.removeEventListener('click', handleCanvasClick);
-      renderer.dispose();
+      isMounted = false;
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
     };
-  }, [modelRecord, token]);
-
-  useEffect(() => {
-    if (isOpen && modelRecord) {
-      const cleanup = initScene();
-      return cleanup;
-    }
-  }, [isOpen, modelRecord, initScene]);
-
-  // Handle Wireframe toggle
-  useEffect(() => {
-    meshesRef.current.forEach((mesh) => {
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((m) => {
-          if ('wireframe' in m) m.wireframe = wireframe;
-        });
-      } else if (mesh.material && 'wireframe' in mesh.material) {
-        (mesh.material as THREE.MeshStandardMaterial).wireframe = wireframe;
-      }
-    });
-  }, [wireframe]);
-
-  // Highlight selected component in 3D viewport
-  useEffect(() => {
-    meshesRef.current.forEach((mesh, compId) => {
-      const isSelected = selectedComponentId === compId;
-      const orig = originalMaterialsRef.current.get(mesh.id.toString());
-
-      if (isSelected) {
-        if (!Array.isArray(mesh.material)) {
-          const mat = mesh.material as THREE.MeshStandardMaterial;
-          mat.emissive = new THREE.Color(0x2563eb);
-          mat.emissiveIntensity = 0.45;
-        }
-      } else if (orig) {
-        // Reset to original material appearance
-        if (!Array.isArray(mesh.material) && !Array.isArray(orig)) {
-          const mat = mesh.material as THREE.MeshStandardMaterial;
-          const origMat = orig as THREE.MeshStandardMaterial;
-          mat.emissive = origMat.emissive ? origMat.emissive.clone() : new THREE.Color(0x000000);
-          mat.emissiveIntensity = origMat.emissiveIntensity ?? 0;
-        }
-      }
-    });
-  }, [selectedComponentId]);
-
-  // Viewport Control Handlers
-  const handleResetCamera = () => {
-    if (cameraRef.current && controlsRef.current && defaultCameraStateRef.current) {
-      cameraRef.current.position.copy(defaultCameraStateRef.current.position);
-      controlsRef.current.target.copy(defaultCameraStateRef.current.target);
-      controlsRef.current.update();
-    }
-  };
-
-  const handleFitToView = () => {
-    if (cameraRef.current && controlsRef.current && modelGroupRef.current) {
-      const box = new THREE.Box3().setFromObject(modelGroupRef.current);
-      const size = box.getSize(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const fov = cameraRef.current.fov * (Math.PI / 180);
-      let cameraDist = Math.abs((maxDim / 2) / Math.tan(fov / 2));
-      cameraDist = Math.max(cameraDist * 1.8, 2.5);
-
-      cameraRef.current.position.set(cameraDist * 0.7, cameraDist * 0.5, cameraDist * 0.9);
-      controlsRef.current.target.set(0, 0, 0);
-      controlsRef.current.update();
-    }
-  };
+  }, [isOpen, modelRecord, fileUrl, machine?.model3dUrl, token]);
 
   const handleVerifyCrossLink = async (mappingId: string) => {
     if (!token || !machine) return;
@@ -639,6 +323,13 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   const selectedMapping = mappings.find(
     (m) => m.componentId === selectedComponentId || m.componentName.toLowerCase().includes(selectedComponentId || '')
   );
+
+  const activeModelUrl =
+    fileUrl ||
+    modelRecord?.fileUrl ||
+    machine?.model3dUrl ||
+    blobUrl ||
+    (modelRecord ? `/api/v1/engineering/models/${modelRecord.id}/content` : '');
 
   return (
     <div
@@ -756,7 +447,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             </div>
           </div>
         ) : unsupportedFormat ? (
-          /* Honest Unsupported Format Banner (e.g. raw STEP/IGES without GLB conversion) */
+          /* Honest Unsupported Format Banner */
           <div className="h-[520px] flex flex-col items-center justify-center p-8 bg-[#F8FAFC] text-center space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600">
               <Info className="w-8 h-8" />
@@ -810,7 +501,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             </div>
           </div>
         ) : loadError ? (
-          /* Honest Failed-to-Load State */
+          /* Error State */
           <div className="h-[520px] flex flex-col items-center justify-center p-8 bg-[#F8FAFC] text-center space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600">
               <AlertTriangle className="w-8 h-8" />
@@ -827,7 +518,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
 
             <div className="flex items-center gap-3 pt-2">
               <button
-                onClick={() => initScene()}
+                onClick={() => setModelRecord({ ...modelRecord })}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition"
               >
                 <RefreshCw className="w-4 h-4" />
@@ -842,15 +533,15 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             </div>
           </div>
         ) : (
-          /* Real Three.js Viewport & Component Cross-Linking */
+          /* Genuine 3D CAD Engineering Viewport (WebGL Canvas + R3F) */
           <div className="flex flex-col md:flex-row h-[550px] w-full bg-[#F5F6F7] overflow-hidden">
-            {/* Viewport Canvas */}
+            {/* Viewport Canvas Container */}
             <div className="relative flex-1 h-full overflow-hidden flex flex-col bg-[#F1F5F9]">
-              {/* Overlay Controls */}
+              {/* Overlay Metadata Tag */}
               <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-[#CBD5E1] shadow-sm">
                 <span className="text-[11px] font-mono font-bold text-[#1A202C] uppercase">{currentMachine.assetTag}</span>
                 <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded font-mono font-bold">
-                  {modelRecord.fileFormat} GEOMETRY
+                  {modelRecord.fileFormat} TWIN
                 </span>
                 {modelStats && (
                   <span className="text-[10px] font-mono text-[#64748B] hidden sm:inline">
@@ -859,15 +550,10 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
                 )}
               </div>
 
+              {/* Viewport Toolbar */}
               <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5 bg-white/95 backdrop-blur-md p-1 rounded-xl border border-[#CBD5E1] shadow-sm">
                 <button
-                  onClick={handleFitToView}
-                  className="p-1.5 rounded-lg text-[#64748B] hover:text-[#1A202C] text-xs transition"
-                  title="Fit Model to Viewport"
-                >
-                  <Maximize2 className="w-3.5 h-3.5" />
-                </button>
-                <button
+                  type="button"
                   onClick={() => setWireframe(!wireframe)}
                   className={`p-1.5 rounded-lg text-xs transition ${
                     wireframe ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-[#64748B] hover:text-[#1A202C]'
@@ -876,21 +562,32 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
                 >
                   <Sliders className="w-3.5 h-3.5" />
                 </button>
-                <button
-                  onClick={handleResetCamera}
-                  className="p-1.5 rounded-lg text-[#64748B] hover:text-[#1A202C] text-xs transition"
-                  title="Reset Camera View"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
               </div>
 
-              {/* Three.js Container */}
-              <div ref={containerRef} className="flex-1 w-full h-full cursor-grab active:cursor-grabbing relative">
-                {isLoadingGeometry && (
-                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white/80 backdrop-blur-xs gap-2">
-                    <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
-                    <span className="text-xs font-mono text-[#64748B]">Streaming 3D CAD Geometry...</span>
+              {/* WebGL Canvas Viewport powered by @react-three/fiber and @react-three/drei */}
+              <div className="flex-1 w-full h-full relative overflow-hidden">
+                {activeModelUrl ? (
+                  <ThreeDModelViewer
+                    fileUrl={activeModelUrl}
+                    fileFormat={modelRecord.fileFormat}
+                    wireframe={wireframe}
+                    selectedComponentId={selectedComponentId}
+                    onSelectComponent={(compId) => setSelectedComponentId(compId)}
+                    onModelStats={setModelStats}
+                    onComponentList={(extracted) => {
+                      setComponentList(
+                        extracted.map((c) => ({
+                          id: c.id,
+                          name: c.name,
+                          vertexCount: c.vertexCount,
+                        }))
+                      );
+                    }}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                    <RefreshCw className="w-5 h-5 animate-spin text-[#2563EB]" />
+                    <span className="text-xs font-mono mt-2">Preparing 3D WebGL Canvas...</span>
                   </div>
                 )}
               </div>

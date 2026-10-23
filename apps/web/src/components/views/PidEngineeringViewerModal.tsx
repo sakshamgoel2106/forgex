@@ -21,6 +21,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
+import { PidPdfViewer } from './PidPdfViewer';
 
 interface PidEngineeringViewerModalProps {
   isOpen: boolean;
@@ -31,6 +32,7 @@ interface PidEngineeringViewerModalProps {
   initialDrawingId?: string | null;
   initialDrawing?: EngineeringDrawing | null;
   plantName?: string | null;
+  fileUrl?: string | null;
   onSelectTag?: (tag: string) => void;
   onOpen3dComponent?: (componentId: string) => void;
   onOpenManual?: (pageNumber: number) => void;
@@ -47,6 +49,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   initialDrawingId,
   initialDrawing,
   plantName,
+  fileUrl,
   onSelectTag,
   onOpen3dComponent,
   onOpenManual,
@@ -78,6 +81,11 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   const [svgContent, setSvgContent] = useState<string | null>(null);
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+
+  const activePdfUrl =
+    pdfBlobUrl ||
+    (fileUrl && (fileUrl.toLowerCase().includes('.pdf') || drawingRecord?.fileFormat === 'PDF') ? fileUrl : null) ||
+    (drawingRecord?.fileFormat === 'PDF' && drawingRecord.fileUrl ? drawingRecord.fileUrl : null);
 
   // Tag Selection & Search
   const [selectedTag, setSelectedTag] = useState<string | null>(activeTag || null);
@@ -112,9 +120,38 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
       return;
     }
 
-    if (!machine && !initialDrawingId) {
+    if (!machine && !initialDrawingId && !fileUrl) {
       setDrawingsList([]);
       setDrawingRecord(null);
+      setIsLoadingMetadata(false);
+      return;
+    }
+
+    if (fileUrl && !initialDrawing && !initialDrawingId && !machine) {
+      const syntheticDrawing: EngineeringDrawing = {
+        id: 'external-file',
+        organizationId: 'default',
+        plantId: 'default',
+        drawingTitle: 'P&ID Schematic Diagram',
+        uniqueDrawingNumber: 'PID-EXT-001',
+        drawingType: 'PID',
+        discipline: 'Piping & Instrumentation',
+        revision: 'Rev 1',
+        source: 'Storage',
+        storageKey: fileUrl,
+        fileUrl: fileUrl,
+        originalFileName: fileUrl.split('/').pop()?.split('?')[0] || 'schematic.pdf',
+        fileFormat: fileUrl.toLowerCase().includes('.svg') ? 'SVG' : 'PDF',
+        fileSizeBytes: 0,
+        fileHashSha256: '',
+        status: 'APPROVED',
+        dataClassification: 'RESTRICTED',
+        equipmentTags: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setDrawingsList([syntheticDrawing]);
+      setDrawingRecord(syntheticDrawing);
       setIsLoadingMetadata(false);
       return;
     }
@@ -230,7 +267,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     return () => {
       isMounted = false;
     };
-  }, [isOpen, machine, initialDrawingId, token, activeTag]);
+  }, [isOpen, machine, initialDrawingId, initialDrawing, fileUrl, token, activeTag]);
 
   // --------------------------------------------------------------------------
   // 2. Fetch Actual Diagram Content when Drawing Changes
@@ -805,14 +842,16 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
               {/* Viewport Canvas Container */}
               <div
                 ref={viewportRef}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-                onWheel={handleWheel}
-                className="flex-1 overflow-hidden flex items-center justify-center p-4 select-none cursor-grab active:cursor-grabbing bg-[#EAEEF4]"
+                onMouseDown={!activePdfUrl ? handleMouseDown : undefined}
+                onMouseMove={!activePdfUrl ? handleMouseMove : undefined}
+                onMouseUp={!activePdfUrl ? handleMouseUp : undefined}
+                onMouseLeave={!activePdfUrl ? handleMouseUp : undefined}
+                onWheel={!activePdfUrl ? handleWheel : undefined}
+                className={`flex-1 overflow-hidden flex items-center justify-center select-none ${
+                  !activePdfUrl ? 'p-4 cursor-grab active:cursor-grabbing' : 'p-0'
+                } bg-[#EAEEF4]`}
               >
-                {isLoadingContent ? (
+                {isLoadingContent && !activePdfUrl ? (
                   <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
                     <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
                     <span className="text-xs font-mono">Loading diagram stream...</span>
@@ -840,7 +879,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                       </a>
                     )}
                   </div>
-                ) : contentError ? (
+                ) : contentError && !activePdfUrl ? (
                   /* Corrupt / Content Load Error State */
                   <div className="max-w-md bg-white border border-red-200 rounded-2xl p-6 shadow-lg text-center space-y-3">
                     <div className="w-12 h-12 rounded-xl bg-red-50 border border-red-200 text-red-600 flex items-center justify-center mx-auto">
@@ -849,12 +888,23 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     <h4 className="text-sm font-bold text-slate-900 font-mono">Drawing Load Error</h4>
                     <p className="text-xs text-slate-600 leading-relaxed">{contentError}</p>
                     <button
-                      onClick={() => setDrawingRecord({ ...drawingRecord })}
+                      onClick={() => drawingRecord && setDrawingRecord({ ...drawingRecord })}
                       className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-800 transition"
                     >
                       Retry Load
                     </button>
                   </div>
+                ) : activePdfUrl ? (
+                  /* 3. Deep Zoom Pan Pinch PDF Rendering using react-pdf & react-zoom-pan-pinch */
+                  <PidPdfViewer
+                    fileUrl={activePdfUrl}
+                    drawingTitle={drawingRecord?.drawingTitle || 'P&ID Schematic'}
+                    activeTag={selectedTag}
+                    onTagClick={(tag) => {
+                      setSelectedTag(tag);
+                      onSelectTag?.(tag);
+                    }}
+                  />
                 ) : (
                   /* Actual Diagram Rendering */
                   <div
@@ -877,21 +927,10 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     {imageBlobUrl && (
                       <img
                         src={imageBlobUrl}
-                        alt={drawingRecord.drawingTitle}
+                        alt={drawingRecord?.drawingTitle || 'P&ID Drawing'}
                         draggable={false}
                         className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl max-w-none max-h-[75vh] object-contain select-none"
                       />
-                    )}
-
-                    {/* 3. PDF Document Rendering */}
-                    {pdfBlobUrl && (
-                      <div className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl overflow-hidden w-[850px] h-[600px] max-w-full">
-                        <iframe
-                          src={`${pdfBlobUrl}#toolbar=0&navpanes=0`}
-                          title={drawingRecord.drawingTitle}
-                          className="w-full h-full border-0"
-                        />
-                      </div>
                     )}
                   </div>
                 )}
@@ -909,7 +948,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                   <span>Full Screen: F</span>
                 </div>
                 <div className="font-mono text-[10px] text-slate-500">
-                  {drawingRecord.originalFileName} ({drawingRecord.fileFormat})
+                  {drawingRecord?.originalFileName || 'Schematic Diagram'} ({drawingRecord?.fileFormat || (activePdfUrl ? 'PDF' : 'VECTOR')})
                 </div>
               </div>
             </div>

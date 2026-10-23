@@ -1348,6 +1348,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
           machine={viewerMachine}
           initialModel={viewerModel}
           initialModelId={viewerModel?.id}
+          fileUrl={viewerModel?.fileUrl}
           mappings={viewerMappings}
           onOpenPid={(tag) => {
             setIs3dViewerOpen(false);
@@ -1371,6 +1372,7 @@ export const EngineeringAssetCenterView: React.FC = () => {
           machine={viewerMachine}
           initialDrawing={viewerDrawing}
           initialDrawingId={viewerDrawing?.id || activeDrawingId}
+          fileUrl={viewerDrawing?.fileUrl}
           plantName={
             plants.find((p) => p.id === (viewerDrawing?.plantId || viewerMachine?.plantId))?.name ||
             'Main Production Facility'
