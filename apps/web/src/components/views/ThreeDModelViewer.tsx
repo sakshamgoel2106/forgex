@@ -12,6 +12,7 @@ export interface ThreeDModelViewerProps {
   onSelectComponent?: (componentId: string | null) => void;
   onModelStats?: (stats: { vertexCount: number; meshCount: number; dimensions: string }) => void;
   onComponentList?: (components: Array<{ id: string; name: string; vertexCount: number }>) => void;
+  onRetry?: () => void;
 }
 
 interface ErrorBoundaryProps {
@@ -250,6 +251,7 @@ export const ThreeDModelViewer: React.FC<ThreeDModelViewerProps> = ({
   onSelectComponent,
   onModelStats,
   onComponentList,
+  onRetry,
 }) => {
   const [retryKey, setRetryKey] = useState(0);
 
@@ -286,7 +288,13 @@ export const ThreeDModelViewer: React.FC<ThreeDModelViewerProps> = ({
 
   return (
     <div className="relative w-full h-full bg-[#F1F5F9] overflow-hidden select-none">
-      <CadErrorBoundary key={retryKey} onRetry={() => setRetryKey((k) => k + 1)}>
+      <CadErrorBoundary
+        key={retryKey}
+        onRetry={() => {
+          setRetryKey((k) => k + 1);
+          onRetry?.();
+        }}
+      >
         <Canvas
           camera={{ position: [4, 3.5, 5], fov: 45 }}
           shadows

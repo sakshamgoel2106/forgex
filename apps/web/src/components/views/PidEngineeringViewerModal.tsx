@@ -93,10 +93,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
 
-  const activePdfUrl =
-    pdfBlobUrl ||
-    (fileUrl && (fileUrl.toLowerCase().includes('.pdf') || drawingRecord?.fileFormat === 'PDF') ? fileUrl : null) ||
-    (drawingRecord?.fileFormat === 'PDF' && drawingRecord.fileUrl ? drawingRecord.fileUrl : null);
+  const activePdfUrl = pdfBlobUrl;
 
   // Tag Selection & Search
   const [selectedTag, setSelectedTag] = useState<string | null>(activeTag || null);
@@ -330,20 +327,20 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
         const contentType = res.headers.get('content-type') || '';
 
-        if (contentType.includes('svg')) {
+        if (contentType.includes('svg') || drawingRecord.fileFormat === 'SVG') {
           const svgText = await res.text();
           if (isMounted) {
             setSvgContent(svgText);
             setIsLoadingContent(false);
           }
-        } else if (contentType.includes('pdf')) {
+        } else if (contentType.includes('pdf') || drawingRecord.fileFormat === 'PDF') {
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
           if (isMounted) {
             setPdfBlobUrl(url);
             setIsLoadingContent(false);
           }
-        } else if (contentType.startsWith('image/')) {
+        } else if (contentType.startsWith('image/') || ['PNG', 'JPG', 'JPEG', 'WEBP'].includes(drawingRecord.fileFormat || '')) {
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
           if (isMounted) {

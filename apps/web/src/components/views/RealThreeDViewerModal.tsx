@@ -198,7 +198,61 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
     };
   }, [isOpen, machine, initialModel, initialModelId, token]);
 
-  // 2. Fetch authenticated binary blob stream if no direct storage URL is available
+  const [isStreaming, setIsStreaming] = useState(false);
+
+  // 2. Fetch authenticated binary blob stream to render with zero CORS issues
+  const fetchBlob = useCallback(async () => {
+    if (!modelRecord) return;
+
+    // STEP/STP formats cannot be rendered directly in Three.js without conversion to GLB
+    const isStep = ['STEP', 'STP', 'IGES', 'IGS'].includes(modelRecord.fileFormat?.toUpperCase() || '');
+    if (isStep && !modelRecord.convertedStorageKey) {
+      setUnsupportedFormat({
+        format: modelRecord.fileFormat,
+        message: `B-Rep CAD format '${modelRecord.fileFormat}' cannot be rendered directly in web 3D viewers. Download original CAD file for desktop CAD tools.`,
+        downloadUrl: `/api/v1/engineering/models/${modelRecord.id}/download`,
+      });
+      return;
+    }
+
+    try {
+      setIsStreaming(true);
+      setLoadError(null);
+      setUnsupportedFormat(null);
+      const headers = getAuthHeaders();
+
+      const res = await fetch(`/api/v1/engineering/models/${modelRecord.id}/content`, { headers });
+      if (res.status === 422) {
+        const errData = await res.json().catch(() => ({}));
+        setUnsupportedFormat({
+          format: modelRecord.fileFormat,
+          message: errData.error?.message || 'Unsupported format for direct browser rendering.',
+          downloadUrl: errData.error?.downloadUrl,
+        });
+        return;
+      }
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error?.message || `Failed to stream 3D CAD model (HTTP ${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      setBlobUrl((prev) => {
+        if (prev && prev.startsWith('blob:')) {
+          URL.revokeObjectURL(prev);
+        }
+        return objUrl;
+      });
+    } catch (err: any) {
+      console.warn('Failed to stream model content blob:', err);
+      setLoadError(err.message || 'Failed to stream 3D CAD model');
+    } finally {
+      setIsStreaming(false);
+    }
+  }, [modelRecord, getAuthHeaders]);
+
   useEffect(() => {
     if (!isOpen || !modelRecord) {
       if (blobUrl) {
@@ -208,50 +262,13 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
       return;
     }
 
-    // If direct Supabase Storage URL is already provided, skip proxy fetch
-    if (fileUrl || modelRecord.fileUrl || machine?.model3dUrl) {
+    // If an in-memory blob URL is already active, don't re-fetch
+    if (blobUrl && blobUrl.startsWith('blob:')) {
       return;
     }
 
-    let isMounted = true;
-    const fetchBlob = async () => {
-      try {
-        const headers = getAuthHeaders();
-
-        const res = await fetch(`/api/v1/engineering/models/${modelRecord.id}/content`, { headers });
-        if (res.status === 422) {
-          const errData = await res.json().catch(() => ({}));
-          if (isMounted) {
-            setUnsupportedFormat({
-              format: modelRecord.fileFormat,
-              message: errData.error?.message || 'Unsupported format for direct browser rendering.',
-              downloadUrl: errData.error?.downloadUrl,
-            });
-          }
-          return;
-        }
-
-        if (res.ok) {
-          const blob = await res.blob();
-          const objUrl = URL.createObjectURL(blob);
-          if (isMounted) {
-            setBlobUrl(objUrl);
-          }
-        }
-      } catch (err: any) {
-        console.warn('Failed to stream model content blob:', err);
-      }
-    };
-
     fetchBlob();
-
-    return () => {
-      isMounted = false;
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
-      }
-    };
-  }, [isOpen, modelRecord, fileUrl, machine?.model3dUrl, token]);
+  }, [isOpen, modelRecord?.id, fetchBlob]);
 
   const handleVerifyCrossLink = async (mappingId: string) => {
     if (!token || !machine) return;
@@ -346,11 +363,8 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   );
 
   const activeModelUrl =
-    fileUrl ||
-    modelRecord?.fileUrl ||
-    machine?.model3dUrl ||
     blobUrl ||
-    (modelRecord ? `/api/v1/engineering/models/${modelRecord.id}/content` : '');
+    (fileUrl && (fileUrl.startsWith('blob:') || fileUrl.startsWith('data:')) ? fileUrl : '');
 
   return (
     <div
@@ -544,11 +558,10 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
                 {loadError}
               </p>
             </div>
-
             <div className="flex items-center gap-3 pt-2">
               <button
-                onClick={() => setModelRecord({ ...modelRecord })}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition"
+                onClick={() => fetchBlob()}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition cursor-pointer"
               >
                 <RefreshCw className="w-4 h-4" />
                 Retry Loading
@@ -595,7 +608,13 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
 
               {/* WebGL Canvas Viewport powered by @react-three/fiber and @react-three/drei */}
               <div className="flex-1 w-full h-full relative overflow-hidden">
-                {activeModelUrl ? (
+                {isStreaming || (!activeModelUrl && !loadError && !unsupportedFormat) ? (
+                  <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                    <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
+                    <span className="text-xs font-mono font-bold mt-2 text-slate-700">Streaming 3D Twin...</span>
+                    <span className="text-[10px] font-mono text-slate-500">Authenticating & Downloading {modelRecord?.fileFormat || 'GLB'} Geometry</span>
+                  </div>
+                ) : activeModelUrl ? (
                   <React.Suspense
                     fallback={
                       <div className="flex flex-col items-center justify-center h-full text-slate-500">
@@ -620,11 +639,12 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
                           }))
                         );
                       }}
+                      onRetry={fetchBlob}
                     />
                   </React.Suspense>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-full text-slate-500">
-                    <RefreshCw className="w-5 h-5 animate-spin text-[#2563EB]" />
+                    <RefreshCw className="w-6 h-6 animate-spin text-[#2563EB]" />
                     <span className="text-xs font-mono mt-2">Preparing 3D WebGL Canvas...</span>
                   </div>
                 )}
