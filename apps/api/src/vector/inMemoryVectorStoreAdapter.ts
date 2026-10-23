@@ -54,7 +54,8 @@ export class InMemoryVectorStoreAdapter implements IVectorStoreAdapter {
     collectionName: string,
     vector: number[],
     filter?: { organizationId?: string; plantId?: string; documentId?: string; machineId?: string },
-    limit = 10
+    limit = 10,
+    _queryText?: string
   ): Promise<VectorSearchResult[]> {
     // Fail-Closed Tenant Isolation Enforcement: missing organization filter MUST throw
     if (!filter?.organizationId) {

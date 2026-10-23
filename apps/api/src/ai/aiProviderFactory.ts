@@ -5,7 +5,7 @@ import type {
 import { LocalDevInferenceAdapter } from './localDevInferenceAdapter.js';
 import { OllamaEnterpriseAdapter } from './ollamaEnterpriseAdapter.js';
 import { CloudSaasAdapter } from './cloudSaasAdapter.js';
-import { ReciprocalRankFusionReranker } from './reranker.js';
+import { CrossEncoderReranker } from './reranker.js';
 import { config } from '../config/env.js';
 
 let defaultGenerationProvider: IMultimodalGenerationProvider | null = null;
@@ -64,7 +64,7 @@ export function resetGenerationProvider(): void {
 
 export function createRerankingProvider(): IRerankingProvider {
   if (defaultRerankingProvider) return defaultRerankingProvider;
-  defaultRerankingProvider = new ReciprocalRankFusionReranker();
+  defaultRerankingProvider = new CrossEncoderReranker();
   return defaultRerankingProvider;
 }
 

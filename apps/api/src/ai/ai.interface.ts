@@ -63,6 +63,13 @@ export interface GenerationRequest {
   plantContext?: { code: string; name: string } | null;
 }
 
+export interface RawCitationOutput {
+  chunkId: string;
+  docId: string;
+  pageNumber: number;
+  exactVerbatimQuote: string;
+}
+
 export interface GenerationResult {
   answerText: string;
   confidence: 'HIGH' | 'MEDIUM' | 'UNCERTAIN' | 'INSUFFICIENT_EVIDENCE';
@@ -70,6 +77,7 @@ export interface GenerationResult {
   conflictDetected: boolean;
   conflictDetails?: string | null;
   usedEvidenceChunkIds: string[];
+  rawCitations?: RawCitationOutput[];
   modelUsed: string;
 }
 

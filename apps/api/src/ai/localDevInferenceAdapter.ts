@@ -242,6 +242,20 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
 
     const confidence = conflictDetected ? 'UNCERTAIN' : 'HIGH';
 
+    const rawCitations: import('./ai.interface.js').RawCitationOutput[] = [];
+    for (const ev of sanitizedEvidence.slice(0, 2)) {
+      const line = ev.content.split('\n')[0] || ev.content;
+      const quote = line.slice(0, Math.min(line.length, 120)).trim();
+      if (quote.length > 0) {
+        rawCitations.push({
+          chunkId: ev.chunkId,
+          docId: ev.documentId,
+          pageNumber: ev.pageNumber,
+          exactVerbatimQuote: quote,
+        });
+      }
+    }
+
     return {
       answerText: answerBody,
       confidence,
@@ -249,6 +263,7 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       conflictDetected,
       conflictDetails,
       usedEvidenceChunkIds: citationsUsed,
+      rawCitations,
       modelUsed: this.modelName,
     };
   }

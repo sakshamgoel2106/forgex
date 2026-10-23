@@ -497,13 +497,74 @@ ${generalKnowledgeText}
       };
     }
 
+    // Deterministic Hazard Classification outside LLM (Fix Bug #2 Part A)
+    const deterministicHazards = this.classifyHazard(query, machine?.machineType);
+    let deterministicLotoProcedure: string | null = null;
+    let deterministicMawpLimit: string | number | null = machine?.operatingPressureMax ?? null;
+    let deterministicVoltageLimit: string | number | null = null;
+    const deterministicSafetyAlerts: string[] = [];
+
     if (
       isImmediateHazard ||
+      deterministicHazards.length > 0 ||
       /\b(hazardous|danger|dangerous|arc flash|toxic|loto|lockout|high pressure|emergency shutdown|radiation|chemical leak|explosion|lethal|critical failure|overheat|overheating|abnormal vibration)\b/i.test(
         query
       )
     ) {
       isSafetyCritical = true;
+    }
+
+    if (deterministicHazards.length > 0 && machine) {
+      // Query PostgreSQL directly for machine's verified LOTO isolation procedure & operating limits
+      if (machine.technicalSpecs) {
+        const specs = machine.technicalSpecs as Record<string, any>;
+        if (specs.lotoIsolationProcedure) deterministicLotoProcedure = String(specs.lotoIsolationProcedure);
+        if (specs.loto_isolation_procedure) deterministicLotoProcedure = String(specs.loto_isolation_procedure);
+        if (specs.lotoProcedure) deterministicLotoProcedure = String(specs.lotoProcedure);
+        if (specs.energyIsolation) deterministicLotoProcedure = String(specs.energyIsolation);
+
+        if (!deterministicMawpLimit && (specs.mawp || specs.operatingPressureMax || specs.designDischargePressure)) {
+          deterministicMawpLimit = specs.mawp || specs.operatingPressureMax || specs.designDischargePressure;
+        }
+        if (specs.ratedVoltage || specs.voltage || specs.operatingVoltage) {
+          deterministicVoltageLimit = specs.ratedVoltage || specs.voltage || specs.operatingVoltage;
+        }
+      }
+
+      try {
+        const approvedClaims = await this.dataStore.listEvidenceClaims(organizationId, {
+          machineId: machine.id,
+          status: 'APPROVED',
+        });
+        for (const claim of approvedClaims) {
+          const f = claim.fieldName.toLowerCase();
+          if (!deterministicLotoProcedure && (f.includes('loto') || f.includes('isolation'))) {
+            deterministicLotoProcedure = String(claim.claimValue);
+          }
+          if (!deterministicMawpLimit && (f.includes('pressure') || f.includes('mawp'))) {
+            deterministicMawpLimit = `${claim.claimValue} ${claim.unit || ''}`.trim();
+          }
+          if (!deterministicVoltageLimit && (f.includes('voltage') || f.includes('volt'))) {
+            deterministicVoltageLimit = `${claim.claimValue} ${claim.unit || ''}`.trim();
+          }
+        }
+      } catch {
+        // non-blocking
+      }
+
+      const hazardsList = deterministicHazards.join(', ');
+      let lotoAlert = `[MANDATORY LOCKOUT/TAGOUT PROTOCOL — HAZARD: ${hazardsList}] Mandatory Zero Energy State verification required before physical contact.`;
+      if (deterministicLotoProcedure) {
+        lotoAlert += ` Verified Isolation Procedure: "${deterministicLotoProcedure}".`;
+      } else {
+        lotoAlert += ` Lockout/tagout primary energy feeder, de-energize electrical breakers, close suction/discharge isolation valves, and vent stored pressure.`;
+      }
+      deterministicSafetyAlerts.push(lotoAlert);
+
+      let limitsAlert = `[VERIFIED OPERATING LIMITS] `;
+      limitsAlert += `MAWP: ${deterministicMawpLimit ? deterministicMawpLimit : 'Refer to stamped machine nameplate — do not exceed OEM limits'}. `;
+      limitsAlert += `Rated Voltage: ${deterministicVoltageLimit ? deterministicVoltageLimit : 'Verify zero electrical energy with calibrated multimeter'}.`;
+      deterministicSafetyAlerts.push(limitsAlert);
     }
 
     let machineMaintenanceRecords: MaintenanceRecord[] = [];
@@ -585,7 +646,7 @@ ${generalKnowledgeText}
       content: query,
     });
 
-    // 4. Retrieve Candidate Chunks (Semantic Vector Search with Strict Tenant Filter)
+    // 4. Retrieve Candidate Chunks (Qdrant Hybrid Search Dense 768-dim + BM25 Sparse with RRF)
     const queryVector = await this.embeddingProvider.generateEmbedding(query);
 
     const vectorHits = await this.vectorStore.search(
@@ -594,8 +655,10 @@ ${generalKnowledgeText}
       {
         organizationId,
         plantId: plant.id,
+        machineId: machine?.id,
       },
-      topK * 3
+      25,
+      query
     );
 
     // 5. Pre-Generation Authorization Verification: Ensure every candidate belongs to an active tenant document
@@ -1144,6 +1207,11 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
       finalAnswer += `\n\n[MEASUREMENT NOTICE] No verified sensor telemetry or calibrated gauge reading is available for this machine. ForgeX AI policy strictly forbids estimating or inventing values. Physical inspection with calibrated tools is required.`;
     }
 
+    // Inject deterministic LOTO & operating limit alerts outside LLM
+    if (deterministicSafetyAlerts.length > 0) {
+      finalAnswer = `${deterministicSafetyAlerts.map((a) => `### ${a}`).join('\n\n')}\n\n${finalAnswer}`;
+    }
+
     // Never claim a machine has been shut down unless trusted control integration confirms it
     if (
       /\b(shutdown|shut down|emergency stop|e-stop|trip the machine|stop the pump|isolate equipment)\b/i.test(query) &&
@@ -1163,7 +1231,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
       conflictDetails: generationResult.conflictDetails,
     });
 
-    // 10. Construct and Validate Citations with Confidentiality & Disclosure Controls
+    // 10. Construct and Validate Citations with Verbatim Substring Check & Confidentiality Controls
     const citationsToSave = [];
     const isNonAdmin =
       userRole &&
@@ -1171,19 +1239,37 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
       userRole !== 'ORGANIZATION_ADMIN' &&
       userRole !== 'ENGINEER_TECHNICIAN';
 
+    const normalizeWhitespace = (str: string) => str.replace(/\s+/g, ' ').trim().toLowerCase();
+
     if (!generationResult.isInsufficientEvidence && !createdTicket) {
-      for (const chunkId of generationResult.usedEvidenceChunkIds) {
-        const evidenceMatch = authorizedEvidence.find((e) => e.chunkId === chunkId);
-        if (evidenceMatch) {
+      if (generationResult.rawCitations && generationResult.rawCitations.length > 0) {
+        for (const rawCit of generationResult.rawCitations) {
+          // Check 1: Verify chunkId was actually returned by Qdrant in authorizedEvidence
+          const evidenceMatch = authorizedEvidence.find((e) => e.chunkId === rawCit.chunkId);
+          if (!evidenceMatch) {
+            logger.warn(
+              { chunkId: rawCit.chunkId },
+              'Citation dropped: chunkId was not returned in Qdrant authorized evidence for this request'
+            );
+            continue;
+          }
+
+          // Check 2: Verify exactVerbatimQuote is a literal substring of that chunk's text (after whitespace normalization)
+          const normQuote = normalizeWhitespace(rawCit.exactVerbatimQuote || '');
+          const normContent = normalizeWhitespace(evidenceMatch.content || '');
+          if (!normQuote || !normContent.includes(normQuote)) {
+            logger.warn(
+              { chunkId: rawCit.chunkId, quote: rawCit.exactVerbatimQuote },
+              'Citation dropped: exactVerbatimQuote is not a literal substring of the candidate chunk text'
+            );
+            continue;
+          }
+
           let snippetText: string;
           if (isNonAdmin) {
-            if (evidenceMatch.chunkId.startsWith('guidance_')) {
-              snippetText = `Reference: [APPROVED OPERATIONAL GUIDANCE] ${evidenceMatch.documentTitle}`;
-            } else {
-              snippetText = `Reference: [APPROVED GUIDANCE: ${evidenceMatch.documentNumber} - ${evidenceMatch.sectionHeading || 'Approved Section'} (Page ${evidenceMatch.pageNumber})]`;
-            }
+            snippetText = `Reference: [APPROVED GUIDANCE: ${evidenceMatch.documentNumber} - ${evidenceMatch.sectionHeading || 'Approved Section'} (Page ${evidenceMatch.pageNumber})]`;
           } else {
-            snippetText = evidenceMatch.content.slice(0, 280);
+            snippetText = rawCit.exactVerbatimQuote.slice(0, 280);
           }
 
           citationsToSave.push({
@@ -1192,12 +1278,50 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
             documentNumber: evidenceMatch.documentNumber,
             documentTitle: evidenceMatch.documentTitle,
             documentVersionId: evidenceMatch.documentVersionId,
-            pageNumber: evidenceMatch.pageNumber,
+            pageNumber: rawCit.pageNumber || evidenceMatch.pageNumber,
             knowledgeChunkId: evidenceMatch.chunkId,
             snippet: snippetText,
+            exactVerbatimQuote: rawCit.exactVerbatimQuote,
             confidenceScore: evidenceMatch.score,
             sectionHeading: evidenceMatch.sectionHeading,
           });
+        }
+      } else {
+        for (const chunkId of generationResult.usedEvidenceChunkIds) {
+          const evidenceMatch = authorizedEvidence.find((e) => e.chunkId === chunkId);
+          if (evidenceMatch) {
+            const firstLine = evidenceMatch.content.split('\n')[0] || evidenceMatch.content;
+            const verbatimQuote = firstLine.slice(0, Math.min(firstLine.length, 120)).trim();
+            const normQuote = normalizeWhitespace(verbatimQuote);
+            const normContent = normalizeWhitespace(evidenceMatch.content);
+
+            if (normQuote && normContent.includes(normQuote)) {
+              let snippetText: string;
+              if (isNonAdmin) {
+                if (evidenceMatch.chunkId.startsWith('guidance_')) {
+                  snippetText = `Reference: [APPROVED OPERATIONAL GUIDANCE] ${evidenceMatch.documentTitle}`;
+                } else {
+                  snippetText = `Reference: [APPROVED GUIDANCE: ${evidenceMatch.documentNumber} - ${evidenceMatch.sectionHeading || 'Approved Section'} (Page ${evidenceMatch.pageNumber})]`;
+                }
+              } else {
+                snippetText = evidenceMatch.content.slice(0, 280);
+              }
+
+              citationsToSave.push({
+                messageId: assistantMessage.id,
+                documentId: evidenceMatch.documentId,
+                documentNumber: evidenceMatch.documentNumber,
+                documentTitle: evidenceMatch.documentTitle,
+                documentVersionId: evidenceMatch.documentVersionId,
+                pageNumber: evidenceMatch.pageNumber,
+                knowledgeChunkId: evidenceMatch.chunkId,
+                snippet: snippetText,
+                exactVerbatimQuote: verbatimQuote,
+                confidenceScore: evidenceMatch.score,
+                sectionHeading: evidenceMatch.sectionHeading,
+              });
+            }
+          }
         }
       }
     }
@@ -1217,6 +1341,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
       ...assistantMessage,
       questionMode: determinedQuestionMode,
       citations: savedCitations,
+      safetyAlerts: deterministicSafetyAlerts.length > 0 ? deterministicSafetyAlerts : undefined,
       ticketId: createdTicket ? createdTicket.id : null,
       ticketNumber: createdTicket ? createdTicket.ticketNumber : null,
     };
@@ -1226,10 +1351,46 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
       userMessage,
       assistantMessage: completeAssistantMessage,
       questionMode: determinedQuestionMode,
+      safetyAlerts: deterministicSafetyAlerts.length > 0 ? deterministicSafetyAlerts : undefined,
       ticket: createdTicket,
       missingInfoTask: createdTask,
       recurringFaultAnalysis,
       maintenanceRecords: machineMaintenanceRecords,
     };
+  }
+
+  private classifyHazard(query: string, machineType?: string | null): string[] {
+    const matchedHazards: string[] = [];
+    const text = `${query} ${machineType || ''}`.toLowerCase();
+
+    if (/\b(electrical|voltage|480v|4160v|breaker|arc\s*flash|feeder|busbar|transformer|de-energiz|kv|phase|wire|grounding)\b/i.test(text)) {
+      matchedHazards.push('ELECTRICAL');
+    }
+    if (/\b(pressure|psi|bar|kpa|psig|relief\s*valve|mawp|pressur|blowdown|piping|hydraulic)\b/i.test(text)) {
+      matchedHazards.push('PRESSURE');
+    }
+    if (/\b(valve|block\s*valve|isolation\s*valve|bleed|suction\s*valve|discharge\s*valve|mov-\d+|ball\s*valve|gate\s*valve)\b/i.test(text)) {
+      matchedHazards.push('VALVE');
+    }
+    if (/\b(thermal|temperature|hot|steam|overheat|celsius|fahrenheit|burn|heat|exhaust|boiler)\b/i.test(text)) {
+      matchedHazards.push('THERMAL');
+    }
+    if (/\b(rotating|shaft|impeller|coupling|bearing|rpm|flywheel|motor\s*shaft|rotor|turbine)\b/i.test(text)) {
+      matchedHazards.push('ROTATING_SHAFT');
+    }
+    if (/\b(maintenance|repair|overhaul|disassembly|teardown|replace|service|inspect|troubleshoot|install|calibration)\b/i.test(text)) {
+      matchedHazards.push('MAINTENANCE');
+    }
+    if (/\b(loto|lockout|tagout|isolate|isolation|zero\s*energy|interlock|padlock|hasp)\b/i.test(text)) {
+      matchedHazards.push('LOTO');
+    }
+    if (/\b(torque|ft-lbs|nm|bolt|tighten|flange|torque\s*spec|stud)\b/i.test(text)) {
+      matchedHazards.push('TORQUE');
+    }
+    if (/\b(seal|gland|packing|mechanical\s*seal|stuffing\s*box|seal\s*flush|leakage)\b/i.test(text)) {
+      matchedHazards.push('SEAL');
+    }
+
+    return matchedHazards;
   }
 }

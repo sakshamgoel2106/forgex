@@ -8,6 +8,7 @@ import {
   SpeechProviderUnavailableError,
 } from '../speech/localDevSpeechAdapter.js';
 import { SUPPORTED_SPEECH_LANGUAGES } from '../speech/speech.interface.js';
+import { VectorStoreUnavailableError } from '../vector/vectorStore.interface.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config/env.js';
 
@@ -98,6 +99,7 @@ export class CopilotController {
           confidence: result.assistantMessage.confidence,
           questionMode: result.questionMode,
           citations: result.assistantMessage.citations,
+          safetyAlerts: result.safetyAlerts || result.assistantMessage.safetyAlerts || [],
           isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
           conflictDetected: result.assistantMessage.conflictDetected,
           conflictDetails: result.assistantMessage.conflictDetails,
@@ -111,6 +113,60 @@ export class CopilotController {
       });
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to execute Copilot query');
+
+      const isVectorStoreUnavailable =
+        err instanceof VectorStoreUnavailableError ||
+        err?.isVectorStoreUnavailable ||
+        err?.name === 'VectorStoreUnavailableError' ||
+        err?.message?.includes('VectorStoreUnavailableError') ||
+        err?.message?.includes('circuit breaker is OPEN') ||
+        err?.message?.includes('Qdrant vector store unreachable') ||
+        err?.message?.includes('vector database is currently unreachable');
+
+      if (isVectorStoreUnavailable) {
+        const organizationId = req.auth?.organization.id;
+        const machineId = (req.body?.machineId || req.body?.assetId) as string | undefined;
+        const plantId = req.body?.plantId as string | undefined;
+
+        let certifiedManuals: Array<{
+          id: string;
+          documentNumber: string;
+          title: string;
+          category: string;
+          downloadUrl: string;
+        }> = [];
+
+        if (organizationId) {
+          try {
+            const docs = await this.dataStore.listDocuments(organizationId, {
+              plantId: plantId && plantId !== 'GENERAL' ? plantId : undefined,
+              machineId: machineId,
+            });
+            certifiedManuals = docs.map((d) => ({
+              id: d.id,
+              documentNumber: d.documentNumber,
+              title: d.title,
+              category: d.category,
+              downloadUrl: `/api/v1/documents/${d.id}/download`,
+            }));
+          } catch (dbErr: any) {
+            logger.warn({ err: dbErr?.message }, 'Failed to fetch certified fallback manuals from PostgreSQL');
+          }
+        }
+
+        res.status(503).json({
+          success: false,
+          error: {
+            code: 'VECTOR_STORE_UNAVAILABLE',
+            message: 'Vector search service (Qdrant) is temporarily unavailable. Direct certified manuals available.',
+            serviceStatus: 'DEGRADED',
+            machineId: machineId || null,
+            certifiedManuals,
+          },
+        });
+        return;
+      }
+
       const isUnavailable =
         err?.message?.includes('Enterprise Inference Failure') ||
         err?.message?.includes('Air-gapped policy') ||

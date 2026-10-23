@@ -27,6 +27,15 @@ export interface VectorSearchResult {
   payload: Record<string, unknown>;
 }
 
+export class VectorStoreUnavailableError extends Error {
+  public readonly isVectorStoreUnavailable = true;
+  constructor(message = 'Vector store service (Qdrant) is unavailable or timed out') {
+    super(message);
+    this.name = 'VectorStoreUnavailableError';
+    Object.setPrototypeOf(this, VectorStoreUnavailableError.prototype);
+  }
+}
+
 export interface IVectorStoreAdapter {
   ensureCollection(collectionName: string, dimensions: number): Promise<void>;
   upsertPoints(collectionName: string, points: VectorPoint[]): Promise<void>;
@@ -36,7 +45,8 @@ export interface IVectorStoreAdapter {
     collectionName: string,
     vector: number[],
     filter?: { organizationId?: string; plantId?: string; documentId?: string; machineId?: string },
-    limit?: number
+    limit?: number,
+    queryText?: string
   ): Promise<VectorSearchResult[]>;
   clear(collectionName?: string): Promise<void>;
 }

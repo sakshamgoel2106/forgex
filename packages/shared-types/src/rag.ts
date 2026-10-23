@@ -26,6 +26,7 @@ export interface Citation {
   snippet: string;
   confidenceScore: number;
   sectionHeading?: string | null;
+  exactVerbatimQuote?: string;
 }
 
 export interface MessageFeedback {
@@ -44,6 +45,7 @@ export interface CopilotMessage {
   content: string;
   confidence: AnswerConfidence;
   citations: Citation[];
+  safetyAlerts?: string[];
   questionMode?: QuestionHandlingMode;
   isInsufficientEvidence?: boolean;
   conflictDetected?: boolean;
@@ -84,6 +86,7 @@ export interface RAGQueryResponse {
   userMessage: CopilotMessage;
   assistantMessage: CopilotMessage;
   questionMode: QuestionHandlingMode;
+  safetyAlerts?: string[];
   ticket?: any | null;
   missingInfoTask?: any | null;
   recurringFaultAnalysis?: RecurringFaultAnalysis | null;
