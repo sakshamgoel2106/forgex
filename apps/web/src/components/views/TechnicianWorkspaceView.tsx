@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../lib/AuthContext';
+import { useToast } from '../../lib/ToastContext';
+import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill } from '../modals/ExpertKnowledgeCaptureModal';
 import {
   Wrench,
   Clock,
@@ -24,7 +26,13 @@ import {
   User,
   Award,
   AlertTriangle,
+  Building2,
+  Lock,
 } from 'lucide-react';
+import {
+  computeTechnicianLiveStatus,
+  setTechnicianShiftStatus,
+} from '../../utils/technicianLiveStatus';
 
 export interface TechStep {
   id: string;
@@ -38,16 +46,50 @@ export interface TechStep {
 export interface TechProfile {
   id: string;
   name: string;
+  discipline: string;
   role: string;
   rating: number;
   tier: string;
+  initialSolved: number;
 }
 
 export const TECHNICIAN_ROSTER: TechProfile[] = [
-  { id: 'tech-1', name: 'Alex Rivera', role: 'Mechanical Systems Specialist', rating: 4.9, tier: 'Top Rated' },
-  { id: 'tech-2', name: 'Marcus Vance', role: 'Senior Hydraulic Engineer', rating: 4.8, tier: 'High Performer' },
-  { id: 'tech-3', name: 'Sarah Chen', role: 'Electrical Controls Specialist', rating: 4.9, tier: 'Top Rated' },
-  { id: 'tech-4', name: 'Elena Rostova', role: 'Lead Vibration Analyst', rating: 4.7, tier: 'Certified Specialist' },
+  {
+    id: 'tech-1',
+    name: 'Alex Rivera',
+    discipline: 'Mechanical & Rotating Systems',
+    role: 'Mechanical Systems Specialist',
+    rating: 4.9,
+    tier: 'Top Rated',
+    initialSolved: 28,
+  },
+  {
+    id: 'tech-2',
+    name: 'Marcus Vance',
+    discipline: 'Hydraulics & Pressure Systems',
+    role: 'Senior Hydraulic Engineer',
+    rating: 4.8,
+    tier: 'High Performer',
+    initialSolved: 24,
+  },
+  {
+    id: 'tech-3',
+    name: 'Sarah Chen',
+    discipline: 'Electrical Controls & PLC',
+    role: 'Electrical Controls Specialist',
+    rating: 4.9,
+    tier: 'Top Rated',
+    initialSolved: 31,
+  },
+  {
+    id: 'tech-4',
+    name: 'Elena Rostova',
+    discipline: 'Vibration & Acoustic Analysis',
+    role: 'Lead Vibration Analyst',
+    rating: 4.7,
+    tier: 'Certified Specialist',
+    initialSolved: 19,
+  },
 ];
 
 export interface TechTask {
@@ -84,8 +126,10 @@ export interface TechTask {
 export const TechnicianWorkspaceView: React.FC<{
   onLaunchSop?: (ticketId: string) => void;
   onNavigateToCopilot?: (assetTag: string) => void;
-}> = ({ onLaunchSop, onNavigateToCopilot }) => {
+  initialTicketId?: string;
+}> = ({ onLaunchSop, onNavigateToCopilot, initialTicketId }) => {
   const { user, token, organization, isOwnerOrAdmin, membership } = useAuth();
+  const { toast } = useToast();
   const [tasks, setTasks] = useState<TechTask[]>([]);
   const [selectedTask, setSelectedTask] = useState<TechTask | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -96,6 +140,48 @@ export const TechnicianWorkspaceView: React.FC<{
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [deleteConfirmTask, setDeleteConfirmTask] = useState<TechTask | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Expert Knowledge Capture Modal State upon Task Resolution
+  const [isExpertCaptureOpen, setIsExpertCaptureOpen] = useState(false);
+  const [expertCapturePrefill, setExpertCapturePrefill] = useState<ExpertKnowledgePrefill | null>(null);
+
+  // Persistent Solved Count per Technician (Kundli record)
+  const [solvedCounts, setSolvedCounts] = useState<Record<string, number>>(() => {
+    try {
+      const raw = localStorage.getItem('forgex_tech_solved_counts');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {
+      'Alex Rivera': 28,
+      'Marcus Vance': 24,
+      'Sarah Chen': 31,
+      'Elena Rostova': 19,
+    };
+  });
+
+  const incrementSolved = (techName: string) => {
+    setSolvedCounts((prev) => {
+      const updated = {
+        ...prev,
+        [techName]: (prev[techName] || 25) + 1,
+      };
+      try {
+        localStorage.setItem('forgex_tech_solved_counts', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+  };
+
+  // OEM Escalation Modal State
+  const [isOemModalOpen, setIsOemModalOpen] = useState(false);
+  const [oemTargetTask, setOemTargetTask] = useState<TechTask | null>(null);
+  const [oemVendorName, setOemVendorName] = useState('Siemens Industry AG / DMG Mori');
+  const [oemFaultCode, setOemFaultCode] = useState('');
+  const [oemRcaFindings, setOemRcaFindings] = useState('');
+  const [oemFailedNotes, setOemFailedNotes] = useState('');
+  const [oemContactEmail, setOemContactEmail] = useState('service.support@siemens-oem.com');
+  const [oemSlaPriority, setOemSlaPriority] = useState('L4 Critical / 4-Hour Emergency Dispatch');
+  const [isSubmittingOem, setIsSubmittingOem] = useState(false);
 
   const isSupervisorOrAdmin =
     isOwnerOrAdmin ||
@@ -482,8 +568,24 @@ export const TechnicianWorkspaceView: React.FC<{
       const allTasks = [...mappedFromCases, ...mappedFromTickets];
       setTasks(allTasks);
 
-      // Preserve currently selected task if it still exists
+      // Deep-link auto-selection: check initialTicketId prop, sessionStorage, and URL ?ticketId= param
+      const urlTicketId = new URLSearchParams(window.location.search).get('ticketId');
+      const sessionTicketId = sessionStorage.getItem('forgex_selected_tech_ticket');
+      const targetTicketId = initialTicketId || sessionTicketId || urlTicketId;
+
       setSelectedTask((prevSelected) => {
+        if (targetTicketId) {
+          const matchedByTarget = allTasks.find(
+            (t) =>
+              t.id === targetTicketId ||
+              t.rawCaseId === targetTicketId ||
+              t.title.includes(targetTicketId)
+          );
+          if (matchedByTarget) {
+            sessionStorage.removeItem('forgex_selected_tech_ticket');
+            return matchedByTarget;
+          }
+        }
         if (!prevSelected) return allTasks.length > 0 ? allTasks[0] : null;
         const matched = allTasks.find(
           (t) => t.id === prevSelected.id || (t.rawCaseId && t.rawCaseId === prevSelected.rawCaseId)
@@ -496,15 +598,44 @@ export const TechnicianWorkspaceView: React.FC<{
       setLoading(false);
       setSyncing(false);
     }
-  }, [token, organization?.id]);
+  }, [token, organization?.id, initialTicketId]);
 
   useEffect(() => {
     fetchQueue(false);
   }, [fetchQueue]);
 
+  // Listen for navigation deep-links to specific tickets
+  useEffect(() => {
+    const handleNav = (e: Event) => {
+      const custom = e as CustomEvent<{ module?: string; ticketId?: string; caseId?: string }>;
+      const target = custom.detail?.ticketId || custom.detail?.caseId;
+      if (target) {
+        setTasks((currentTasks) => {
+          const match = currentTasks.find(
+            (t) => t.id === target || t.rawCaseId === target || t.title.includes(target)
+          );
+          if (match) {
+            setSelectedTask(match);
+          }
+          return currentTasks;
+        });
+      }
+    };
+    window.addEventListener('forgex:navigate', handleNav);
+    return () => window.removeEventListener('forgex:navigate', handleNav);
+  }, []);
+
   useEffect(() => {
     setShowDiagnostics(false);
   }, [selectedTask?.id]);
+
+  const [shiftVersion, setShiftVersion] = useState(0);
+
+  useEffect(() => {
+    const handleShift = () => setShiftVersion((v) => v + 1);
+    window.addEventListener('forgex:tech-shift-changed', handleShift);
+    return () => window.removeEventListener('forgex:tech-shift-changed', handleShift);
+  }, []);
 
   // Compute live workload and live progress % per technician across active tasks
   const technicianStats = useMemo(() => {
@@ -513,15 +644,22 @@ export const TechnicianWorkspaceView: React.FC<{
       const totalSteps = assigned.reduce((sum, t) => sum + t.stepsCount, 0);
       const doneSteps = assigned.reduce((sum, t) => sum + t.completedSteps, 0);
       const progressPct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+      const solvedCount = solvedCounts[tech.name] ?? tech.initialSolved;
+      const liveStatus = computeTechnicianLiveStatus(
+        { fullName: tech.name, id: tech.id },
+        tasks
+      );
       return {
         ...tech,
+        solvedCount,
         assignedCount: assigned.length,
         totalSteps,
         doneSteps,
         progressPct,
+        liveStatus,
       };
     });
-  }, [tasks]);
+  }, [tasks, solvedCounts, shiftVersion]);
 
   // Start Execution Action
   const handleStartExecution = (taskId: string) => {
@@ -555,74 +693,18 @@ export const TechnicianWorkspaceView: React.FC<{
     );
   };
 
-  // Toggle step completion via checkbox (Strict Persistence to LocalStorage & Backend Database)
+  // Toggle step completion via checkbox (Strict Irreversible Locking - Requirement 5)
   const handleToggleStep = async (taskId: string, stepId: string) => {
-    let targetTask: TechTask | undefined;
-    let nextStepStatus: TechStep['status'] = 'COMPLETED';
-
-    setTasks((prevTasks) =>
-      prevTasks.map((t) => {
-        if (t.id !== taskId) return t;
-        targetTask = t;
-
-        const updatedSteps = t.steps.map((step) => {
-          if (step.id === stepId) {
-            nextStepStatus = step.status === 'COMPLETED' ? 'PENDING' : 'COMPLETED';
-            return { ...step, status: nextStepStatus };
-          }
-          return step;
-        });
-
-        const firstPendingIdx = updatedSteps.findIndex((s) => s.status === 'PENDING');
-        if (firstPendingIdx !== -1 && !updatedSteps.some((s) => s.status === 'IN_PROGRESS')) {
-          updatedSteps[firstPendingIdx].status = 'IN_PROGRESS';
-        }
-
-        const completedCount = updatedSteps.filter((s) => s.status === 'COMPLETED').length;
-        const allCompleted = completedCount === updatedSteps.length && updatedSteps.length > 0;
-
-        saveStoredExecution(t, updatedSteps, true);
-
-        const updatedTask: TechTask = {
-          ...t,
-          steps: updatedSteps,
-          completedSteps: completedCount,
-          status: allCompleted ? 'Resolved' : 'In Progress',
-        };
-
-        if (selectedTask?.id === taskId) {
-          setSelectedTask(updatedTask);
-        }
-
-        return updatedTask;
-      })
-    );
-
-    // Persist step to backend database
-    if (token && targetTask) {
-      const caseRef = (targetTask as TechTask).rawCaseId || targetTask.id;
-      try {
-        const headers: Record<string, string> = {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        };
-        if (organization?.id) headers['x-organization-id'] = organization.id;
-
-        await fetch(`/api/v1/maintenance/cases/${caseRef}/steps/${stepId}`, {
-          method: 'PATCH',
-          headers,
-          body: JSON.stringify({
-            status: nextStepStatus,
-            technicianNotes: 'Executed via Technician Field Workspace',
-          }),
-        }).catch(() => null);
-      } catch (err) {
-        console.warn('Backend step update async push notice:', err);
-      }
+    const task = tasks.find((t) => t.id === taskId);
+    const existingStep = task?.steps.find((s) => s.id === stepId);
+    if (existingStep?.status === 'COMPLETED') {
+      toast.info('Step Locked', 'This verified step is permanently locked and cannot be reopened.');
+      return;
     }
+    await handleCompleteAndNext(taskId, stepId);
   };
 
-  // Complete Step & Advance to next step (Strict Persistence to LocalStorage & Backend Database)
+  // Complete Step & Advance to next step (Strict Persistence & Live Cross-Module Sync)
   const handleCompleteAndNext = async (taskId: string, stepId: string) => {
     let targetTask: TechTask | undefined;
 
@@ -661,6 +743,32 @@ export const TechnicianWorkspaceView: React.FC<{
 
         if (selectedTask?.id === taskId) {
           setSelectedTask(updatedTask);
+        }
+
+        // Live Progress Sync across modules (Kundli roster bar & Raised Tickets)
+        window.dispatchEvent(
+          new CustomEvent('forgex:ticket-progress-sync', {
+            detail: {
+              ticketId: t.id,
+              rawCaseId: t.rawCaseId,
+              status: allCompleted ? 'RESOLVED' : 'IN_PROGRESS',
+              isSolved: allCompleted,
+              completedSteps: completedCount,
+              totalSteps: updatedSteps.length,
+              technicianName: t.assignedTechnicianName,
+            },
+          })
+        );
+        if (allCompleted) {
+          window.dispatchEvent(
+            new CustomEvent('forgex:ticket-solved', {
+              detail: {
+                ticketId: t.id,
+                rawCaseId: t.rawCaseId,
+              },
+            })
+          );
+          incrementSolved(t.assignedTechnicianName);
         }
 
         return updatedTask;
@@ -825,6 +933,221 @@ export const TechnicianWorkspaceView: React.FC<{
       });
   }, [tasks, searchQuery, filterPriority, selectedTechnician]);
 
+  // Mark Task Solved & Archive to Maintenance History (Multi-Stage Ticket Resolution)
+  const handleMarkTaskSolved = async (task: TechTask, atStep?: TechStep) => {
+    try {
+      const caseRef = task.rawCaseId || task.id;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (organization?.id) headers['x-organization-id'] = organization.id;
+
+      const resolutionNotes = atStep
+        ? `Issue solved at procedure step #${atStep.stepNumber} (${atStep.title}): ${atStep.instruction} by technician ${task.assignedTechnicianName}.`
+        : `Field maintenance completed by ${task.assignedTechnicianName}. All procedure verification steps passed.`;
+
+      // 1. Mark status RESOLVED on Maintenance Case
+      await fetch(`/api/v1/maintenance/cases/${caseRef}/status`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          status: 'RESOLVED',
+          reason: resolutionNotes,
+        }),
+      }).catch(() => null);
+
+      // 2. Mark ALL steps as COMPLETED (100% progress & strictly locked - Requirement 5)
+      const completedSteps = task.steps.map((s) => ({ ...s, status: 'COMPLETED' as const }));
+
+      saveStoredExecution(task, completedSteps, true);
+
+      // 3. Post authoritative record directly to /api/v1/maintenance-records
+      await fetch('/api/v1/maintenance-records', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          machineAssetTag: task.assetTag,
+          ticketNumber: task.id,
+          problemStatement: task.symptomDescription || task.title,
+          observedSymptoms: [task.symptomDescription || task.title],
+          rootCause: task.topRootCause || 'Field mechanical / electrical wear corrected',
+          faultCategory: task.specialistDiscipline?.toLowerCase().includes('hydraul')
+            ? 'HYDRAULICS'
+            : task.specialistDiscipline?.toLowerCase().includes('elec')
+            ? 'ELECTRICAL'
+            : 'MECHANICAL',
+          repairActions: atStep
+            ? [`Issue solved at step #${atStep.stepNumber} (${atStep.title}): ${atStep.instruction}`]
+            : task.steps.map((s) => `Step #${s.stepNumber} (${s.title}): ${s.instruction}`),
+          verificationState: 'PASSED',
+          approvalStatus: 'APPROVED',
+          resolvedAt: new Date().toISOString(),
+        }),
+      }).catch((mrErr) => {
+        console.warn('Failed to post direct maintenance-record:', mrErr);
+      });
+
+      // 4. Increment technician's solved counter
+      incrementSolved(task.assignedTechnicianName);
+
+      // Dispatch 100% Live Progress Sync across modules
+      window.dispatchEvent(
+        new CustomEvent('forgex:ticket-progress-sync', {
+          detail: {
+            ticketId: task.id,
+            rawCaseId: task.rawCaseId,
+            status: 'RESOLVED',
+            isSolved: true,
+            completedSteps: completedSteps.length,
+            totalSteps: completedSteps.length,
+            technicianName: task.assignedTechnicianName,
+          },
+        })
+      );
+      window.dispatchEvent(
+        new CustomEvent('forgex:ticket-solved', {
+          detail: {
+            ticketId: task.id,
+            rawCaseId: task.rawCaseId,
+          },
+        })
+      );
+
+      // 5. Update local task state
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id
+            ? { ...t, status: 'Resolved' as const, steps: completedSteps, completedSteps: completedSteps.length }
+            : t
+        )
+      );
+
+      if (selectedTask?.id === task.id) {
+        setSelectedTask((prev) =>
+          prev ? { ...prev, status: 'Resolved', steps: completedSteps, completedSteps: completedSteps.length } : null
+        );
+      }
+
+      // 6. Pre-fill and trigger Expert Knowledge Capture Form (Requirement 4)
+      setExpertCapturePrefill({
+        machineAssetTag: task.assetTag,
+        issueTitle: `Field Fix: [${task.assetTag}] ${task.title}`,
+        category: task.specialistDiscipline?.toLowerCase().includes('hydraul')
+          ? 'Tooling Hack'
+          : task.specialistDiscipline?.toLowerCase().includes('safety')
+          ? 'Safety & LOTO'
+          : 'Troubleshooting Trick',
+        resolutionSummary: atStep
+          ? `Issue solved at step #${atStep.stepNumber} (${atStep.title}). Applied fix: ${atStep.instruction}. Root Cause: ${task.topRootCause || 'Field anomaly corrected'}.`
+          : `All ${task.steps.length} field repair steps completed. Root Cause: ${task.topRootCause || 'Mechanical anomaly'}. Remedy: ${task.recommendedFix || 'Restored operational baseline.'}`,
+        symptom: task.symptomDescription,
+      });
+      setIsExpertCaptureOpen(true);
+
+      toast.success(
+        'Task Resolved & Logged',
+        `Maintenance repair record archived to Maintenance History. ${task.assignedTechnicianName}'s solved counter incremented!`
+      );
+    } catch (err) {
+      console.error('Failed to resolve task:', err);
+    }
+  };
+
+  // Open OEM Vendor Escalation Modal
+  const handleOpenOemModal = (task: TechTask) => {
+    setOemTargetTask(task);
+    setOemFaultCode(task.faultCode || 'ERR-702-HW-FATAL');
+    setOemRcaFindings(
+      task.topRootCause ||
+        task.symptomDescription ||
+        'Internal mechanical wear / thermal degradation beyond field overhaul specifications.'
+    );
+
+    const activeOrFailedStep =
+      task.steps.find((s) => s.status === 'IN_PROGRESS') ||
+      task.steps.find((s) => s.status === 'PENDING') ||
+      task.steps[task.steps.length - 1];
+
+    setOemFailedNotes(
+      activeOrFailedStep
+        ? `Blocked at [Step ${activeOrFailedStep.stepNumber}: ${activeOrFailedStep.title}] — Sub-assembly internal seizure requires OEM specialized factory tooling and warranty overhaul.`
+        : 'Sub-assembly internal failure requires certified OEM factory technician onsite.'
+    );
+
+    // Auto-detect OEM Manufacturer Name
+    const tag = task.assetTag.toUpperCase();
+    const name = task.assetName.toLowerCase();
+    if (tag.includes('PUMP') || name.includes('pump')) {
+      setOemVendorName('Flowserve Pump Technologies GmbH');
+      setOemContactEmail('emea.dispatch@flowserve.com');
+    } else if (tag.includes('HYD') || name.includes('press')) {
+      setOemVendorName('Bosch Rexroth Industrial Hydraulics');
+      setOemContactEmail('service.field@boschrexroth.de');
+    } else if (tag.includes('CNC') || name.includes('lathe') || name.includes('spindle')) {
+      setOemVendorName('DMG MORI Industrial Services');
+      setOemContactEmail('support@dmgmori.com');
+    } else {
+      setOemVendorName('Siemens Motion & Drives Automation');
+      setOemContactEmail('support.service@siemens.com');
+    }
+
+    setIsOemModalOpen(true);
+  };
+
+  // Confirm OEM Vendor Dispatch & Update Ticket Status
+  const handleConfirmOemDispatch = async () => {
+    if (!oemTargetTask) return;
+    setIsSubmittingOem(true);
+    try {
+      const caseRef = oemTargetTask.rawCaseId || oemTargetTask.id;
+      if (token) {
+        const headers: Record<string, string> = {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        };
+        if (organization?.id) headers['x-organization-id'] = organization.id;
+
+        await fetch(`/api/v1/maintenance/cases/${caseRef}/status`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            status: 'ESCALATED_TO_OEM',
+            reason: `OEM Escalation to ${oemVendorName} (${oemContactEmail}) under ${oemSlaPriority}. Notes: ${oemFailedNotes}`,
+          }),
+        }).catch(() => null);
+      }
+
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === oemTargetTask.id
+            ? {
+                ...t,
+                status: 'Assigned' as const,
+                title: `[OEM: ${oemVendorName}] ${t.title}`,
+              }
+            : t
+        )
+      );
+
+      toast.success(
+        'OEM Vendor Escalation Dispatched',
+        `Official L4 Service Request dispatched to ${oemVendorName}. Ticket status marked ESCALATED_TO_OEM.`
+      );
+
+      setIsOemModalOpen(false);
+      setOemTargetTask(null);
+    } catch (err) {
+      console.error('OEM Escalation failed:', err);
+      toast.error(
+        'Escalation Notice',
+        'Failed to lodge OEM escalation request. Please try again.'
+      );
+    } finally {
+      setIsSubmittingOem(false);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F8FAFC] text-[#0F172A] font-sans antialiased">
       {/* Top Header Bar with Technician Selector, Star Rating & Live Workload Strip */}
@@ -891,6 +1214,133 @@ export const TechnicianWorkspaceView: React.FC<{
           >
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-blue-600' : ''}`} />
           </button>
+        </div>
+      </div>
+
+      {/* Technician Roster & Kundli Bar */}
+      <div className="bg-white border-b border-slate-200 px-4 py-3 shrink-0 shadow-2xs">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-slate-700 flex items-center gap-1.5">
+              <Award className="w-3.5 h-3.5 text-blue-600" />
+              Technician Roster & Kundli Register
+            </span>
+            <span className="text-[10px] font-mono bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-semibold">
+              Live Workload & Skill Dispatch
+            </span>
+          </div>
+          {selectedTechnician !== 'ALL' && (
+            <button
+              onClick={() => setSelectedTechnician('ALL')}
+              className="text-[11px] font-mono text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center gap-1 cursor-pointer"
+            >
+              <span>Show All Queue ({tasks.length})</span>
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+          {technicianStats.map((tech) => {
+            const isSelected = selectedTechnician === tech.name;
+            const live = tech.liveStatus;
+            const isOnShift = live.shiftStatus === 'ON_SHIFT';
+
+            return (
+              <div
+                key={tech.id}
+                onClick={() => setSelectedTechnician(isSelected ? 'ALL' : tech.name)}
+                className={`p-2.5 rounded-lg border transition-all cursor-pointer relative ${
+                  isSelected
+                    ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
+                    : 'bg-slate-50/60 hover:bg-slate-100/70 border-slate-200 hover:border-slate-300 shadow-2xs'
+                }`}
+                title={`Click to filter queue for ${tech.name}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold text-slate-900 truncate">
+                        {tech.name}
+                      </span>
+                      {isSelected && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                      {tech.discipline}
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded shrink-0">
+                    ⭐ {tech.rating.toFixed(1)}
+                  </span>
+                </div>
+
+                {/* Live Status Pill & Quick Shift Toggle */}
+                <div className="mt-2 pt-1.5 border-t border-slate-200/60 flex items-center justify-between gap-1 text-[10px] font-mono">
+                  <span
+                    className={`font-semibold px-1.5 py-0.5 rounded border truncate max-w-[130px] ${
+                      live.statusType === 'AVAILABLE'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                        : live.statusType === 'BUSY'
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-rose-50 text-rose-800 border-rose-200'
+                    }`}
+                    title={live.fullText}
+                  >
+                    {live.shortText}
+                  </span>
+
+                  {/* Manual Shift Toggle Chip */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const next = isOnShift ? 'ON_BREAK' : 'ON_SHIFT';
+                      setTechnicianShiftStatus(tech.name, next);
+                    }}
+                    className={`px-1.5 py-0.5 rounded border font-bold transition shrink-0 cursor-pointer text-[10px] ${
+                      isOnShift
+                        ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border-emerald-300'
+                        : 'bg-rose-100 text-rose-800 hover:bg-rose-200 border-rose-300'
+                    }`}
+                    title="Click to toggle technician shift availability"
+                  >
+                    {isOnShift ? '🟢 On Shift' : '🔴 On Break'}
+                  </button>
+                </div>
+
+                <div className="mt-1.5 flex items-center justify-between text-[11px] font-mono">
+                  <span className="text-slate-600">
+                    Active: <strong className="text-slate-900">{tech.assignedCount}</strong>
+                  </span>
+                  <span className="text-emerald-700 font-semibold">
+                    🏆 {tech.solvedCount} Solved
+                  </span>
+                </div>
+
+                {/* Live Step Progress Bar */}
+                <div className="mt-1.5">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 mb-0.5">
+                    <span>Live Progress</span>
+                    <span className="font-bold text-slate-700">{tech.progressPct}%</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${
+                        tech.progressPct === 100
+                          ? 'bg-emerald-500'
+                          : tech.progressPct > 0
+                          ? 'bg-blue-600'
+                          : 'bg-slate-300'
+                      }`}
+                      style={{ width: `${tech.progressPct}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -1361,8 +1811,14 @@ export const TechnicianWorkspaceView: React.FC<{
                               <div className="flex items-start gap-3 flex-1 min-w-0">
                                 <button
                                   type="button"
+                                  disabled={isCompleted}
                                   onClick={() => handleToggleStep(selectedTask.id, step.id)}
-                                  className="mt-0.5 text-slate-400 hover:text-blue-600 transition cursor-pointer shrink-0"
+                                  className={`mt-0.5 transition shrink-0 ${
+                                    isCompleted
+                                      ? 'text-emerald-600 cursor-not-allowed opacity-90'
+                                      : 'text-slate-400 hover:text-blue-600 cursor-pointer'
+                                  }`}
+                                  title={isCompleted ? 'Step confirmed and permanently locked' : 'Click to confirm step'}
                                 >
                                   {isCompleted ? (
                                     <CheckSquare className="w-5 h-5 text-emerald-600 fill-emerald-50" />
@@ -1402,11 +1858,23 @@ export const TechnicianWorkspaceView: React.FC<{
                                 </div>
                               </div>
 
-                              {/* Status Tag */}
-                              <div className="shrink-0">
+                              {/* Status Tag & Quick Solve Button */}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {!isCompleted && selectedTask.status !== 'Resolved' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMarkTaskSolved(selectedTask, step)}
+                                    className="px-2.5 py-1 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white border border-emerald-300 transition cursor-pointer flex items-center gap-1 shadow-2xs active:scale-95"
+                                    title="Fault solved at this step — complete ticket immediately"
+                                  >
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    <span>✅ Issue Solved Here</span>
+                                  </button>
+                                )}
                                 {isCompleted ? (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
-                                    <Check className="w-3 h-3" /> DONE
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded shadow-2xs">
+                                    <Lock className="w-3 h-3 text-emerald-700" />
+                                    <span>🔒 Completed</span>
                                   </span>
                                 ) : isActive ? (
                                   <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
@@ -1423,24 +1891,50 @@ export const TechnicianWorkspaceView: React.FC<{
                             {/* Active Step Dedicated Actions */}
                             {isActive && (
                               <div className="pt-2.5 border-t border-blue-100 flex flex-wrap items-center justify-between gap-2.5">
-                                <button
-                                  type="button"
-                                  onClick={() => handleAskCopilot(selectedTask, step)}
-                                  className="px-3 py-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-md inline-flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-                                >
-                                  <Cpu className="w-3.5 h-3.5 text-blue-600" />
-                                  <span>Ask Copilot for Specifications</span>
-                                </button>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {/* Option 1: Confirm Step & Next */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCompleteAndNext(selectedTask.id, step.id)}
+                                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1.5 transition shadow-xs cursor-pointer whitespace-nowrap"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>✓ Confirm Step & Next</span>
+                                    <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
+                                  </button>
 
-                                <button
-                                  type="button"
-                                  onClick={() => handleCompleteAndNext(selectedTask.id, step.id)}
-                                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-md inline-flex items-center gap-1.5 transition shadow-xs cursor-pointer"
-                                >
-                                  <Check className="w-3.5 h-3.5" />
-                                  <span>Complete Step & Next</span>
-                                  <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
-                                </button>
+                                  {/* Option 2: Issue Solved Here — Complete Ticket */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMarkTaskSolved(selectedTask, step)}
+                                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1.5 transition shadow-xs cursor-pointer whitespace-nowrap active:scale-95"
+                                    title="Fault resolved at this procedure step — complete ticket and log to Maintenance History"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>✅ Issue Solved Here — Complete Ticket</span>
+                                  </button>
+                                </div>
+
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAskCopilot(selectedTask, step)}
+                                    className="px-3 py-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                                  >
+                                    <Cpu className="w-3.5 h-3.5 text-blue-600" />
+                                    <span>Ask Copilot</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenOemModal(selectedTask)}
+                                    className="px-3 py-1.5 border border-amber-300 hover:border-amber-400 bg-amber-50/80 hover:bg-amber-100/80 text-amber-900 text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                                    title="Hardware blocked or requires manufacturer factory intervention"
+                                  >
+                                    <Building2 className="w-3.5 h-3.5 text-amber-700" />
+                                    <span>Escalate to OEM</span>
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>
@@ -1448,24 +1942,59 @@ export const TechnicianWorkspaceView: React.FC<{
                       })}
                     </div>
 
+                    {/* Fallback Unresolved Action if technician is blocked / hardware beyond in-house repair */}
+                    {selectedTask.completedSteps < selectedTask.stepsCount && (
+                      <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2 text-amber-900 font-medium">
+                          <Building2 className="w-4 h-4 text-amber-700 shrink-0" />
+                          <span>
+                            Technician blocked or internal sub-assembly requires OEM factory intervention?
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenOemModal(selectedTask)}
+                          className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-md inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer shrink-0"
+                        >
+                          <Building2 className="w-3.5 h-3.5" />
+                          <span>🏭 Issue Unresolved — Escalate to OEM / Manufacturer</span>
+                        </button>
+                      </div>
+                    )}
+
                     {/* Completion Banner when all steps are done */}
                     {selectedTask.completedSteps === selectedTask.stepsCount &&
                       selectedTask.stepsCount > 0 && (
                         <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                           <div className="flex items-center gap-2 text-emerald-800 font-semibold">
                             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                            <span>
-                              All execution steps completed. Field maintenance verified & ready for
-                              formal signoff.
-                            </span>
+                            <div>
+                              <div className="font-bold">
+                                All {selectedTask.stepsCount}/{selectedTask.stepsCount} Execution Steps Completed
+                              </div>
+                              <div className="text-[11px] text-emerald-700 font-normal">
+                                Field maintenance verified & operational baseline restored.
+                              </div>
+                            </div>
                           </div>
-                          <button
-                            onClick={() => onLaunchSop?.(selectedTask.id)}
-                            className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
-                          >
-                            <span>Open Formal SOP Signoff</span>
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handleMarkTaskSolved(selectedTask)}
+                              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
+                            >
+                              <Award className="w-4 h-4 text-emerald-200" />
+                              <span>Mark Solved & Archive to Maintenance History</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onLaunchSop?.(selectedTask.id)}
+                              className="px-3 py-2 bg-white hover:bg-emerald-100/50 border border-emerald-300 text-emerald-800 font-semibold rounded-lg inline-flex items-center justify-center gap-1.5 transition cursor-pointer"
+                            >
+                              <span>Formal SOP Signoff</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       )}
                   </div>
@@ -1473,8 +2002,20 @@ export const TechnicianWorkspaceView: React.FC<{
               </div>
             </div>
           ) : (
-            <div className="flex-1 flex items-center justify-center p-6 text-slate-400 text-xs font-mono">
-              Select a field task from the queue to start execution
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 space-y-3 font-mono">
+              <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
+                <Wrench className="w-6 h-6 text-slate-400" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-slate-600 font-sans">
+                  {tasks.length === 0 ? 'Technician Queue is Empty' : 'No Field Task Selected'}
+                </p>
+                <p className="text-xs text-slate-400 font-sans max-w-sm">
+                  {tasks.length === 0
+                    ? 'No active tickets in dispatch. Tickets flow in live from RCA escalations and operator reports.'
+                    : 'Select a task from the list on the left to review procedure steps and start maintenance execution.'}
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -1528,6 +2069,204 @@ export const TechnicianWorkspaceView: React.FC<{
           </div>
         </div>
       )}
+
+      {/* OEM Vendor Escalation Modal (L4 Fallback) */}
+      {isOemModalOpen && oemTargetTask && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200/50">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 leading-tight">
+                    L4 OEM Escalation & Manufacturer Warranty Dispatch
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Hardware beyond plant field repair · Auto-compiled official manufacturer service dossier
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOemModalOpen(false);
+                  setOemTargetTask(null);
+                }}
+                disabled={isSubmittingOem}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Auto-Compiled Context Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono">
+              <div>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold">Asset Tag</span>
+                <span className="font-bold text-slate-900">{oemTargetTask.assetTag}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold">Equipment Name</span>
+                <span className="font-bold text-slate-900 truncate block">{oemTargetTask.assetName}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold">Ticket Number</span>
+                <span className="font-bold text-blue-600">{oemTargetTask.id}</span>
+              </div>
+            </div>
+
+            {/* Form Fields */}
+            <div className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* OEM Manufacturer */}
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">
+                    OEM Manufacturer / Authorized Partner
+                  </label>
+                  <input
+                    type="text"
+                    value={oemVendorName}
+                    onChange={(e) => setOemVendorName(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:border-blue-500 font-sans"
+                    placeholder="e.g. Siemens Industry AG, DMG Mori, Flowserve"
+                  />
+                </div>
+
+                {/* Dispatch Email */}
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">
+                    Vendor Warranty Desk / SLA Dispatch Email
+                  </label>
+                  <input
+                    type="email"
+                    value={oemContactEmail}
+                    onChange={(e) => setOemContactEmail(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:border-blue-500 font-mono"
+                    placeholder="service.support@vendor.com"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Fault Code */}
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">
+                    Diagnostic Fault / Error Code
+                  </label>
+                  <input
+                    type="text"
+                    value={oemFaultCode}
+                    onChange={(e) => setOemFaultCode(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-hidden focus:border-blue-500"
+                    placeholder="e.g. ERR-702-HW-FATAL"
+                  />
+                </div>
+
+                {/* SLA Response Tier */}
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">
+                    Contracted SLA Warranty Priority Tier
+                  </label>
+                  <select
+                    value={oemSlaPriority}
+                    onChange={(e) => setOemSlaPriority(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:border-blue-500 font-sans cursor-pointer"
+                  >
+                    <option value="L4 Critical / 4-Hour Emergency Dispatch">
+                      🚨 L4 Critical — 4-Hour Emergency Onsite Dispatch
+                    </option>
+                    <option value="L4 High / Next Business Day Field Engineer">
+                      ⚠️ L4 High — Next Business Day Field Engineer
+                    </option>
+                    <option value="L4 Standard / Factory Remote Telemetry Analysis">
+                      📡 L4 Standard — Factory Remote Telemetry Analysis
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              {/* RCA Findings */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">
+                  Root Cause Analysis (RCA) Findings & Hypothesis
+                </label>
+                <input
+                  type="text"
+                  value={oemRcaFindings}
+                  onChange={(e) => setOemRcaFindings(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:border-blue-500 font-sans"
+                  placeholder="Summary of RCA investigation findings"
+                />
+              </div>
+
+              {/* Technician's Failed Step Notes */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 flex items-center justify-between">
+                  <span>Technician Blocker & Failed Step Evidence</span>
+                  <span className="text-[10px] text-slate-400 font-normal font-mono">
+                    Required for OEM warranty claim validation
+                  </span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={oemFailedNotes}
+                  onChange={(e) => setOemFailedNotes(e.target.value)}
+                  className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:border-blue-500 font-sans resize-none leading-relaxed"
+                  placeholder="Describe why field repair was blocked and what OEM specialized tooling or factory replacement parts are necessary..."
+                />
+              </div>
+
+              {/* Advisory note */}
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>
+                  Confirming this action will update ticket status to{' '}
+                  <strong className="font-mono text-amber-800">ESCALATED_TO_OEM</strong>, lock in-house field
+                  execution, and log the official warranty service ticket in plant records.
+                </span>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOemModalOpen(false);
+                  setOemTargetTask(null);
+                }}
+                disabled={isSubmittingOem}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmOemDispatch}
+                disabled={isSubmittingOem}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+              >
+                {isSubmittingOem ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Building2 className="w-3.5 h-3.5" />
+                )}
+                <span>{isSubmittingOem ? 'Dispatching...' : 'Dispatch Official OEM Service Request'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Expert Knowledge Capture Modal upon Task Resolution */}
+      <ExpertKnowledgeCaptureModal
+        isOpen={isExpertCaptureOpen}
+        onClose={() => setIsExpertCaptureOpen(false)}
+        prefillData={expertCapturePrefill}
+      />
     </div>
   );
 };

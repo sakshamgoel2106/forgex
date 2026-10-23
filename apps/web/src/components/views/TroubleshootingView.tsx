@@ -25,6 +25,7 @@ import {
   ShieldAlert,
   Package,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
@@ -33,6 +34,8 @@ import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
 import type { RcaSession, TeardownSop } from '@forgex/shared-types';
 import { generateRcaPdfReport } from '../../utils/rcaPdfReport';
+import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill } from '../modals/ExpertKnowledgeCaptureModal';
+import { selectBestTechnician } from './SopExecutionView';
 
 interface MachineItem {
   id: string;
@@ -56,7 +59,7 @@ const QUICK_SYMPTOM_CHIPS = [
 export const TroubleshootingView: React.FC<{
   onNavigateToSop?: () => void;
   onNavigateToMaintenance?: (assetId: string) => void;
-}> = ({ onNavigateToMaintenance }) => {
+}> = ({ onNavigateToSop, onNavigateToMaintenance }) => {
   const { toast } = useToast();
   const { organization, user } = useAuth();
 
@@ -100,6 +103,10 @@ export const TroubleshootingView: React.FC<{
     discipline: string;
     severity: string;
   } | null>(null);
+
+  // Expert Knowledge Capture Modal State (Multi-Stage Ticket Resolution)
+  const [isExpertCaptureOpen, setIsExpertCaptureOpen] = useState(false);
+  const [expertCapturePrefill, setExpertCapturePrefill] = useState<ExpertKnowledgePrefill | null>(null);
 
   // Storage Keys for Bulletproof Persistence (Database + localStorage + sessionStorage)
   const storageKey = `forgex_rca_history_${organization?.id || 'default'}`;
@@ -162,6 +169,74 @@ export const TroubleshootingView: React.FC<{
     setEscalationBanner(null);
     setFailedStepForEscalation(null);
     setSelectedWhyStep(null);
+  };
+
+  // Delete RCA Record Confirmation State (Requirement 2)
+  const [deleteRcaConfirmation, setDeleteRcaConfirmation] = useState<{
+    isOpen: boolean;
+    session: RcaSession | null;
+  }>({
+    isOpen: false,
+    session: null,
+  });
+
+  // Check if an RCA is locked from deletion (linked to active ticket or completed history)
+  const checkIsRcaLocked = useCallback((session: RcaSession | null): boolean => {
+    if (!session) return false;
+    const s = session as any;
+    // Direct escalation markers
+    if (s.isEscalated || s.escalatedTicketId || s.status === 'ESCALATED') {
+      return true;
+    }
+    // Closed / verified / completed
+    if (s.status === 'VERIFIED_CLOSED' || s.isLocked) {
+      return true;
+    }
+    // Check shared raised tickets
+    try {
+      const raw = localStorage.getItem('forgex_shared_raised_tickets');
+      if (raw) {
+        const tickets: any[] = JSON.parse(raw);
+        const isLinkedToActive = tickets.some(
+          (t) =>
+            (t.rcaSessionId && t.rcaSessionId === s.id) ||
+            (s.escalatedTicketId &&
+              (t.caseNumber === s.escalatedTicketId || t.id === s.escalatedTicketId)) ||
+            (t.assetTag === s.assetTag && (t.status === 'IN_PROGRESS' || t.status === 'RESOLVED'))
+        );
+        if (isLinkedToActive) return true;
+      }
+    } catch {}
+    return false;
+  }, []);
+
+  // Delete RCA Handler (permanently removes un-escalated draft/test RCA)
+  const handleDeleteRca = async () => {
+    const session = deleteRcaConfirmation.session;
+    if (!session) return;
+    setDeleteRcaConfirmation({ isOpen: false, session: null });
+    try {
+      setRecentSessions((prev) => prev.filter((s) => s.id !== session.id));
+
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const list: RcaSession[] = JSON.parse(raw);
+        const filtered = list.filter((s) => s.id !== session.id);
+        localStorage.setItem(storageKey, JSON.stringify(filtered));
+      }
+
+      apiFetch(`/api/v1/rca/sessions/${session.id}`, { method: 'DELETE' }).catch((e) =>
+        console.warn('Backend delete sync:', e)
+      );
+
+      if (activeSession?.id === session.id) {
+        handleStartNewInvestigation();
+      }
+
+      toast.success('RCA Deleted', `Investigation record for ${session.assetTag} was permanently removed.`);
+    } catch (err: any) {
+      toast.error('Delete Failed', err.message || 'Could not delete RCA record.');
+    }
   };
 
   // 1-Step Failure Confirmation State (Marking Steps "Fail")
@@ -326,6 +401,32 @@ export const TroubleshootingView: React.FC<{
     };
   }, []);
 
+  // Requirement 1: Always reset to clean "No Active RCA" state on page mount/refresh
+  useEffect(() => {
+    sessionStorage.removeItem('forgex_active_rca_id');
+  }, []);
+
+  // Check for incoming ticket from AI Copilot
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('forgex_rca_ticket');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.assetTag) {
+          setSelectedMachineTag(parsed.assetTag);
+        }
+        if (parsed.symptom) {
+          setSymptom(parsed.symptom);
+        }
+        sessionStorage.removeItem('forgex_rca_ticket');
+        toast.info(
+          'Ticket Received from AI Copilot',
+          `Loaded anomaly context for ${parsed.assetTag}. Ready for higher officer root cause analysis.`
+        );
+      }
+    } catch {}
+  }, [toast]);
+
   // Fetch and merge Recent RCA Sessions (Backend DB + localStorage) and restore active RCA
   const fetchRecentSessions = useCallback(async () => {
     try {
@@ -381,24 +482,14 @@ export const TroubleshootingView: React.FC<{
       setRecentSessions(mergedList);
       localStorage.setItem(storageKey, JSON.stringify(mergedList));
 
-      // 4. Restore active session if sessionStorage has activeRcaId
-      const activeRcaId = sessionStorage.getItem('forgex_active_rca_id');
-      if (activeRcaId && !activeSession) {
-        const match = mergedList.find((s) => s.id === activeRcaId);
-        if (match) {
-          setActiveSession(match);
-          setSelectedMachineTag(match.assetTag);
-          setErrorCode(match.detectedFaultCode || match.errorCode || '');
-          setMachineStatus((match.machineStatus as any) || 'Running - Abnormal');
-          setSymptom(match.symptom);
-        }
-      }
+      // Requirement 1: Do NOT auto-restore past RCA across page reloads.
+      // RCA starts at clean "No Active RCA / Start New Investigation" default state.
     } catch (err) {
       console.warn('Error during merged RCA session load:', err);
     } finally {
       setIsLoadingRecents(false);
     }
-  }, [storageKey, activeSession]);
+  }, [storageKey]);
 
   useEffect(() => {
     fetchRecentSessions();
@@ -613,6 +704,27 @@ export const TroubleshootingView: React.FC<{
           console.warn('Could not complete session on backend:', compErr);
         }
 
+        // Permanently record resolution to Maintenance History
+        try {
+          apiFetch('/api/v1/maintenance/cases', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              assetTag: activeSession.assetTag,
+              title: `RCA Resolution: ${activeSession.assetTag} Verified Normal`,
+              description: `All ${activeSession.investigationSteps.length} root cause investigation steps passed with 100% verification. Issue resolved in-house.`,
+              severity: 'LOW',
+              priority: 'LOW',
+              status: 'RESOLVED',
+              symptomDescription: activeSession.symptom,
+              faultCode: activeSession.detectedFaultCode || activeSession.errorCode || 'NORM-PASS',
+              plantName: organization?.name || 'Main Manufacturing Facility',
+              reportedByUserName: engineerName,
+              technicianNotes: 'Investigation completed with 100% verification by maintenance engineer. Archived to Maintenance History.',
+            }),
+          }).catch(() => null);
+        } catch {}
+
         setVerificationCompleteModal(true);
         toast.success(
           'Investigation 100% Verified!',
@@ -622,6 +734,135 @@ export const TroubleshootingView: React.FC<{
     } catch {
       toast.error('Update Failed', 'Could not sync step status to database.');
     }
+  };
+
+  // Case 1 (Solved at RCA Stage): Resolve Ticket & Save Record directly to Maintenance History and prompt Expert Knowledge
+  const handleResolveTicketAndSaveRecord = async (solvedStep?: any) => {
+    if (!activeSession) return;
+
+    const targetTag = activeSession.assetTag || selectedMachineTag || 'PLANT-MACHINE';
+    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
+    const topHyp =
+      activeSession.hypotheses?.find((h) => h.status === 'CONFIRMED') ||
+      activeSession.hypotheses?.[0];
+    const currentSymptom =
+      activeSession.symptom?.trim() ||
+      symptom?.trim() ||
+      'Abnormal operating conditions identified during RCA';
+    const nowIso = new Date().toISOString();
+
+    // 1. Mark RCA session sealed and completed
+    const updatedSteps = activeSession.investigationSteps.map((s) => {
+      if (solvedStep && s.id === solvedStep.id) {
+        return { ...s, status: 'PASS' as const, isLocked: true };
+      }
+      return { ...s, isLocked: true };
+    });
+
+    const updatedSession: RcaSession = {
+      ...activeSession,
+      status: 'VERIFIED_CLOSED',
+      isLocked: true,
+      completedAt: nowIso,
+      verifiedBy: {
+        id: user?.id || 'engineer',
+        name: engineerName,
+      },
+      investigationSteps: updatedSteps,
+      updatedAt: nowIso,
+    };
+
+    setActiveSession(updatedSession);
+    persistSession(updatedSession);
+
+    // 2. Call backend to mark RCA session complete
+    try {
+      await apiFetch(`/api/v1/rca/${activeSession.id}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          verifiedByUserId: user?.id,
+          verifiedByName: engineerName,
+          completionNotes: solvedStep
+            ? `Fault resolved directly at investigation step #${solvedStep.stepNumber} (${solvedStep.name}) by Maintenance Engineer.`
+            : 'All root cause verification steps passed and sealed by Maintenance Engineer.',
+        }),
+      }).catch(() => null);
+    } catch {}
+
+    // 3. Post authoritative record directly to /api/v1/maintenance-records
+    const ticketId = (activeSession as any).ticketNumber || `RCA-${Date.now().toString().slice(-4)}`;
+    try {
+      await apiFetch('/api/v1/maintenance-records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          machineAssetTag: targetTag,
+          ticketNumber: ticketId,
+          problemStatement: currentSymptom,
+          observedSymptoms: [currentSymptom],
+          rootCause: topHyp?.title || 'Verified condition cleared during RCA',
+          faultCategory: 'MECHANICAL',
+          repairActions: [
+            solvedStep
+              ? `Fault resolved at step #${solvedStep.stepNumber} (${solvedStep.name}): ${solvedStep.instruction}`
+              : `All ${activeSession.investigationSteps.length} root cause investigation steps passed with 100% verification. Issue resolved in-house.`,
+          ],
+          verificationState: 'PASSED',
+          approvalStatus: 'APPROVED',
+          resolvedAt: nowIso,
+          source: 'RCA',
+        }),
+      }).catch(() => null);
+    } catch (mrErr) {
+      console.warn('Failed to post direct maintenance record:', mrErr);
+    }
+
+    // 4. Also sync to maintenance cases as RESOLVED so work orders/case list stays in sync
+    try {
+      await apiFetch('/api/v1/maintenance/cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetTag: targetTag,
+          caseNumber: ticketId,
+          title: `RCA Resolution: [${targetTag}] ${topHyp?.title || currentSymptom.slice(0, 50)}`,
+          description: solvedStep
+            ? `Resolved at RCA Step #${solvedStep.stepNumber} (${solvedStep.name}). Diagnostic details: ${solvedStep.instruction}`
+            : `All root cause investigation steps passed with 100% verification. Issue resolved in-house without field dispatch.`,
+          severity: 'LOW',
+          priority: 'LOW',
+          status: 'RESOLVED',
+          symptomDescription: currentSymptom,
+          faultCode: activeSession.detectedFaultCode || activeSession.errorCode || 'RCA-RESOLVED',
+          plantName: organization?.name || 'Main Manufacturing Facility',
+          reportedByUserName: engineerName,
+          technicianNotes: solvedStep
+            ? `Resolved at RCA step #${solvedStep.stepNumber} by ${engineerName}. Recorded to Maintenance History.`
+            : `100% verified and resolved by ${engineerName}. Recorded to Maintenance History.`,
+        }),
+      }).catch(() => null);
+    } catch {}
+
+    // Close any previous verification modal
+    setVerificationCompleteModal(false);
+
+    // 5. Pre-fill and trigger Expert Knowledge Capture Form (Requirement 4)
+    setExpertCapturePrefill({
+      machineAssetTag: targetTag,
+      issueTitle: `RCA Fix: [${targetTag}] ${topHyp?.title || currentSymptom.slice(0, 60)}`,
+      category: 'Reliability',
+      resolutionSummary: solvedStep
+        ? `Resolved at RCA step #${solvedStep.stepNumber} (${solvedStep.name}). Expected parameter: ${solvedStep.expectedReading || 'Normal range'}. Root cause identified: ${topHyp?.title || 'Physical anomaly'}. Recommended Fix applied: ${topHyp?.recommendedFix || solvedStep.instruction}`
+        : `Verified all investigation steps. Primary root cause: ${topHyp?.title || 'System calibrated'}. Remediation: ${topHyp?.recommendedFix || 'Operating parameters restored within tolerance.'}`,
+      symptom: currentSymptom,
+    });
+    setIsExpertCaptureOpen(true);
+
+    toast.success(
+      'Ticket Resolved & Saved to Maintenance History',
+      `Audit record sealed for ${targetTag}. Form ready to publish fix to Expert Knowledge.`
+    );
   };
 
   // Initiate Step Fail: Launch Failure Confirmation Modal
@@ -1273,7 +1514,7 @@ Investigation Progress: ${progressStr}`;
 
       // If still no ticketNum, generate clean fallback ID
       if (!ticketNum) {
-        ticketNum = `ESC-${Date.now().toString().slice(-4)}`;
+        ticketNum = `ESC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
       }
 
       setEscalatedTicketId(ticketNum);
@@ -1284,19 +1525,136 @@ Investigation Progress: ${progressStr}`;
       });
       setIsEscalateOpen(false);
 
-      toast.success(
-        'Specialist Ticket Dispatched',
-        `Specialist ticket #${ticketNum} dispatched successfully to ${escalateDiscipline}.`,
+      // AI Smart Auto-Assignment: select the best qualified available technician
+      const assignedTech = selectBestTechnician(
         {
-          action: {
-            label: 'View in Technician Queue ->',
-            onClick: () => {
-              window.dispatchEvent(
-                new CustomEvent('forgex:navigate', { detail: { module: 'tech' } })
-              );
-            },
+          assetTag: targetTag,
+          title: `[${ticketNum}] ${targetTag}: ${activeFault} (${escalateDiscipline})`,
+          symptomDescription: currentSymptom,
+          faultCode: activeFault,
+        },
+        []
+      );
+
+      // Build authoritative ticket object matching Raised Tickets & Dispatch schema
+      const newTicket = {
+        id: ticketNum,
+        caseNumber: ticketNum,
+        assetTag: targetTag,
+        assetId: targetTag,
+        assetName: matchedMachine?.name || activeSession.machineName || targetTag,
+        title: `[${ticketNum}] ${targetTag}: ${activeFault} (${escalateDiscipline})`,
+        description: `Escalated RCA: [${targetTag}] ${topHyp?.title || currentSymptom}\n\nTop Root Cause: ${topHyp?.title || 'Thermal / Mechanical Breakdown'}\nRecommended Fix: ${topHyp?.recommendedFix || 'Execute isolation, LOTO, and specialist overhaul.'}\n\nField Notes: ${escalateNotes || 'Urgent specialist dispatch from RCA Copilot.'}`,
+        severity: (escalateSeverity || 'HIGH') as any,
+        priority: (escalateSeverity || 'HIGH') as any,
+        status: 'IN_PROGRESS' as const,
+        symptomDescription: currentSymptom,
+        faultCode: activeFault,
+        machineStatus: activeSession.machineStatus || machineStatus || 'Running - Abnormal',
+        topRootCause: topHyp?.title || 'Mechanical Seal Thermal Breakdown',
+        probability: topHyp?.probability || 88,
+        recommendedFix: topHyp?.recommendedFix || 'Execute isolation, LOTO, and replace seal face.',
+        investigationProgress: progressStr,
+        specialistDiscipline: escalateDiscipline,
+        lotoApplied: Boolean(isLotoApplied),
+        reportedByRole: 'Maintenance Engineer',
+        reportedByName: `Maintenance Engineer / ${engineerName}`,
+        assignedTechnicianUserId: assignedTech.id,
+        assignedTechnicianName: assignedTech.fullName,
+        assignedTechnicianRating: assignedTech.rating,
+        isAiAutoAssigned: true,
+        rcaSessionId: activeSession.id,
+        source: 'RCA',
+        createdAtFormatted,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        checklist: [
+          {
+            id: 'step-loto-verify',
+            stepNumber: 1,
+            title: 'Verify Zero-Energy LOTO & Area Safety',
+            instruction: `Isolate power source, apply lockout padlocks, tag isolation points, and verify zero electrical/mechanical energy for ${targetTag}.`,
+            requiresLoto: Boolean(isLotoApplied),
+            status: isLotoApplied ? ('COMPLETED' as const) : ('PENDING' as const),
           },
-        }
+          {
+            id: 'step-component-inspect',
+            stepNumber: 2,
+            title: 'Component Disassembly & Inspection',
+            instruction: `Remove protective housings and inspect seals, bearings, couplings, and electrical terminations for wear.`,
+            requiresLoto: false,
+            status: 'PENDING' as const,
+          },
+          {
+            id: 'step-remedial-fix',
+            stepNumber: 3,
+            title: 'Corrective Repair & Replacement Procedure',
+            instruction: `Apply recommended fix: ${topHyp?.recommendedFix || 'Execute component replacement and renew lubricants to OEM spec.'}`,
+            requiresLoto: false,
+            status: 'PENDING' as const,
+          },
+          {
+            id: 'step-qa-verify',
+            stepNumber: 4,
+            title: 'Functional Re-Commissioning & QA Verification',
+            instruction: `Perform run-test, verify baseline vibration & temperature sensors, and record final sign-off.`,
+            requiresLoto: false,
+            status: 'PENDING' as const,
+          },
+        ],
+        history: [
+          {
+            id: `h-${Date.now()}`,
+            action: 'CASE_ESCALATED_FROM_RCA',
+            user: engineerName,
+            timestamp: new Date().toISOString(),
+            notes: `Escalated directly from RCA Copilot for ${escalateDiscipline}. Auto-assigned to ${assignedTech.fullName} (⭐ ${assignedTech.rating}).`,
+          },
+        ],
+      };
+
+      // Persist to shared store in localStorage & sessionStorage for bulletproof cross-module synchronization
+      try {
+        const existingRaw = localStorage.getItem('forgex_shared_raised_tickets');
+        const existingList = existingRaw ? JSON.parse(existingRaw) : [];
+        const filtered = existingList.filter((t: any) => t.id !== ticketNum && t.caseNumber !== ticketNum);
+        filtered.unshift(newTicket);
+        localStorage.setItem('forgex_shared_raised_tickets', JSON.stringify(filtered));
+      } catch (errShared) {
+        console.warn('Could not cache to forgex_shared_raised_tickets:', errShared);
+      }
+
+      sessionStorage.setItem('forgex_selected_case_id', ticketNum);
+
+      // Mark current session as escalated and persist
+      const updatedSession: any = {
+        ...activeSession,
+        isEscalated: true,
+        escalatedTicketId: ticketNum,
+        status: 'ESCALATED',
+        updatedAt: new Date().toISOString(),
+      };
+      setActiveSession(updatedSession);
+      persistSession(updatedSession);
+
+      // Immediately navigate directly to Raised Tickets with this newly escalated ticket visible and selected at the top
+      window.dispatchEvent(
+        new CustomEvent('forgex:navigate', {
+          detail: {
+            module: 'maintenance',
+            caseId: ticketNum,
+            ticket: newTicket,
+          },
+        })
+      );
+
+      if (onNavigateToSop) {
+        onNavigateToSop();
+      }
+
+      toast.success(
+        'Specialist Ticket Escalated & Dispatched',
+        `Ticket #${ticketNum} auto-assigned to ${assignedTech.fullName} and opened in Raised Tickets.`
       );
     } catch (err: any) {
       toast.error('Escalation Failed', err.message || 'Could not dispatch specialist ticket.');
@@ -1338,73 +1696,96 @@ Investigation Progress: ${progressStr}`;
             <span className="whitespace-nowrap">Start New Investigation</span>
           </button>
 
-          {/* Recent RCAs Dropdown Selector - only displayed when Active RCA is loaded */}
-          {activeSession && (
-            <div className="relative shrink-0" ref={historyDropdownRef}>
-              <button
-                type="button"
-                onClick={() => setIsHistoryDropdownOpen(!isHistoryDropdownOpen)}
-                className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-mono font-medium text-slate-700 flex items-center gap-1.5 transition shadow-sm whitespace-nowrap shrink-0"
-              >
-                <History className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                <span className="whitespace-nowrap">Recent RCAs ({recentSessions.length})</span>
-                <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
-              </button>
+          {/* Recent RCAs Dropdown Selector - always displayed in toolbar */}
+          <div className="relative shrink-0" ref={historyDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsHistoryDropdownOpen(!isHistoryDropdownOpen)}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-mono font-medium text-slate-700 flex items-center gap-1.5 transition shadow-sm whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <History className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span className="whitespace-nowrap">Recent RCAs ({recentSessions.length})</span>
+              <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+            </button>
 
-              {isHistoryDropdownOpen && (
-                <div className="absolute right-0 mt-1.5 w-80 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 text-xs animate-in fade-in slide-in-from-top-1">
-                  <div className="p-2 border-b border-slate-100">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handleStartNewInvestigation();
-                        setIsHistoryDropdownOpen(false);
-                      }}
-                      className="w-full text-center py-1.5 px-3 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-mono font-bold text-xs flex items-center justify-center gap-1.5 transition border border-blue-200"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Start New Investigation</span>
-                    </button>
-                  </div>
-                  <div className="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between font-mono font-bold text-[10px] uppercase text-slate-400">
-                    <span>Previous Investigations</span>
-                    <span>{recentSessions.length} total</span>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
-                    {recentSessions.length === 0 ? (
-                      <div className="p-4 text-center text-slate-400 font-mono text-xs">
-                        No previous RCA investigations found.
-                      </div>
-                    ) : (
-                      recentSessions.map((session) => (
-                        <button
-                          key={session.id}
-                          type="button"
-                          onClick={() => handleLoadSession(session)}
-                          className="w-full text-left p-2.5 hover:bg-blue-50/70 transition flex flex-col gap-0.5 group"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono font-bold text-blue-700">
-                              {session.assetTag}
-                            </span>
-                            <span className="text-[10px] font-mono text-slate-400">
-                              {session.createdAt?.split('T')[0]}
-                            </span>
-                          </div>
-                          {session.detectedFaultCode && (
-                            <span className="text-[10px] font-mono font-semibold text-rose-600 truncate">
-                              {session.detectedFaultCode}
-                            </span>
-                          )}
-                          <p className="text-slate-600 text-[11px] truncate">{session.symptom}</p>
-                        </button>
-                      ))
-                    )}
-                  </div>
+            {isHistoryDropdownOpen && (
+              <div className="absolute right-0 mt-1.5 w-84 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 text-xs animate-in fade-in slide-in-from-top-1">
+                <div className="p-2 border-b border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleStartNewInvestigation();
+                      setIsHistoryDropdownOpen(false);
+                    }}
+                    className="w-full text-center py-1.5 px-3 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-mono font-bold text-xs flex items-center justify-center gap-1.5 transition border border-blue-200 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Start New Investigation</span>
+                  </button>
                 </div>
-              )}
-            </div>
-          )}
+                <div className="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between font-mono font-bold text-[10px] uppercase text-slate-400">
+                  <span>Previous Investigations</span>
+                  <span>{recentSessions.length} total</span>
+                </div>
+                <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
+                  {recentSessions.length === 0 ? (
+                    <div className="p-4 text-center text-slate-400 font-mono text-xs">
+                      No previous RCA investigations found.
+                    </div>
+                  ) : (
+                    recentSessions.map((session) => {
+                      const isLocked = checkIsRcaLocked(session);
+                      return (
+                        <div
+                          key={session.id}
+                          onClick={() => handleLoadSession(session)}
+                          className="w-full text-left p-2.5 hover:bg-blue-50/70 transition flex items-center justify-between gap-2 group cursor-pointer"
+                        >
+                          <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono font-bold text-blue-700">
+                                {session.assetTag}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-400">
+                                {session.createdAt?.split('T')[0]}
+                              </span>
+                            </div>
+                            {session.detectedFaultCode && (
+                              <span className="text-[10px] font-mono font-semibold text-rose-600 truncate">
+                                {session.detectedFaultCode}
+                              </span>
+                            )}
+                            <p className="text-slate-600 text-[11px] truncate">{session.symptom}</p>
+                          </div>
+                          {isLocked ? (
+                            <span
+                              title="Locked — Linked to Active Ticket/History"
+                              className="p-1 text-slate-400 cursor-not-allowed shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Lock className="w-3.5 h-3.5 text-slate-400" />
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              title="Delete this RCA record"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteRcaConfirmation({ isOpen: true, session });
+                              }}
+                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition shrink-0 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Tab Switcher if active session exists */}
           {activeSession && (
@@ -1435,7 +1816,7 @@ Investigation Progress: ${progressStr}`;
             </div>
           )}
 
-          {/* Escalate to Specialist Button */}
+          {/* Escalate Ticket to Technician Button */}
           <Button
             variant="primary"
             size="sm"
@@ -1447,7 +1828,7 @@ Investigation Progress: ${progressStr}`;
           >
             <UserCheck className="w-3.5 h-3.5 shrink-0" />
             <span className="whitespace-nowrap">
-              {escalatedTicketId ? `Dispatched (${escalatedTicketId})` : 'Escalate to Specialist'}
+              {escalatedTicketId ? `Dispatched (${escalatedTicketId})` : 'Escalate Ticket to Technician'}
             </span>
           </Button>
         </div>
@@ -1675,26 +2056,49 @@ Investigation Progress: ${progressStr}`;
                         (s.investigationSteps &&
                           s.investigationSteps.length > 0 &&
                           s.investigationSteps.every((st) => st.status === 'PASS'));
+                      const isLocked = checkIsRcaLocked(s);
                       return (
-                        <button
+                        <div
                           key={s.id}
-                          type="button"
                           onClick={() => handleLoadSession(s)}
-                          className="p-3.5 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50/60 hover:bg-white text-xs space-y-2 transition text-left shadow-sm hover:shadow group"
+                          className="p-3.5 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50/60 hover:bg-white text-xs space-y-2 transition text-left shadow-sm hover:shadow group cursor-pointer relative"
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-mono font-bold text-blue-700 text-sm group-hover:underline">
                               {s.assetTag}
                             </span>
-                            <span
-                              className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase shrink-0 ${
-                                allPassed
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
-                              }`}
-                            >
-                              {allPassed ? '100% Verified' : 'In Progress'}
-                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span
+                                className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase shrink-0 ${
+                                  allPassed
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                }`}
+                              >
+                                {allPassed ? '100% Verified' : 'In Progress'}
+                              </span>
+                              {isLocked ? (
+                                <span
+                                  title="Locked — Linked to Active Ticket/History"
+                                  className="p-1 text-slate-400 cursor-not-allowed"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  title="Delete this RCA record"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeleteRcaConfirmation({ isOpen: true, session: s });
+                                  }}
+                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </div>
 
                           {s.detectedFaultCode && (
@@ -1714,7 +2118,7 @@ Investigation Progress: ${progressStr}`;
                               Load Investigation →
                             </span>
                           </div>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -2276,12 +2680,20 @@ Investigation Progress: ${progressStr}`;
                                   >
                                     <X className="w-3 h-3 text-rose-600" /> Fail
                                   </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleResolveTicketAndSaveRecord(step)}
+                                    className="px-2.5 py-1 rounded border flex items-center gap-1 transition bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 font-bold cursor-pointer active:scale-95 shadow-xs"
+                                    title="Fault resolved at this step — mark resolved and log record to Maintenance History"
+                                  >
+                                    <CheckCircle2 className="w-3 h-3" /> ✓ Resolve Ticket & Save Record
+                                  </button>
                                 </>
                               )}
                             </div>
                           </div>
 
-                          {/* Failed Step Anomaly Highlight Banner with Direct Specialist Escalation */}
+                          {/* Failed Step Anomaly Highlight Banner with Direct Technician Escalation */}
                           {isFailed && (
                             <div className="ml-8 mt-2.5 p-3 rounded-lg bg-rose-100/80 border border-rose-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in">
                               <div className="text-xs text-rose-950 font-sans">
@@ -2294,7 +2706,7 @@ Investigation Progress: ${progressStr}`;
                                 onClick={() => handleOpenEscalateForFailedStep(step)}
                                 className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5 shrink-0 py-1.5 px-3 cursor-pointer active:scale-95"
                               >
-                                <span>🚨 Escalate Failed Step to Specialist →</span>
+                                <span>🚨 Escalate Ticket to Technician →</span>
                               </Button>
                             </div>
                           )}
@@ -2366,7 +2778,7 @@ Investigation Progress: ${progressStr}`;
                             onClick={() => handleOpenEscalateForFailedStep(failedStep)}
                             className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5 shrink-0 py-2 px-3.5 cursor-pointer active:scale-95 transition"
                           >
-                            <span>🚨 Escalate Failed Step to Specialist →</span>
+                            <span>🚨 Escalate Ticket to Technician →</span>
                           </Button>
                         </div>
                       </div>
@@ -2392,9 +2804,19 @@ Investigation Progress: ${progressStr}`;
                             </p>
                           </div>
                         </div>
-                        <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400 font-bold shrink-0 self-start sm:self-auto">
-                          AUDIT RECORD LOCKED
-                        </span>
+                        <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+                          <button
+                            type="button"
+                            onClick={() => handleResolveTicketAndSaveRecord()}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-xs cursor-pointer transition"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>✓ Resolve Ticket & Save Record</span>
+                          </button>
+                          <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400 font-bold">
+                            AUDIT RECORD LOCKED
+                          </span>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-emerald-200 text-xs font-mono">
@@ -2438,6 +2860,17 @@ Investigation Progress: ${progressStr}`;
                 </div>
 
                 <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                  {/* Resolve Ticket & Save Record */}
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => handleResolveTicketAndSaveRecord()}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>✓ Resolve Ticket & Save Record</span>
+                  </Button>
+
                   {/* Save to Expert Knowledge */}
                   <Button
                     variant="outline"
@@ -2480,14 +2913,14 @@ Investigation Progress: ${progressStr}`;
         </div>
       </div>
 
-      {/* Escalate to Machine Specialist Modal */}
+      {/* Escalate Ticket to Technician Modal */}
       <Modal
         isOpen={isEscalateOpen}
         onClose={() => {
           if (!isEscalating) setIsEscalateOpen(false);
         }}
-        title="Escalate to Machine Specialist"
-        subtitle="Dispatch high-priority support ticket to qualified plant engineer or OEM technical authority."
+        title="Escalate Ticket to Technician & Dispatch Queue"
+        subtitle="Dispatch high-priority support ticket into Raised Tickets with smart AI auto-assignment and availability fallback."
         maxWidth="2xl"
       >
         <form onSubmit={handleEscalateSubmit} className="space-y-4">
@@ -2639,7 +3072,7 @@ Investigation Progress: ${progressStr}`;
               className="bg-[#0F172A] text-white hover:bg-black font-semibold rounded-lg shadow-sm flex items-center gap-1.5"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>{isEscalating ? 'Dispatching...' : 'Dispatch Specialist Ticket'}</span>
+              <span>{isEscalating ? 'Dispatching...' : 'Escalate Ticket to Technician'}</span>
             </Button>
           </div>
         </form>
@@ -3089,7 +3522,7 @@ Investigation Progress: ${progressStr}`;
               }}
               className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm py-2 px-3.5"
             >
-              <span>🚨 Escalate Failed Step to Specialist Now →</span>
+              <span>🚨 Escalate Ticket to Technician →</span>
             </Button>
           </div>
         </div>
@@ -3148,11 +3581,21 @@ Investigation Progress: ${progressStr}`;
               type="button"
               variant="primary"
               size="sm"
+              onClick={() => handleResolveTicketAndSaveRecord()}
+              className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm py-2 px-3.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>✓ Resolve Ticket & Save Record</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={() => {
                 setVerificationCompleteModal(false);
                 handleExportRcaSummary();
               }}
-              className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm py-2 px-3.5"
+              className="w-full sm:w-auto text-indigo-700 border-indigo-300 hover:bg-indigo-50 font-bold text-xs flex items-center justify-center gap-1.5 py-2 px-3.5"
             >
               <FileText className="w-3.5 h-3.5" />
               <span>Export RCA Summary</span>
@@ -3160,6 +3603,50 @@ Investigation Progress: ${progressStr}`;
           </div>
         </div>
       </Modal>
+
+      {/* Delete RCA Record Confirmation Modal (Requirement 2) */}
+      <Modal
+        isOpen={deleteRcaConfirmation.isOpen}
+        onClose={() => setDeleteRcaConfirmation({ isOpen: false, session: null })}
+        title="Delete RCA Record"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setDeleteRcaConfirmation({ isOpen: false, session: null })}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleDeleteRca}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-bold inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Record</span>
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-2 text-xs font-sans text-slate-700">
+          <p className="text-sm font-semibold text-slate-900">
+            Delete this RCA record for{' '}
+            <strong className="font-mono text-blue-700">{deleteRcaConfirmation.session?.assetTag}</strong>?
+          </p>
+          <p className="text-slate-500">
+            This will permanently remove the investigation notes and hypothesis matrix from your session history.
+          </p>
+        </div>
+      </Modal>
+
+      {/* Expert Knowledge Capture Modal upon RCA Resolution */}
+      <ExpertKnowledgeCaptureModal
+        isOpen={isExpertCaptureOpen}
+        onClose={() => setIsExpertCaptureOpen(false)}
+        prefillData={expertCapturePrefill}
+      />
     </div>
   );
 };

@@ -67,16 +67,16 @@ const NAV_ITEMS: NavItemDef[] = [
   { id: 'machine-recovery',   label: 'Machine Recovery',     icon: Cpu,             group: 'operations' },
 
   // 2. KNOWLEDGE
-  { id: 'knowledge-hub',      label: 'Knowledge Hub',        icon: FileText,        group: 'knowledge' },
   { id: 'copilot',            label: 'AI Copilot',           icon: MessageSquare,   group: 'knowledge' },
   { id: 'troubleshooting',    label: 'Troubleshooting & RCA',icon: HelpCircle,      group: 'knowledge' },
   { id: 'expert',             label: 'Expert Knowledge',     icon: GraduationCap,   group: 'knowledge' },
+  { id: 'knowledge-hub',      label: 'Knowledge Hub',        icon: FileText,        group: 'knowledge' },
 
   // 3. EXECUTION
-  { id: 'maintenance',        label: 'Work Orders',          icon: HardHat,         group: 'execution' },
+  { id: 'maintenance',        label: 'Raised Tickets',       icon: HardHat,         group: 'execution' },
+  { id: 'tech',               label: 'Technician Queue',     icon: Wrench,          group: 'execution' },
   { id: 'history',            label: 'Maintenance History',  icon: History,         group: 'execution' },
   { id: 'visual',             label: 'Visual Intelligence',  icon: ScanLine,        group: 'execution' },
-  { id: 'tech',               label: 'Technician Queue',     icon: Wrench,          group: 'execution' },
   { id: 'worker',             label: 'Worker Workspace',     icon: UserCheck,       group: 'execution' },
 
   // 4. GOVERNANCE

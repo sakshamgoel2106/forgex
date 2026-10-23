@@ -1438,15 +1438,16 @@ export class MaintenanceWorkflowEngine {
 
     // Permitted transition matrix
     const permittedTransitions: Record<MaintenanceCaseStatus, MaintenanceCaseStatus[]> = {
-      REPORTED: ['INVESTIGATING', 'DIAGNOSED', 'IN_PROGRESS', 'CLOSED', 'ESCALATED_HUMAN'],
-      INVESTIGATING: ['DIAGNOSED', 'IN_PROGRESS', 'CLOSED', 'ESCALATED_HUMAN'],
-      DIAGNOSED: ['IN_PROGRESS', 'PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN'],
-      IN_PROGRESS: ['PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN'],
-      PENDING_APPROVAL: ['RESOLVED', 'REJECTED', 'CLOSED', 'ESCALATED_HUMAN'],
+      REPORTED: ['INVESTIGATING', 'DIAGNOSED', 'IN_PROGRESS', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
+      INVESTIGATING: ['DIAGNOSED', 'IN_PROGRESS', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
+      DIAGNOSED: ['IN_PROGRESS', 'PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
+      IN_PROGRESS: ['PENDING_APPROVAL', 'RESOLVED', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
+      PENDING_APPROVAL: ['RESOLVED', 'REJECTED', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
       RESOLVED: ['CLOSED'],
       CLOSED: [],
-      ESCALATED_HUMAN: ['IN_PROGRESS', 'DIAGNOSED', 'CLOSED'],
-      REJECTED: ['IN_PROGRESS', 'PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN'],
+      ESCALATED_HUMAN: ['IN_PROGRESS', 'DIAGNOSED', 'CLOSED', 'ESCALATED_TO_OEM', 'RESOLVED'],
+      ESCALATED_TO_OEM: ['IN_PROGRESS', 'CLOSED', 'RESOLVED'],
+      REJECTED: ['IN_PROGRESS', 'PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
     };
 
     const allowed = permittedTransitions[currentStatus] || [];
@@ -1463,7 +1464,9 @@ export class MaintenanceWorkflowEngine {
         userRole === 'ORGANIZATION_ADMIN' ||
         userRole === 'SUPERVISOR' ||
         userRole === 'PLANT_MANAGER' ||
-        userRole === 'ENGINEER_TECHNICIAN';
+        userRole === 'ENGINEER_TECHNICIAN' ||
+        userRole === 'TECHNICIAN' ||
+        userRole === 'ENGINEER';
       if (!isReviewer) {
         throw new Error(`Unauthorized: Role '${userRole}' is not permitted to approve or reject work orders.`);
       }
@@ -1549,6 +1552,9 @@ export class MaintenanceWorkflowEngine {
     } else if (nextStatus === 'ESCALATED_HUMAN') {
       updates.isEscalated = true;
       updates.escalationReason = (request.reason || request.notes)?.trim() || null;
+    } else if (nextStatus === 'ESCALATED_TO_OEM') {
+      updates.isEscalated = true;
+      updates.escalationReason = (request.reason || request.notes)?.trim() || 'OEM_VENDOR_REQUEST';
     }
 
     const updated = await this.dataStore.updateMaintenanceCase(organizationId, caseId, updates);
