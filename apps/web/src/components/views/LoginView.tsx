@@ -201,7 +201,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
   // ==========================================
   // Google OAuth & Email OTP State (Requirements 1-3)
   // ==========================================
-  const [loginMethod, setLoginMethod] = useState<'otp' | 'credentials'>('otp');
+  const [loginMethod, setLoginMethod] = useState<'otp' | 'credentials'>('credentials');
   const [googleModalOpen, setGoogleModalOpen] = useState(false);
   const [googleModalError, setGoogleModalError] = useState<string | null>(null);
   const [googleEmailInput, setGoogleEmailInput] = useState('');
@@ -2625,22 +2625,39 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
                       </div>
                     )}
 
-                    {/* Option 2: Continue with Email OTP Selector */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLoginMethod('otp');
-                        setError(null);
-                      }}
-                      className={`w-full py-2.5 px-4 border rounded-xl flex items-center justify-center gap-2.5 transition text-xs font-semibold shadow-xs ${
-                        loginMethod === 'otp'
-                          ? 'bg-[#151C24] text-white border-[#151C24]'
-                          : 'bg-white hover:bg-gray-50 text-gray-800 border-[#CBD5E1]'
-                      }`}
-                    >
-                      <Mail className={`w-4 h-4 ${loginMethod === 'otp' ? 'text-blue-400' : 'text-blue-600'}`} />
-                      <span>Continue with Email OTP</span>
-                    </button>
+                    {/* Segmented Auth Method Switcher */}
+                    <div className="grid grid-cols-2 gap-1.5 p-1 bg-gray-100 rounded-xl border border-gray-200 text-xs font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLoginMethod('credentials');
+                          setError(null);
+                        }}
+                        className={`py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition ${
+                          loginMethod === 'credentials'
+                            ? 'bg-white text-gray-900 shadow-xs border border-gray-200'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        <Lock className={`w-3.5 h-3.5 ${loginMethod === 'credentials' ? 'text-blue-600' : 'text-gray-400'}`} />
+                        <span>Work Password</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLoginMethod('otp');
+                          setError(null);
+                        }}
+                        className={`py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition ${
+                          loginMethod === 'otp'
+                            ? 'bg-white text-gray-900 shadow-xs border border-gray-200'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        <Mail className={`w-3.5 h-3.5 ${loginMethod === 'otp' ? 'text-blue-600' : 'text-gray-400'}`} />
+                        <span>Email OTP</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* EMAIL OTP FLOW */}
@@ -2892,6 +2909,64 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
                           </>
                         )}
                       </button>
+
+                      {/* Quick Dev Sign-In Personas */}
+                      <div className="pt-3 pb-1 border-t border-dashed border-gray-200 mt-3">
+                        <div className="flex items-center justify-between text-[11px] text-gray-500 mb-2 font-mono">
+                          <span className="uppercase tracking-wider">Quick Sign-In Personas</span>
+                          <span className="text-[10px] text-blue-600 font-sans">Click to fill</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIdentifier('admin@forgex.industrial');
+                              setPassword('Admin@1234');
+                              setFieldErrors({});
+                            }}
+                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
+                          >
+                            <div className="font-semibold text-gray-800">Plant Admin</div>
+                            <div className="text-[10px] text-gray-500 truncate font-mono">admin@forgex...</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIdentifier('engineer@forgex.industrial');
+                              setPassword('Engineer@1234');
+                              setFieldErrors({});
+                            }}
+                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
+                          >
+                            <div className="font-semibold text-gray-800">Lead Engineer</div>
+                            <div className="text-[10px] text-gray-500 truncate font-mono">engineer@forgex...</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIdentifier('sagarmaheshwari200761@gmail.com');
+                              setPassword('Admin@1234');
+                              setFieldErrors({});
+                            }}
+                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
+                          >
+                            <div className="font-semibold text-gray-800">Sagar (Owner)</div>
+                            <div className="text-[10px] text-gray-500 truncate font-mono">sagarmaheshwari...</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIdentifier('tech@forgex.industrial');
+                              setPassword('Tech@1234');
+                              setFieldErrors({});
+                            }}
+                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
+                          >
+                            <div className="font-semibold text-gray-800">Technician</div>
+                            <div className="text-[10px] text-gray-500 truncate font-mono">tech@forgex...</div>
+                          </button>
+                        </div>
+                      </div>
                     </form>
                   </>
                 )}

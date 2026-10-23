@@ -84,9 +84,13 @@ interface NoteFormItem {
   title: string;
   assetTag: string;
   taskDuringIssue: string;
+  isCustomTask?: boolean;
+  customTask?: string;
   observedAt: string;
-  category: ExpertCategory;
-  severity: ExpertSeverity;
+  category: ExpertCategory | string;
+  isCustomCategory?: boolean;
+  customCategory?: string;
+  severity: ExpertSeverity | '';
   symptom: string;
   content: string;
 }
@@ -154,59 +158,106 @@ function formatObservedDateTime(isoOrString?: string | null): string {
   }
 }
 
-function createDefaultNoteItem(defaultMachineTag = ''): NoteFormItem {
+function createDefaultNoteItem(): NoteFormItem {
   return {
     clientId: `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     title: '',
-    assetTag: defaultMachineTag,
-    taskDuringIssue: 'Routine Startup',
+    assetTag: '',
+    taskDuringIssue: '',
+    isCustomTask: false,
+    customTask: '',
     observedAt: getCurrentLocalDateTime(),
-    category: 'Reliability',
-    severity: 'Pro-Tip / Best Practice',
+    category: '',
+    isCustomCategory: false,
+    customCategory: '',
+    severity: '',
     symptom: '',
     content: '',
   };
 }
 
-function getFallbackAiInsight(note: ExpertNote): string {
-  if (note.aiSupplementalInsight && note.aiSupplementalInsight.trim().length > 0) {
-    return note.aiSupplementalInsight;
-  }
-  const tag = (
-    (note.machineAssetTags && note.machineAssetTags[0]) ||
-    note.machineAssetTag ||
-    note.assetTag ||
-    'EQUIPMENT'
-  ).toUpperCase();
-  const cat = note.category || 'Reliability';
-  const task = note.taskDuringIssue || 'Routine Maintenance';
+function isInsightRedundant(fieldAction: string, insight?: string | null): boolean {
+  if (!insight || !insight.trim()) return true;
+  if (!fieldAction || !fieldAction.trim()) return false;
 
-  if (tag.includes('PUMP') || tag.includes('SLURRY')) {
-    return `Cross-check API 610 seal flush Plan 11/53A pressures before starting. Verify casing bolt torque cross-pattern sequence to 85 Nm, and ensure full LOTO isolation of primary suction and discharge isolation valves prior to mechanical seal servicing.`;
-  } else if (tag.includes('GEN') || tag.includes('DIESEL') || tag.includes('101')) {
-    return `Cross-check OEM manual Section 4.2 for cold-crank pre-lubrication pressure (min 1.8 bar). Verify rotating diode exciter bridge diodes with multimeter before synchronizing, and confirm emergency stop governor trip latch is fully engaged and free of carbon fouling.`;
-  } else if (tag.includes('PKG') || tag.includes('901') || tag.includes('CONV')) {
-    return `Verify photo-eye sensor optical alignment (margin > 3.0) and tension roller radial runout under 0.05 mm. Confirm Category 4 dual-channel safety relay interlock is tested and cleared before restarting packaging line indexing cycle.`;
-  } else if (tag.includes('HEX') || tag.includes('PLATE') || tag.includes('HEAT') || tag.includes('801')) {
-    return `Cross-check tightening dimension 'A' across plate pack per heat exchanger manual drawing. Ensure differential pressure across plates does not exceed 4.5 bar during initial fluid charging, and purge all entrained air via top vent valves.`;
-  } else if (tag.includes('TURB') || tag.includes('COMP')) {
-    return `Verify unloader valve clearance (0.015" feeler gauge) and confirm radial shaft vibration is under 2.8 mm/s RMS (ISO 10816-3). Execute NFPA 70E Arc Flash Class 2 PPE protocol during high-voltage auxiliary lube skid power isolation.`;
-  } else if (cat === 'Safety & LOTO') {
-    return `Mandatory zero-energy state verification required per OSHA 1910.147. Bleed residual pneumatic/hydraulic line pressure to 0 psig, apply secondary safety padlocks to breaker panel, and log lockout tagout serial number before initiating teardown.`;
+  const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+  const normAction = normalize(fieldAction);
+  const normInsight = normalize(insight);
+
+  // Exact or near-exact duplicate
+  if (normAction === normInsight) return true;
+  if (normAction.includes(normInsight)) return true;
+  if (normInsight.includes(normAction) && normInsight.length - normAction.length < 25) return true;
+
+  // Specific cross-reference patterns (OEM sections, torque, tolerances, standards)
+  const crossRefRegex = /(section \d+(\.\d+)?|api \d+|osha \d+(\.\d+)?|nfpa \d+[a-z]?|iso \d+(-\d+)?|\b\d+(\.\d+)?\s*(nm|ft-lbs|bar|psig|mm|in|rpm)\b|\bplan \d+[a-z]?\b|\bcategory \d\b)/gi;
+  const refsInInsight = insight.match(crossRefRegex) || [];
+
+  if (refsInInsight.length > 0) {
+    const allRefsInAction = refsInInsight.every((ref) => normAction.includes(normalize(ref)));
+    if (allRefsInAction) {
+      const actionWords = new Set(normAction.split(' '));
+      const novelWords = normInsight.split(' ').filter((w) => w.length > 3 && !actionWords.has(w));
+      if (novelWords.length < 5) return true;
+    }
   } else {
-    return `Cross-check OEM Technical Manual Section 6 for torque tolerances and lubrication intervals. Verify alignment using dial indicator within ±0.05 mm tolerance, and ensure all electrical interlocks and safety guards are re-certified prior to returning machine ${tag} to active production during ${task}.`;
+    const actionWords = new Set(normAction.split(' '));
+    const novelWords = normInsight.split(' ').filter((w) => w.length > 3 && !actionWords.has(w));
+    if (novelWords.length < 5) return true;
   }
+
+  return false;
+}
+
+function getNonRedundantAiInsight(note: ExpertNote): string | null {
+  const content = note.description || note.content || '';
+  const rawInsight = note.aiSupplementalInsight;
+
+  if (rawInsight && rawInsight.trim().length > 0) {
+    if (isInsightRedundant(content, rawInsight)) {
+      return null;
+    }
+    return rawInsight.trim();
+  }
+
+  return null;
 }
 
 export const ExpertKnowledgeView: React.FC = () => {
   const { toast } = useToast();
-  const { user, organization, membership } = useAuth();
+  const { user, organization, membership, isOwnerOrAdmin } = useAuth();
 
   const userRole = membership?.role;
-  const isAdminOrOwner =
+  const isAdminOrOwner = Boolean(
+    isOwnerOrAdmin ||
     userRole === 'ORGANIZATION_OWNER' ||
     userRole === 'ORGANIZATION_ADMIN' ||
-    userRole === 'PLANT_MANAGER';
+    (userRole as string) === 'ADMIN'
+  );
+
+  const canEditOrDeleteNote = useCallback(
+    (note: ExpertNote): boolean => {
+      if (isAdminOrOwner) return true;
+      if (!user) return false;
+
+      // Match by author userId
+      if (note.authorUserId && note.authorUserId === user.id) return true;
+      if ((note as any).authorId && (note as any).authorId === user.id) return true;
+
+      // Match by author email
+      if (note.authorEmail && user.email && note.authorEmail.toLowerCase() === user.email.toLowerCase()) return true;
+
+      // Match by author name
+      const currentUserName = user.fullName || (user as any).name || '';
+      if (currentUserName) {
+        if (note.authorName && note.authorName.toLowerCase() === currentUserName.toLowerCase()) return true;
+        if (note.author && note.author.toLowerCase() === currentUserName.toLowerCase()) return true;
+      }
+
+      return false;
+    },
+    [isAdminOrOwner, user]
+  );
 
   const [notes, setNotes] = useState<ExpertNote[]>([]);
   const [uploadedMachines, setUploadedMachines] = useState<Array<{ assetTag: string; name: string }>>([]);
@@ -218,6 +269,14 @@ export const ExpertKnowledgeView: React.FC = () => {
   const [severityFilter, setSeverityFilter] = useState<string>('ALL');
   const [machineFilter, setMachineFilter] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'NEWEST' | 'HELPFUL' | 'RATING'>('NEWEST');
+
+  // Available categories including any custom categories created across notes
+  const availableCategories = useMemo(() => {
+    const customCats = notes
+      .map((n) => n.category)
+      .filter((c): c is string => Boolean(c) && !(PRACTICAL_CATEGORIES as string[]).includes(c));
+    return [...PRACTICAL_CATEGORIES, ...Array.from(new Set(customCats))];
+  }, [notes]);
 
   // Quick Edit Modal State
   const [editingNote, setEditingNote] = useState<ExpertNote | null>(null);
@@ -483,11 +542,15 @@ export const ExpertKnowledgeView: React.FC = () => {
     }
   };
 
-  // Quick Edit Handlers
+  // Quick Edit Handlers (Restricted to Admin/Owner)
   const handleOpenEdit = (note: ExpertNote, e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
+    }
+    if (!canEditOrDeleteNote(note)) {
+      toast.error('Unauthorized', 'Only the note author or an organization administrator may edit this note.');
+      return;
     }
     setEditingNote(note);
     setEditTitle(note.title);
@@ -578,16 +641,14 @@ export const ExpertKnowledgeView: React.FC = () => {
     toast.info('Copilot Prompt Ready', 'Opened AI Copilot with this note context.');
   };
 
-  // Delete Handler (Optimistic UI update)
+  // Delete Handler (Restricted to Admin/Owner only)
   const handleDelete = async (note: ExpertNote, e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    const isAuthor =
-      user && (note.authorUserId === user.id || (note.authorEmail && note.authorEmail === user.email));
-    if (!isAdminOrOwner && !isAuthor) {
-      toast.error('Unauthorized', 'Only organization administrators or the original author may delete this note.');
+    if (!canEditOrDeleteNote(note)) {
+      toast.error('Unauthorized', 'Only the note author or an organization administrator may delete this note.');
       return;
     }
 
@@ -622,8 +683,19 @@ export const ExpertKnowledgeView: React.FC = () => {
   };
 
   const handleAddAnotherSection = () => {
-    const defaultTag = uploadedMachines.length > 0 ? uploadedMachines[0].assetTag : '';
-    setFormNotes((prev) => [...prev, createDefaultNoteItem(defaultTag)]);
+    // Validate custom entries in current notes before adding another
+    for (let i = 0; i < formNotes.length; i++) {
+      const n = formNotes[i];
+      if (n.isCustomTask && !n.customTask?.trim()) {
+        toast.error('Validation Error', `Note #${i + 1}: Please enter custom task name or switch back to list.`);
+        return;
+      }
+      if (n.isCustomCategory && !n.customCategory?.trim()) {
+        toast.error('Validation Error', `Note #${i + 1}: Please enter custom category name or switch back to list.`);
+        return;
+      }
+    }
+    setFormNotes((prev) => [...prev, createDefaultNoteItem()]);
   };
 
   const handleRemoveSection = (index: number) => {
@@ -644,8 +716,28 @@ export const ExpertKnowledgeView: React.FC = () => {
         toast.error('Validation Error', `Note #${i + 1} requires a Target Machine selection.`);
         return false;
       }
-      if (!n.taskDuringIssue.trim()) {
-        toast.error('Validation Error', `Note #${i + 1} requires Task / Operation Being Performed.`);
+      const effectiveTask = (n.isCustomTask ? (n.customTask || '') : n.taskDuringIssue).trim();
+      if (!effectiveTask) {
+        toast.error(
+          'Validation Error',
+          n.isCustomTask
+            ? `Note #${i + 1} requires a custom Task / Operation description.`
+            : `Note #${i + 1} requires Task / Operation Being Performed.`
+        );
+        return false;
+      }
+      const effectiveCategory = (n.isCustomCategory ? (n.customCategory || '') : n.category).trim();
+      if (!effectiveCategory) {
+        toast.error(
+          'Validation Error',
+          n.isCustomCategory
+            ? `Note #${i + 1} requires a custom Category name.`
+            : `Note #${i + 1} requires a Category selection.`
+        );
+        return false;
+      }
+      if (!n.severity) {
+        toast.error('Validation Error', `Note #${i + 1} requires an Impact / Severity selection.`);
         return false;
       }
       if (!n.content.trim()) {
@@ -656,17 +748,22 @@ export const ExpertKnowledgeView: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const payload = formNotes.map((n) => ({
-        title: n.title.trim(),
-        description: n.content.trim(),
-        category: n.category,
-        severity: n.severity,
-        symptom: n.symptom.trim() || null,
-        taskDuringIssue: n.taskDuringIssue.trim() || null,
-        observedAt: n.observedAt ? new Date(n.observedAt).toISOString() : null,
-        assetTag: n.assetTag.trim().toUpperCase() || null,
-        status: 'APPROVED',
-      }));
+      const payload = formNotes.map((n) => {
+        const effectiveTask = (n.isCustomTask ? (n.customTask || '') : n.taskDuringIssue).trim();
+        const effectiveCategory = (n.isCustomCategory ? (n.customCategory || '') : n.category).trim();
+
+        return {
+          title: n.title.trim(),
+          description: n.content.trim(),
+          category: effectiveCategory || 'Reliability',
+          severity: n.severity || 'Pro-Tip / Best Practice',
+          symptom: n.symptom.trim() || null,
+          taskDuringIssue: effectiveTask || null,
+          observedAt: n.observedAt ? new Date(n.observedAt).toISOString() : null,
+          assetTag: n.assetTag.trim().toUpperCase() || null,
+          status: 'APPROVED',
+        };
+      });
 
       const res = await apiFetch('/api/v1/recovery/expert-library', {
         method: 'POST',
@@ -679,19 +776,24 @@ export const ExpertKnowledgeView: React.FC = () => {
         throw new Error(errorData.error?.message || `Server responded with ${res.status}`);
       }
 
-      await fetchNotes(false);
+      const result = await res.json().catch(() => ({}));
+      if (result.success && result.data) {
+        const newEntries: ExpertNote[] = Array.isArray(result.data) ? result.data : [result.data];
+        setNotes((prev) => [...newEntries, ...prev]);
+      } else {
+        await fetchNotes(false);
+      }
 
-      const defaultTag = uploadedMachines.length > 0 ? uploadedMachines[0].assetTag : '';
       if (closeModalAfter) {
         setIsSubmitOpen(false);
-        setFormNotes([createDefaultNoteItem(defaultTag)]);
+        setFormNotes([createDefaultNoteItem()]);
         toast.success(
           'Field Notes Published',
           `${payload.length} field insight(s) saved and indexed into AI Copilot.`
         );
       } else {
         // Reset form for new batch but leave modal open
-        setFormNotes([createDefaultNoteItem(defaultTag)]);
+        setFormNotes([createDefaultNoteItem()]);
         toast.success(
           'Saved & Ready for Next',
           `${payload.length} field note(s) saved. Ready for your next entry.`
@@ -820,7 +922,7 @@ export const ExpertKnowledgeView: React.FC = () => {
     const displayContent = note.description || note.content || '';
     const displayDate = formatObservedDateTime(note.observedAt || note.createdAt || note.date);
     const displaySeverity = (note.severity as ExpertSeverity) || 'Pro-Tip / Best Practice';
-    const displayAiInsight = getFallbackAiInsight(note);
+    const displayAiInsight = getNonRedundantAiInsight(note);
 
     const rawTags = (note.machineAssetTags && note.machineAssetTags.length > 0)
       ? note.machineAssetTags
@@ -829,9 +931,8 @@ export const ExpertKnowledgeView: React.FC = () => {
           .map((t) => t.trim())
           .filter(Boolean);
 
-    const isAuthor =
-      user && (note.authorUserId === user.id || (note.authorEmail && note.authorEmail === user.email));
-    const canManage = isAdminOrOwner || isAuthor;
+    // Strictly restrict Edit and Delete to original Author or Admin / Owner roles only
+    const canEditOrDelete = canEditOrDeleteNote(note);
 
     const isReviewsOpen = !!expandedReviews[note.id];
     const reviewsList = Array.isArray(note.reviews) ? note.reviews : [];
@@ -900,25 +1001,27 @@ export const ExpertKnowledgeView: React.FC = () => {
                 <span className="hidden xl:inline">Ask Copilot</span>
               </button>
 
-              {/* Quick Edit (Pencil) */}
-              {canManage && (
+              {/* Quick Edit (Pencil) - Conditionally rendered strictly for Author or Admin / Owner only */}
+              {canEditOrDelete && (
                 <button
                   type="button"
                   onClick={(e) => handleOpenEdit(note, e)}
-                  title="Quick edit note title, trigger or guidance"
+                  title="Quick edit note title, trigger or guidance (Author or Admin)"
                   className="text-slate-400 hover:text-amber-600 transition p-1.5 rounded-md hover:bg-amber-50"
+                  aria-label="Edit expert knowledge entry"
                 >
                   <Pencil className="w-3.5 h-3.5" />
                 </button>
               )}
 
-              {/* Delete */}
-              {canManage && (
+              {/* Delete (Trash) - Conditionally rendered strictly for Author or Admin / Owner only */}
+              {canEditOrDelete && (
                 <button
                   type="button"
                   onClick={(e) => handleDelete(note, e)}
-                  title="Delete note (Admin or Author)"
+                  title="Delete note from library and vector search (Author or Admin)"
                   className="text-slate-400 hover:text-rose-600 transition p-1.5 rounded-md hover:bg-rose-50"
+                  aria-label="Delete expert knowledge entry"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -974,33 +1077,37 @@ export const ExpertKnowledgeView: React.FC = () => {
             </p>
           </div>
 
-          {/* Block 3 - AI Supplemental Knowledge & Manual Cross-Check (Indigo Box) */}
-          <div className="bg-indigo-50/80 border border-indigo-200/90 rounded-lg p-3 space-y-1.5">
-            <div className="flex items-center gap-1.5 font-mono font-bold text-indigo-900 text-[10px] uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-              <span>🤖 AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK:</span>
+          {/* Block 3 - AI Supplemental Knowledge & Manual Cross-Check (Only rendered if new, non-redundant data is present) */}
+          {displayAiInsight && (
+            <div className="bg-indigo-50/80 border border-indigo-200/90 rounded-lg p-3 space-y-1.5 transition-all">
+              <div className="flex items-center gap-1.5 font-mono font-bold text-indigo-900 text-[10px] uppercase tracking-wider">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span>🤖 AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK:</span>
+              </div>
+              <p className="text-indigo-950 text-xs leading-relaxed font-sans pl-5">
+                {displayAiInsight}
+              </p>
             </div>
-            <p className="text-indigo-950 text-xs leading-relaxed font-sans pl-5">
-              {displayAiInsight}
-            </p>
-          </div>
+          )}
         </div>
 
         {/* Footer Row: Author on left; Star rating, Worker Feedback toggle & Upvote/Downvote on right */}
-        <div className="space-y-3 pt-3 border-t border-[#F1F5F9] mt-2">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#64748B]">
-            <div className="flex items-center gap-1.5">
-              <User className="w-3.5 h-3.5 text-slate-400" />
-              <span className="font-medium text-slate-700">{displayAuthor}</span>
-              <span className="text-[10px] text-slate-400 hidden sm:inline">({displayRole})</span>
+        <div className="pt-3 border-t border-[#F1F5F9] mt-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className="w-5 h-5 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
+                <User className="w-3 h-3 text-slate-500" />
+              </div>
+              <span className="font-mono text-xs font-medium text-slate-700 truncate">{displayAuthor}</span>
+              <span className="font-mono text-[10px] text-slate-400 shrink-0">({displayRole})</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
               {/* Star Rating Badge / Toggle Button */}
               <button
                 type="button"
                 onClick={(e) => toggleReviews(note.id, e)}
-                className="flex items-center gap-1 text-amber-800 font-bold bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-md border border-amber-200 transition text-[11px] font-mono"
+                className="h-8 flex items-center gap-1.5 text-amber-800 font-bold bg-amber-50 hover:bg-amber-100 px-2.5 rounded-lg border border-amber-200 transition text-xs font-mono shadow-2xs"
                 title="View worker ratings and reviews"
               >
                 <Star
@@ -1009,27 +1116,27 @@ export const ExpertKnowledgeView: React.FC = () => {
                   }`}
                 />
                 <span>{hasReviews ? `⭐ ${avgRating}` : `☆ 0.0`}</span>
-                <span className="text-slate-400 font-normal">({reviewCount} reviews)</span>
+                <span className="text-slate-400 font-normal">({reviewCount})</span>
               </button>
 
               {/* Worker Feedback Drawer Toggle */}
               <button
                 type="button"
                 onClick={(e) => toggleReviews(note.id, e)}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-md border text-[11px] font-mono font-medium transition ${
+                className={`h-8 flex items-center gap-1.5 px-3 rounded-lg border text-xs font-mono font-medium transition shadow-2xs ${
                   isReviewsOpen
                     ? 'bg-slate-200 text-slate-900 border-slate-300 font-semibold'
                     : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
                 }`}
                 title="Toggle Worker Feedback & Field Reviews"
               >
-                <MessageSquare className="w-3 h-3 text-slate-500" />
+                <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
                 <span className="hidden sm:inline">Worker Feedback</span>
-                <span className="sm:hidden">Reviews</span>
+                <span className="sm:hidden">Feedback</span>
                 {isReviewsOpen ? (
-                  <ChevronUp className="w-3 h-3 ml-0.5" />
+                  <ChevronUp className="w-3.5 h-3.5 ml-0.5" />
                 ) : (
-                  <ChevronDown className="w-3 h-3 ml-0.5" />
+                  <ChevronDown className="w-3.5 h-3.5 ml-0.5" />
                 )}
               </button>
 
@@ -1037,10 +1144,10 @@ export const ExpertKnowledgeView: React.FC = () => {
               <button
                 type="button"
                 onClick={(e) => handleUpvote(note.id, e)}
-                className="flex items-center gap-1 text-[#2563EB] hover:text-blue-700 font-bold bg-blue-50/80 hover:bg-blue-100 px-2.5 py-1 rounded-md border border-blue-200 transition active:scale-95 text-xs font-mono"
+                className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50/80 hover:bg-blue-100 px-2.5 rounded-lg border border-blue-200 transition active:scale-95 text-xs font-mono shadow-2xs"
                 title="Helpful / Worked in Field (👍)"
               >
-                <ThumbsUp className="w-3.5 h-3.5" />
+                <ThumbsUp className="w-3.5 h-3.5 text-blue-600" />
                 <span>{note.upvotes || 0}</span>
               </button>
 
@@ -1048,10 +1155,10 @@ export const ExpertKnowledgeView: React.FC = () => {
               <button
                 type="button"
                 onClick={(e) => handleDislike(note.id, e)}
-                className="flex items-center gap-1 text-rose-600 hover:text-rose-700 font-bold bg-rose-50/80 hover:bg-rose-100 px-2.5 py-1 rounded-md border border-rose-200 transition active:scale-95 text-xs font-mono"
+                className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50/80 hover:bg-rose-100 px-2.5 rounded-lg border border-rose-200 transition active:scale-95 text-xs font-mono shadow-2xs"
                 title="Did Not Work / Field Issue (👎)"
               >
-                <ThumbsDown className="w-3.5 h-3.5" />
+                <ThumbsDown className="w-3.5 h-3.5 text-rose-600" />
                 <span>{note.downvotes || 0}</span>
               </button>
             </div>
@@ -1262,8 +1369,7 @@ export const ExpertKnowledgeView: React.FC = () => {
           size="sm"
           type="button"
           onClick={() => {
-            const defaultTag = uploadedMachines.length > 0 ? uploadedMachines[0].assetTag : '';
-            setFormNotes([createDefaultNoteItem(defaultTag)]);
+            setFormNotes([createDefaultNoteItem()]);
             setIsSubmitOpen(true);
           }}
           leftIcon={<Plus className="w-3.5 h-3.5" />}
@@ -1325,7 +1431,7 @@ export const ExpertKnowledgeView: React.FC = () => {
               className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer"
             >
               <option value="ALL">All Categories</option>
-              {PRACTICAL_CATEGORIES.map((cat) => (
+              {availableCategories.map((cat) => (
                 <option key={cat} value={cat}>
                   {cat}
                 </option>
@@ -1404,8 +1510,7 @@ export const ExpertKnowledgeView: React.FC = () => {
             size="sm"
             type="button"
             onClick={() => {
-              const defaultTag = uploadedMachines.length > 0 ? uploadedMachines[0].assetTag : '';
-              setFormNotes([createDefaultNoteItem(defaultTag)]);
+              setFormNotes([createDefaultNoteItem()]);
               setIsSubmitOpen(true);
             }}
             leftIcon={<Plus className="w-3.5 h-3.5" />}
@@ -1506,9 +1611,11 @@ export const ExpertKnowledgeView: React.FC = () => {
               {/* Row 2: Equipment Tag & Task During Issue (Clean Select Dropdowns matching Category) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
                 <div>
-                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
-                    Target Machine / Equipment Tag(s) <span className="text-rose-500">*</span>
-                  </label>
+                  <div className="h-4 flex items-center mb-1">
+                    <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
+                      Target Machine / Equipment Tag(s) <span className="text-rose-500">*</span>
+                    </label>
+                  </div>
                   <select
                     required
                     value={noteItem.assetTag}
@@ -1516,9 +1623,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                     className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
                   >
                     <option value="" disabled>
-                      {uploadedMachines.length > 0
-                        ? 'Select Uploaded Machine...'
-                        : 'No Uploaded Machines Found (Ingest in Knowledge Hub first)'}
+                      -- Select Machine --
                     </option>
                     {uploadedMachines.map((m) => (
                       <option key={m.assetTag} value={m.assetTag}>
@@ -1529,55 +1634,183 @@ export const ExpertKnowledgeView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
-                    Task / Operation During Issue <span className="text-rose-500">*</span>
-                  </label>
-                  <select
-                    required
-                    value={noteItem.taskDuringIssue}
-                    onChange={(e) => updateFormNote(index, { taskDuringIssue: e.target.value })}
-                    className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
-                  >
-                    <option value="" disabled>
-                      Select Task / Operation...
-                    </option>
-                    {COMMON_TASKS.map((task) => (
-                      <option key={task} value={task}>
-                        {task}
+                  <div className="h-4 flex items-center justify-between mb-1">
+                    <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
+                      Task / Operation During Issue <span className="text-rose-500">*</span>
+                    </label>
+                    {noteItem.isCustomTask && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateFormNote(index, {
+                            isCustomTask: false,
+                            taskDuringIssue: COMMON_TASKS.includes(noteItem.taskDuringIssue) ? noteItem.taskDuringIssue : '',
+                          });
+                        }}
+                        className="text-[10px] font-mono text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>↩ Select from list</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {noteItem.isCustomTask ? (
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        autoFocus
+                        required
+                        value={noteItem.customTask ?? ''}
+                        onChange={(e) => updateFormNote(index, { customTask: e.target.value })}
+                        placeholder="Type custom task or operation during issue..."
+                        className="w-full pl-3 pr-24 py-1.5 bg-white border border-[#2563EB] ring-1 ring-[#2563EB]/20 rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateFormNote(index, {
+                            isCustomTask: false,
+                            taskDuringIssue: COMMON_TASKS.includes(noteItem.taskDuringIssue) ? noteItem.taskDuringIssue : '',
+                          });
+                        }}
+                        className="absolute right-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 transition cursor-pointer"
+                        title="Switch back to dropdown list"
+                      >
+                        ↩ List
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      required
+                      value={noteItem.taskDuringIssue}
+                      onChange={(e) => {
+                        if (e.target.value === '__CUSTOM_TASK__') {
+                          updateFormNote(index, {
+                            isCustomTask: true,
+                            customTask: noteItem.customTask || '',
+                          });
+                        } else {
+                          updateFormNote(index, {
+                            isCustomTask: false,
+                            taskDuringIssue: e.target.value,
+                          });
+                        }
+                      }}
+                      className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
+                    >
+                      <option value="" disabled>
+                        -- Select Task / Operation --
                       </option>
-                    ))}
-                  </select>
+                      {COMMON_TASKS.map((task) => (
+                        <option key={task} value={task}>
+                          {task}
+                        </option>
+                      ))}
+                      <option value="__CUSTOM_TASK__" className="text-blue-700 font-bold bg-blue-50/50">
+                        + Other / Custom Task (Type manually)...
+                      </option>
+                    </select>
+                  )}
                 </div>
               </div>
 
               {/* Row 3: Category & Impact / Severity */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
                 <div>
-                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
-                    Category <span className="text-rose-500">*</span>
-                  </label>
-                  <select
-                    value={noteItem.category}
-                    onChange={(e) => updateFormNote(index, { category: e.target.value as ExpertCategory })}
-                    className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
-                  >
-                    {PRACTICAL_CATEGORIES.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
+                  <div className="h-4 flex items-center justify-between mb-1">
+                    <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
+                      Category <span className="text-rose-500">*</span>
+                    </label>
+                    {noteItem.isCustomCategory && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateFormNote(index, {
+                            isCustomCategory: false,
+                            category: (PRACTICAL_CATEGORIES as string[]).includes(noteItem.category) ? noteItem.category : '',
+                          });
+                        }}
+                        className="text-[10px] font-mono text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>↩ Select from list</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {noteItem.isCustomCategory ? (
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        autoFocus
+                        required
+                        value={noteItem.customCategory ?? ''}
+                        onChange={(e) => updateFormNote(index, { customCategory: e.target.value })}
+                        placeholder="Type custom category..."
+                        className="w-full pl-3 pr-24 py-1.5 bg-white border border-[#2563EB] ring-1 ring-[#2563EB]/20 rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateFormNote(index, {
+                            isCustomCategory: false,
+                            category: (PRACTICAL_CATEGORIES as string[]).includes(noteItem.category) ? noteItem.category : '',
+                          });
+                        }}
+                        className="absolute right-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 transition cursor-pointer"
+                        title="Switch back to dropdown list"
+                      >
+                        ↩ List
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      required
+                      value={noteItem.category}
+                      onChange={(e) => {
+                        if (e.target.value === '__CUSTOM_CATEGORY__') {
+                          updateFormNote(index, {
+                            isCustomCategory: true,
+                            customCategory: noteItem.customCategory || '',
+                          });
+                        } else {
+                          updateFormNote(index, {
+                            isCustomCategory: false,
+                            category: e.target.value as ExpertCategory,
+                          });
+                        }
+                      }}
+                      className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
+                    >
+                      <option value="" disabled>
+                        -- Select Category --
                       </option>
-                    ))}
-                  </select>
+                      {PRACTICAL_CATEGORIES.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                      <option value="__CUSTOM_CATEGORY__" className="text-blue-700 font-bold bg-blue-50/50">
+                        + Other / Custom Category (Type manually)...
+                      </option>
+                    </select>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
-                    Impact / Severity <span className="text-rose-500">*</span>
-                  </label>
+                  <div className="h-4 flex items-center mb-1">
+                    <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
+                      Impact / Severity <span className="text-rose-500">*</span>
+                    </label>
+                  </div>
                   <select
+                    required
                     value={noteItem.severity}
                     onChange={(e) => updateFormNote(index, { severity: e.target.value as ExpertSeverity })}
                     className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
                   >
+                    <option value="" disabled>
+                      -- Select Impact / Severity --
+                    </option>
                     {PRACTICAL_SEVERITIES.map((sev) => (
                       <option key={sev} value={sev}>
                         {sev}

@@ -580,7 +580,13 @@ export interface IDataStore {
   saveRcaSession(session: RcaSession): Promise<RcaSession>;
   listRcaSessions(organizationId: string, options?: { plantId?: string; assetId?: string; limit?: number }): Promise<RcaSession[]>;
   getRcaSessionById(organizationId: string, id: string): Promise<RcaSession | null>;
+  deleteRcaSession(organizationId: string, id: string): Promise<boolean>;
   updateRcaSessionStep(organizationId: string, sessionId: string, stepId: string, status: 'PENDING' | 'PASS' | 'FAIL', technicianNotes?: string, extra?: { isLocked?: boolean; verifiedAt?: string; verifiedBy?: string }): Promise<RcaSession | null>;
+  purgeRcaRecordsOlderThan(days: number, organizationId?: string): Promise<{
+    deletedRcaSessions: number;
+    deletedMaintenanceRecords: number;
+    cutoffDate: string;
+  }>;
 }
 
 export interface CreateMaintenanceCaseDTO {

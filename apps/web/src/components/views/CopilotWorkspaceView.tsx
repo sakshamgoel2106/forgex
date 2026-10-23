@@ -186,6 +186,40 @@ export const CopilotWorkspaceView: React.FC = () => {
   const [queryStep, setQueryStep] = useState<string>('');
   const [queryError, setQueryError] = useState<string | null>(null);
 
+  // Ingest RCA Deep-Dive 5-Why handoff from Troubleshooting & RCA module
+  useEffect(() => {
+    const checkHandoff = () => {
+      try {
+        const raw = sessionStorage.getItem('forgex_copilot_handoff');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.prompt) {
+            setQueryInput(parsed.prompt);
+          }
+          if (parsed.assetTag) {
+            setSelectedAssetId(parsed.assetTag);
+          }
+          sessionStorage.removeItem('forgex_copilot_handoff');
+        }
+      } catch (err) {
+        console.warn('Error reading copilot handoff state:', err);
+      }
+    };
+
+    // Check immediately on mount
+    checkHandoff();
+
+    // Also listen for runtime handoff event
+    const handleHandoffEvent = () => {
+      checkHandoff();
+    };
+
+    window.addEventListener('forgex:copilot-handoff', handleHandoffEvent);
+    return () => {
+      window.removeEventListener('forgex:copilot-handoff', handleHandoffEvent);
+    };
+  }, []);
+
 
   // Feedback Modal State
   const [feedbackMessageId, setFeedbackMessageId] = useState<string | null>(null);
@@ -464,6 +498,37 @@ export const CopilotWorkspaceView: React.FC = () => {
       setQueryStep('');
     }
   };
+
+  // Handle RCA 5-Why and External Deep-Dive Handoffs
+  useEffect(() => {
+    const processHandoff = () => {
+      const handoffRaw = sessionStorage.getItem('forgex_copilot_handoff');
+      if (handoffRaw) {
+        try {
+          const handoff = JSON.parse(handoffRaw);
+          sessionStorage.removeItem('forgex_copilot_handoff');
+          if (handoff.assetTag) {
+            setSelectedAssetId(handoff.assetTag);
+          }
+          if (handoff.prompt) {
+            setQueryInput(handoff.prompt);
+            setTimeout(() => {
+              handleSendQuery(handoff.prompt);
+            }, 350);
+          }
+        } catch (e) {
+          console.warn('Failed to parse copilot handoff:', e);
+        }
+      }
+    };
+
+    const timer = setTimeout(processHandoff, 250);
+    window.addEventListener('forgex:copilot-handoff', processHandoff);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('forgex:copilot-handoff', processHandoff);
+    };
+  }, []);
 
   // Manage Wake-Word & VAD Lifecycle
   useEffect(() => {

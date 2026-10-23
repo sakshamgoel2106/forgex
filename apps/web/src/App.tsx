@@ -79,7 +79,16 @@ const RBACFallbackBanner: React.FC<{
 
 const AppContent: React.FC = () => {
   const { user, membership, token, isLoading, isOwnerOrAdmin } = useAuth();
-  const [activeModule, setActiveModule] = useState<NavModule>('overview');
+  const getInitialModule = (): NavModule => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname + window.location.hash;
+      if (path.includes('ai-copilot')) return 'copilot';
+      if (path.includes('troubleshooting')) return 'troubleshooting';
+    }
+    return 'overview';
+  };
+
+  const [activeModule, setActiveModule] = useState<NavModule>(getInitialModule());
 
   const role = membership?.role || 'VIEWER';
 
@@ -94,7 +103,7 @@ const AppContent: React.FC = () => {
     }
   }, [membership?.role]);
 
-  // Global cross-module navigation event listener
+  // Global cross-module navigation and popstate event listener
   useEffect(() => {
     const handleNavEvent = (e: Event) => {
       const customEvent = e as CustomEvent<{ module: string; caseId?: string }>;
@@ -102,8 +111,22 @@ const AppContent: React.FC = () => {
         setActiveModule(customEvent.detail.module as NavModule);
       }
     };
+
+    const handlePopState = () => {
+      const path = window.location.pathname + window.location.hash;
+      if (path.includes('ai-copilot')) {
+        setActiveModule('copilot');
+      } else if (path.includes('troubleshooting')) {
+        setActiveModule('troubleshooting');
+      }
+    };
+
     window.addEventListener('forgex:navigate', handleNavEvent);
-    return () => window.removeEventListener('forgex:navigate', handleNavEvent);
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('forgex:navigate', handleNavEvent);
+      window.removeEventListener('popstate', handlePopState);
+    };
   }, []);
 
   if (isLoading) {

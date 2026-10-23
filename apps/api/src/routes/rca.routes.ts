@@ -6,6 +6,7 @@ import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import type { IMultimodalGenerationProvider } from '../ai/ai.interface.js';
 import { RcaService } from '../services/rca.service.js';
 import type { RcaAnalysisRequest } from '@forgex/shared-types';
+import { executeRcaRetentionPurge, getRcaRetentionStatus } from '../services/rcaRetentionWorker.js';
 
 export function createRcaRouter(
   dataStore: IDataStore,
@@ -71,10 +72,10 @@ export function createRcaRouter(
   });
 
   /**
-   * GET /api/v1/rca/sessions
+   * GET /api/v1/rca/sessions and GET /api/rca
    * List recent RCA investigations for tenant
    */
-  router.get('/sessions', async (req: Request, res: Response): Promise<void> => {
+  const listSessionsHandler = async (req: Request, res: Response): Promise<void> => {
     try {
       const organizationId = req.auth!.organization.id;
       const plantId = req.query.plantId as string | undefined;
@@ -83,7 +84,7 @@ export function createRcaRouter(
       const sessions = await rcaService.listSessions(organizationId, {
         plantId,
         assetId,
-        limit: 15,
+        limit: 25,
       });
 
       res.status(200).json({
@@ -96,13 +97,141 @@ export function createRcaRouter(
         error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
       });
     }
+  };
+
+  router.get('/sessions', listSessionsHandler);
+  router.get('/', listSessionsHandler);
+
+  /**
+   * POST /api/v1/rca and POST /api/v1/rca/sessions
+   * Persist / save complete RCA investigation record
+   */
+  const saveSessionHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const sessionData = req.body;
+      if (!sessionData) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'FORGEX_VALIDATION_ERROR', message: 'Session data is required.' },
+        });
+        return;
+      }
+
+      const id = sessionData.id || `rca-${Date.now()}`;
+      const sessionToSave = {
+        ...sessionData,
+        id,
+        organizationId,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await dataStore.saveRcaSession(sessionToSave);
+
+      res.status(200).json({
+        success: true,
+        message: 'RCA session saved successfully.',
+        data: sessionToSave,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  };
+
+  router.post('/sessions', saveSessionHandler);
+  router.post('/', saveSessionHandler);
+
+  /**
+   * PUT /api/v1/rca/sessions/:id and PUT /api/v1/rca/:id
+   * Update entire RCA session state (steps, status, hypotheses)
+   */
+  const updateSessionHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const id = req.params.id as string;
+      const existing = await rcaService.getSessionById(organizationId, id);
+
+      const sessionToSave = {
+        ...(existing || {}),
+        ...req.body,
+        id,
+        organizationId,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await dataStore.saveRcaSession(sessionToSave);
+
+      res.status(200).json({
+        success: true,
+        message: 'RCA session updated successfully.',
+        data: sessionToSave,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  };
+
+  router.put('/sessions/:id', updateSessionHandler);
+  router.put('/:id', updateSessionHandler);
+
+  /**
+   * POST /api/v1/rca/retention/purge
+   * Trigger auto-delete data retention purge for past RCAs and maintenance history logs
+   */
+  router.post('/retention/purge', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const days = req.body?.days
+        ? parseInt(req.body.days, 10)
+        : req.query?.days
+        ? parseInt(req.query.days as string, 10)
+        : undefined;
+
+      const result = await executeRcaRetentionPurge(dataStore, days, organizationId);
+
+      res.status(200).json({
+        success: true,
+        message: 'RCA data retention purge completed successfully. Expert Knowledge repository remains permanently intact.',
+        data: result,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_RETENTION_ERROR', message: err.message },
+      });
+    }
   });
 
   /**
-   * GET /api/v1/rca/sessions/:id
+   * GET /api/v1/rca/retention/status
+   * Get RCA retention policy configuration and execution status
+   */
+  router.get('/retention/status', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const status = getRcaRetentionStatus();
+      res.status(200).json({
+        success: true,
+        data: status,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  /**
+   * GET /api/v1/rca/sessions/:id and GET /api/v1/rca/:id
    * Reload single RCA investigation
    */
-  router.get('/sessions/:id', async (req: Request, res: Response): Promise<void> => {
+  const getSessionHandler = async (req: Request, res: Response): Promise<void> => {
     try {
       const organizationId = req.auth!.organization.id;
       const id = req.params.id as string;
@@ -126,7 +255,44 @@ export function createRcaRouter(
         error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
       });
     }
-  });
+  };
+
+  router.get('/sessions/:id', getSessionHandler);
+  router.get('/:id', getSessionHandler);
+
+  /**
+   * DELETE /api/v1/rca/sessions/:id and DELETE /api/v1/rca/:id
+   * Manually delete single RCA session (strictly preserves Expert Knowledge records)
+   */
+  const deleteSessionHandler = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const id = req.params.id as string;
+
+      const deleted = await dataStore.deleteRcaSession(organizationId, id);
+      if (!deleted) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: `RCA session '${id}' not found.` },
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `RCA session '${id}' deleted successfully. Expert Knowledge entries remain permanently intact.`,
+        data: { id, deleted: true },
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  };
+
+  router.delete('/sessions/:id', deleteSessionHandler);
+  router.delete('/:id', deleteSessionHandler);
 
   /**
    * PATCH /api/v1/rca/sessions/:id/steps/:stepId
@@ -209,9 +375,13 @@ export function createRcaRouter(
         maintenanceRecord: result.maintenanceRecord,
       });
     } catch (err: any) {
-      res.status(500).json({
+      const isRestricted = err.message?.includes('Cannot complete RCA or log to Maintenance History');
+      res.status(isRestricted ? 400 : 500).json({
         success: false,
-        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+        error: {
+          code: isRestricted ? 'FORGEX_RCA_INCOMPLETE_RESTRICTION' : 'FORGEX_INTERNAL_ERROR',
+          message: err.message,
+        },
       });
     }
   });
@@ -257,8 +427,8 @@ export function createRcaRouter(
       const time = now.toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
       const createdAtFormatted = reqCreatedAtFormatted || `${day} ${month} ${year}, ${time}`;
 
-      const userRole = (req.auth?.membership as any)?.role || 'Field Reliability Specialist';
-      const userName = req.auth!.user.fullName || (req.auth!.user as any).name || req.auth!.user.email || 'Plant Technician';
+      const userName = req.auth!.user.fullName || (req.auth!.user as any).name || req.auth!.user.email || 'Authorized Engineer';
+      const reportedByFull = `Maintenance Engineer / ${userName}`;
 
       // Resolve plant
       let resolvedPlantId = plantId;
@@ -301,7 +471,7 @@ export function createRcaRouter(
 
       const diagnosticSummary = `Equipment: ${targetTag} (${resolvedMachineName})
 Plant Area: ${resolvedPlantName}
-Reported By: ${userName} (${userRole})
+Reported By: ${reportedByFull}
 Dispatch Time: ${createdAtFormatted}
 Operating State: ${machineStatus}
 Fault / Alarm Code: ${faultCode || 'ALM-THRM-402'}
@@ -312,7 +482,7 @@ Investigation Progress: ${investigationProgress}
 Specialist Discipline: ${specialistDiscipline}
 Priority: ${severity || priority}
 LOTO Verified / Safe: ${lotoApplied ? 'YES - Energy Isolated & Padlocked' : 'NO - Live Running Abnormal'}
-Technician Notes: ${activeNotes}`;
+Maintenance Engineer Field Notes: ${activeNotes}`;
 
       const ticket = await dataStore.createSpecialistTicket(organizationId, {
         ticketNumber: ticketNum,
@@ -323,7 +493,7 @@ Technician Notes: ${activeNotes}`;
         assetName: resolvedMachineName,
         reportedByUserId: req.auth!.user.id,
         reportedByUserName: userName,
-        reportedByRole: userRole,
+        reportedByRole: 'Maintenance Engineer',
         createdAtFormatted,
         machineStatus,
         faultCode: faultCode || 'ALM-THRM-402',
@@ -372,8 +542,8 @@ Technician Notes: ${activeNotes}`;
           severity: caseSeverity,
           status: 'ESCALATED_HUMAN',
           reportedByUserId: req.auth!.user.id,
-          reportedByName: userName,
-          reportedByRole: userRole,
+          reportedByName: reportedByFull,
+          reportedByRole: 'Maintenance Engineer',
           assignedTechnicianName: specialistDiscipline,
           createdAtFormatted,
           machineStatus,

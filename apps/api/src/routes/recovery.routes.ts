@@ -730,6 +730,39 @@ export function createRecoveryRouter(
   // Expert Knowledge Library Endpoints (Prompt 04)
   // ---------------------------------------------------------------------------
 
+  function isInsightRedundant(fieldAction: string, insight?: string | null): boolean {
+    if (!insight || !insight.trim()) return true;
+    if (!fieldAction || !fieldAction.trim()) return false;
+
+    const normalize = (str: string) => str.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+    const normAction = normalize(fieldAction);
+    const normInsight = normalize(insight);
+
+    // Exact or near-exact match
+    if (normAction === normInsight) return true;
+    if (normAction.includes(normInsight)) return true;
+    if (normInsight.includes(normAction) && normInsight.length - normAction.length < 25) return true;
+
+    // Detect technical cross-reference markers: OEM manual sections, torque, tolerances, LOTO/standards
+    const crossRefRegex = /(section \d+(\.\d+)?|api \d+|osha \d+(\.\d+)?|nfpa \d+[a-z]?|iso \d+(-\d+)?|\b\d+(\.\d+)?\s*(nm|ft-lbs|bar|psig|mm|in|rpm)\b|\bplan \d+[a-z]?\b|\bcategory \d\b)/gi;
+    const refsInInsight = insight.match(crossRefRegex) || [];
+
+    if (refsInInsight.length > 0) {
+      const allRefsInAction = refsInInsight.every((ref) => normAction.includes(normalize(ref)));
+      if (allRefsInAction) {
+        const actionWords = new Set(normAction.split(' '));
+        const novelWords = normInsight.split(' ').filter((w) => w.length > 3 && !actionWords.has(w));
+        if (novelWords.length < 5) return true;
+      }
+    } else {
+      const actionWords = new Set(normAction.split(' '));
+      const novelWords = normInsight.split(' ').filter((w) => w.length > 3 && !actionWords.has(w));
+      if (novelWords.length < 5) return true;
+    }
+
+    return false;
+  }
+
   function generateAiSupplementalInsight(data: {
     assetTag?: string | null;
     category?: string;
@@ -737,26 +770,33 @@ export function createRecoveryRouter(
     description: string;
     symptom?: string | null;
     taskDuringIssue?: string | null;
-  }): string {
+  }): string | null {
     const tag = (data.assetTag || 'EQUIPMENT').toUpperCase();
     const cat = data.category || 'Reliability';
     const task = data.taskDuringIssue || 'Routine Maintenance';
 
+    let candidate = '';
     if (tag.includes('PUMP') || tag.includes('SLURRY')) {
-      return `Cross-check API 610 seal flush Plan 11/53A pressures before starting. Verify casing bolt torque cross-pattern sequence to 85 Nm, and ensure full LOTO isolation of primary suction and discharge isolation valves prior to mechanical seal servicing.`;
+      candidate = `Cross-check API 610 seal flush Plan 11/53A pressures before starting. Verify casing bolt torque cross-pattern sequence to 85 Nm, and ensure full LOTO isolation of primary suction and discharge isolation valves prior to mechanical seal servicing.`;
     } else if (tag.includes('GEN') || tag.includes('DIESEL') || tag.includes('101')) {
-      return `Cross-check OEM manual Section 4.2 for cold-crank pre-lubrication pressure (min 1.8 bar). Verify rotating diode exciter bridge diodes with multimeter before synchronizing, and confirm emergency stop governor trip latch is fully engaged and free of carbon fouling.`;
+      candidate = `Cross-check OEM manual Section 4.2 for cold-crank pre-lubrication pressure (min 1.8 bar). Verify rotating diode exciter bridge diodes with multimeter before synchronizing, and confirm emergency stop governor trip latch is fully engaged and free of carbon fouling.`;
     } else if (tag.includes('PKG') || tag.includes('901') || tag.includes('CONV')) {
-      return `Verify photo-eye sensor optical alignment (margin > 3.0) and tension roller radial runout under 0.05 mm. Confirm Category 4 dual-channel safety relay interlock is tested and cleared before restarting packaging line indexing cycle.`;
+      candidate = `Verify photo-eye sensor optical alignment (margin > 3.0) and tension roller radial runout under 0.05 mm. Confirm Category 4 dual-channel safety relay interlock is tested and cleared before restarting packaging line indexing cycle.`;
     } else if (tag.includes('HEX') || tag.includes('PLATE') || tag.includes('HEAT') || tag.includes('801')) {
-      return `Cross-check tightening dimension 'A' across plate pack per heat exchanger manual drawing. Ensure differential pressure across plates does not exceed 4.5 bar during initial fluid charging, and purge all entrained air via top vent valves.`;
+      candidate = `Cross-check tightening dimension 'A' across plate pack per heat exchanger manual drawing. Ensure differential pressure across plates does not exceed 4.5 bar during initial fluid charging, and purge all entrained air via top vent valves.`;
     } else if (tag.includes('TURB') || tag.includes('COMP')) {
-      return `Verify unloader valve clearance (0.015" feeler gauge) and confirm radial shaft vibration is under 2.8 mm/s RMS (ISO 10816-3). Execute NFPA 70E Arc Flash Class 2 PPE protocol during high-voltage auxiliary lube skid power isolation.`;
+      candidate = `Verify unloader valve clearance (0.015" feeler gauge) and confirm radial shaft vibration is under 2.8 mm/s RMS (ISO 10816-3). Execute NFPA 70E Arc Flash Class 2 PPE protocol during high-voltage auxiliary lube skid power isolation.`;
     } else if (cat === 'Safety & LOTO') {
-      return `Mandatory zero-energy state verification required per OSHA 1910.147. Bleed residual pneumatic/hydraulic line pressure to 0 psig, apply secondary safety padlocks to breaker panel, and log lockout tagout serial number before initiating teardown.`;
+      candidate = `Mandatory zero-energy state verification required per OSHA 1910.147. Bleed residual pneumatic/hydraulic line pressure to 0 psig, apply secondary safety padlocks to breaker panel, and log lockout tagout serial number before initiating teardown.`;
     } else {
-      return `Cross-check OEM Technical Manual Section 6 for torque tolerances and lubrication intervals. Verify alignment using dial indicator within ±0.05 mm tolerance, and ensure all electrical interlocks and safety guards are re-certified prior to returning machine ${tag} to active production during ${task}.`;
+      candidate = `Cross-check OEM Technical Manual Section 6 for torque tolerances and lubrication intervals. Verify alignment using dial indicator within ±0.05 mm tolerance, and ensure all electrical interlocks and safety guards are re-certified prior to returning machine ${tag} to active production during ${task}.`;
     }
+
+    if (isInsightRedundant(data.description, candidate)) {
+      return null;
+    }
+
+    return candidate;
   }
 
   /**
@@ -778,7 +818,11 @@ export function createRecoveryRouter(
 
       const entries = await recoveryService.listExpertKnowledge(orgId, filters);
       const enrichedEntries = entries.map((entry) => {
-        if (!entry.aiSupplementalInsight) {
+        if (entry.aiSupplementalInsight) {
+          if (isInsightRedundant(entry.description, entry.aiSupplementalInsight)) {
+            entry.aiSupplementalInsight = null;
+          }
+        } else {
           entry.aiSupplementalInsight = generateAiSupplementalInsight({
             assetTag: entry.machineAssetTag || (entry.machineAssetTags && entry.machineAssetTags[0]),
             category: entry.category,
@@ -830,7 +874,11 @@ export function createRecoveryRouter(
         return;
       }
 
-      if (!entry.aiSupplementalInsight) {
+      if (entry.aiSupplementalInsight) {
+        if (isInsightRedundant(entry.description, entry.aiSupplementalInsight)) {
+          entry.aiSupplementalInsight = null;
+        }
+      } else {
         entry.aiSupplementalInsight = generateAiSupplementalInsight({
           assetTag: entry.machineAssetTag || (entry.machineAssetTags && entry.machineAssetTags[0]),
           category: entry.category,
@@ -941,9 +989,11 @@ export function createRecoveryRouter(
           }
         }
 
-        const aiSupplementalInsight =
-          note.aiSupplementalInsight ||
-          generateAiSupplementalInsight({
+        let aiSupplementalInsight: string | null = note.aiSupplementalInsight || null;
+        if (aiSupplementalInsight && isInsightRedundant(description, aiSupplementalInsight)) {
+          aiSupplementalInsight = null;
+        } else if (!aiSupplementalInsight) {
+          aiSupplementalInsight = generateAiSupplementalInsight({
             assetTag: machineAssetTag,
             category,
             title,
@@ -951,6 +1001,7 @@ export function createRecoveryRouter(
             symptom,
             taskDuringIssue,
           });
+        }
 
         const dto: CreateExpertKnowledgeDTO = {
           plantId,
@@ -1276,7 +1327,6 @@ ${entry.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check: $
     try {
       const orgId = req.auth!.organization.id;
       const id = req.params.id as string;
-      const actorUserId = req.auth!.user.id;
       const actorRole = req.auth!.membership.role;
 
       const existing = await recoveryService.getExpertKnowledgeById(orgId, id);
@@ -1291,15 +1341,25 @@ ${entry.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check: $
       const isAdmin =
         actorRole === 'ORGANIZATION_OWNER' ||
         actorRole === 'ORGANIZATION_ADMIN' ||
+        (actorRole as string) === 'ADMIN' ||
         actorRole === 'PLANT_MANAGER';
-      const isAuthor = existing.authorUserId === actorUserId;
+
+      const actorUserId = req.auth!.user.id;
+      const actorName = req.auth!.user.fullName || (req.auth!.user as any).name || '';
+      const actorEmail = req.auth!.user.email || '';
+
+      const isAuthor =
+        Boolean(existing.authorUserId && existing.authorUserId === actorUserId) ||
+        Boolean(existing.authorEmail && actorEmail && existing.authorEmail.toLowerCase() === actorEmail.toLowerCase()) ||
+        Boolean(existing.authorName && actorName && existing.authorName.toLowerCase() === actorName.toLowerCase()) ||
+        Boolean((existing as any).author && actorName && (existing as any).author.toLowerCase() === actorName.toLowerCase());
 
       if (!isAdmin && !isAuthor) {
         res.status(403).json({
           success: false,
           error: {
             code: 'FORGEX_FORBIDDEN',
-            message: 'Only organization administrators or the original author may edit this note.',
+            message: 'Access denied: Only the note author or an organization administrator may edit expert knowledge entries.',
           },
         });
         return;
@@ -1312,6 +1372,13 @@ ${entry.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check: $
       if (req.body.taskDuringIssue !== undefined) updates.taskDuringIssue = req.body.taskDuringIssue;
       if (req.body.category !== undefined) updates.category = req.body.category;
       if (req.body.severity !== undefined) updates.severity = req.body.severity;
+
+      if (existing.aiSupplementalInsight) {
+        const checkDesc = updates.description || existing.description;
+        if (isInsightRedundant(checkDesc, existing.aiSupplementalInsight)) {
+          updates.aiSupplementalInsight = null;
+        }
+      }
 
       const updated = await recoveryService.updateExpertKnowledge(orgId, id, updates);
 
@@ -1445,7 +1512,6 @@ ${updated.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check:
     try {
       const orgId = req.auth!.organization.id;
       const id = req.params.id as string;
-      const actorUserId = req.auth!.user.id;
       const actorRole = req.auth!.membership.role;
 
       const existing = await recoveryService.getExpertKnowledgeById(orgId, id);
@@ -1460,15 +1526,25 @@ ${updated.aiSupplementalInsight ? `AI Supplemental Insight & Manual Cross-Check:
       const isAdmin =
         actorRole === 'ORGANIZATION_OWNER' ||
         actorRole === 'ORGANIZATION_ADMIN' ||
+        (actorRole as string) === 'ADMIN' ||
         actorRole === 'PLANT_MANAGER';
-      const isAuthor = existing.authorUserId === actorUserId;
+
+      const actorUserId = req.auth!.user.id;
+      const actorName = req.auth!.user.fullName || (req.auth!.user as any).name || '';
+      const actorEmail = req.auth!.user.email || '';
+
+      const isAuthor =
+        Boolean(existing.authorUserId && existing.authorUserId === actorUserId) ||
+        Boolean(existing.authorEmail && actorEmail && existing.authorEmail.toLowerCase() === actorEmail.toLowerCase()) ||
+        Boolean(existing.authorName && actorName && existing.authorName.toLowerCase() === actorName.toLowerCase()) ||
+        Boolean((existing as any).author && actorName && (existing as any).author.toLowerCase() === actorName.toLowerCase());
 
       if (!isAdmin && !isAuthor) {
         res.status(403).json({
           success: false,
           error: {
             code: 'FORGEX_FORBIDDEN',
-            message: 'Only organization administrators or the original author may delete this note.',
+            message: 'Access denied: Only the note author or an organization administrator may delete expert knowledge entries.',
           },
         });
         return;

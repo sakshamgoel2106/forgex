@@ -7,6 +7,7 @@ import { createStorageAdapter } from './storage/storageFactory.js';
 import { createEmbeddingAdapter } from './embeddings/embeddingFactory.js';
 import { createVectorStoreAdapter } from './vector/vectorStoreFactory.js';
 import { bootstrapInitialData } from './db/bootstrapData.js';
+import { startRcaRetentionWorker, stopRcaRetentionWorker } from './services/rcaRetentionWorker.js';
 
 async function startServer() {
   // 1. Validate environment requirements for configured deployment mode
@@ -27,11 +28,14 @@ async function startServer() {
   const embeddingAdapter = createEmbeddingAdapter();
   const vectorStore = createVectorStoreAdapter();
 
-  // 3. Ensure baseline demo organization is initialized strictly when explicitly enabled
-  if (process.env.ALLOW_DEMO_BOOTSTRAP === 'true') {
-    bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore).catch((err) => {
+  // 3. Ensure baseline demo organization is initialized strictly when explicitly enabled or in local development
+  if (process.env.ALLOW_DEMO_BOOTSTRAP === 'true' || config.DEPLOYMENT_MODE === 'local_dev') {
+    try {
+      await bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore);
+      logger.info('Demo baseline data and user credentials initialized successfully');
+    } catch (err: any) {
       logger.warn({ err: err?.message }, 'Initial bootstrap data seeding notice');
-    });
+    }
   } else {
     logger.info('Clean database mode active: automatic demo seeding is disabled.');
   }
@@ -57,13 +61,18 @@ async function startServer() {
       },
       '⚡ ForgeX AI Core API server online'
     );
+
+    // 5. Start scheduled background workers (e.g. RCA data retention policy)
+    startRcaRetentionWorker(dataStore);
   });
 
-  // 5. Graceful shutdown handling
+  // 6. Graceful shutdown handling
   let isShuttingDown = false;
   async function handleShutdown(signal: string) {
     if (isShuttingDown) return;
     isShuttingDown = true;
+
+    stopRcaRetentionWorker();
 
     logger.info({ signal }, 'Termination signal received. Closing HTTP server cleanly...');
     server.close(async () => {

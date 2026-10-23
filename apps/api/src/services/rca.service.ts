@@ -854,6 +854,22 @@ Return ONLY a valid JSON object matching this schema:
       throw new Error(`RCA Session ${sessionId} not found`);
     }
 
+    const steps = session.investigationSteps || [];
+    const hasFailedStep = steps.some((step) => step.status === 'FAIL');
+    const isStepIncomplete = steps.length === 0 || steps.some((step) => step.status !== 'PASS');
+    const isHaltedOrAbandoned =
+      session.status === 'FAILED' ||
+      session.status === 'HALTED' ||
+      session.status === 'ABANDONED';
+
+    // Strict Conditional Check: An RCA must ONLY be saved to Maintenance History if it has successfully completed all investigation steps (e.g., status is 100% Verified or Completed).
+    // If an RCA is incomplete, halted, failed at a specific step, or abandoned, it must NOT be logged into the permanent Maintenance History.
+    if (hasFailedStep || isStepIncomplete || isHaltedOrAbandoned) {
+      throw new Error(
+        'Cannot complete RCA or log to Maintenance History: Only investigations with 100% successfully verified and passed steps can be recorded. Incomplete, halted, or failed RCAs are strictly prevented from entering permanent Maintenance History.'
+      );
+    }
+
     const now = completedAt || new Date().toISOString();
     session.investigationSteps = session.investigationSteps.map((step) => ({
       ...step,
@@ -872,6 +888,17 @@ Return ONLY a valid JSON object matching this schema:
 
     let createdRecord = null;
     try {
+      // Secondary safeguard: Strict verification gating before saving to Maintenance History table
+      const is100PercentVerified =
+        Array.isArray(session.investigationSteps) &&
+        session.investigationSteps.length > 0 &&
+        session.investigationSteps.every((s) => s.status === 'PASS') &&
+        !session.investigationSteps.some((s) => s.status === 'FAIL');
+
+      if (!is100PercentVerified) {
+        return { session, maintenanceRecord: null };
+      }
+
       const topHyp =
         session.hypotheses.find((h) => h.status === 'CONFIRMED') || session.hypotheses[0];
 
@@ -903,7 +930,10 @@ Return ONLY a valid JSON object matching this schema:
         plantId,
         machineId,
         machineAssetTag: session.assetTag,
+        ticketId: `rca-ticket-${session.id}`,
         ticketNumber: `RCA-VERIFIED-${session.assetTag}`,
+        caseId: session.id,
+        caseNumber: `CASE-RCA-${session.assetTag}`,
         problemStatement: `Field Symptom: ${session.symptom}`,
         rootCause:
           topHyp?.title || 'All 5/5 Investigation Steps physically verified and permanently cleared.',

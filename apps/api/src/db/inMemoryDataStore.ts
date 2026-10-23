@@ -5774,6 +5774,12 @@ export class InMemoryDataStore implements IDataStore {
     return session;
   }
 
+  public async deleteRcaSession(organizationId: string, id: string): Promise<boolean> {
+    const session = this.rcaSessions.get(id);
+    if (!session || session.organizationId !== organizationId) return false;
+    return this.rcaSessions.delete(id);
+  }
+
   public async updateRcaSessionStep(
     organizationId: string,
     sessionId: string,
@@ -5800,6 +5806,47 @@ export class InMemoryDataStore implements IDataStore {
     });
     session.updatedAt = new Date().toISOString();
     return session;
+  }
+
+  public async purgeRcaRecordsOlderThan(
+    days: number,
+    organizationId?: string
+  ): Promise<{ deletedRcaSessions: number; deletedMaintenanceRecords: number; cutoffDate: string }> {
+    const retentionMs = Math.max(1, days) * 24 * 60 * 60 * 1000;
+    const cutoffTime = Date.now() - retentionMs;
+    const cutoffDate = new Date(cutoffTime).toISOString();
+
+    let deletedRcaSessions = 0;
+    for (const [id, session] of this.rcaSessions.entries()) {
+      if (organizationId && session.organizationId !== organizationId) continue;
+      const sessionDate = new Date(session.createdAt || session.updatedAt).getTime();
+      if (sessionDate < cutoffTime) {
+        this.rcaSessions.delete(id);
+        deletedRcaSessions++;
+      }
+    }
+
+    let deletedMaintenanceRecords = 0;
+    for (const [id, record] of this.maintenanceRecords.entries()) {
+      if (organizationId && record.organizationId !== organizationId) continue;
+      const isRcaRecord =
+        record.ticketNumber?.startsWith('RCA-') ||
+        record.faultCategory === 'RCA_SESSION' ||
+        record.problemStatement?.startsWith('Field Symptom:');
+      if (isRcaRecord) {
+        const recDate = new Date(record.createdAt || record.resolvedAt).getTime();
+        if (recDate < cutoffTime) {
+          this.maintenanceRecords.delete(id);
+          deletedMaintenanceRecords++;
+        }
+      }
+    }
+
+    return {
+      deletedRcaSessions,
+      deletedMaintenanceRecords,
+      cutoffDate,
+    };
   }
 }
 

@@ -223,6 +223,23 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
         plantId = plants[0]?.id || 'plant-default';
       }
 
+      // Restrict RCA records: Only 100% verified and passed investigations can be logged to Maintenance History
+      const isRcaRecord =
+        data.ticketNumber?.startsWith('RCA-') ||
+        data.faultCategory === 'RCA_SESSION' ||
+        data.source === 'RCA';
+      if (isRcaRecord && data.verificationState !== 'PASSED') {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FORGEX_RCA_VERIFICATION_REQUIRED',
+            message:
+              'Incomplete, halted, or failed RCAs cannot be logged to permanent Maintenance History. Only 100% verified investigations are permitted.',
+          },
+        });
+        return;
+      }
+
       const record = await dataStore.createMaintenanceRecord(organizationId, {
         plantId,
         machineId: data.machineId || data.assetId || 'machine-default',

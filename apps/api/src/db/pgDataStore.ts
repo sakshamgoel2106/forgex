@@ -8742,6 +8742,12 @@ export class PgDataStore implements IDataStore {
     return session;
   }
 
+  public async deleteRcaSession(organizationId: string, id: string): Promise<boolean> {
+    const session = this.rcaSessions.get(id);
+    if (!session || session.organizationId !== organizationId) return false;
+    return this.rcaSessions.delete(id);
+  }
+
   public async updateRcaSessionStep(
     organizationId: string,
     sessionId: string,
@@ -8768,6 +8774,51 @@ export class PgDataStore implements IDataStore {
     });
     session.updatedAt = new Date().toISOString();
     return session;
+  }
+
+  public async purgeRcaRecordsOlderThan(
+    days: number,
+    organizationId?: string
+  ): Promise<{ deletedRcaSessions: number; deletedMaintenanceRecords: number; cutoffDate: string }> {
+    const retentionMs = Math.max(1, days) * 24 * 60 * 60 * 1000;
+    const cutoffTime = Date.now() - retentionMs;
+    const cutoffDate = new Date(cutoffTime).toISOString();
+
+    let deletedRcaSessions = 0;
+    for (const [id, session] of this.rcaSessions.entries()) {
+      if (organizationId && session.organizationId !== organizationId) continue;
+      const sessionDate = new Date(session.createdAt || session.updatedAt).getTime();
+      if (sessionDate < cutoffTime) {
+        this.rcaSessions.delete(id);
+        deletedRcaSessions++;
+      }
+    }
+
+    let deletedMaintenanceRecords = 0;
+    try {
+      const deleteQuery = organizationId
+        ? `DELETE FROM maintenance_records
+           WHERE organization_id = $1
+             AND (ticket_number LIKE 'RCA-%' OR fault_category = 'RCA_SESSION' OR problem_statement LIKE 'Field Symptom:%')
+             AND created_at < NOW() - make_interval(days => $2)
+           RETURNING id`
+        : `DELETE FROM maintenance_records
+           WHERE (ticket_number LIKE 'RCA-%' OR fault_category = 'RCA_SESSION' OR problem_statement LIKE 'Field Symptom:%')
+             AND created_at < NOW() - make_interval(days => $1)
+           RETURNING id`;
+
+      const params = organizationId ? [organizationId, days] : [days];
+      const res = await this.pool.query(deleteQuery, params);
+      deletedMaintenanceRecords = res.rowCount || 0;
+    } catch (pgErr) {
+      console.warn('Non-fatal: maintenance_records purge in Postgres encountered notice:', pgErr);
+    }
+
+    return {
+      deletedRcaSessions,
+      deletedMaintenanceRecords,
+      cutoffDate,
+    };
   }
 }
 

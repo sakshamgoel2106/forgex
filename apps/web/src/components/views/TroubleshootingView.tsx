@@ -24,6 +24,7 @@ import {
   Clock,
   ShieldAlert,
   Package,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
@@ -31,6 +32,7 @@ import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
 import type { RcaSession, TeardownSop } from '@forgex/shared-types';
+import { generateRcaPdfReport } from '../../utils/rcaPdfReport';
 
 interface MachineItem {
   id: string;
@@ -99,17 +101,57 @@ export const TroubleshootingView: React.FC<{
     severity: string;
   } | null>(null);
 
-  // 5-Why Causal Flow Collapsible State
-  const [expandedWhyChains, setExpandedWhyChains] = useState<Record<string, boolean>>({});
-  const toggleWhyChain = (hypId: string) => {
-    setExpandedWhyChains((prev) => ({
-      ...prev,
-      [hypId]: prev[hypId] === false ? true : false,
-    }));
+  // Storage Keys for Bulletproof Persistence (Database + localStorage + sessionStorage)
+  const storageKey = `forgex_rca_history_${organization?.id || 'default'}`;
+
+  // Inline Step Inspection State for 5-Why
+  const [selectedWhyStep, setSelectedWhyStep] = useState<{ hypId: string; stepIndex: number } | null>(null);
+
+  const handleToggleWhyStep = (hypId: string, stepIndex: number) => {
+    setSelectedWhyStep((prev) => {
+      if (prev?.hypId === hypId && prev?.stepIndex === stepIndex) {
+        return null;
+      }
+      return { hypId, stepIndex };
+    });
   };
+
+  // Helper to persist RCA investigation state to localStorage, sessionStorage, and backend DB
+  const persistSession = useCallback(
+    (session: RcaSession) => {
+      try {
+        sessionStorage.setItem('forgex_active_rca_id', session.id);
+
+        const raw = localStorage.getItem(storageKey);
+        let list: RcaSession[] = raw ? JSON.parse(raw) : [];
+        const existingIdx = list.findIndex((s) => s.id === session.id);
+        if (existingIdx !== -1) {
+          list[existingIdx] = session;
+        } else {
+          list.unshift(session);
+        }
+        localStorage.setItem(storageKey, JSON.stringify(list));
+        setRecentSessions(list);
+
+        // Sync to backend DB asynchronously
+        apiFetch(`/api/v1/rca/sessions/${session.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(session),
+        }).catch((err) => console.warn('Non-fatal backend session sync:', err));
+      } catch (e) {
+        console.warn('RCA Persistence error:', e);
+      }
+    },
+    [storageKey]
+  );
+
+  // Failed Step Escalation Reference
+  const [failedStepForEscalation, setFailedStepForEscalation] = useState<any | null>(null);
 
   // Reset to Clean Empty State
   const handleStartNewInvestigation = () => {
+    sessionStorage.removeItem('forgex_active_rca_id');
     setActiveSession(null);
     setSelectedMachineTag('');
     setMachineStatus('');
@@ -118,7 +160,18 @@ export const TroubleshootingView: React.FC<{
     setAnalysisError(null);
     setEscalatedTicketId(null);
     setEscalationBanner(null);
+    setFailedStepForEscalation(null);
+    setSelectedWhyStep(null);
   };
+
+  // 1-Step Failure Confirmation State (Marking Steps "Fail")
+  const [failConfirmation, setFailConfirmation] = useState<{
+    isOpen: boolean;
+    step: any | null;
+  }>({
+    isOpen: false,
+    step: null,
+  });
 
   // 2-Step Confirmation State for Marking Steps "Pass"
   const [passConfirmation, setPassConfirmation] = useState<{
@@ -134,6 +187,33 @@ export const TroubleshootingView: React.FC<{
     stepName: '',
     stage: 1,
   });
+
+  // LOTO & PPE Modal State
+  const [isLotoModalOpen, setIsLotoModalOpen] = useState(false);
+
+  // Center Failure Alert Popup Modal State (Auto-pops when step fails)
+  const [failureAlertModal, setFailureAlertModal] = useState<{
+    isOpen: boolean;
+    step: any | null;
+  }>({
+    isOpen: false,
+    step: null,
+  });
+
+  // Center 100% Verification Complete Popup Modal State
+  const [verificationCompleteModal, setVerificationCompleteModal] = useState(false);
+
+  // Drawer toggles for compact hypothesis cards
+  const [expandedWhyCards, setExpandedWhyCards] = useState<Record<string, boolean>>({});
+  const [expandedToolsCards, setExpandedToolsCards] = useState<Record<string, boolean>>({});
+
+  const toggleCardDrawer = (hypId: string, drawer: 'why' | 'tools') => {
+    if (drawer === 'why') {
+      setExpandedWhyCards((prev) => ({ ...prev, [hypId]: !prev[hypId] }));
+    } else {
+      setExpandedToolsCards((prev) => ({ ...prev, [hypId]: !prev[hypId] }));
+    }
+  };
 
   // Teardown SOP Modal State
   const [isTeardownOpen, setIsTeardownOpen] = useState(false);
@@ -246,23 +326,79 @@ export const TroubleshootingView: React.FC<{
     };
   }, []);
 
-  // Fetch Recent RCA Sessions
+  // Fetch and merge Recent RCA Sessions (Backend DB + localStorage) and restore active RCA
   const fetchRecentSessions = useCallback(async () => {
     try {
       setIsLoadingRecents(true);
-      const res = await apiFetch('/api/v1/rca/sessions');
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data)) {
-          setRecentSessions(json.data);
+
+      // 1. Read cached localStorage records
+      let localRecords: RcaSession[] = [];
+      try {
+        const cachedRaw = localStorage.getItem(storageKey);
+        if (cachedRaw) {
+          localRecords = JSON.parse(cachedRaw);
+        }
+      } catch (err) {
+        console.warn('Could not read cached RCA sessions from localStorage:', err);
+      }
+
+      // 2. Fetch from backend API
+      let backendRecords: RcaSession[] = [];
+      try {
+        const res = await apiFetch('/api/v1/rca/sessions');
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data)) {
+            backendRecords = json.data;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch recent RCA sessions from backend:', err);
+      }
+
+      // 3. Merge uniquely by ID, prioritizing the record with latest updatedAt
+      const map = new Map<string, RcaSession>();
+      [...localRecords, ...backendRecords].forEach((s) => {
+        if (!s || !s.id) return;
+        const existing = map.get(s.id);
+        if (!existing) {
+          map.set(s.id, s);
+        } else {
+          const existingTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+          const newTime = new Date(s.updatedAt || s.createdAt || 0).getTime();
+          if (newTime >= existingTime) {
+            map.set(s.id, s);
+          }
+        }
+      });
+
+      const mergedList = Array.from(map.values()).sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.createdAt || 0).getTime() -
+          new Date(a.updatedAt || a.createdAt || 0).getTime()
+      );
+
+      setRecentSessions(mergedList);
+      localStorage.setItem(storageKey, JSON.stringify(mergedList));
+
+      // 4. Restore active session if sessionStorage has activeRcaId
+      const activeRcaId = sessionStorage.getItem('forgex_active_rca_id');
+      if (activeRcaId && !activeSession) {
+        const match = mergedList.find((s) => s.id === activeRcaId);
+        if (match) {
+          setActiveSession(match);
+          setSelectedMachineTag(match.assetTag);
+          setErrorCode(match.detectedFaultCode || match.errorCode || '');
+          setMachineStatus((match.machineStatus as any) || 'Running - Abnormal');
+          setSymptom(match.symptom);
         }
       }
     } catch (err) {
-      console.warn('Could not fetch recent RCA sessions:', err);
+      console.warn('Error during merged RCA session load:', err);
     } finally {
       setIsLoadingRecents(false);
     }
-  }, []);
+  }, [storageKey, activeSession]);
 
   useEffect(() => {
     fetchRecentSessions();
@@ -317,6 +453,7 @@ export const TroubleshootingView: React.FC<{
       if (res.ok && json.success && json.data) {
         const session: RcaSession = json.data;
         setActiveSession(session);
+        persistSession(session);
         setErrorCode(session.detectedFaultCode || session.errorCode || '');
         setActiveTab('rca');
         toast.success(
@@ -338,7 +475,42 @@ export const TroubleshootingView: React.FC<{
     }
   };
 
-  // Initiate Step Pass: Launch Confirmation 1 (Field Check Verification)
+  // Helper: Verify sequential step gating and downstream lock state
+  const getStepGateStatus = (stepIndex: number, session: RcaSession | null) => {
+    if (!session || !session.investigationSteps) {
+      return { allowed: false, reason: 'No active session' };
+    }
+    const steps = session.investigationSteps;
+
+    // Check if any prior step failed
+    const failedIdx = steps.findIndex((s) => s.status === 'FAIL');
+    if (failedIdx !== -1 && stepIndex > failedIdx) {
+      return {
+        allowed: false,
+        blockedByFailure: true,
+        failedStepNumber: steps[failedIdx].stepNumber,
+        failedStepName: steps[failedIdx].name,
+        reason: `Blocked — Halted at Step #${steps[failedIdx].stepNumber}`,
+      };
+    }
+
+    // Check if previous step has passed
+    if (stepIndex > 0) {
+      const prevStep = steps[stepIndex - 1];
+      if (prevStep.status !== 'PASS') {
+        return {
+          allowed: false,
+          blockedBySequence: true,
+          prevStepNumber: prevStep.stepNumber,
+          reason: `Awaiting Step #${prevStep.stepNumber} Pass`,
+        };
+      }
+    }
+
+    return { allowed: true };
+  };
+
+  // Initiate Step Pass: Launch Confirmation 1 (Field Check Verification) with Sequential Gating
   const handleInitiateStepPass = (step: any) => {
     if (
       step.isLocked ||
@@ -349,6 +521,13 @@ export const TroubleshootingView: React.FC<{
       toast.info('Step Locked', 'This verified step is locked and cannot be changed.');
       return;
     }
+
+    const gate = getStepGateStatus(step.stepNumber - 1, activeSession);
+    if (!gate.allowed) {
+      toast.warning('Step Gated', gate.reason || 'Complete previous steps sequentially.');
+      return;
+    }
+
     setPassConfirmation({
       isOpen: true,
       stepId: step.id,
@@ -364,7 +543,7 @@ export const TroubleshootingView: React.FC<{
     setPassConfirmation((prev) => ({ ...prev, isOpen: false }));
 
     const nowIso = new Date().toISOString();
-    const verifierName = user?.fullName || user?.email || 'Field Specialist';
+    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Maintenance Engineer';
 
     const updatedSteps = activeSession.investigationSteps.map((s) =>
       s.id === stepId
@@ -373,7 +552,7 @@ export const TroubleshootingView: React.FC<{
             status: 'PASS' as const,
             isLocked: true,
             verifiedAt: nowIso,
-            verifiedBy: verifierName,
+            verifiedBy: engineerName,
           }
         : s
     );
@@ -381,38 +560,35 @@ export const TroubleshootingView: React.FC<{
     const isAllNowPassed =
       updatedSteps.length > 0 && updatedSteps.every((s) => s.status === 'PASS');
 
-    setActiveSession((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        investigationSteps: updatedSteps,
-        ...(isAllNowPassed
-          ? {
-              status: 'VERIFIED_CLOSED' as const,
-              isLocked: true,
-              completedAt: nowIso,
-              verifiedBy: verifierName,
-            }
-          : {}),
-      };
-    });
+    const updatedSession: RcaSession = {
+      ...activeSession,
+      investigationSteps: updatedSteps,
+      ...(isAllNowPassed
+        ? {
+            status: 'VERIFIED_CLOSED' as const,
+            isLocked: true,
+            completedAt: nowIso,
+            verifiedBy: { id: user?.id || 'eng-01', name: engineerName },
+          }
+        : {}),
+      updatedAt: nowIso,
+    };
+
+    setActiveSession(updatedSession);
+    persistSession(updatedSession);
 
     try {
       // Sync step status and lock to backend
-      const res = await apiFetch(`/api/v1/rca/sessions/${activeSession.id}/steps/${stepId}`, {
+      await apiFetch(`/api/v1/rca/sessions/${activeSession.id}/steps/${stepId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           status: 'PASS',
           isLocked: true,
           verifiedAt: nowIso,
-          verifiedBy: verifierName,
+          verifiedBy: engineerName,
         }),
       });
-
-      if (!res.ok) {
-        console.warn('Backend step status patch warning');
-      }
 
       toast.success(
         'Step Verified & Locked',
@@ -427,7 +603,7 @@ export const TroubleshootingView: React.FC<{
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               completedAt: nowIso,
-              verifiedBy: verifierName,
+              verifiedBy: { id: user?.id || 'eng-01', name: engineerName },
             }),
           });
           if (compRes.ok) {
@@ -437,6 +613,7 @@ export const TroubleshootingView: React.FC<{
           console.warn('Could not complete session on backend:', compErr);
         }
 
+        setVerificationCompleteModal(true);
         toast.success(
           'Investigation 100% Verified!',
           'Permanent record saved to Maintenance History & Recent RCAs.'
@@ -447,75 +624,336 @@ export const TroubleshootingView: React.FC<{
     }
   };
 
-  // Step Status Toggle (PASS, FAIL, PENDING) with Strict Lock Guard
-  const toggleStepStatus = async (stepId: string, newStatus: 'PASS' | 'FAIL' | 'PENDING') => {
-    if (!activeSession) return;
-    const targetStep = activeSession.investigationSteps.find((s) => s.id === stepId);
-    if (!targetStep) return;
-
+  // Initiate Step Fail: Launch Failure Confirmation Modal
+  const handleInitiateStepFail = (step: any) => {
     if (
-      targetStep.isLocked ||
-      targetStep.status === 'PASS' ||
-      activeSession.isLocked ||
-      activeSession.status === 'VERIFIED_CLOSED'
+      step.isLocked ||
+      step.status === 'PASS' ||
+      step.status === 'FAIL' ||
+      activeSession?.isLocked ||
+      activeSession?.status === 'VERIFIED_CLOSED'
     ) {
-      toast.info('Step Locked', 'This verified step is locked and cannot be changed.');
+      toast.info('Step Locked', 'This step is locked and cannot be modified.');
       return;
     }
 
-    if (newStatus === 'PASS') {
-      handleInitiateStepPass(targetStep);
+    const gate = getStepGateStatus(step.stepNumber - 1, activeSession);
+    if (!gate.allowed) {
+      toast.warning('Step Gated', gate.reason || 'Complete previous steps sequentially.');
       return;
     }
 
-    setActiveSession((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        investigationSteps: prev.investigationSteps.map((s) =>
-          s.id === stepId ? { ...s, status: newStatus } : s
-        ),
-      };
+    setFailConfirmation({
+      isOpen: true,
+      step,
+    });
+  };
+
+  // Confirm Step Failure: Halt Investigation, Lock Failed Step & Lock all Subsequent Steps
+  const handleConfirmFail = async () => {
+    if (!activeSession || !failConfirmation.step) return;
+    const targetStep = failConfirmation.step;
+    setFailConfirmation({ isOpen: false, step: null });
+
+    const nowIso = new Date().toISOString();
+    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Maintenance Engineer';
+
+    const targetIndex = targetStep.stepNumber - 1;
+    const updatedSteps = activeSession.investigationSteps.map((s, idx) => {
+      if (s.id === targetStep.id) {
+        return {
+          ...s,
+          status: 'FAIL' as const,
+          isLocked: true,
+          verifiedAt: nowIso,
+          verifiedBy: engineerName,
+        };
+      }
+      // Immediately lock and block all subsequent steps below the failed step!
+      if (idx > targetIndex) {
+        return {
+          ...s,
+          isLocked: true,
+        };
+      }
+      return s;
     });
 
+    const updatedSession: RcaSession = {
+      ...activeSession,
+      status: 'HALTED_FAILED_STEP' as any,
+      investigationSteps: updatedSteps,
+      updatedAt: nowIso,
+    };
+
+    setActiveSession(updatedSession);
+    persistSession(updatedSession);
+
+    setFailureAlertModal({ isOpen: true, step: targetStep });
+
+    toast.error(
+      'Investigation Halted',
+      `Critical anomaly detected at Step #${targetStep.stepNumber}. All subsequent steps locked. Please escalate to Machine Specialist.`
+    );
+
     try {
-      const res = await apiFetch(`/api/v1/rca/sessions/${activeSession.id}/steps/${stepId}`, {
+      await apiFetch(`/api/v1/rca/sessions/${activeSession.id}/steps/${targetStep.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify({
+          status: 'FAIL',
+          isLocked: true,
+          verifiedAt: nowIso,
+          verifiedBy: engineerName,
+        }),
       });
 
-      if (!res.ok) {
-        throw new Error('Failed to update step status');
-      }
-
-      if (newStatus === 'FAIL') {
-        toast.warning('Anomaly Isolated', 'Check failed! Failure pathway isolated.');
-      } else {
-        toast.info('Step Reset', 'Step reset to pending verification.');
-      }
-    } catch {
-      toast.error('Update Failed', 'Could not sync step status to database.');
+      await apiFetch(`/api/v1/rca/sessions/${activeSession.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedSession),
+      });
+    } catch (err) {
+      console.warn('Backend failed step sync error:', err);
     }
   };
 
-  // Toggle Hypothesis Status
+  // Open Escalation Modal with Pre-filled Failed Step Context
+  const handleOpenEscalateForFailedStep = (failedStep: any) => {
+    if (!activeSession) return;
+    const targetTag = activeSession.assetTag || selectedMachineTag || 'PLANT-MACHINE';
+    const currentSymptom = activeSession.symptom?.trim() || symptom?.trim() || '';
+    const topHyp =
+      activeSession.hypotheses?.find((h) => h.status === 'CONFIRMED') ||
+      activeSession.hypotheses?.[0];
+    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
+
+    const prefill = `Maintenance Engineer ${engineerName} reported symptom on ${targetTag}: ${currentSymptom}
+
+🚨 HALTED AT FAILED INVESTIGATION STEP:
+- Step #${failedStep.stepNumber}: ${failedStep.name}
+- Expected Reading: ${failedStep.expectedReading || 'Normal baseline parameter'}
+- Field Observation: Physical check failed; critical anomaly confirmed on equipment.
+
+Top AI Root Cause Hypothesis:
+- Suspected Cause: ${topHyp?.title || 'Unknown Failure Mode'} (${topHyp?.probability || 88}% confidence)
+- Mechanism: ${topHyp?.mechanismExplanation || 'Boundary condition breakdown'}
+- Recommended Remediation: ${topHyp?.recommendedFix || 'Execute isolation and specialist inspection.'}`;
+
+    setEscalateDiscipline('Mechanical / Rotating Equipment Lead');
+    setEscalateSeverity('CRITICAL');
+    setIsLotoApplied(true);
+    setEscalateNotes(prefill);
+    setFailedStepForEscalation(failedStep);
+    setIsEscalateOpen(true);
+  };
+
+  // Toggle Hypothesis Status & Persist
   const setHypothesisStatus = (id: string, newStatus: 'CONFIRMED' | 'HYPOTHESIS' | 'RULED_OUT') => {
     if (!activeSession) return;
-    setActiveSession((prev) => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        hypotheses: prev.hypotheses.map((h) =>
-          h.id === id ? { ...h, status: newStatus } : h
-        ),
-      };
+    const nowIso = new Date().toISOString();
+    const updatedHypotheses = activeSession.hypotheses.map((h) => {
+      if (h.id === id) {
+        return { ...h, status: newStatus };
+      }
+      if (newStatus === 'CONFIRMED' && h.status === 'CONFIRMED') {
+        return { ...h, status: 'HYPOTHESIS' as const };
+      }
+      return h;
     });
+
+    const updatedSession: RcaSession = {
+      ...activeSession,
+      hypotheses: updatedHypotheses,
+      updatedAt: nowIso,
+    };
+
+    setActiveSession(updatedSession);
+    persistSession(updatedSession);
+
+    if (newStatus === 'CONFIRMED') {
+      const confirmedHyp = activeSession.hypotheses.find((h) => h.id === id);
+      toast.success(
+        'Root Cause Confirmed',
+        `Confirmed "${confirmedHyp?.title || 'Hypothesis'}" as primary root cause by Maintenance Engineer.`
+      );
+    }
+  };
+
+  // Export RCA Summary Report (Professional Formatted PDF)
+  const handleExportRcaSummary = () => {
+    if (!activeSession) return;
+    const targetTag = activeSession.assetTag || selectedMachineTag || 'PLANT-MACHINE';
+    const nowStr = new Date().toLocaleString();
+    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
+    const passedCount = activeSession.investigationSteps.filter((s) => s.status === 'PASS').length;
+    const totalCount = activeSession.investigationSteps.length;
+    const topHyp =
+      activeSession.hypotheses.find((h) => h.status === 'CONFIRMED') || activeSession.hypotheses[0];
+    const failedStep = activeSession.investigationSteps.find((s) => s.status === 'FAIL');
+    const matchedMachine = machines.find(
+      (m) => (m.asset_tag || m.assetTag || m.name || m.id) === targetTag
+    );
+
+    const overallStatus: '100% VERIFIED & CLOSED' | 'CRITICAL ANOMALY HALTED' | 'IN PROGRESS' = failedStep
+      ? 'CRITICAL ANOMALY HALTED'
+      : (passedCount === totalCount && totalCount > 0) || activeSession.status === 'VERIFIED_CLOSED' || activeSession.isLocked
+      ? '100% VERIFIED & CLOSED'
+      : 'IN PROGRESS';
+
+    try {
+      generateRcaPdfReport({
+        targetTag,
+        machineName: matchedMachine?.name || activeSession.machineName,
+        plantName: matchedMachine?.plant_area || organization?.name || 'Main Manufacturing Facility',
+        reportDate: nowStr,
+        engineerName,
+        engineerRole: (user as any)?.role || 'Maintenance Engineer',
+        operatingState: activeSession.machineStatus || 'Running - Abnormal',
+        detectedFaultCode: activeSession.detectedFaultCode || activeSession.errorCode,
+        symptom: activeSession.symptom,
+        topHypothesis: topHyp
+          ? {
+              title: topHyp.title,
+              probability: topHyp.probability,
+              severity: topHyp.severity,
+              mttr: topHyp.mttr,
+              requiredSkill: topHyp.requiredSkill,
+              downtimeRisk: topHyp.downtimeRisk,
+              mechanismExplanation: topHyp.mechanismExplanation,
+              recommendedFix: topHyp.recommendedFix,
+              fiveWhyChain: topHyp.fiveWhyChain,
+              requiredTools: topHyp.requiredTools,
+              spareParts: topHyp.spareParts,
+              status: topHyp.status,
+            }
+          : undefined,
+        investigationSteps: activeSession.investigationSteps.map((s) => ({
+          stepNumber: s.stepNumber,
+          name: s.name,
+          instruction: s.instruction,
+          expectedReading: s.expectedReading,
+          requiresLoto: s.requiresLoto,
+          status: (s.status as any) || 'PENDING',
+          verifiedAt: s.verifiedAt,
+          verifiedBy: s.verifiedBy,
+        })),
+        safetyReadiness: activeSession.safetyReadiness,
+        escalation: escalatedTicketId
+          ? {
+              ticketId: escalatedTicketId,
+              discipline: escalationBanner?.discipline,
+              severity: escalationBanner?.severity,
+            }
+          : null,
+        overallStatus,
+      });
+
+      toast.success(
+        'RCA Summary PDF Exported',
+        'RCA Summary PDF exported successfully!'
+      );
+    } catch (err: any) {
+      console.error('Failed to generate RCA PDF report:', err);
+      toast.error('Export Failed', 'Could not generate RCA PDF report.');
+    }
+  };
+
+  // Deep-Dive 5-Why in AI Copilot Handoff
+  const handleDeepDiveInCopilot = (hyp: any) => {
+    const targetTag = activeSession?.assetTag || selectedMachineTag || 'PLANT-MACHINE';
+    const fault = activeSession?.detectedFaultCode || activeSession?.errorCode || errorCode || 'Alarm Anomaly';
+    const activeSymptom = activeSession?.symptom || symptom;
+    const fiveWhyList = (
+      hyp.fiveWhyChain && hyp.fiveWhyChain.length > 0
+        ? hyp.fiveWhyChain
+        : [
+            `Why 1: Operational load deviation on ${targetTag}`,
+            'Why 2: Boundary fluid starvation & dynamic cavitation',
+            'Why 3: Thermal stress erosion on seal faces',
+            'Why 4: Dynamic O-ring extrusion and seal leakage',
+            `Observed Symptom: ${activeSymptom}`,
+          ]
+    ).join(' -> ');
+
+    const prompt = `Perform an in-depth Root Cause Failure Analysis (RCFA) for industrial equipment ${targetTag} [Fault Code: ${fault}]. Field Symptom: ${activeSymptom}. Primary Root Cause Hypothesis: ${hyp.title}. 5-Why Causal Flow: ${fiveWhyList}. Explain the detailed failure physics, boundary lubrication breakdown, vibration spectral signatures, and OEM manual verification procedures.`;
+
+    sessionStorage.setItem(
+      'forgex_copilot_handoff',
+      JSON.stringify({
+        assetTag: targetTag,
+        prompt,
+        hypothesisTitle: hyp.title,
+      })
+    );
+
+    window.history.pushState({}, '', '/ai-copilot');
+    window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'copilot' } }));
+    window.dispatchEvent(new CustomEvent('forgex:copilot-handoff'));
+  };
+
+  // Helper: Detailed 5-Why Engineering Breakdown Data
+  const getWhyStepDetails = (
+    stepText: string,
+    stepIndex: number,
+    _totalSteps: number,
+    _hyp: any,
+    assetTag: string
+  ) => {
+    const title = stepText.replace(/^Why\s*\d+:\s*/i, '').trim();
+
+    let mechanism = `Dynamic physical stress progression during stage ${stepIndex + 1}. Operational load deviation on ${assetTag} creates localized hydrodynamic turbulence, boundary lubricant shearing, and thermal dissipation failure.`;
+    if (stepIndex === 0) {
+      mechanism = `Initial operational boundary excursion on ${assetTag}. Deviation in suction head, electrical input frequency, or shaft torque beyond design operating envelope.`;
+    } else if (stepIndex === 1) {
+      mechanism = `Boundary fluid film starvation across dynamic interface. Pressure drop induces localized vapor bubble inception and high-frequency implosive micro-jets.`;
+    } else if (stepIndex === 2) {
+      mechanism = `Thermal stress erosion and micro-pitting on sealing faces (silicon carbide / tungsten carbide). Localized interfacial temperatures exceed boundary lubricant boiling point.`;
+    } else if (stepIndex === 3) {
+      mechanism = `Secondary sealing degradation. Elastomeric O-rings undergo dynamic extrusion, hardening, and compression set under elevated localized temperature and chemical exposure.`;
+    } else if (stepIndex >= 4) {
+      mechanism = `Gross containment breach and primary functional failure. Severe shaft deflection, vibration harmonic resonance, and fluid leakage exceeding hazardous operational limits.`;
+    }
+
+    let verification = `Measure vibration velocity (in/sec RMS) and compare FFT spectral peaks at 1X/2X rotational harmonics against baseline.`;
+    if (stepIndex === 0) {
+      verification = `Review DCS/SCADA process trend logs for suction pressure fluctuations, motor current draw (Amps), and inlet throttling valve position.`;
+    } else if (stepIndex === 1) {
+      verification = `Conduct ultrasonic contact probe inspection on pump casing to detect acoustic emission spike in 30-40 kHz range (cavitation inception).`;
+    } else if (stepIndex === 2) {
+      verification = `Inspect seal flush plan (Plan 11/53A) pressure differential gauge and check seal chamber temperature using calibrated dual-laser IR pyrometer.`;
+    } else if (stepIndex === 3) {
+      verification = `Perform optical leak inspection at seal gland drain port; utilize dial indicator to measure radial shaft runout (must remain < 0.002 in / 0.05 mm).`;
+    } else if (stepIndex >= 4) {
+      verification = `Perform dye penetrant test on seal sleeve / shaft collar and confirm total fluid loss rate against plant environmental discharge limits.`;
+    }
+
+    let reference = `ISO 10816-3 Vibration Severity Zone C/D threshold; API 610 §6.8.3 mechanical seal piping plan requirements.`;
+    if (stepIndex === 0) {
+      reference = `OEM Operations Manual §3.2 (Operating Window & NPSH Margins); Hydraulic Institute HI 9.6.1.`;
+    } else if (stepIndex === 1) {
+      reference = `API 682 4th Ed. §4.1 (Cavitation Suppression & Minimum Flow Orifice Sizing); ISO 13709.`;
+    } else if (stepIndex === 2) {
+      reference = `API 682 Category 2/3 Seal Chamber Thermal Guidelines; ASTM C1198 Silicon Carbide Face Limits.`;
+    } else if (stepIndex === 3) {
+      reference = `OEM Assembly Manual §5.4 (Shaft Runout Tolerances < 0.05mm); ASTM D395 Elastomer Compression Set.`;
+    } else if (stepIndex >= 4) {
+      reference = `Plant Environmental & Safety LOTO Standard SOP-MNT-402; OSHA 1910.147 Zero-Energy Isolation.`;
+    }
+
+    return {
+      label: stepText.startsWith('Why') ? stepText.split(':')[0] : `Why #${stepIndex + 1}`,
+      title,
+      mechanism,
+      verification,
+      reference,
+    };
   };
 
   // Reload Previous RCA Session
   const handleLoadSession = (session: RcaSession) => {
     setActiveSession(session);
+    persistSession(session);
     setSelectedMachineTag(session.assetTag);
     setErrorCode(session.detectedFaultCode || session.errorCode || '');
     setMachineStatus((session.machineStatus as any) || 'Running - Abnormal');
@@ -692,16 +1130,24 @@ Investigation Progress: ${progressStr}`;
     const topHyp =
       activeSession.hypotheses?.find((h) => h.status === 'CONFIRMED') ||
       activeSession.hypotheses?.[0];
+    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
 
-    const prefill = `Technician observed symptom on ${targetTag}: ${currentSymptom}${
+    const failedStep = activeSession.investigationSteps?.find((s) => s.status === 'FAIL');
+    setFailedStepForEscalation(failedStep || null);
+
+    const prefill = `Maintenance Engineer ${engineerName} reported symptom on ${targetTag}: ${currentSymptom}${
+      failedStep
+        ? `\n\n🚨 HALTED AT FAILED INVESTIGATION STEP:\n- Step #${failedStep.stepNumber}: ${failedStep.name}\n- Expected Reading: ${failedStep.expectedReading || 'In-spec baseline'}\n- Field Check Observation: Physical check failed / anomaly confirmed on equipment.`
+        : ''
+    }${
       topHyp
         ? `\n\nTop AI Root Cause Hypothesis:\n- Suspected Cause: ${topHyp.title} (${topHyp.probability}% confidence)\n- Mechanism: ${topHyp.mechanismExplanation}\n- Recommended Remediation: ${topHyp.recommendedFix}`
         : ''
     }`;
 
     // Reset dropdowns to ensure clean unselected start
-    setEscalateDiscipline('');
-    setEscalateSeverity('');
+    setEscalateDiscipline(failedStep ? 'Mechanical / Rotating Equipment Lead' : '');
+    setEscalateSeverity(failedStep ? 'CRITICAL' : '');
     setIsLotoApplied(null);
     setEscalateNotes(prefill);
     setIsEscalateOpen(true);
@@ -728,6 +1174,7 @@ Investigation Progress: ${progressStr}`;
     }
 
     const targetTag = activeSession.assetTag || selectedMachineTag || 'GEN-DIESEL-101';
+    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
 
     setIsEscalating(true);
     try {
@@ -777,8 +1224,10 @@ Investigation Progress: ${progressStr}`;
             priority: escalateSeverity,
             severity: escalateSeverity,
             lotoApplied: isLotoApplied,
-            notes: escalateNotes || `Technician observed symptom on ${targetTag}: ${currentSymptom}`,
-            technicianNotes: escalateNotes || `Technician observed symptom on ${targetTag}: ${currentSymptom}`,
+            reportedByRole: 'Maintenance Engineer',
+            reportedByUserName: engineerName,
+            notes: escalateNotes || `Maintenance Engineer ${engineerName} reported symptom on ${targetTag}: ${currentSymptom}`,
+            technicianNotes: escalateNotes || `Maintenance Engineer ${engineerName} reported symptom on ${targetTag}: ${currentSymptom}`,
             topRootCause: topHyp?.title,
             probability: topHyp?.probability,
             recommendedFix: topHyp?.recommendedFix,
@@ -798,7 +1247,7 @@ Investigation Progress: ${progressStr}`;
 
       // 2. Fallback to /api/v1/tickets if needed
       if (!ticketNum) {
-        const diagnosticSummary = `Equipment: ${targetTag}\nOperating State: ${activeSession.machineStatus || machineStatus}\nFault Code: ${activeFault}\nDiscipline: ${escalateDiscipline}\nLOTO: ${isLotoApplied ? 'YES - Padlocked' : 'NO - Live Running'}\nField Symptom: ${currentSymptom}\n${topHyp ? `AI Suspected Cause: ${topHyp.title} (${topHyp.probability}% prob)\n` : ''}Technician Notes: ${escalateNotes}`;
+        const diagnosticSummary = `Equipment: ${targetTag}\nOperating State: ${activeSession.machineStatus || machineStatus}\nFault Code: ${activeFault}\nDiscipline: ${escalateDiscipline}\nLOTO: ${isLotoApplied ? 'YES - Padlocked' : 'NO - Live Running'}\nReported By: Maintenance Engineer / ${engineerName}\nField Symptom: ${currentSymptom}\n${topHyp ? `AI Suspected Cause: ${topHyp.title} (${topHyp.probability}% prob)\n` : ''}Maintenance Engineer Notes: ${escalateNotes}`;
 
         const fallbackRes = await apiFetch('/api/v1/tickets', {
           method: 'POST',
@@ -865,19 +1314,30 @@ Investigation Progress: ${progressStr}`;
   return (
     <div className="flex-1 min-h-0 min-w-0 w-full h-full flex flex-col bg-[#F8FAFC]">
       {/* Top Banner Toolbar */}
-      <div className="p-4 md:px-6 bg-white border-b border-[#E2E8F0] flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-            <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide whitespace-nowrap">
+      <div className="p-4 md:px-6 bg-white border-b border-[#E2E8F0] flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 w-full shrink-0">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide break-words">
               Root Cause Analysis & Troubleshooting Copilot
             </h2>
           </div>
-          <p className="text-xs text-[#64748B] mt-0.5 font-sans truncate">
-            Diagnostic reasoning grounded in Knowledge Hub manuals, senior technician field notes, and failure logs.
+          <p className="text-xs text-[#64748B] mt-0.5 font-sans break-words">
+            Diagnostic reasoning grounded in Knowledge Hub manuals, maintenance engineer field notes, and failure logs.
           </p>
         </div>
 
-        <div className="flex items-center gap-2 relative shrink-0 flex-wrap sm:flex-nowrap">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {/* + Start New Investigation Button in Top Header Toolbar */}
+          <button
+            type="button"
+            onClick={handleStartNewInvestigation}
+            className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-xs font-mono font-bold text-blue-700 flex items-center gap-1.5 transition shadow-xs whitespace-nowrap shrink-0 cursor-pointer"
+            title="Reset active investigation to clean empty state"
+          >
+            <Plus className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span className="whitespace-nowrap">Start New Investigation</span>
+          </button>
+
           {/* Recent RCAs Dropdown Selector - only displayed when Active RCA is loaded */}
           {activeSession && (
             <div className="relative shrink-0" ref={historyDropdownRef}>
@@ -903,7 +1363,7 @@ Investigation Progress: ${progressStr}`;
                       className="w-full text-center py-1.5 px-3 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 font-mono font-bold text-xs flex items-center justify-center gap-1.5 transition border border-blue-200"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      <span>+ Start New Investigation</span>
+                      <span>Start New Investigation</span>
                     </button>
                   </div>
                   <div className="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between font-mono font-bold text-[10px] uppercase text-slate-400">
@@ -1264,28 +1724,63 @@ Investigation Progress: ${progressStr}`;
           ) : (
             <div className="space-y-6 flex-1">
               {/* Active Case Top Summary */}
-              <div className="bg-white rounded-xl border border-[#E2E8F0] p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <span className="font-mono font-bold text-sm text-[#0F172A]">
-                    {activeSession.assetTag}
-                  </span>
-                  {activeSession.machineName && activeSession.machineName !== activeSession.assetTag && (
-                    <span className="text-xs text-slate-500 font-sans">
-                      ({activeSession.machineName})
-                    </span>
-                  )}
-                  {activeSession.detectedFaultCode && (
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 font-bold shrink-0">
-                      {activeSession.detectedFaultCode}
-                    </span>
-                  )}
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 shrink-0 font-medium">
-                    State: {activeSession.machineStatus || 'Running'}
-                  </span>
+              <div className="bg-white rounded-xl border border-[#E2E8F0] shadow-sm overflow-hidden">
+                <div className="flex flex-col lg:flex-row justify-between items-start gap-4 p-4">
+                  {/* Left Content */}
+                  <div className="flex-1 min-w-0 flex flex-col gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono font-bold text-sm text-[#0F172A]">
+                        {activeSession.assetTag}
+                      </span>
+                      {activeSession.machineName && activeSession.machineName !== activeSession.assetTag && (
+                        <span className="text-xs text-slate-500 font-sans">
+                          ({activeSession.machineName})
+                        </span>
+                      )}
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-medium shrink-0">
+                        State: {activeSession.machineStatus || 'Running'}
+                      </span>
+                    </div>
+
+                    {activeSession.detectedFaultCode && (
+                      <div className="inline-flex items-center max-w-full">
+                        <span className="text-[10px] font-mono px-2.5 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 font-bold break-words whitespace-normal leading-relaxed">
+                          {activeSession.detectedFaultCode.toUpperCase().includes('FAULT') || activeSession.detectedFaultCode.toUpperCase().includes('ALARM')
+                            ? activeSession.detectedFaultCode
+                            : `FAULT / ALARM CODE: ${activeSession.detectedFaultCode}`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Content */}
+                  <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setIsLotoModalOpen(true)}
+                      className="px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-xs font-mono font-bold text-amber-900 flex items-center gap-1.5 transition shadow-xs whitespace-nowrap cursor-pointer"
+                      title="View OSHA 1910.147 LOTO & PPE Isolation Points"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                      <span>🛡️ LOTO & PPE Checklist — View</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleExportRcaSummary}
+                      className="px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-xs font-mono font-semibold text-indigo-800 flex items-center gap-1.5 transition shadow-xs whitespace-nowrap cursor-pointer"
+                      title="Download professional PDF RCA summary report"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      <span>Export RCA Summary</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="text-xs text-slate-600 font-sans truncate max-w-md">
-                  <strong>Symptom:</strong> {activeSession.symptom}
+                {/* Full Un-truncated Symptom Text */}
+                <div className="text-xs text-slate-700 font-sans leading-relaxed px-4 py-3 bg-slate-50/50 border-t border-slate-100 flex items-start gap-1.5">
+                  <strong className="text-slate-900 font-mono text-[11px] uppercase shrink-0">Observed Field Symptom:</strong>
+                  <span className="break-words text-slate-800 font-medium">{activeSession.symptom}</span>
                 </div>
               </div>
 
@@ -1302,203 +1797,134 @@ Investigation Progress: ${progressStr}`;
                   </div>
 
                   <div className="space-y-3.5">
-                    {activeSession.hypotheses.map((hyp, index) => (
-                      <div
-                        key={hyp.id}
-                        className={`rounded-xl border p-4 sm:p-5 transition bg-white shadow-sm space-y-3 ${
-                          hyp.status === 'CONFIRMED'
-                            ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-50/20'
-                            : hyp.status === 'RULED_OUT'
-                            ? 'opacity-60 border-slate-200 bg-slate-50'
-                            : 'border-[#E2E8F0] hover:border-blue-300'
-                        }`}
-                      >
-                        {/* Hypothesis Header */}
-                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="w-5 h-5 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-mono font-bold">
+                    {activeSession.hypotheses.map((hyp, index) => {
+                      const isWhyOpen = !!expandedWhyCards[hyp.id];
+                      const isToolsOpen = !!expandedToolsCards[hyp.id];
+                      const chain =
+                        hyp.fiveWhyChain && hyp.fiveWhyChain.length > 0
+                          ? hyp.fiveWhyChain
+                          : [
+                              `Why 1: Operational load deviation on ${activeSession.assetTag}`,
+                              'Why 2: Boundary fluid starvation & dynamic cavitation',
+                              'Why 3: Thermal stress erosion on silicon carbide seal faces',
+                              'Why 4: Dynamic O-ring extrusion and seal leakage',
+                              `Observed Symptom: ${activeSession.symptom}`,
+                            ];
+                      const toolsCount = (hyp.requiredTools?.length || 4);
+                      const partsCount = (hyp.spareParts?.length || 3);
+
+                      return (
+                        <div
+                          key={hyp.id}
+                          className={`rounded-xl border p-3.5 transition bg-white shadow-xs space-y-2.5 ${
+                            hyp.status === 'CONFIRMED'
+                              ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-50/15'
+                              : hyp.status === 'RULED_OUT'
+                              ? 'opacity-60 border-slate-200 bg-slate-50'
+                              : 'border-[#E2E8F0] hover:border-blue-300'
+                          }`}
+                        >
+                          {/* Compact Top Row: Rank, Title, Severity, Confidence, & Status Actions in a single tight line */}
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="w-5 h-5 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-mono font-bold shrink-0">
                                 #{index + 1}
                               </span>
-                              <h4 className="text-sm font-bold text-slate-900 leading-snug">
+                              <h4 className="text-sm font-bold text-slate-900 truncate">
                                 {hyp.title}
                               </h4>
                             </div>
+
+                            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                              {/* Severity Pill */}
+                              <span
+                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase ${
+                                  hyp.severity === 'CRITICAL'
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                    : hyp.severity === 'HIGH'
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                    : 'bg-blue-50 text-blue-700 border-blue-200'
+                                }`}
+                              >
+                                {hyp.severity}
+                              </span>
+
+                              {/* Confidence Progress */}
+                              <div className="flex items-center gap-1.5 font-mono text-xs">
+                                <div className="w-14 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      hyp.probability >= 80
+                                        ? 'bg-emerald-500'
+                                        : hyp.probability >= 60
+                                        ? 'bg-amber-500'
+                                        : 'bg-blue-500'
+                                    }`}
+                                    style={{ width: `${hyp.probability}%` }}
+                                  />
+                                </div>
+                                <span className="font-bold text-slate-700">{hyp.probability}%</span>
+                              </div>
+
+                              {/* Confirm / Rule Out Action Buttons */}
+                              <div className="flex items-center gap-1 font-mono text-xs">
+                                {hyp.status === 'CONFIRMED' ? (
+                                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    <span>✓ Confirmed</span>
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setHypothesisStatus(hyp.id, 'CONFIRMED')}
+                                    className="px-2 py-0.5 rounded border transition bg-white text-slate-700 border-slate-300 hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 text-[11px] font-semibold cursor-pointer active:scale-95 shadow-2xs"
+                                  >
+                                    Confirm
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setHypothesisStatus(hyp.id, 'RULED_OUT')}
+                                  className={`px-2 py-0.5 rounded border transition text-[11px] cursor-pointer ${
+                                    hyp.status === 'RULED_OUT'
+                                      ? 'bg-rose-600 text-white border-rose-600 font-bold'
+                                      : 'bg-white text-slate-500 border-slate-200 hover:bg-rose-50 hover:text-rose-700'
+                                  }`}
+                                >
+                                  Rule Out
+                                </button>
+                              </div>
+                            </div>
                           </div>
 
-                          <div className="flex items-center gap-2 shrink-0">
+                          {/* Single-Line Meta Strip */}
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 border border-slate-200">
+                              <Clock className="w-2.5 h-2.5 text-blue-600" />
+                              <span>MTTR: <strong>{hyp.mttr || '45–60 mins'}</strong></span>
+                            </span>
+
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              <GraduationCap className="w-2.5 h-2.5 text-indigo-500" />
+                              <span>Skill: <strong>{hyp.requiredSkill || 'L2 Mechanical'}</strong></span>
+                            </span>
+
                             <span
-                              className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase ${
-                                hyp.severity === 'CRITICAL'
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${
+                                (hyp.downtimeRisk || 'High').toLowerCase() === 'critical'
                                   ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : hyp.severity === 'HIGH'
+                                  : (hyp.downtimeRisk || 'High').toLowerCase() === 'high'
                                   ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                  : 'bg-blue-50 text-blue-700 border-blue-200'
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                               }`}
                             >
-                              {hyp.severity} Severity
+                              <span>Risk: <strong>{hyp.downtimeRisk || 'High'}</strong></span>
                             </span>
 
-                            {/* Confidence Progress */}
-                            <div className="flex items-center gap-1.5 font-mono text-xs">
-                              <div className="w-16 h-2 rounded-full bg-slate-200 overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${
-                                    hyp.probability >= 80
-                                      ? 'bg-emerald-500'
-                                      : hyp.probability >= 60
-                                      ? 'bg-amber-500'
-                                      : 'bg-blue-500'
-                                  }`}
-                                  style={{ width: `${hyp.probability}%` }}
-                                />
-                              </div>
-                              <span className="font-bold text-slate-700">{hyp.probability}%</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Mechanism Explanation */}
-                        <div className="text-xs text-slate-700 font-sans leading-relaxed pl-7">
-                          {hyp.mechanismExplanation}
-                        </div>
-
-                        {/* ⏱️ MTTR & Operational Impact Bar */}
-                        <div className="pl-7 pt-1 flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-mono font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-800 border border-slate-200 shadow-xs">
-                            <Clock className="w-3 h-3 text-blue-600" />
-                            <span>Est. MTTR: <strong>{hyp.mttr || '45–60 mins'}</strong></span>
-                          </span>
-
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-mono font-semibold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-xs">
-                            <GraduationCap className="w-3 h-3 text-indigo-500" />
-                            <span>Required Skill: <strong>{hyp.requiredSkill || 'L2 Mechanical Specialist'}</strong></span>
-                          </span>
-
-                          <span
-                            className={`inline-flex items-center gap-1.5 text-[10px] font-mono font-semibold px-2.5 py-1 rounded-full border shadow-xs ${
-                              (hyp.downtimeRisk || 'High').toLowerCase() === 'critical'
-                                ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                : (hyp.downtimeRisk || 'High').toLowerCase() === 'high'
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            }`}
-                          >
-                            <span>Downtime Risk: <strong>{hyp.downtimeRisk || 'High'}</strong></span>
-                          </span>
-                        </div>
-
-                        {/* 🌳 Interactive 5-Why Failure Causal Chain */}
-                        <div className="pl-7 pt-1">
-                          <div className="rounded-xl border border-slate-200 bg-slate-50/90 p-3 space-y-2.5 shadow-xs">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold text-slate-800 uppercase tracking-wide">
-                                <span>🌳 5-Why Failure Causal Chain</span>
-                                <span className="text-slate-400 font-normal lowercase">(causal sequence)</span>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => toggleWhyChain(hyp.id)}
-                                className="text-[10px] font-mono text-blue-600 hover:text-blue-800 font-bold flex items-center gap-1 px-2 py-0.5 rounded hover:bg-blue-50 transition"
-                              >
-                                {expandedWhyChains[hyp.id] === false ? 'Expand 5-Why Flow' : 'Collapse Flow'}
-                                <ChevronDown
-                                  className={`w-3 h-3 transition-transform ${
-                                    expandedWhyChains[hyp.id] === false ? '-rotate-90' : ''
-                                  }`}
-                                />
-                              </button>
-                            </div>
-
-                            {expandedWhyChains[hyp.id] !== false && (
-                              <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-xs font-sans">
-                                {(hyp.fiveWhyChain && hyp.fiveWhyChain.length > 0
-                                  ? hyp.fiveWhyChain
-                                  : [
-                                      `Why 1: Operational load deviation on ${activeSession.assetTag}`,
-                                      'Why 2: Boundary fluid starvation & dynamic cavitation',
-                                      'Why 3: Thermal stress erosion on silicon carbide seal faces',
-                                      'Why 4: Dynamic O-ring extrusion and seal leakage',
-                                      `Observed Symptom: ${activeSession.symptom}`,
-                                    ]
-                                ).map((step, sIdx, arr) => (
-                                  <React.Fragment key={sIdx}>
-                                    <span
-                                      className={`px-2.5 py-1 rounded-lg border text-[11px] leading-tight font-medium shadow-xs ${
-                                        sIdx === arr.length - 1
-                                          ? 'bg-rose-50 text-rose-800 border-rose-300 font-bold'
-                                          : sIdx === 0
-                                          ? 'bg-blue-50 text-blue-900 border-blue-200 font-bold'
-                                          : 'bg-white text-slate-700 border-slate-200'
-                                      }`}
-                                    >
-                                      {step}
-                                    </span>
-                                    {sIdx < arr.length - 1 && (
-                                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                    )}
-                                  </React.Fragment>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* 🧰 Required Tools & Spare Parts Kit */}
-                        <div className="pl-7 pt-1 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                          {/* Tools Required */}
-                          <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2 shadow-xs">
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-700 uppercase">
-                              <Wrench className="w-3.5 h-3.5 text-blue-600" />
-                              <span>Required Tools & Diagnostic Instruments:</span>
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {(hyp.requiredTools && hyp.requiredTools.length > 0
-                                ? hyp.requiredTools
-                                : ['Laser Alignment Kit', 'Torque Wrench (20-150 ft-lbs)', 'CAT IV Digital Multimeter', 'Calibrated IR Pyrometer']
-                              ).map((tool, tIdx) => (
-                                <span
-                                  key={tIdx}
-                                  className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 border border-slate-200 font-medium"
-                                >
-                                  🧰 {tool}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Spare Parts Kit */}
-                          <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2 shadow-xs">
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-700 uppercase">
-                              <Package className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Spare Parts & Consumables Kit:</span>
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {(hyp.spareParts && hyp.spareParts.length > 0
-                                ? hyp.spareParts
-                                : ['Cartridge Mechanical Seal Kit', 'Fluoroelastomer O-Ring Set', 'Stainless Spiral Wound Gasket']
-                              ).map((part, pIdx) => (
-                                <span
-                                  key={pIdx}
-                                  className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold"
-                                >
-                                  📦 {part}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Verified Sources Badges */}
-                        {hyp.verifiedSources && hyp.verifiedSources.length > 0 && (
-                          <div className="pl-7 pt-1 flex flex-wrap items-center gap-1.5">
-                            <span className="text-[10px] font-mono text-slate-400 uppercase font-semibold">
-                              Verified Sources:
-                            </span>
-                            {hyp.verifiedSources.map((source, sIdx) => (
+                            {hyp.verifiedSources && hyp.verifiedSources.map((source, sIdx) => (
                               <span
                                 key={sIdx}
-                                className={`text-[10px] font-mono px-2 py-0.5 rounded border flex items-center gap-1 ${
+                                className={`px-2 py-0.5 rounded border flex items-center gap-1 ${
                                   source.type === 'MANUAL'
                                     ? 'bg-blue-50 text-blue-700 border-blue-200'
                                     : source.type === 'EXPERT_NOTE'
@@ -1508,51 +1934,221 @@ Investigation Progress: ${progressStr}`;
                               >
                                 {source.type === 'MANUAL' ? (
                                   <BookOpen className="w-2.5 h-2.5" />
-                                ) : source.type === 'EXPERT_NOTE' ? (
-                                  <GraduationCap className="w-2.5 h-2.5" />
                                 ) : (
-                                  <Wrench className="w-2.5 h-2.5" />
+                                  <GraduationCap className="w-2.5 h-2.5" />
                                 )}
-                                <span>{source.reference}</span>
+                                <span className="truncate max-w-[150px]">{source.reference}</span>
                               </span>
                             ))}
                           </div>
-                        )}
 
-                        {/* Recommended Field Fix & Actions */}
-                        <div className="pl-7 pt-2.5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="text-xs text-slate-700 font-sans">
-                            <strong className="text-slate-900 font-mono text-[11px] uppercase mr-1">
-                              Recommended Fix:
-                            </strong>
-                            <span>{hyp.recommendedFix}</span>
+                          {/* Concise Summary & Recommended Fix (2-Line Display) */}
+                          <div className="space-y-1 text-xs font-sans text-slate-700 pt-1">
+                            <p className="line-clamp-2 leading-relaxed">
+                              <strong className="text-slate-900 font-mono text-[11px] uppercase mr-1">
+                                Mechanism:
+                              </strong>
+                              {hyp.mechanismExplanation}
+                            </p>
+                            <p className="line-clamp-2 leading-relaxed">
+                              <strong className="text-slate-900 font-mono text-[11px] uppercase mr-1">
+                                Recommended Fix:
+                              </strong>
+                              <span className="text-slate-800 font-medium">{hyp.recommendedFix}</span>
+                            </p>
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0 font-mono text-[11px]">
+                          {/* Collapsible Drawer Toggle Bar */}
+                          <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* 🌳 5-Why Toggle Button */}
+                              <button
+                                type="button"
+                                onClick={() => toggleCardDrawer(hyp.id, 'why')}
+                                className={`text-[11px] font-mono px-2.5 py-1 rounded-md border flex items-center gap-1.5 transition cursor-pointer ${
+                                  isWhyOpen
+                                    ? 'bg-blue-50 text-blue-800 border-blue-300 font-bold'
+                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 font-medium'
+                                }`}
+                              >
+                                <span>🌳 View 5-Why Chain ({chain.length} steps)</span>
+                                <ChevronDown
+                                  className={`w-3 h-3 transition-transform ${isWhyOpen ? 'rotate-180 text-blue-700' : 'text-slate-400'}`}
+                                />
+                              </button>
+
+                              {/* 🧰 Tools & Parts Toggle Button */}
+                              <button
+                                type="button"
+                                onClick={() => toggleCardDrawer(hyp.id, 'tools')}
+                                className={`text-[11px] font-mono px-2.5 py-1 rounded-md border flex items-center gap-1.5 transition cursor-pointer ${
+                                  isToolsOpen
+                                    ? 'bg-amber-50 text-amber-900 border-amber-300 font-bold'
+                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 font-medium'
+                                }`}
+                              >
+                                <span>🧰 Tools & Parts ({toolsCount + partsCount})</span>
+                                <ChevronDown
+                                  className={`w-3 h-3 transition-transform ${isToolsOpen ? 'rotate-180 text-amber-700' : 'text-slate-400'}`}
+                                />
+                              </button>
+                            </div>
+
+                            {/* Deep-Dive in AI Copilot */}
                             <button
-                              onClick={() => setHypothesisStatus(hyp.id, 'CONFIRMED')}
-                              className={`px-2 py-1 rounded border transition ${
-                                hyp.status === 'CONFIRMED'
-                                  ? 'bg-emerald-600 text-white border-emerald-600'
-                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-emerald-50'
-                              }`}
+                              type="button"
+                              onClick={() => handleDeepDiveInCopilot(hyp)}
+                              className="text-[11px] font-mono font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-md transition flex items-center gap-1 shadow-2xs active:scale-95 cursor-pointer ml-auto"
+                              title="Pass complete 5-Why context directly to AI Copilot"
                             >
-                              Confirm
-                            </button>
-                            <button
-                              onClick={() => setHypothesisStatus(hyp.id, 'RULED_OUT')}
-                              className={`px-2 py-1 rounded border transition ${
-                                hyp.status === 'RULED_OUT'
-                                  ? 'bg-rose-600 text-white border-rose-600'
-                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-rose-50'
-                              }`}
-                            >
-                              Rule Out
+                              <span>💬 Deep-Dive in AI Copilot →</span>
                             </button>
                           </div>
+
+                          {/* 🌳 Collapsible 5-Why Drawer (Hidden by default) */}
+                          {isWhyOpen && (
+                            <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3 space-y-2.5 animate-in fade-in duration-150">
+                              <div className="flex items-center justify-between text-[11px] font-mono font-bold text-slate-800 uppercase tracking-wide">
+                                <span>🌳 5-Why Failure Causal Sequence</span>
+                                <span className="text-slate-500 font-normal lowercase">click any step to inspect physics</span>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-1.5 text-xs font-sans">
+                                {chain.map((step, sIdx, arr) => {
+                                  const isSelected =
+                                    selectedWhyStep?.hypId === hyp.id &&
+                                    selectedWhyStep?.stepIndex === sIdx;
+
+                                  return (
+                                    <React.Fragment key={sIdx}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleWhyStep(hyp.id, sIdx)}
+                                        title="Click to inspect physical failure mechanism, verification method, and reference"
+                                        className={`px-2.5 py-1 rounded-lg border text-[11px] leading-tight font-medium shadow-2xs transition-all cursor-pointer text-left select-none ${
+                                          isSelected
+                                            ? 'ring-2 ring-blue-500 bg-blue-100 text-blue-900 border-blue-400 font-bold scale-102'
+                                            : sIdx === arr.length - 1
+                                            ? 'bg-rose-50 text-rose-800 border-rose-300 font-bold hover:bg-rose-100'
+                                            : sIdx === 0
+                                            ? 'bg-blue-50 text-blue-900 border-blue-200 font-bold hover:bg-blue-100'
+                                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                        }`}
+                                      >
+                                        {step}
+                                      </button>
+                                      {sIdx < arr.length - 1 && (
+                                        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Inline 5-Why Step Inspector */}
+                              {selectedWhyStep?.hypId === hyp.id && (() => {
+                                const stepText = chain[selectedWhyStep.stepIndex] || `Stage ${selectedWhyStep.stepIndex + 1}`;
+                                const details = getWhyStepDetails(
+                                  stepText,
+                                  selectedWhyStep.stepIndex,
+                                  chain.length,
+                                  hyp,
+                                  activeSession.assetTag
+                                );
+
+                                return (
+                                  <div className="mt-2 p-2.5 rounded-lg border border-blue-200 bg-white text-xs space-y-2 font-sans animate-in fade-in duration-150">
+                                    <div className="flex items-center justify-between pb-1.5 border-b border-blue-100">
+                                      <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-blue-900 uppercase">
+                                        <span>🔬 Step Breakdown:</span>
+                                        <span className="text-slate-900 font-semibold">{stepText}</span>
+                                      </div>
+                                      <span className="text-[10px] font-mono text-blue-700 bg-blue-100 px-2 py-0.5 rounded font-bold">
+                                        Stage {selectedWhyStep.stepIndex + 1} of {chain.length}
+                                      </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 pt-0.5">
+                                      <div className="p-2 rounded bg-slate-50 border border-slate-200 space-y-1">
+                                        <div className="text-[10px] font-mono font-bold text-slate-700 uppercase">
+                                          ⚡ 1. Failure Mechanism
+                                        </div>
+                                        <p className="text-slate-700 text-[11px] leading-relaxed">
+                                          {details.mechanism}
+                                        </p>
+                                      </div>
+
+                                      <div className="p-2 rounded bg-slate-50 border border-slate-200 space-y-1">
+                                        <div className="text-[10px] font-mono font-bold text-slate-700 uppercase">
+                                          🔍 2. Field Verification
+                                        </div>
+                                        <p className="text-slate-700 text-[11px] leading-relaxed">
+                                          {details.verification}
+                                        </p>
+                                      </div>
+
+                                      <div className="p-2 rounded bg-slate-50 border border-slate-200 space-y-1">
+                                        <div className="text-[10px] font-mono font-bold text-slate-700 uppercase">
+                                          📖 3. Reference
+                                        </div>
+                                        <p className="text-slate-800 text-[11px] leading-relaxed font-mono">
+                                          {details.reference}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          )}
+
+                          {/* 🧰 Collapsible Tools & Parts Drawer (Hidden by default) */}
+                          {isToolsOpen && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs animate-in fade-in duration-150">
+                              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 space-y-1.5">
+                                <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-slate-700 uppercase">
+                                  <Wrench className="w-3 h-3 text-blue-600" />
+                                  <span>Required Tools & Diagnostic Instruments:</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                  {(hyp.requiredTools && hyp.requiredTools.length > 0
+                                    ? hyp.requiredTools
+                                    : ['Laser Alignment Kit', 'Torque Wrench (20-150 ft-lbs)', 'CAT IV Multimeter', 'IR Pyrometer']
+                                  ).map((tool, tIdx) => (
+                                    <span
+                                      key={tIdx}
+                                      className="text-[10px] font-mono px-2 py-0.5 rounded bg-white text-slate-800 border border-slate-200 font-medium"
+                                    >
+                                      🧰 {tool}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-2.5 space-y-1.5">
+                                <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-emerald-800 uppercase">
+                                  <Package className="w-3 h-3 text-emerald-600" />
+                                  <span>Spare Parts & Consumables Kit:</span>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                  {(hyp.spareParts && hyp.spareParts.length > 0
+                                    ? hyp.spareParts
+                                    : ['Cartridge Mechanical Seal Kit', 'Fluoroelastomer O-Ring Set', 'Spiral Wound Gasket']
+                                  ).map((part, pIdx) => (
+                                    <span
+                                      key={pIdx}
+                                      className="text-[10px] font-mono px-2 py-0.5 rounded bg-white text-emerald-800 border border-emerald-200 font-semibold"
+                                    >
+                                      📦 {part}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1560,128 +2156,6 @@ Investigation Progress: ${progressStr}`;
               {/* Investigation Steps Checklist Tab */}
               {activeTab === 'steps' && (
                 <div className="space-y-4">
-                  {/* ⚡ Mandatory LOTO & PPE Safety Readiness Banner */}
-                  <div className="rounded-xl border border-amber-300 bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 p-4 shadow-sm space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
-                          <Zap className="w-4 h-4 fill-current" />
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold font-mono text-amber-950 uppercase tracking-wide flex items-center gap-2">
-                            <span>⚡ MANDATORY LOTO & PPE SAFETY READINESS</span>
-                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-900 border border-amber-300 font-bold">
-                              OSHA 1910.147 COMPLIANT
-                            </span>
-                          </h4>
-                          <p className="text-[11px] text-amber-900/90 font-sans mt-0.5">
-                            {activeSession.safetyReadiness?.preWorkBriefing ||
-                              `Mandatory hazardous energy isolation required on ${activeSession.assetTag}. Verify 0.0 PSIG and zero electrical voltage before servicing step #1.`}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2.5 border-t border-amber-200/70 text-xs font-sans">
-                      {/* Required PPE */}
-                      <div className="bg-white/80 rounded-lg p-2.5 border border-amber-200/80 space-y-1.5">
-                        <div className="text-[10px] font-mono font-bold text-amber-900 uppercase flex items-center gap-1.5">
-                          <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
-                          <span>Required Personal Protective Equipment (PPE)</span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {(activeSession.safetyReadiness?.requiredPpe || [
-                            'Impact Safety Glasses (ANSI Z87.1)',
-                            'Arc Flash Rated Face Shield (NFPA 70E)',
-                            'Heavy Nitrile Chemical Gloves',
-                            'Steel-Toe Metatarsal Safety Boots',
-                          ]).map((ppe, pIdx) => (
-                            <span
-                              key={pIdx}
-                              className="text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-amber-100/70 text-amber-900 border border-amber-300/80"
-                            >
-                              ✓ {ppe}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Primary Isolation Points */}
-                      <div className="bg-white/80 rounded-lg p-2.5 border border-amber-200/80 space-y-1.5">
-                        <div className="text-[10px] font-mono font-bold text-amber-900 uppercase flex items-center gap-1.5">
-                          <Lock className="w-3.5 h-3.5 text-amber-600" />
-                          <span>Designated Energy Isolation Points</span>
-                        </div>
-                        <div className="space-y-1">
-                          {(activeSession.safetyReadiness?.isolationPoints || [
-                            `MCC Main Feeder Breaker Lockout for ${activeSession.assetTag}`,
-                            'Suction & Discharge Manual Handwheel Gate Valves',
-                            'Casing Bleed Drain Manifold (Verify 0.0 PSIG)',
-                          ]).map((point, ptIdx) => (
-                            <div key={ptIdx} className="text-[11px] text-slate-800 flex items-start gap-1.5">
-                              <span className="text-amber-600 font-mono font-bold">[{ptIdx + 1}]</span>
-                              <span>{point}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  {/* 100% Investigation Verified & Closed Audit Banner */}
-                  {(activeSession.status === 'VERIFIED_CLOSED' ||
-                    activeSession.isLocked ||
-                    (totalStepsCount > 0 && passedStepsCount === totalStepsCount)) && (
-                    <div className="rounded-xl border-2 border-emerald-500 bg-emerald-50/95 p-4 shadow-sm space-y-3 animate-in fade-in">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-mono font-bold shrink-0 shadow-xs">
-                            🔒
-                          </span>
-                          <div>
-                            <h3 className="text-sm font-bold font-mono text-emerald-950 uppercase tracking-wide">
-                              🔒 100% INVESTIGATION VERIFIED & CLOSED
-                            </h3>
-                            <p className="text-[11px] text-emerald-800 font-sans">
-                              All verification safety checks confirmed by technician. Permanent audit entry sealed in Maintenance History & Recent RCAs.
-                            </p>
-                          </div>
-                        </div>
-                        <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400 font-bold shrink-0 self-start sm:self-auto">
-                          AUDIT RECORD LOCKED
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2.5 border-t border-emerald-200 text-xs font-mono">
-                        <div>
-                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Verified Timestamp</span>
-                          <strong className="text-slate-900">
-                            {activeSession.completedAt
-                              ? new Date(activeSession.completedAt).toLocaleString()
-                              : new Date().toLocaleString()}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Asset Tag</span>
-                          <strong className="text-slate-900">{activeSession.assetTag}</strong>
-                        </div>
-                        <div>
-                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Fault / Alarm</span>
-                          <strong className="text-rose-700 truncate block">
-                            {activeSession.detectedFaultCode || activeSession.errorCode || 'ALM-THRM-402 / High Temp Trip'}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Verifying User</span>
-                          <strong className="text-slate-900 truncate block">
-                            {typeof activeSession.verifiedBy === 'object'
-                              ? activeSession.verifiedBy?.name
-                              : activeSession.verifiedBy || user?.fullName || user?.email || 'Plant Specialist'}
-                          </strong>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
                   {/* Investigation Progress Bar */}
                   <div className="bg-white rounded-xl border border-[#E2E8F0] p-4 shadow-sm space-y-2">
                     <div className="flex items-center justify-between text-xs font-mono">
@@ -1703,28 +2177,48 @@ Investigation Progress: ${progressStr}`;
                   </div>
 
                   <div className="space-y-3">
-                    {activeSession.investigationSteps.map((step) => {
+                    {activeSession.investigationSteps.map((step, sIdx) => {
+                      const failedStep = activeSession.investigationSteps.find((s) => s.status === 'FAIL');
+                      const failedIdx = failedStep ? activeSession.investigationSteps.indexOf(failedStep) : -1;
+                      const isFailed = step.status === 'FAIL';
+                      const isPassed = step.status === 'PASS';
+                      const isBlockedByPriorFailure = failedIdx !== -1 && sIdx > failedIdx;
+                      const isPreviousPassed = sIdx === 0 || activeSession.investigationSteps[sIdx - 1].status === 'PASS';
+                      const isAwaitingPrevious = !failedStep && !isPassed && !isFailed && !isPreviousPassed;
+                      const isAllPassed = totalStepsCount > 0 && passedStepsCount === totalStepsCount;
                       const isStepLocked =
                         step.isLocked ||
-                        step.status === 'PASS' ||
+                        isPassed ||
                         activeSession.status === 'VERIFIED_CLOSED' ||
                         activeSession.isLocked ||
-                        (totalStepsCount > 0 && passedStepsCount === totalStepsCount);
+                        isAllPassed;
 
                       return (
                         <div
                           key={step.id}
-                          className={`rounded-xl border p-4 bg-white shadow-sm transition space-y-2.5 ${
-                            step.status === 'PASS'
+                          className={`rounded-xl border p-3.5 bg-white shadow-xs transition space-y-2 ${
+                            isPassed
                               ? 'border-emerald-300 bg-emerald-50/20'
-                              : step.status === 'FAIL'
-                              ? 'border-rose-300 bg-rose-50/20'
+                              : isFailed
+                              ? 'border-rose-400 bg-rose-50/30'
+                              : isBlockedByPriorFailure
+                              ? 'border-slate-200 bg-slate-50/70 opacity-75'
+                              : isAwaitingPrevious
+                              ? 'border-slate-200 bg-slate-50/50 opacity-85'
                               : 'border-slate-200'
                           }`}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-2.5">
-                              <span className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-mono font-bold shrink-0 mt-0.5">
+                              <span
+                                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono font-bold shrink-0 mt-0.5 ${
+                                  isPassed
+                                    ? 'bg-emerald-600 text-white'
+                                    : isFailed
+                                    ? 'bg-rose-600 text-white'
+                                    : 'bg-slate-800 text-white'
+                                }`}
+                              >
                                 {step.stepNumber}
                               </span>
                               <div className="space-y-1">
@@ -1742,12 +2236,29 @@ Investigation Progress: ${progressStr}`;
                               </div>
                             </div>
 
-                            {/* Verification Buttons or Locked Badge */}
+                            {/* Verification Buttons or Locked / Gated Badge */}
                             <div className="flex items-center gap-1.5 shrink-0 font-mono text-xs">
-                              {isStepLocked ? (
-                                <span className="px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold flex items-center gap-1.5 select-none shadow-xs">
+                              {isBlockedByPriorFailure ? (
+                                <span className="px-2.5 py-1 rounded-md bg-rose-100 text-rose-800 border border-rose-300 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs">
+                                  <Lock className="w-3 h-3 text-rose-700" />
+                                  <span>🔒 Blocked — Halted at Step #{failedStep?.stepNumber}</span>
+                                </span>
+                              ) : isFailed ? (
+                                <span className="px-2.5 py-1 rounded-md bg-rose-600 text-white border border-rose-700 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs animate-pulse">
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  <span>🚨 FAILED (Anomaly Confirmed)</span>
+                                </span>
+                              ) : isStepLocked ? (
+                                <span className="px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs">
                                   <Lock className="w-3 h-3 text-emerald-700" />
                                   <span>🔒 Verified & Locked</span>
+                                </span>
+                              ) : isAwaitingPrevious ? (
+                                <span
+                                  className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-500 border border-slate-300 text-[11px] flex items-center gap-1.5 select-none"
+                                  title="Awaiting preceding check verification"
+                                >
+                                  <span>⏳ Awaiting previous step...</span>
                                 </span>
                               ) : (
                                 <>
@@ -1760,30 +2271,33 @@ Investigation Progress: ${progressStr}`;
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => toggleStepStatus(step.id, 'FAIL')}
-                                    className={`px-2.5 py-1 rounded border flex items-center gap-1 transition ${
-                                      step.status === 'FAIL'
-                                        ? 'bg-rose-600 text-white border-rose-600 font-bold'
-                                        : 'bg-white text-slate-600 border-slate-300 hover:bg-rose-50 hover:text-rose-700'
-                                    }`}
+                                    onClick={() => handleInitiateStepFail(step)}
+                                    className="px-2.5 py-1 rounded border flex items-center gap-1 transition bg-white text-slate-600 border-slate-300 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 font-semibold cursor-pointer active:scale-95 shadow-xs"
                                   >
-                                    <X className="w-3 h-3" /> Fail
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleStepStatus(step.id, 'PENDING')}
-                                    className={`px-2 py-1 rounded border transition ${
-                                      step.status === 'PENDING'
-                                        ? 'bg-amber-100 text-amber-800 border-amber-300 font-semibold'
-                                        : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'
-                                    }`}
-                                  >
-                                    Pending
+                                    <X className="w-3 h-3 text-rose-600" /> Fail
                                   </button>
                                 </>
                               )}
                             </div>
                           </div>
+
+                          {/* Failed Step Anomaly Highlight Banner with Direct Specialist Escalation */}
+                          {isFailed && (
+                            <div className="ml-8 mt-2.5 p-3 rounded-lg bg-rose-100/80 border border-rose-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in">
+                              <div className="text-xs text-rose-950 font-sans">
+                                <strong className="font-mono text-rose-800 uppercase">🚨 Critical Anomaly Confirmed:</strong> Expected reading <span className="font-mono font-bold">"{step.expectedReading || 'In-spec baseline'}"</span> was not met. Subsequent checks halted.
+                              </div>
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="sm"
+                                onClick={() => handleOpenEscalateForFailedStep(step)}
+                                className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5 shrink-0 py-1.5 px-3 cursor-pointer active:scale-95"
+                              >
+                                <span>🚨 Escalate Failed Step to Specialist →</span>
+                              </Button>
+                            </div>
+                          )}
 
                         {/* Safety Warning */}
                         {step.safetyWarning && (
@@ -1814,6 +2328,105 @@ Investigation Progress: ${progressStr}`;
                     );
                   })}
                   </div>
+
+                  {/* Persistent Bottom Summary Bar: Failed Step Anomaly Alert */}
+                  {(() => {
+                    const failedStep = activeSession.investigationSteps.find((s) => s.status === 'FAIL');
+                    if (!failedStep) return null;
+
+                    return (
+                      <div className="rounded-xl border-2 border-rose-500 bg-rose-50/95 p-3.5 shadow-sm space-y-2.5 animate-in fade-in">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-start gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-rose-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs mt-0.5">
+                              <ShieldAlert className="w-4 h-4 text-white" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-600 text-white uppercase tracking-wider">
+                                  Critical Anomaly
+                                </span>
+                                <span className="text-xs font-mono font-bold text-rose-900">
+                                  Step #{failedStep.stepNumber} Verification Failed
+                                </span>
+                              </div>
+                              <h3 className="text-sm font-bold text-slate-900 mt-1">
+                                🚨 CRITICAL ANOMALY: Step #{failedStep.stepNumber} ({failedStep.name}) — INVESTIGATION HALTED
+                              </h3>
+                              <p className="text-xs text-rose-800 font-sans mt-0.5">
+                                Physical anomaly confirmed. Expected condition: <strong className="font-mono text-rose-900">{failedStep.expectedReading || 'In-spec tolerance'}</strong> was not met. Downstream investigation steps are locked.
+                              </p>
+                            </div>
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handleOpenEscalateForFailedStep(failedStep)}
+                            className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5 shrink-0 py-2 px-3.5 cursor-pointer active:scale-95 transition"
+                          >
+                            <span>🚨 Escalate Failed Step to Specialist →</span>
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Persistent Bottom Summary Bar: 100% Investigation Verified & Closed Audit Record */}
+                  {(activeSession.status === 'VERIFIED_CLOSED' ||
+                    activeSession.isLocked ||
+                    (totalStepsCount > 0 && passedStepsCount === totalStepsCount)) && (
+                    <div className="rounded-xl border-2 border-emerald-500 bg-emerald-50/95 p-3.5 shadow-sm space-y-2.5 animate-in fade-in">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-mono font-bold shrink-0 shadow-xs">
+                            🔒
+                          </span>
+                          <div>
+                            <h3 className="text-sm font-bold font-mono text-emerald-950 uppercase tracking-wide">
+                              🔒 100% INVESTIGATION VERIFIED & CLOSED
+                            </h3>
+                            <p className="text-[11px] text-emerald-800 font-sans">
+                              All verification safety checks confirmed by technician. Permanent audit entry sealed in Maintenance History & Recent RCAs.
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400 font-bold shrink-0 self-start sm:self-auto">
+                          AUDIT RECORD LOCKED
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-emerald-200 text-xs font-mono">
+                        <div>
+                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Verified Timestamp</span>
+                          <strong className="text-slate-900">
+                            {activeSession.completedAt
+                              ? new Date(activeSession.completedAt).toLocaleString()
+                              : new Date().toLocaleString()}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Asset Tag</span>
+                          <strong className="text-slate-900">{activeSession.assetTag}</strong>
+                        </div>
+                        <div>
+                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Fault / Alarm</span>
+                          <strong className="text-rose-700 truncate block">
+                            {activeSession.detectedFaultCode || activeSession.errorCode || 'ALM-THRM-402 / High Temp Trip'}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-emerald-700 block text-[10px] uppercase font-semibold">Verifying User</span>
+                          <strong className="text-slate-900 truncate block">
+                            {typeof activeSession.verifiedBy === 'object'
+                              ? activeSession.verifiedBy?.name
+                              : activeSession.verifiedBy || user?.fullName || user?.email || 'Plant Specialist'}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1907,6 +2520,20 @@ Investigation Progress: ${progressStr}`;
                 </span>
               </div>
             )}
+            {failedStepForEscalation && (
+              <div className="p-3 rounded-lg bg-rose-100/80 border border-rose-300 text-xs text-rose-950 space-y-1 font-mono mt-2">
+                <div className="flex items-center gap-1.5 font-bold text-rose-800 uppercase text-[10px]">
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Failed Investigation Step:</span>
+                </div>
+                <div className="font-sans font-bold text-slate-900 text-xs">
+                  Step #{failedStepForEscalation.stepNumber} — {failedStepForEscalation.name}
+                </div>
+                <div className="text-[11px] text-rose-900">
+                  Expected Condition: <strong className="font-mono">{failedStepForEscalation.expectedReading || 'In-spec baseline parameter'}</strong>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Form Fields: Discipline & Severity */}
@@ -1980,10 +2607,10 @@ Investigation Progress: ${progressStr}`;
             </div>
           </div>
 
-          {/* Pre-filled Technician Notes */}
+          {/* Pre-filled Maintenance Engineer Notes */}
           <div>
             <label className="block text-xs font-mono text-[#64748B] uppercase font-bold mb-1">
-              Technician Notes / Context (Editable)
+              MAINTENANCE ENGINEER / FIELD NOTES & CONTEXT (EDITABLE)
             </label>
             <textarea
               rows={4}
@@ -2107,6 +2734,61 @@ Investigation Progress: ${progressStr}`;
               </div>
             </div>
           )}
+        </div>
+      </Modal>
+
+      {/* Step Failure Confirmation Modal */}
+      <Modal
+        isOpen={failConfirmation.isOpen}
+        onClose={() => setFailConfirmation({ isOpen: false, step: null })}
+        title="Confirm Anomaly / Step Failure"
+        subtitle={
+          failConfirmation.step
+            ? `Step #${failConfirmation.step.stepNumber}: ${failConfirmation.step.name}`
+            : 'Step Verification'
+        }
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1.5 text-xs">
+              <p className="font-semibold text-rose-950 text-sm leading-snug">
+                Confirm Failure on Step #{failConfirmation.step?.stepNumber}?
+              </p>
+              <p className="text-rose-800 leading-relaxed">
+                Marking this step as <strong>FAILED</strong> will halt further investigation checks, permanently lock all downstream steps, and trigger a direct Machine Specialist Escalation prompt.
+              </p>
+              {failConfirmation.step?.expectedReading && (
+                <div className="mt-2 p-2 bg-white/80 rounded border border-rose-200 text-slate-700">
+                  <span className="font-bold text-rose-900 block font-mono text-[11px]">EXPECTED PARAMETER:</span>
+                  <span className="font-mono text-xs">{failConfirmation.step.expectedReading}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center pt-2 border-t border-slate-200 font-mono text-xs">
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => setFailConfirmation({ isOpen: false, step: null })}
+              className="text-slate-600"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              type="button"
+              onClick={handleConfirmFail}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-bold flex items-center gap-1.5 shadow-sm"
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Confirm Failure & Halt Investigation</span>
+            </Button>
+          </div>
         </div>
       </Modal>
 
@@ -2255,6 +2937,225 @@ Investigation Progress: ${progressStr}`;
           <div className="flex justify-end pt-2 border-t border-[#E2E8F0]">
             <Button variant="primary" size="sm" onClick={() => setIsTeardownOpen(false)}>
               Close SOP
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* 🛡️ OSHA 1910.147 LOTO & PPE Readiness Checklist Popup Modal */}
+      <Modal
+        isOpen={isLotoModalOpen}
+        onClose={() => setIsLotoModalOpen(false)}
+        title="OSHA 1910.147 MANDATORY LOTO & PPE SAFETY READINESS"
+      >
+        <div className="space-y-4 text-xs font-sans">
+          {/* Header Warning Banner */}
+          <div className="rounded-xl border border-amber-300 bg-amber-50/90 p-3.5 space-y-2">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
+              <span className="font-mono font-bold text-amber-950 uppercase tracking-wide text-[11px]">
+                Pre-Work Safety Briefing — {activeSession?.assetTag || 'Target Equipment'}
+              </span>
+            </div>
+            <p className="text-amber-900 leading-relaxed text-[11px]">
+              {activeSession?.safetyReadiness?.preWorkBriefing ||
+                `Mandatory hazardous energy isolation required on ${activeSession?.assetTag || 'target asset'}. Ensure 0.0 PSIG residual pressure and zero electrical voltage before opening physical casing or performing step #1.`}
+            </p>
+          </div>
+
+          {/* PPE Requirements */}
+          <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-mono font-bold text-slate-800 uppercase text-[11px] flex items-center gap-1.5">
+                <ShieldAlert className="w-3.5 h-3.5 text-blue-600" />
+                Required Personal Protective Equipment (PPE)
+              </span>
+              <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-bold">
+                MANDATORY
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              {(activeSession?.safetyReadiness?.requiredPpe || [
+                'Impact Safety Glasses (ANSI Z87.1)',
+                'Arc Flash Rated Face Shield (NFPA 70E)',
+                'Heavy Nitrile Chemical Gloves',
+                'Steel-Toe Metatarsal Safety Boots',
+              ]).map((ppe, pIdx) => (
+                <div
+                  key={pIdx}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-medium font-mono text-[11px]"
+                >
+                  <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{ppe}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Designated Energy Isolation Points */}
+          <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2">
+            <span className="font-mono font-bold text-slate-800 uppercase text-[11px] flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-amber-600" />
+              Designated Energy Isolation Points (Zero Energy State)
+            </span>
+            <div className="space-y-1.5 pt-1">
+              {(activeSession?.safetyReadiness?.isolationPoints || [
+                `MCC Main Feeder Breaker Lockout for ${activeSession?.assetTag || 'Machine'}`,
+                'Suction & Discharge Manual Handwheel Gate Valves',
+                'Casing Bleed Drain Manifold (Verify 0.0 PSIG)',
+              ]).map((point, ptIdx) => (
+                <div
+                  key={ptIdx}
+                  className="flex items-start gap-2 p-2 rounded-lg bg-amber-50/50 border border-amber-200 text-slate-800 text-xs"
+                >
+                  <span className="font-mono font-bold text-amber-700 shrink-0">[{ptIdx + 1}]</span>
+                  <span className="font-medium">{point}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2 border-t border-slate-200">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setIsLotoModalOpen(false)}
+              className="bg-slate-900 text-white font-mono text-xs"
+            >
+              Acknowledge & Close Checklist
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* 🚨 Center Failure Alert Popup Modal (Auto-pops when any step fails) */}
+      <Modal
+        isOpen={failureAlertModal.isOpen}
+        onClose={() => setFailureAlertModal({ isOpen: false, step: null })}
+        title={`CRITICAL ANOMALY: STEP #${failureAlertModal.step?.stepNumber || ''} FAILED`}
+      >
+        <div className="space-y-4 text-xs font-sans">
+          <div className="p-3.5 rounded-xl border-2 border-rose-500 bg-rose-50/90 space-y-2">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 animate-pulse" />
+              <h4 className="font-bold text-rose-950 font-mono uppercase text-xs">
+                Investigation Halted — Physical Anomaly Confirmed
+              </h4>
+            </div>
+            <p className="text-rose-900 text-xs leading-relaxed">
+              Step #{failureAlertModal.step?.stepNumber} (<strong>{failureAlertModal.step?.name}</strong>) verification failed.
+              Expected tolerance/condition: <strong className="font-mono text-rose-950">{failureAlertModal.step?.expectedReading || 'In-spec tolerance'}</strong> was not met.
+            </p>
+          </div>
+
+          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50 space-y-1.5 font-mono text-[11px] text-slate-700">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Asset Tag:</span>
+              <strong className="text-slate-900">{activeSession?.assetTag}</strong>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Downstream State:</span>
+              <strong className="text-rose-700">ALL SUBSEQUENT STEPS LOCKED</strong>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Reported By:</span>
+              <strong className="text-slate-900">{user?.fullName || user?.email || 'Maintenance Engineer'}</strong>
+            </div>
+          </div>
+
+          <p className="text-slate-600 text-[11px]">
+            To prevent equipment damage or secondary failures, do not proceed with subsequent field checks. Escalate this failure to a dedicated equipment specialist now.
+          </p>
+
+          <div className="flex flex-col-reverse sm:flex-row items-center justify-end gap-2 pt-2 border-t border-slate-200">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setFailureAlertModal({ isOpen: false, step: null })}
+              className="w-full sm:w-auto text-xs"
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                const target = failureAlertModal.step;
+                setFailureAlertModal({ isOpen: false, step: null });
+                if (target) {
+                  handleOpenEscalateForFailedStep(target);
+                }
+              }}
+              className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm py-2 px-3.5"
+            >
+              <span>🚨 Escalate Failed Step to Specialist Now →</span>
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* 🔒 Center 100% Verification Complete Popup Modal (Auto-pops when all steps pass) */}
+      <Modal
+        isOpen={verificationCompleteModal}
+        onClose={() => setVerificationCompleteModal(false)}
+        title="100% INVESTIGATION VERIFIED & AUDIT SEALED"
+      >
+        <div className="space-y-4 text-xs font-sans">
+          <div className="p-4 rounded-xl border-2 border-emerald-500 bg-emerald-50/90 space-y-2 text-center">
+            <div className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto text-base font-bold shadow-sm">
+              ✓
+            </div>
+            <h4 className="font-bold font-mono text-emerald-950 uppercase text-sm">
+              All Investigation Steps Successfully Verified
+            </h4>
+            <p className="text-emerald-900 text-xs leading-relaxed max-w-md mx-auto">
+              Every sequential safety and operational check for <strong>{activeSession?.assetTag}</strong> has been confirmed and permanently sealed by the Maintenance Engineer.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-xs font-mono p-3 rounded-lg border border-slate-200 bg-slate-50">
+            <div>
+              <span className="text-slate-500 block text-[10px] uppercase font-semibold">Asset Tag</span>
+              <strong className="text-slate-900">{activeSession?.assetTag}</strong>
+            </div>
+            <div>
+              <span className="text-slate-500 block text-[10px] uppercase font-semibold">Total Steps Passed</span>
+              <strong className="text-emerald-700">{totalStepsCount} of {totalStepsCount} (100%)</strong>
+            </div>
+            <div>
+              <span className="text-slate-500 block text-[10px] uppercase font-semibold">Verifying Engineer</span>
+              <strong className="text-slate-900 truncate block">
+                {user?.fullName || user?.email || 'Maintenance Engineer'}
+              </strong>
+            </div>
+            <div>
+              <span className="text-slate-500 block text-[10px] uppercase font-semibold">Audit Record</span>
+              <strong className="text-blue-700">Sealed & Saved</strong>
+            </div>
+          </div>
+
+          <div className="flex flex-col-reverse sm:flex-row items-center justify-end gap-2 pt-2 border-t border-slate-200">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setVerificationCompleteModal(false)}
+              className="w-full sm:w-auto text-xs"
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setVerificationCompleteModal(false);
+                handleExportRcaSummary();
+              }}
+              className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm py-2 px-3.5"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Export RCA Summary</span>
             </Button>
           </div>
         </div>
