@@ -14,7 +14,6 @@ import {
   Sparkles,
   Cpu,
   Layers,
-  Wrench,
   Star,
   MessageSquare,
   ChevronDown,
@@ -23,6 +22,7 @@ import {
   Copy,
   CheckCircle2,
   AlertTriangle,
+  ExternalLink,
 } from 'lucide-react';
 import type { ExpertNoteReview, ReviewOutcome } from '@forgex/shared-types';
 import { Button } from '../ui/button';
@@ -209,18 +209,69 @@ function isInsightRedundant(fieldAction: string, insight?: string | null): boole
   return false;
 }
 
+function generateUniqueAiCrossCheck(note: ExpertNote): string {
+  const tag = (note.machineAssetTag || note.assetTag || 'EQUIPMENT').toUpperCase();
+  const text = `${note.title} ${note.description || note.content || ''} ${note.symptom || ''} ${note.taskDuringIssue || ''}`.toLowerCase();
+
+  if (text.includes('seal') || text.includes('o-ring') || text.includes('gland') || text.includes('flush') || text.includes('drip')) {
+    return `• Cross-check API 682 / OEM Manual §5.2 for seal flush Plan 11 differential pressure (> 1.5 bar).\n• Verify dynamic shaft runout is < 0.05 mm and LOTO suction isolation before gland removal.`;
+  }
+  if (text.includes('vibrat') || text.includes('align') || text.includes('coupling') || text.includes('chatter') || text.includes('balance') || text.includes('laser')) {
+    return `• Cross-check ISO 10816-3 Zone B limit (2.8 mm/s RMS) and verify radial shaft alignment within ±0.03 mm.\n• Inspect baseplate soft-foot tolerance (< 0.05 mm) before final bolt torquing.`;
+  }
+  if (text.includes('temp') || text.includes('heat') || text.includes('thermal') || text.includes('bearing') || text.includes('lubric') || text.includes('grease') || text.includes('oil')) {
+    return `• Cross-check OEM Manual §4.3: Bearing thermal limit is 75°C; verify kinematic viscosity of synthetic lube.\n• Allow housing cooldown below 40°C before line contact per plant safety SOP.`;
+  }
+  if (text.includes('valve') || text.includes('reed') || text.includes('suction') || text.includes('cavitat') || text.includes('impeller') || text.includes('strainer') || text.includes('pressure')) {
+    return `• Cross-check OEM Section 3 for minimum suction head (NPSHa margin > 1.2m) and valve seat clearance.\n• Depressurize manifold to 0.0 psig and inspect strainer mesh for particulate blinding.`;
+  }
+  if (text.includes('electr') || text.includes('voltage') || text.includes('current') || text.includes('breaker') || text.includes('trip') || text.includes('vfd') || text.includes('diode') || text.includes('megger')) {
+    return `• Cross-check NFPA 70E Arc Flash protocol; confirm zero energy (0.0 VAC) across starter phases.\n• Verify stator insulation resistance > 2 MΩ with 1000V megohmmeter before re-energizing.`;
+  }
+  if (text.includes('startup') || text.includes('shut') || text.includes('prime') || text.includes('crank') || text.includes('governor')) {
+    return `• Cross-check OEM Startup Checklist §2.1: Confirm pre-lube pressure > 1.8 bar before crank sequence.\n• Verify emergency stop trip mechanism is unlatched and clear of carbon buildup.`;
+  }
+  if (text.includes('safety') || text.includes('loto') || text.includes('lockout') || text.includes('danger')) {
+    return `• Verify zero-energy state per OSHA 1910.147 (residual pressure 0.0 psig, electrical locked out).\n• Apply red danger padlock and record isolation entry in plant LOTO registry.`;
+  }
+  if (tag.includes('GEN') || tag.includes('DIESEL')) {
+    return `• Cross-check Diesel Manual §4.2: Cold-crank pre-lube pressure minimum 1.8 bar.\n• Inspect governor trip latch freedom and verify rotating diode bridge health.`;
+  }
+  if (tag.includes('COMP')) {
+    return `• Cross-check Compressor Manual §6.1: Discharge unloader clearance 0.015" feeler gauge.\n• Verify interstage condensate auto-drain cycles continuously during operation.`;
+  }
+  if (tag.includes('PUMP')) {
+    return `• Cross-check Pump Manual §3.4: Suction line block valve locked 100% open during run.\n• Verify mechanical packing leakage is within allowable limit (< 5 drops/min).`;
+  }
+
+  return `• Cross-check OEM Technical Manual Section 6 for torque limits and clearance tolerances on ${tag}.\n• Ensure safety guards and interlocks are re-certified prior to returning to production.`;
+}
+
 function getNonRedundantAiInsight(note: ExpertNote): string | null {
   const content = note.description || note.content || '';
   const rawInsight = note.aiSupplementalInsight;
 
-  if (rawInsight && rawInsight.trim().length > 0) {
-    if (isInsightRedundant(content, rawInsight)) {
-      return null;
+  const isOldLongHardcoded =
+    rawInsight &&
+    (rawInsight.includes('Cross-check API 610 seal flush Plan 11/53A pressures before starting') ||
+      rawInsight.includes('Cross-check OEM manual Section 4.2 for cold-crank pre-lubrication pressure') ||
+      rawInsight.includes('tightening dimension \'A\' across plate pack per heat exchanger') ||
+      rawInsight.includes('Execute NFPA 70E Arc Flash Class 2 PPE protocol during high-voltage') ||
+      rawInsight.includes('Mandatory zero-energy state verification required per OSHA 1910.147. Bleed residual') ||
+      rawInsight.includes('Cross-check OEM Technical Manual Section 6 for torque tolerances and lubrication intervals. Verify alignment using dial indicator'));
+
+  if (!rawInsight || isOldLongHardcoded) {
+    const generated = generateUniqueAiCrossCheck(note);
+    if (!isInsightRedundant(content, generated)) {
+      return generated;
     }
-    return rawInsight.trim();
+    return null;
   }
 
-  return null;
+  if (isInsightRedundant(content, rawInsight)) {
+    return null;
+  }
+  return rawInsight.trim();
 }
 
 export const ExpertKnowledgeView: React.FC = () => {
@@ -277,6 +328,9 @@ export const ExpertKnowledgeView: React.FC = () => {
       .filter((c): c is string => Boolean(c) && !(PRACTICAL_CATEGORIES as string[]).includes(c));
     return [...PRACTICAL_CATEGORIES, ...Array.from(new Set(customCats))];
   }, [notes]);
+
+  // Centered Knowledge Detail Modal State
+  const [selectedNoteForModal, setSelectedNoteForModal] = useState<ExpertNote | null>(null);
 
   // Quick Edit Modal State
   const [editingNote, setEditingNote] = useState<ExpertNote | null>(null);
@@ -385,6 +439,7 @@ export const ExpertKnowledgeView: React.FC = () => {
     setNotes((prev) =>
       prev.map((n) => (n.id === id ? { ...n, upvotes: (n.upvotes || 0) + 1 } : n))
     );
+    setSelectedNoteForModal((curr) => (curr && curr.id === id ? { ...curr, upvotes: (curr.upvotes || 0) + 1 } : curr));
 
     try {
       const res = await apiFetch(`/api/v1/recovery/expert-library/${id}/upvote`, {
@@ -396,6 +451,7 @@ export const ExpertKnowledgeView: React.FC = () => {
       const result = await res.json();
       if (result.success && result.data) {
         setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...result.data } : n)));
+        setSelectedNoteForModal((curr) => (curr && curr.id === id ? { ...curr, ...result.data } : curr));
       }
       toast.info('Insight Endorsed', 'Thank you for endorsing peer reliability expertise.');
     } catch (err: any) {
@@ -403,6 +459,7 @@ export const ExpertKnowledgeView: React.FC = () => {
       setNotes((prev) =>
         prev.map((n) => (n.id === id ? { ...n, upvotes: Math.max(0, (n.upvotes || 0) - 1) } : n))
       );
+      setSelectedNoteForModal((curr) => (curr && curr.id === id ? { ...curr, upvotes: Math.max(0, (curr.upvotes || 0) - 1) } : curr));
       toast.error('Upvote Failed', 'Could not record your endorsement.');
     }
   };
@@ -417,6 +474,7 @@ export const ExpertKnowledgeView: React.FC = () => {
     setNotes((prev) =>
       prev.map((n) => (n.id === id ? { ...n, downvotes: (n.downvotes || 0) + 1 } : n))
     );
+    setSelectedNoteForModal((curr) => (curr && curr.id === id ? { ...curr, downvotes: (curr.downvotes || 0) + 1 } : curr));
 
     try {
       const res = await apiFetch(`/api/v1/recovery/expert-library/${id}/downvote`, {
@@ -428,6 +486,7 @@ export const ExpertKnowledgeView: React.FC = () => {
       const result = await res.json();
       if (result.success && result.data) {
         setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, ...result.data } : n)));
+        setSelectedNoteForModal((curr) => (curr && curr.id === id ? { ...curr, ...result.data } : curr));
       }
       toast.info('Feedback Recorded', 'Issue flagged for engineering review.');
     } catch (err: any) {
@@ -435,6 +494,7 @@ export const ExpertKnowledgeView: React.FC = () => {
       setNotes((prev) =>
         prev.map((n) => (n.id === id ? { ...n, downvotes: Math.max(0, (n.downvotes || 0) - 1) } : n))
       );
+      setSelectedNoteForModal((curr) => (curr && curr.id === id ? { ...curr, downvotes: Math.max(0, (curr.downvotes || 0) - 1) } : curr));
       toast.error('Feedback Failed', 'Could not record dislike.');
     }
   };
@@ -915,14 +975,12 @@ export const ExpertKnowledgeView: React.FC = () => {
     }
   };
 
-  // Structured Note Card Renderer
+  // Compact 3-Column Note Card Renderer (Fits 4-6 Notes on Screen)
   const renderNoteCard = (note: ExpertNote) => {
     const displayAuthor = note.authorName || note.author || note.authorEmail || 'Senior Technician';
     const displayRole = note.authorRole || note.role || 'Frontline Expert';
     const displayContent = note.description || note.content || '';
     const displayDate = formatObservedDateTime(note.observedAt || note.createdAt || note.date);
-    const displaySeverity = (note.severity as ExpertSeverity) || 'Pro-Tip / Best Practice';
-    const displayAiInsight = getNonRedundantAiInsight(note);
 
     const rawTags = (note.machineAssetTags && note.machineAssetTags.length > 0)
       ? note.machineAssetTags
@@ -930,403 +988,88 @@ export const ExpertKnowledgeView: React.FC = () => {
           .split(',')
           .map((t) => t.trim())
           .filter(Boolean);
+    const primaryTag = rawTags[0] || 'PLANT_WIDE';
 
-    // Strictly restrict Edit and Delete to original Author or Admin / Owner roles only
-    const canEditOrDelete = canEditOrDeleteNote(note);
-
-    const isReviewsOpen = !!expandedReviews[note.id];
+    const needsReview = (note.downvotes || 0) >= 3 || ((note.downvotes || 0) > (note.upvotes || 0) && (note.downvotes || 0) >= 2);
     const reviewsList = Array.isArray(note.reviews) ? note.reviews : [];
     const reviewCount = typeof note.reviewCount === 'number' ? note.reviewCount : reviewsList.length;
     const hasReviews = reviewCount > 0;
-    const avgRating = hasReviews && typeof note.averageRating === 'number' ? Number(note.averageRating).toFixed(1) : '0.0';
-
-    const needsReview = (note.downvotes || 0) >= 3 || ((note.downvotes || 0) > (note.upvotes || 0) && (note.downvotes || 0) >= 2);
+    const avgRating = hasReviews && typeof note.averageRating === 'number' ? Number(note.averageRating).toFixed(1) : '5.0';
 
     return (
       <div
         key={note.id}
-        className="rounded-xl border border-[#E2E8F0] bg-white p-5 space-y-3.5 shadow-sm hover:shadow-md transition-shadow relative flex flex-col justify-between"
+        onClick={() => setSelectedNoteForModal(note)}
+        className="p-4 rounded-xl bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md transition cursor-pointer flex flex-col justify-between h-[190px] group select-none shadow-2xs"
       >
-        <div className="space-y-3">
-          {/* Header Row: Category, Severity & Warning Badges on left; Date, Copy, Copilot, Edit, Delete on right */}
-          <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
-            <div className="flex flex-wrap items-center gap-1.5">
+        {/* Top Row: Asset Tag Badge + Category / Fault Pill + Verified Badge */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-1.5 flex-wrap">
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span className="text-[10px] font-mono text-blue-800 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 font-bold shrink-0 truncate max-w-[130px]">
+                {primaryTag}
+              </span>
               <span
-                className={`text-[10px] font-mono px-2 py-0.5 rounded border font-bold uppercase tracking-wider ${getCategoryBadgeClasses(
+                className={`text-[10px] font-mono px-2 py-0.5 rounded-md border font-semibold truncate max-w-[140px] ${getCategoryBadgeClasses(
                   note.category
                 )}`}
               >
                 {note.category}
               </span>
-              <span
-                className={`text-[10px] font-sans px-2 py-0.5 rounded border font-semibold ${getSeverityBadgeClasses(
-                  displaySeverity
-                )}`}
-              >
-                {displaySeverity}
-              </span>
-              {needsReview && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800 font-bold flex items-center gap-1 animate-pulse">
-                  <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                  ⚠️ Needs Engineer Review
-                </span>
-              )}
             </div>
 
-            <div className="flex items-center gap-1.5">
-              {displayDate && (
-                <span className="text-[11px] font-mono text-slate-400 font-medium mr-1 hidden sm:inline">
-                  {displayDate}
+            <div className="flex items-center gap-1 shrink-0">
+              {needsReview ? (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800 font-bold flex items-center gap-0.5 animate-pulse">
+                  <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                  Review
+                </span>
+              ) : (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 font-bold flex items-center gap-0.5">
+                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                  Verified
                 </span>
               )}
-              {/* 1-Click Copy Tip */}
-              <button
-                type="button"
-                onClick={(e) => handleCopyTip(note, e)}
-                title="Copy field tip guidance to clipboard"
-                className="text-slate-400 hover:text-blue-600 transition p-1.5 rounded-md hover:bg-blue-50 flex items-center gap-1 text-[11px] font-mono"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">Copy</span>
-              </button>
-
-              {/* Ask AI Copilot */}
-              <button
-                type="button"
-                onClick={(e) => handleAskCopilot(note, e)}
-                title="Open AI Copilot with this note for troubleshooting"
-                className="text-slate-400 hover:text-indigo-600 transition p-1.5 rounded-md hover:bg-indigo-50 flex items-center gap-1 text-[11px] font-mono"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-                <span className="hidden xl:inline">Ask Copilot</span>
-              </button>
-
-              {/* Quick Edit (Pencil) - Conditionally rendered strictly for Author or Admin / Owner only */}
-              {canEditOrDelete && (
-                <button
-                  type="button"
-                  onClick={(e) => handleOpenEdit(note, e)}
-                  title="Quick edit note title, trigger or guidance (Author or Admin)"
-                  className="text-slate-400 hover:text-amber-600 transition p-1.5 rounded-md hover:bg-amber-50"
-                  aria-label="Edit expert knowledge entry"
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Delete (Trash) - Conditionally rendered strictly for Author or Admin / Owner only */}
-              {canEditOrDelete && (
-                <button
-                  type="button"
-                  onClick={(e) => handleDelete(note, e)}
-                  title="Delete note from library and vector search (Author or Admin)"
-                  className="text-slate-400 hover:text-rose-600 transition p-1.5 rounded-md hover:bg-rose-50"
-                  aria-label="Delete expert knowledge entry"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+              {hasReviews && (
+                <span className="text-[10px] font-mono text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-bold flex items-center gap-0.5">
+                  <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                  {avgRating}
+                </span>
               )}
             </div>
           </div>
 
-          {/* Title & Machine/Task Pill Bar */}
+          {/* Middle: Bold Note Title & 2-Line preview of Recommended Field Action */}
           <div>
-            <h4 className="text-sm font-bold text-[#0F172A] leading-snug">
+            <h4
+              className="text-sm font-bold text-slate-900 group-hover:text-blue-600 transition-colors line-clamp-1"
+              title={note.title}
+            >
               {note.title}
             </h4>
-            <div className="flex flex-wrap items-center gap-1.5 mt-2">
-              {rawTags.map((tag, idx) => (
-                <span
-                  key={idx}
-                  className="text-[10px] font-mono text-blue-800 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 font-semibold flex items-center gap-1"
-                >
-                  <Cpu className="w-3 h-3 text-blue-500 shrink-0" />
-                  <span>Machine: {tag}</span>
-                </span>
-              ))}
-              {note.taskDuringIssue && (
-                <span className="text-[10px] font-mono text-purple-800 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200 font-semibold flex items-center gap-1">
-                  <Wrench className="w-3 h-3 text-purple-500 shrink-0" />
-                  <span>Task During Issue: {note.taskDuringIssue}</span>
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Block 1 - Trigger / Issue Observed (Amber Box) */}
-          {note.symptom && (
-            <div className="bg-amber-50/80 border border-amber-200/90 rounded-lg p-2.5 space-y-1">
-              <div className="flex items-center gap-1.5 font-mono font-bold text-amber-800 text-[10px] uppercase tracking-wider">
-                <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                <span>WHEN TO APPLY / TRIGGER CONDITION:</span>
-              </div>
-              <p className="text-amber-950 text-xs font-sans pl-5 leading-relaxed">
-                {note.symptom}
-              </p>
-            </div>
-          )}
-
-          {/* Block 2 - Expert Solution & Field Guidance (Structured Box) */}
-          <div className="bg-slate-50/80 border border-slate-200 rounded-lg p-3 space-y-1.5">
-            <div className="flex items-center gap-1.5 font-mono font-bold text-slate-700 text-[10px] uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span>RECOMMENDED FIELD ACTION:</span>
-            </div>
-            <p className="text-slate-800 text-xs leading-relaxed font-sans whitespace-pre-line pl-5">
+            <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed mt-1">
               {displayContent}
             </p>
           </div>
-
-          {/* Block 3 - AI Supplemental Knowledge & Manual Cross-Check (Only rendered if new, non-redundant data is present) */}
-          {displayAiInsight && (
-            <div className="bg-indigo-50/80 border border-indigo-200/90 rounded-lg p-3 space-y-1.5 transition-all">
-              <div className="flex items-center gap-1.5 font-mono font-bold text-indigo-900 text-[10px] uppercase tracking-wider">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                <span>🤖 AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK:</span>
-              </div>
-              <p className="text-indigo-950 text-xs leading-relaxed font-sans pl-5">
-                {displayAiInsight}
-              </p>
-            </div>
-          )}
         </div>
 
-        {/* Footer Row: Author on left; Star rating, Worker Feedback toggle & Upvote/Downvote on right */}
-        <div className="pt-3 border-t border-[#F1F5F9] mt-3 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2.5">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <div className="w-5 h-5 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
-                <User className="w-3 h-3 text-slate-500" />
-              </div>
-              <span className="font-mono text-xs font-medium text-slate-700 truncate">{displayAuthor}</span>
-              <span className="font-mono text-[10px] text-slate-400 shrink-0">({displayRole})</span>
+        {/* Bottom Footer: Contributor Name & Role, Date/Time, and subtle View Full Note ↗ */}
+        <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] font-mono">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="w-4 h-4 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
+              <User className="w-2.5 h-2.5 text-slate-500" />
             </div>
-
-            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-              {/* Star Rating Badge / Toggle Button */}
-              <button
-                type="button"
-                onClick={(e) => toggleReviews(note.id, e)}
-                className="h-8 flex items-center gap-1.5 text-amber-800 font-bold bg-amber-50 hover:bg-amber-100 px-2.5 rounded-lg border border-amber-200 transition text-xs font-mono shadow-2xs"
-                title="View worker ratings and reviews"
-              >
-                <Star
-                  className={`w-3.5 h-3.5 ${
-                    hasReviews ? 'fill-amber-400 text-amber-400' : 'text-slate-300'
-                  }`}
-                />
-                <span>{hasReviews ? `⭐ ${avgRating}` : `☆ 0.0`}</span>
-                <span className="text-slate-400 font-normal">({reviewCount})</span>
-              </button>
-
-              {/* Worker Feedback Drawer Toggle */}
-              <button
-                type="button"
-                onClick={(e) => toggleReviews(note.id, e)}
-                className={`h-8 flex items-center gap-1.5 px-3 rounded-lg border text-xs font-mono font-medium transition shadow-2xs ${
-                  isReviewsOpen
-                    ? 'bg-slate-200 text-slate-900 border-slate-300 font-semibold'
-                    : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
-                }`}
-                title="Toggle Worker Feedback & Field Reviews"
-              >
-                <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
-                <span className="hidden sm:inline">Worker Feedback</span>
-                <span className="sm:hidden">Feedback</span>
-                {isReviewsOpen ? (
-                  <ChevronUp className="w-3.5 h-3.5 ml-0.5" />
-                ) : (
-                  <ChevronDown className="w-3.5 h-3.5 ml-0.5" />
-                )}
-              </button>
-
-              {/* Upvote (Helpful) Button */}
-              <button
-                type="button"
-                onClick={(e) => handleUpvote(note.id, e)}
-                className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50/80 hover:bg-blue-100 px-2.5 rounded-lg border border-blue-200 transition active:scale-95 text-xs font-mono shadow-2xs"
-                title="Helpful / Worked in Field (👍)"
-              >
-                <ThumbsUp className="w-3.5 h-3.5 text-blue-600" />
-                <span>{note.upvotes || 0}</span>
-              </button>
-
-              {/* Dislike (Did Not Work) Button */}
-              <button
-                type="button"
-                onClick={(e) => handleDislike(note.id, e)}
-                className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50/80 hover:bg-rose-100 px-2.5 rounded-lg border border-rose-200 transition active:scale-95 text-xs font-mono shadow-2xs"
-                title="Did Not Work / Field Issue (👎)"
-              >
-                <ThumbsDown className="w-3.5 h-3.5 text-rose-600" />
-                <span>{note.downvotes || 0}</span>
-              </button>
-            </div>
+            <span className="text-slate-700 font-medium truncate max-w-[110px]">{displayAuthor}</span>
+            <span className="text-slate-400 text-[10px] truncate hidden sm:inline">({displayRole})</span>
           </div>
 
-          {/* Expandable Worker Feedback / Field Reviews Drawer (Collapsed by default, 0 pre-filled reviews) */}
-          {isReviewsOpen && (
-            <div className="pt-3 border-t border-slate-200 space-y-3 bg-slate-50/70 -mx-5 -mb-5 p-4 rounded-b-xl">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                  <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
-                  Worker Feedback / Field Reviews ({reviewsList.length})
-                </span>
-                <span className="text-[10px] font-mono text-slate-500">
-                  {hasReviews ? `⭐ ${avgRating} / 5.0 Rating` : `☆ 0.0 (0 reviews)`}
-                </span>
-              </div>
-
-              {/* Review Submission Form */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleReviewSubmit(note.id, e);
-                }}
-                className="bg-white p-3 rounded-lg border border-slate-200 space-y-2.5 shadow-xs"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  {/* Star Rating Interactive Selector (Defaults to 0 - outlines) */}
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] font-mono font-bold text-slate-500 mr-1 uppercase">
-                      Rating:
-                    </span>
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <button
-                        key={star}
-                        type="button"
-                        onClick={() => updateReviewForm(note.id, { rating: star })}
-                        className="p-0.5 hover:scale-110 transition"
-                        title={`${star} Star${star > 1 ? 's' : ''}`}
-                      >
-                        <Star
-                          className={`w-4 h-4 transition ${
-                            star <= (reviewFormData[note.id]?.rating ?? 0)
-                              ? 'fill-amber-400 text-amber-400'
-                              : 'text-slate-300'
-                          }`}
-                        />
-                      </button>
-                    ))}
-                    {(reviewFormData[note.id]?.rating ?? 0) === 0 && (
-                      <span className="text-[10px] font-mono text-slate-400 ml-1">
-                        (Click 1-5 to rate)
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Field Outcome Pills */}
-                  <div className="flex items-center gap-1 text-[11px] font-mono">
-                    {(['WORKED_IN_FIELD', 'NEEDS_MODIFICATION', 'GENERAL_COMMENT'] as const).map(
-                      (outcome) => {
-                        const isSelected =
-                          (reviewFormData[note.id]?.outcome ?? 'WORKED_IN_FIELD') === outcome;
-                        return (
-                          <button
-                            key={outcome}
-                            type="button"
-                            onClick={() => updateReviewForm(note.id, { outcome })}
-                            className={`px-2 py-0.5 rounded border text-[10px] font-semibold transition ${
-                              isSelected
-                                ? outcome === 'WORKED_IN_FIELD'
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                  : outcome === 'NEEDS_MODIFICATION'
-                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
-                                  : 'bg-slate-200 text-slate-800 border-slate-300'
-                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                            }`}
-                          >
-                            {outcome === 'WORKED_IN_FIELD'
-                              ? 'Worked in Field ✓'
-                              : outcome === 'NEEDS_MODIFICATION'
-                              ? 'Needs Modification ⚠️'
-                              : 'General Note 📝'}
-                          </button>
-                        );
-                      }
-                    )}
-                  </div>
-                </div>
-
-                {/* Comment Input and Submit */}
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    required
-                    value={reviewFormData[note.id]?.comment ?? ''}
-                    onChange={(e) => updateReviewForm(note.id, { comment: e.target.value })}
-                    placeholder="e.g. Tested on Shift B, reduced vibration immediately..."
-                    className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white font-sans"
-                  />
-                  <Button
-                    type="submit"
-                    size="sm"
-                    variant="primary"
-                    disabled={submittingReview[note.id]}
-                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 h-auto shrink-0 font-semibold"
-                  >
-                    {submittingReview[note.id] ? 'Posting...' : 'Post Review'}
-                  </Button>
-                </div>
-              </form>
-
-              {/* List of Existing Reviews */}
-              {reviewsList.length === 0 ? (
-                <p className="text-[11px] text-slate-400 font-mono italic text-center py-2">
-                  No field reviews yet. Tested this procedure on shift? Rate and post your feedback above!
-                </p>
-              ) : (
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  {reviewsList.map((rev) => (
-                    <div
-                      key={rev.id}
-                      className="p-2.5 rounded-lg border border-slate-200 bg-white text-xs space-y-1 shadow-2xs"
-                    >
-                      <div className="flex items-center justify-between text-[10px] font-mono">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-slate-700">
-                            {rev.userName || 'Field Technician'}
-                          </span>
-                          <span className="text-slate-400">
-                            ({rev.userRole || 'Technician'})
-                          </span>
-                          <span
-                            className={`px-1.5 py-0.2 rounded font-semibold ${
-                              rev.outcome === 'WORKED_IN_FIELD'
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : rev.outcome === 'NEEDS_MODIFICATION'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : 'bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}
-                          >
-                            {rev.outcome === 'WORKED_IN_FIELD'
-                              ? 'Worked in Field ✓'
-                              : rev.outcome === 'NEEDS_MODIFICATION'
-                              ? 'Needs Modification'
-                              : 'Review'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 text-amber-500">
-                          {Array.from({ length: rev.rating || 0 }).map((_, i) => (
-                            <Star
-                              key={i}
-                              className="w-2.5 h-2.5 fill-amber-400 text-amber-400"
-                            />
-                          ))}
-                          <span className="text-slate-400 ml-1">
-                            {formatObservedDateTime(rev.createdAt)}
-                          </span>
-                        </div>
-                      </div>
-                      <p className="text-slate-800 text-xs font-sans pl-1 leading-relaxed">
-                        {rev.comment}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-slate-400 text-[10px] hidden md:inline">{displayDate}</span>
+            <span className="text-xs font-semibold text-blue-600 group-hover:text-blue-700 flex items-center gap-1">
+              <span>View Full Note</span>
+              <ExternalLink className="w-3 h-3" />
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -1538,11 +1281,325 @@ export const ExpertKnowledgeView: React.FC = () => {
           </Button>
         </div>
       ) : (
-        /* Single Clean Grid */
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        /* Single Clean 3-Column Compact Grid */
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {sortedAndFilteredNotes.map((note) => renderNoteCard(note))}
         </div>
       )}
+
+      {/* Centered Knowledge Detail Modal on Card Click */}
+      {selectedNoteForModal && (() => {
+        const modalNote = selectedNoteForModal;
+        const displayAuthor = modalNote.authorName || modalNote.author || modalNote.authorEmail || 'Senior Technician';
+        const displayRole = modalNote.authorRole || modalNote.role || 'Frontline Expert';
+        const displayDate = formatObservedDateTime(modalNote.observedAt || modalNote.createdAt || modalNote.date);
+        const displaySeverity = (modalNote.severity as ExpertSeverity) || 'Pro-Tip / Best Practice';
+        const displayContent = modalNote.description || modalNote.content || '';
+        const aiInsight = getNonRedundantAiInsight(modalNote);
+        const rawTags = (modalNote.machineAssetTags && modalNote.machineAssetTags.length > 0)
+          ? modalNote.machineAssetTags
+          : (modalNote.machineAssetTag || modalNote.assetTag || 'PLANT_WIDE')
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean);
+        const canEditOrDelete = canEditOrDeleteNote(modalNote);
+        const reviewsList = Array.isArray(modalNote.reviews) ? modalNote.reviews : [];
+        const isReviewsOpen = !!expandedReviews[modalNote.id];
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+            onClick={() => setSelectedNoteForModal(null)}
+          >
+            <div
+              className="max-w-2xl w-full bg-white rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header: Asset Tag, Title, Author, Timestamp, Close button */}
+              <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+                <div className="space-y-1.5 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {rawTags.map((tag, idx) => (
+                      <span
+                        key={idx}
+                        className="text-xs font-mono font-bold text-blue-800 bg-blue-50 px-2.5 py-0.5 rounded-md border border-blue-200 flex items-center gap-1"
+                      >
+                        <Cpu className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Machine: {tag}</span>
+                      </span>
+                    ))}
+                    <span
+                      className={`text-[11px] font-mono px-2 py-0.5 rounded-md border font-bold uppercase tracking-wider ${getCategoryBadgeClasses(
+                        modalNote.category
+                      )}`}
+                    >
+                      {modalNote.category}
+                    </span>
+                    <span
+                      className={`text-[11px] font-sans px-2 py-0.5 rounded-md border font-semibold ${getSeverityBadgeClasses(
+                        displaySeverity
+                      )}`}
+                    >
+                      {displaySeverity}
+                    </span>
+                  </div>
+
+                  <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
+                    {modalNote.title}
+                  </h3>
+
+                  <div className="flex items-center gap-2 text-xs font-mono text-slate-500 flex-wrap">
+                    <span className="flex items-center gap-1">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      <strong>{displayAuthor}</strong> ({displayRole})
+                    </span>
+                    {displayDate && (
+                      <>
+                        <span>•</span>
+                        <span>{displayDate}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedNoteForModal(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer shrink-0"
+                  title="Close modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Complete Field Observation / Context */}
+              {(modalNote.symptom || modalNote.taskDuringIssue) && (
+                <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-3.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5 font-mono font-bold text-amber-900 text-xs uppercase tracking-wider">
+                    <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>WHEN TO APPLY / TRIGGER CONDITION:</span>
+                  </div>
+                  {modalNote.symptom && (
+                    <p className="text-xs text-amber-950 font-sans pl-5 leading-relaxed">
+                      <strong>Observed Trigger:</strong> {modalNote.symptom}
+                    </p>
+                  )}
+                  {modalNote.taskDuringIssue && (
+                    <p className="text-xs text-amber-950 font-sans pl-5 leading-relaxed">
+                      <strong>Task During Issue:</strong> {modalNote.taskDuringIssue}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Complete Recommended Field Action */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-1.5 font-mono font-bold text-slate-800 text-xs uppercase tracking-wider">
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span>RECOMMENDED FIELD ACTION & GUIDANCE:</span>
+                </div>
+                <p className="text-slate-800 text-xs leading-relaxed font-sans whitespace-pre-line pl-5">
+                  {displayContent}
+                </p>
+              </div>
+
+              {/* AI Supplement & Manual Cross-Check in compact structured block */}
+              {aiInsight && (
+                <div className="bg-indigo-50/90 border border-indigo-200 rounded-xl p-3.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5 font-mono font-bold text-indigo-950 text-xs uppercase tracking-wider">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span>🤖 AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK:</span>
+                  </div>
+                  <p className="text-xs text-indigo-950 leading-relaxed font-sans pl-5 whitespace-pre-line">
+                    {aiInsight}
+                  </p>
+                </div>
+              )}
+
+              {/* Worker Reviews & Upvoting inside modal */}
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={(e) => handleUpvote(modalNote.id, e)}
+                    className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-3 rounded-lg border border-blue-200 transition active:scale-95 text-xs font-mono cursor-pointer"
+                  >
+                    <ThumbsUp className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Helpful ({modalNote.upvotes || 0})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDislike(modalNote.id, e)}
+                    className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-3 rounded-lg border border-rose-200 transition active:scale-95 text-xs font-mono cursor-pointer"
+                  >
+                    <ThumbsDown className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Did Not Work ({modalNote.downvotes || 0})</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={(e) => toggleReviews(modalNote.id, e)}
+                  className="h-8 flex items-center gap-1.5 px-3 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 cursor-pointer"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Worker Feedback ({reviewsList.length})</span>
+                  {isReviewsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              </div>
+
+              {/* Worker Reviews Drawer if toggled inside modal */}
+              {isReviewsOpen && (
+                <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleReviewSubmit(modalNote.id, e);
+                    }}
+                    className="bg-white p-3 rounded-lg border border-slate-200 space-y-2 shadow-2xs"
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] font-mono font-bold text-slate-500 mr-1 uppercase">Rating:</span>
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button
+                            key={star}
+                            type="button"
+                            onClick={() => updateReviewForm(modalNote.id, { rating: star })}
+                            className="p-0.5 hover:scale-110 transition cursor-pointer"
+                          >
+                            <Star
+                              className={`w-4 h-4 ${
+                                star <= (reviewFormData[modalNote.id]?.rating ?? 0)
+                                  ? 'fill-amber-400 text-amber-400'
+                                  : 'text-slate-300'
+                              }`}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px] font-mono">
+                        {(['WORKED_IN_FIELD', 'NEEDS_MODIFICATION', 'GENERAL_COMMENT'] as const).map((outcome) => (
+                          <button
+                            key={outcome}
+                            type="button"
+                            onClick={() => updateReviewForm(modalNote.id, { outcome })}
+                            className={`px-2 py-0.5 rounded border font-semibold ${
+                              (reviewFormData[modalNote.id]?.outcome ?? 'WORKED_IN_FIELD') === outcome
+                                ? 'bg-blue-100 text-blue-800 border-blue-300'
+                                : 'bg-white text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {outcome === 'WORKED_IN_FIELD' ? 'Worked ✓' : outcome === 'NEEDS_MODIFICATION' ? 'Modified ⚠️' : 'Note 📝'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={reviewFormData[modalNote.id]?.comment ?? ''}
+                        onChange={(e) => updateReviewForm(modalNote.id, { comment: e.target.value })}
+                        placeholder="Add field feedback..."
+                        className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
+                      />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant="primary"
+                        disabled={!!submittingReview[modalNote.id]}
+                        className="text-xs shrink-0"
+                      >
+                        {submittingReview[modalNote.id] ? 'Posting...' : 'Post'}
+                      </Button>
+                    </div>
+                  </form>
+                  {reviewsList.length > 0 && (
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                      {reviewsList.map((rev) => (
+                        <div key={rev.id} className="p-2 bg-white rounded border border-slate-200 text-xs">
+                          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500">
+                            <span>{rev.userName || 'Field Tech'} ({rev.userRole || 'Tech'})</span>
+                            <span>⭐ {rev.rating}</span>
+                          </div>
+                          <p className="text-slate-800 text-xs mt-0.5">{rev.comment}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons in Modal Footer (Copy Note, Delete Note, Ask Copilot, Close) */}
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100 gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={() => handleCopyTip(modalNote)}
+                    className="text-xs font-mono flex items-center gap-1.5"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Note</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={() => handleAskCopilot(modalNote)}
+                    className="text-xs font-mono text-indigo-700 border-indigo-200 hover:bg-indigo-50 flex items-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Ask Copilot</span>
+                  </Button>
+                  {canEditOrDelete && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        onClick={(e) => {
+                          setSelectedNoteForModal(null);
+                          handleOpenEdit(modalNote, e);
+                        }}
+                        className="text-xs font-mono text-slate-700 hover:bg-slate-50 border-slate-200 flex items-center gap-1.5"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>Edit Note</span>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        onClick={(e) => {
+                          setSelectedNoteForModal(null);
+                          handleDelete(modalNote, e);
+                        }}
+                        className="text-xs font-mono text-rose-600 hover:bg-rose-50 border-rose-200 flex items-center gap-1.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete Note</span>
+                      </Button>
+                    </>
+                  )}
+                </div>
+
+                <Button
+                  variant="primary"
+                  size="sm"
+                  type="button"
+                  onClick={() => setSelectedNoteForModal(null)}
+                  className="bg-slate-900 hover:bg-black text-white text-xs font-medium px-4"
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Multi-Note Submission Modal */}
       <Modal

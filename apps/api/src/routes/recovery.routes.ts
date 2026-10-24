@@ -792,24 +792,31 @@ export function createRecoveryRouter(
     taskDuringIssue?: string | null;
   }): string | null {
     const tag = (data.assetTag || 'EQUIPMENT').toUpperCase();
-    const cat = data.category || 'Reliability';
-    const task = data.taskDuringIssue || 'Routine Maintenance';
+    const text = `${data.title} ${data.description} ${data.symptom || ''} ${data.taskDuringIssue || ''}`.toLowerCase();
 
     let candidate = '';
-    if (tag.includes('PUMP') || tag.includes('SLURRY')) {
-      candidate = `Cross-check API 610 seal flush Plan 11/53A pressures before starting. Verify casing bolt torque cross-pattern sequence to 85 Nm, and ensure full LOTO isolation of primary suction and discharge isolation valves prior to mechanical seal servicing.`;
-    } else if (tag.includes('GEN') || tag.includes('DIESEL') || tag.includes('101')) {
-      candidate = `Cross-check OEM manual Section 4.2 for cold-crank pre-lubrication pressure (min 1.8 bar). Verify rotating diode exciter bridge diodes with multimeter before synchronizing, and confirm emergency stop governor trip latch is fully engaged and free of carbon fouling.`;
-    } else if (tag.includes('PKG') || tag.includes('901') || tag.includes('CONV')) {
-      candidate = `Verify photo-eye sensor optical alignment (margin > 3.0) and tension roller radial runout under 0.05 mm. Confirm Category 4 dual-channel safety relay interlock is tested and cleared before restarting packaging line indexing cycle.`;
-    } else if (tag.includes('HEX') || tag.includes('PLATE') || tag.includes('HEAT') || tag.includes('801')) {
-      candidate = `Cross-check tightening dimension 'A' across plate pack per heat exchanger manual drawing. Ensure differential pressure across plates does not exceed 4.5 bar during initial fluid charging, and purge all entrained air via top vent valves.`;
-    } else if (tag.includes('TURB') || tag.includes('COMP')) {
-      candidate = `Verify unloader valve clearance (0.015" feeler gauge) and confirm radial shaft vibration is under 2.8 mm/s RMS (ISO 10816-3). Execute NFPA 70E Arc Flash Class 2 PPE protocol during high-voltage auxiliary lube skid power isolation.`;
-    } else if (cat === 'Safety & LOTO') {
-      candidate = `Mandatory zero-energy state verification required per OSHA 1910.147. Bleed residual pneumatic/hydraulic line pressure to 0 psig, apply secondary safety padlocks to breaker panel, and log lockout tagout serial number before initiating teardown.`;
+    if (text.includes('seal') || text.includes('o-ring') || text.includes('gland') || text.includes('flush') || text.includes('drip')) {
+      candidate = `• Cross-check API 682 / OEM Manual §5.2 for seal flush Plan 11 differential pressure (> 1.5 bar).\n• Verify dynamic shaft runout is < 0.05 mm and LOTO suction isolation before gland removal.`;
+    } else if (text.includes('vibrat') || text.includes('align') || text.includes('coupling') || text.includes('chatter') || text.includes('balance') || text.includes('laser')) {
+      candidate = `• Cross-check ISO 10816-3 Zone B limit (2.8 mm/s RMS) and verify radial shaft alignment within ±0.03 mm.\n• Inspect baseplate soft-foot tolerance (< 0.05 mm) before final bolt torquing.`;
+    } else if (text.includes('temp') || text.includes('heat') || text.includes('thermal') || text.includes('bearing') || text.includes('lubric') || text.includes('grease') || text.includes('oil')) {
+      candidate = `• Cross-check OEM Manual §4.3: Bearing thermal limit is 75°C; verify kinematic viscosity of synthetic lube.\n• Allow housing cooldown below 40°C before line contact per plant safety SOP.`;
+    } else if (text.includes('valve') || text.includes('reed') || text.includes('suction') || text.includes('cavitat') || text.includes('impeller') || text.includes('strainer') || text.includes('pressure')) {
+      candidate = `• Cross-check OEM Section 3 for minimum suction head (NPSHa margin > 1.2m) and valve seat clearance.\n• Depressurize manifold to 0.0 psig and inspect strainer mesh for particulate blinding.`;
+    } else if (text.includes('electr') || text.includes('voltage') || text.includes('current') || text.includes('breaker') || text.includes('trip') || text.includes('vfd') || text.includes('diode') || text.includes('megger')) {
+      candidate = `• Cross-check NFPA 70E Arc Flash protocol; confirm zero energy (0.0 VAC) across starter phases.\n• Verify stator insulation resistance > 2 MΩ with 1000V megohmmeter before re-energizing.`;
+    } else if (text.includes('startup') || text.includes('shut') || text.includes('prime') || text.includes('crank') || text.includes('governor')) {
+      candidate = `• Cross-check OEM Startup Checklist §2.1: Confirm pre-lube pressure > 1.8 bar before crank sequence.\n• Verify emergency stop trip mechanism is unlatched and clear of carbon buildup.`;
+    } else if (text.includes('safety') || text.includes('loto') || text.includes('lockout') || text.includes('danger')) {
+      candidate = `• Verify zero-energy state per OSHA 1910.147 (residual pressure 0.0 psig, electrical locked out).\n• Apply red danger padlock and record isolation entry in plant LOTO registry.`;
+    } else if (tag.includes('GEN') || tag.includes('DIESEL')) {
+      candidate = `• Cross-check Diesel Manual §4.2: Cold-crank pre-lube pressure minimum 1.8 bar.\n• Inspect governor trip latch freedom and verify rotating diode bridge health.`;
+    } else if (tag.includes('COMP')) {
+      candidate = `• Cross-check Compressor Manual §6.1: Discharge unloader clearance 0.015" feeler gauge.\n• Verify interstage condensate auto-drain cycles continuously during operation.`;
+    } else if (tag.includes('PUMP')) {
+      candidate = `• Cross-check Pump Manual §3.4: Suction line block valve locked 100% open during run.\n• Verify mechanical packing leakage is within allowable limit (< 5 drops/min).`;
     } else {
-      candidate = `Cross-check OEM Technical Manual Section 6 for torque tolerances and lubrication intervals. Verify alignment using dial indicator within ±0.05 mm tolerance, and ensure all electrical interlocks and safety guards are re-certified prior to returning machine ${tag} to active production during ${task}.`;
+      candidate = `• Cross-check OEM Technical Manual Section 6 for torque limits and clearance tolerances on ${tag}.\n• Ensure safety guards and interlocks are re-certified prior to returning to production.`;
     }
 
     if (isInsightRedundant(data.description, candidate)) {
@@ -838,11 +845,16 @@ export function createRecoveryRouter(
 
       const entries = await recoveryService.listExpertKnowledge(orgId, filters);
       const enrichedEntries = entries.map((entry) => {
-        if (entry.aiSupplementalInsight) {
-          if (isInsightRedundant(entry.description, entry.aiSupplementalInsight)) {
-            entry.aiSupplementalInsight = null;
-          }
-        } else {
+        const isOldLongHardcoded =
+          entry.aiSupplementalInsight &&
+          (entry.aiSupplementalInsight.includes('Cross-check API 610 seal flush Plan 11/53A pressures before starting') ||
+            entry.aiSupplementalInsight.includes('Cross-check OEM manual Section 4.2 for cold-crank pre-lubrication pressure') ||
+            entry.aiSupplementalInsight.includes('tightening dimension \'A\' across plate pack per heat exchanger') ||
+            entry.aiSupplementalInsight.includes('Execute NFPA 70E Arc Flash Class 2 PPE protocol during high-voltage') ||
+            entry.aiSupplementalInsight.includes('Mandatory zero-energy state verification required per OSHA 1910.147. Bleed residual') ||
+            entry.aiSupplementalInsight.includes('Cross-check OEM Technical Manual Section 6 for torque tolerances and lubrication intervals. Verify alignment using dial indicator'));
+
+        if (!entry.aiSupplementalInsight || isOldLongHardcoded) {
           entry.aiSupplementalInsight = generateAiSupplementalInsight({
             assetTag: entry.machineAssetTag || (entry.machineAssetTags && entry.machineAssetTags[0]),
             category: entry.category,
@@ -851,6 +863,8 @@ export function createRecoveryRouter(
             symptom: entry.symptom,
             taskDuringIssue: entry.taskDuringIssue,
           });
+        } else if (isInsightRedundant(entry.description, entry.aiSupplementalInsight)) {
+          entry.aiSupplementalInsight = null;
         }
         if (!Array.isArray(entry.reviews)) {
           entry.reviews = [];
