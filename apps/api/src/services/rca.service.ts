@@ -280,7 +280,7 @@ PAST MAINTENANCE HISTORY:
 ${workOrderCitations.length > 0 ? workOrderCitations.map((w, i) => `[WO ${i+1}] ${w.reference}: ${w.snippet}`).join('\n') : 'No past maintenance records.'}
 
 TASK:
-Return ONLY a valid JSON object matching this schema:
+Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation and recommendedFix to concise, high-signal 1-2 sentence engineering statements:
 {
   "detectedFaultCode": "string (e.g. ALM-THRM-402 / High Bearing Temp Trip)",
   "safetyReadiness": {
@@ -293,7 +293,7 @@ Return ONLY a valid JSON object matching this schema:
       "title": "Specific root cause tailored to this machine and symptom",
       "probability": 85,
       "severity": "CRITICAL",
-      "mechanismExplanation": "Detailed physical/mechanical mechanism explaining how the failure occurred on this asset",
+      "mechanismExplanation": "Concise 1-2 sentence physical failure mechanism",
       "mttr": "45–60 mins",
       "requiredSkill": "L2 Mechanical Specialist",
       "downtimeRisk": "High",
@@ -306,7 +306,7 @@ Return ONLY a valid JSON object matching this schema:
       ],
       "requiredTools": ["Laser Alignment Tool", "Torque Wrench 85 ft-lbs", "IR Thermometer"],
       "spareParts": ["Cartridge Seal Kit", "Gasket"],
-      "recommendedFix": "Precise corrective maintenance protocol",
+      "recommendedFix": "Concise 1-2 sentence corrective maintenance protocol",
       "status": "HYPOTHESIS"
     }
   ],
@@ -324,17 +324,19 @@ Return ONLY a valid JSON object matching this schema:
   ]
 }`;
 
-        // Attempt supported Gemini models
-        for (const model of ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-pro-latest']) {
+        // Attempt Gemini 2.5 Flash with strict 2.5s latency budget
+        try {
           const gemRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(2500),
               body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
-                  temperature: 0.2,
+                  temperature: 0.1,
+                  maxOutputTokens: 1024,
                   responseMimeType: 'application/json',
                 },
               }),
@@ -380,17 +382,18 @@ Return ONLY a valid JSON object matching this schema:
                   }));
                 }
                 geminiSuccess = true;
-                break;
               }
             }
           }
+        } catch (llmFetchErr: any) {
+          console.warn('Fast-resolving deterministic RCA output (LLM exceeded 2.5s or unavailable):', llmFetchErr?.message);
         }
       } catch (llmErr: any) {
         console.warn('Gemini LLM inference warning, executing dynamic synthesis fallback:', llmErr?.message);
       }
     }
 
-    // 6. Dynamic Machine-Specific Synthesis Engine (Used when LLM API is unavailable or offline)
+    // 6. Dynamic Machine-Specific Synthesis Engine (Fast-resolved under 2.5s)
     if (!geminiSuccess || hypotheses.length === 0) {
       const sym = symptom.toLowerCase();
       const tag = assetTag.toUpperCase();
@@ -439,7 +442,7 @@ Return ONLY a valid JSON object matching this schema:
         preWorkBriefing: `Mandatory LOTO verification on ${assetTag} prior to physical barrier contact. Ensure asset temperature is below 40°C before line breaking. Current status: ${machineStatus}.`,
       };
 
-      // Synthesis of 3 Machine-Specific Hypotheses
+      // Synthesis of 3 Machine-Specific Hypotheses with Crisp 1-2 Line Engineering Statements
       if (isEngineOrGen) {
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
@@ -451,8 +454,8 @@ Return ONLY a valid JSON object matching this schema:
           probability: 89,
           severity: 'CRITICAL',
           mechanismExplanation: hasThermal
-            ? `Field observation (${symptom}) on ${assetTag} reflects restricted jacket cooling flow. Thermostatic bypass valve failure prevents coolant transition to secondary radiator heat exchanger under high electrical load.`
-            : `Torsional pulse monitoring indicates unequal combustion pressure across power cylinders on ${assetTag}. Particulate fouling in high-pressure injector nozzles creates delayed fuel atomization and dynamic vibration harmonics.`,
+            ? `Thermostatic bypass valve failure restricts jacket cooling flow, preventing coolant transition to radiator heat exchangers under load.`
+            : `Particulate coking in high-pressure injector nozzles creates uneven combustion pressure and dynamic crankshaft torsional harmonics.`,
           mttr: '60–90 mins',
           requiredSkill: 'L3 Rotating Reliability / Engine Specialist',
           downtimeRisk: 'Critical',
@@ -466,7 +469,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Injector Pop Tester', 'Digital Pyrometer', 'Cylinder Pressure Manifold', 'Torque Wrench 110 ft-lbs'],
           spareParts: ['Bosch Common Rail Injector Pack', 'Copper Crush Washers', 'Fuel Filter Secondary Cartridge (5-Micron)'],
           verifiedSources: manualCitations.slice(0, 2).concat(expertCitations.slice(0, 1)),
-          recommendedFix: `De-energize alternator field breaker. Perform LOTO. Remove fuel line shroud, inspect injector nozzle spray pattern with pop tester, torque injector hold-down crab nuts to OEM spec, and bleed fuel rail.`,
+          recommendedFix: `De-energize alternator breaker, perform LOTO, pop-test fuel injectors, torque hold-downs to OEM spec, and bleed rail.`,
           status: 'HYPOTHESIS',
         });
 
@@ -475,7 +478,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Main Bearing Hydrodynamic Film Breakdown & Crankcase Oil Dilution on ${assetTag}`,
           probability: 68,
           severity: 'HIGH',
-          mechanismExplanation: `Unburned fuel bypass past compression piston rings dilutes SAE 15W-40 crankcase lubricating oil, dropping kinematic viscosity below allowable limits and causing metallic contact at main crankshaft journals.`,
+          mechanismExplanation: `Unburned fuel bypass past piston rings dilutes crankcase oil, dropping kinematic viscosity and causing journal contact.`,
           mttr: '45–60 mins',
           requiredSkill: 'L2 Lubrication Specialist',
           downtimeRisk: 'High',
@@ -489,7 +492,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Infrared Thermometer', 'Oil Viscosity Test Kit', 'Sample Bottle Vacuum Pump'],
           spareParts: ['Mobil Delvac 15W-40 Heavy Duty Oil (55 Gal Drum)', 'Spin-On Full Flow Oil Filter Gaskets'],
           verifiedSources: manualCitations.slice(1, 3).concat(expertCitations.slice(1, 2)),
-          recommendedFix: `Draw crankcase sample for lab viscosity and flash-point testing. Drain oil pan, replace duplex spin-on oil filters, and refill with fresh synthetic engine oil.`,
+          recommendedFix: `Draw crankcase sample for lab viscosity check, drain oil pan, replace duplex spin-on filters, and refill fresh synthetic oil.`,
           status: 'HYPOTHESIS',
         });
 
@@ -498,7 +501,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Alternator Stator Exciter Diode Bridge Asymmetry on ${assetTag}`,
           probability: 44,
           severity: 'MEDIUM',
-          mechanismExplanation: `Thermal stress on rotating rectifier assembly has caused open-circuit failure in one exciter diode, inducing 120 Hz electrical hum and voltage ripple under plant load.`,
+          mechanismExplanation: `Thermal stress on rotating rectifier caused open-circuit failure in one exciter diode, inducing 120 Hz electrical ripple.`,
           mttr: '30–45 mins',
           requiredSkill: 'L2 Electrical Specialist',
           downtimeRisk: 'Moderate',
@@ -512,7 +515,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['CAT IV 1000V Multimeter', 'Diode Forward Drop Tester', 'Insulated Hex Driver Set'],
           spareParts: ['Rotating Rectifier Diode Assembly (Forward & Reverse Bias Pairs)', 'Varistor Surge Suppressor'],
           verifiedSources: workOrderCitations.slice(0, 1),
-          recommendedFix: `Lock out exciter field circuit. Test all 6 rectifier diodes with multimeter in diode check mode. Replace failed diodes and torque to 4.5 Nm.`,
+          recommendedFix: `Lock out exciter field circuit, test all 6 rectifier diodes with multimeter, and replace defective diodes torqued to 4.5 Nm.`,
           status: 'HYPOTHESIS',
         });
       } else if (isCompressor) {
@@ -521,7 +524,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Stage 2 Discharge Reed Valve Plate Fatigue Fracture on ${assetTag}`,
           probability: 87,
           severity: 'CRITICAL',
-          mechanismExplanation: `Pulsation fatigue on high-pressure stainless reed valve petals has caused micro-cracking and unseated valve sealing. Compressed gas recirculates into the cylinder clearance pocket, causing exponential temperature spikes and loud metallic chatter.`,
+          mechanismExplanation: `Cyclic bending fatigue fractured stainless reed valve petals, causing compressed gas backflow and rapid thermal spikes.`,
           mttr: '75–90 mins',
           requiredSkill: 'L2 Compressor Specialist',
           downtimeRisk: 'Critical',
@@ -535,7 +538,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Valve Spring Depressor', 'Feeler Gauge Set', 'Torque Wrench (35 ft-lbs)', 'Fluke Strobe Tachometer'],
           spareParts: ['Stainless Reed Valve Assembly Kit', 'Copper Cylinder Head Gasket Pack'],
           verifiedSources: manualCitations.slice(0, 2),
-          recommendedFix: `Isolate intake air and discharge header. Padlock electrical feed. Unbolt cylinder head bonnet in star pattern. Replace fractured valve plate, install new copper sealing ring, and torque to 35 ft-lbs.`,
+          recommendedFix: `Isolate pressure headers, lock out motor, unbolt cylinder head, install new stainless reed valves and copper gasket to 35 ft-lbs.`,
           status: 'HYPOTHESIS',
         });
 
@@ -544,7 +547,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Intercooler Shell-and-Tube Fouling & Moisture Separator Carryover on ${assetTag}`,
           probability: 63,
           severity: 'HIGH',
-          mechanismExplanation: `Particulate buildup on external intercooler finned tubes reduces heat exchange coefficient. Condensed water droplets carry over into Stage 2 suction, causing liquid slugging and pinging noise.`,
+          mechanismExplanation: `Intercooler fin particulate buildup impairs heat rejection; condensate carryover into Stage 2 causes liquid slugging.`,
           mttr: '45–60 mins',
           requiredSkill: 'L2 Mechanical Technician',
           downtimeRisk: 'High',
@@ -558,7 +561,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Differential Pressure Gauge', 'Pneumatic Blowgun', 'Brass Bristle Tube Brush'],
           spareParts: ['Auto-Drain Float Valve Rebuild Kit', 'Silicone Intercooler Gasket'],
           verifiedSources: expertCitations.slice(0, 1),
-          recommendedFix: `Depressurize intercooler manifold. Clean auto-drain float trap valve orifices, purge emulsion sludge, and verify condensate drains continuously.`,
+          recommendedFix: `Depressurize manifold, clean auto-drain float trap valve orifices, purge emulsion sludge, and verify continuous drainage.`,
           status: 'HYPOTHESIS',
         });
 
@@ -567,7 +570,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Crosshead Pin Bearing Bushing Wear & Clearance Drift on ${assetTag}`,
           probability: 45,
           severity: 'MEDIUM',
-          mechanismExplanation: `Wear on bronze crosshead pin bushing exceeds allowable OEM clearance of 0.003 inches, creating radial lash on piston rod reversal during top dead center (TDC) transition.`,
+          mechanismExplanation: `Bronze crosshead pin bushing wear exceeds OEM 0.003 in clearance, causing mechanical lash during TDC reversal.`,
           mttr: '90–120 mins',
           requiredSkill: 'L3 Mechanical Specialist',
           downtimeRisk: 'Moderate',
@@ -581,7 +584,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Dial Bore Gauge (1-2 in)', 'Micrometer Set', 'Hydraulic Pin Extractor'],
           spareParts: ['Machined Bronze Crosshead Bushing', 'Retaining Snap Rings'],
           verifiedSources: workOrderCitations.slice(0, 1),
-          recommendedFix: `Open crankcase inspection door under LOTO. Measure pin lash with dial indicator. Press out worn bushing and install interference-fit OEM replacement.`,
+          recommendedFix: `Open crankcase under LOTO, measure radial pin lash with dial indicator, press out worn bushing, and install OEM replacement.`,
           status: 'HYPOTHESIS',
         });
       } else if (isElectricalOrVfd) {
@@ -590,7 +593,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Motor Stator Winding Insulation Breakdown & Phase Imbalance on ${assetTag}`,
           probability: 91,
           severity: 'CRITICAL',
-          mechanismExplanation: `Thermal elevation combined with moisture ingress has degraded NEMA Class F stator insulation resistance below 2 Megohms, creating inter-turn localized heating and phase current unbalance.`,
+          mechanismExplanation: `Thermal degradation and moisture dropped stator insulation resistance below 2 Megohms, causing phase current unbalance.`,
           mttr: '60–75 mins',
           requiredSkill: 'L2 Electrical / Motor Specialist',
           downtimeRisk: 'Critical',
@@ -604,7 +607,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['1000V Digital Megohmmeter (CAT IV)', 'True-RMS Clamp Meter', 'Infrared Thermometer'],
           spareParts: ['Motor Conduit Box Terminal Block', 'Silicone RTV Conduit Sealant', 'Class H Insulating Tape'],
           verifiedSources: manualCitations.slice(0, 2),
-          recommendedFix: `De-energize 480V feeder breaker at MCC. Perform LOTO and verify 0.0 VAC across all phases. Perform 1000V Megohmmeter insulation resistance test. Check winding resistance symmetry with milliohm meter.`,
+          recommendedFix: `De-energize 480V MCC breaker, perform LOTO, conduct 1000V Megohmmeter insulation test, and re-torque conduit terminals.`,
           status: 'HYPOTHESIS',
         });
 
@@ -613,7 +616,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Bearing Fluting Caused by VFD Inverter High-Frequency Shaft Currents on ${assetTag}`,
           probability: 69,
           severity: 'HIGH',
-          mechanismExplanation: `Fast switching dV/dt pulses from the variable frequency drive induce common-mode capacitive voltage across the motor shaft. Electrical discharge machining (EDM) arcs across bearing ball races, creating microscopic washboard fluting and high-frequency noise.`,
+          mechanismExplanation: `Inverter fast-switching dV/dt induces capacitive shaft voltage, arcing through bearing oil films and creating EDM fluting.`,
           mttr: '45–60 mins',
           requiredSkill: 'L2 Electromechanical Specialist',
           downtimeRisk: 'High',
@@ -627,7 +630,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Vibration Spectrum FFT Analyzer', 'Shaft Voltage Probe with Oscilloscope', 'Bearing Induction Heater'],
           spareParts: ['Aegis Carbon Fiber Shaft Grounding Ring Kit', 'Ceramic Hybrid Insulated Deep Groove Ball Bearing (6310 C3)'],
           verifiedSources: expertCitations.slice(0, 1),
-          recommendedFix: `Inspect motor shaft extension. Install carbon fiber shaft grounding ring with conductive epoxy. Verify shaft voltage drops below 1.5V peak-to-peak under VFD operation.`,
+          recommendedFix: `Install Aegis carbon fiber shaft grounding ring with conductive epoxy and verify shaft voltage drops below 1.5V pk-pk.`,
           status: 'HYPOTHESIS',
         });
 
@@ -636,7 +639,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `VFD Inverter DC Bus Ripple & Cooling Fan Heat Sink Thermal Choking on ${assetTag}`,
           probability: 43,
           severity: 'MEDIUM',
-          mechanismExplanation: `Electrolytic capacitor bank degradation in the VFD power module increases DC bus voltage ripple. Dust accumulation on heat sink cooling fans reduces thermal dissipation.`,
+          mechanismExplanation: `DC bus capacitor ripple drift and clogged heatsink fan louvers cause inverter thermal throttling under plant load.`,
           mttr: '30–45 mins',
           requiredSkill: 'L2 Automation / Drive Specialist',
           downtimeRisk: 'Moderate',
@@ -650,7 +653,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['ESD Grounding Wrist Strap', 'Compressed Dry Nitrogen Canister', 'Digital Multimeter'],
           spareParts: ['VFD Cabinet Louver Filter Media (10x10 in)', '24V DC Heatsink Brushless Fan'],
           verifiedSources: workOrderCitations.slice(0, 1),
-          recommendedFix: `Isolate VFD input breaker. Wait 10 minutes for DC bus capacitor discharge to < 50 VDC. Vacuum and blow clean heatsink cooling fins, and replace cabinet intake filter.`,
+          recommendedFix: `Lock out drive, wait 10 min for capacitor discharge to < 50VDC, blow clean heatsink cooling fins, and replace air filter.`,
           status: 'HYPOTHESIS',
         });
       } else {
@@ -664,7 +667,7 @@ Return ONLY a valid JSON object matching this schema:
             : `Bearing Lubrication Starvation & Hydrodynamic Thermal Runaway on ${assetTag}`,
           probability: 88,
           severity: 'CRITICAL',
-          mechanismExplanation: `Operational telemetry and field observed symptom (${symptom}) indicate dynamic seal dry-running or hydraulic cavitation turbulence within ${assetTag}. When fluid velocity drops below critical NPSHa or vapor pressure spikes, localized micro-implosions erode seal faces and impeller tips, causing chatter and pressure drop.`,
+          mechanismExplanation: `Localized suction pressure drop below fluid vapor pressure causes cavitation implosions and thermal seal face micro-cracking.`,
           mttr: '45–60 mins',
           requiredSkill: 'L2 Mechanical Rotating Equipment Specialist',
           downtimeRisk: 'Critical',
@@ -678,16 +681,16 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Digital Dial Indicator with Magnetic Base', 'Laser Alignment Tool', 'Torque Wrench 85 ft-lbs', 'IR Pyrometer'],
           spareParts: ['Cartridge Mechanical Seal Kit (API 682 Plan 11)', 'Spiral Wound 316SS Casing Gasket', 'Fluoroelastomer O-Ring Set'],
           verifiedSources: manualCitations.slice(0, 2).concat(expertCitations.slice(0, 1)),
-          recommendedFix: `Isolate suction block valve, execute LOTO energy isolation, depressurize flush piping, inspect seal faces for thermal stress discoloration, and replace seal cartridge if leakage exceeds 5 drops/min.`,
+          recommendedFix: `Isolate suction valves, verify zero energy under LOTO, check seal faces for thermal discoloration, and replace seal cartridge if dripping.`,
           status: 'HYPOTHESIS',
         });
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Flexible Shaft Coupling Misalignment & Foundation Soft-Foot Resonance on ${assetTag}` ,
+          title: `Flexible Shaft Coupling Misalignment & Foundation Soft-Foot Resonance on ${assetTag}`,
           probability: 66,
           severity: 'HIGH',
-          mechanismExplanation: `Angular and offset shaft misalignment between driver motor and ${assetTag} creates cyclic bending moments on shaft bearings. Under thermal growth, soft-foot base plate shim deflection amplifies 2X running speed vibration harmonics.`,
+          mechanismExplanation: `Shaft centerline angular and offset misalignment induces 2X vibration harmonics, exacerbated by baseplate soft-foot resonance.`,
           mttr: '40–50 mins',
           requiredSkill: 'L2 Precision Alignment Technician',
           downtimeRisk: 'High',
@@ -701,7 +704,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Dual-Beam Laser Alignment Tool', 'Feeler Gauge Set (.0015 - .035 in)', 'Torque Wrench (85 ft-lbs)'],
           spareParts: ['Precision 304 Stainless Steel Alignment Shims (Kit)', 'Elastomeric Coupling Spider Insert'],
           verifiedSources: manualCitations.slice(1, 3).concat(expertCitations.slice(1, 2)),
-          recommendedFix: `Unbolt coupling guard under LOTO. Mount laser alignment sensors across hubs. Loosen hold-down bolts, eliminate soft foot to under 0.002 in, and re-torque foundation fasteners in cross-pattern.`,
+          recommendedFix: `Mount laser alignment sensors across hubs, correct soft-foot shim deflection to < 0.002 in, and torque foundation bolts to 85 ft-lbs.`,
           status: 'HYPOTHESIS',
         });
 
@@ -710,7 +713,7 @@ Return ONLY a valid JSON object matching this schema:
           title: `Suction Line Strainer Mesh Blockage & Fluid Starvation on ${assetTag}`,
           probability: 44,
           severity: 'MEDIUM',
-          mechanismExplanation: `Accumulation of particulate slurry or scale in the upstream suction strainer basket restricts net suction head, creating localized fluid starvation and suction piping hammering.`,
+          mechanismExplanation: `Particulate scale accumulation blinds suction strainer mesh, restricting flow below minimum continuous stable rate.`,
           mttr: '30–40 mins',
           requiredSkill: 'L1 Mechanical Technician',
           downtimeRisk: 'Moderate',
@@ -724,7 +727,7 @@ Return ONLY a valid JSON object matching this schema:
           requiredTools: ['Differential Pressure Gauge', 'Strainer Cover Wrench', 'Brass Wire Cleaning Brush'],
           spareParts: ['40-Mesh 316SS Replacement Strainer Basket', 'EPDM Strainer Bonnet Gasket'],
           verifiedSources: workOrderCitations.slice(0, 1),
-          recommendedFix: `Close suction block valve, open drain valve to relieve residual pressure, remove strainer bonnet, clean 40-mesh basket, and replace elastomer gasket.`,
+          recommendedFix: `Close suction block valve, bleed casing pressure, remove strainer bonnet, clean 40-mesh basket, and fit new EPDM gasket.`,
           status: 'HYPOTHESIS',
         });
       }
