@@ -70,7 +70,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
   const audioBufferSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const filePlaybackStartTimeRef = useRef<number>(0);
   const filePlaybackOffsetRef = useRef<number>(0);
-  const filePlaybackTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const filePlaybackTimerRef = useRef<any>(null);
 
   // Mode 3: Display Media (Tab/System Audio) State
   const [isCapturingSystemAudio, setIsCapturingSystemAudio] = useState(false);
@@ -120,7 +120,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
   const monitorGainRef = useRef<GainNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const scanTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const scanTimerRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
 

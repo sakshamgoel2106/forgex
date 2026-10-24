@@ -4917,6 +4917,168 @@ export const SopExecutionView: React.FC<{
             : 'PUMP-001 (Lowara 10SV08F030T)'
         }
       />
+
+      {/* 7. Delete Ticket Confirmation Modal */}
+      <Modal
+        isOpen={deleteModalState.isOpen}
+        onClose={() => {
+          if (!isSubmitting) setDeleteModalState({ isOpen: false, targetCase: null });
+        }}
+        title="Confirm Work Order Deletion"
+        subtitle={
+          deleteModalState.targetCase
+            ? `Case ${deleteModalState.targetCase.caseNumber} • ${deleteModalState.targetCase.assetTag || 'Asset'}`
+            : undefined
+        }
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={isSubmitting}
+              onClick={() => setDeleteModalState({ isOpen: false, targetCase: null })}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={isSubmitting}
+              onClick={() => handleDeleteCase(deleteModalState.targetCase)}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-bold inline-flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{isSubmitting ? 'Deleting...' : 'Delete Work Order'}</span>
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3 font-sans text-xs">
+          <p className="text-slate-700 text-sm font-medium">
+            Are you sure you want to permanently delete ticket{' '}
+            <strong className="text-slate-900 font-mono">
+              {deleteModalState.targetCase?.caseNumber}
+            </strong>?
+          </p>
+
+          <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1">
+            <div className="font-bold flex items-center gap-1">
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+              <span>Dispatched / Unstarted Work Order</span>
+            </div>
+            <p className="text-[11px] text-rose-800 leading-relaxed">
+              This ticket has not yet begun field execution and will be cleanly removed from the technician execution queue and dispatch boards.
+            </p>
+          </div>
+        </div>
+      </Modal>
+
+      {/* 8. Edit Ticket Details Modal */}
+      <Modal
+        isOpen={editModalState.isOpen}
+        onClose={() => {
+          if (!isSubmitting) setEditModalState((prev) => ({ ...prev, isOpen: false }));
+        }}
+        title="Edit Ticket Details"
+        subtitle={
+          editModalState.caseNumber
+            ? `Editing Work Order ${editModalState.caseNumber}`
+            : undefined
+        }
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={isSubmitting}
+              onClick={() => setEditModalState((prev) => ({ ...prev, isOpen: false }))}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={isSubmitting}
+              onClick={handleSaveTicketEdits}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold inline-flex items-center gap-1.5"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>{isSubmitting ? 'Saving...' : 'Save Changes'}</span>
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3.5 font-sans text-xs">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
+              Ticket Title *
+            </label>
+            <input
+              type="text"
+              value={editModalState.title}
+              onChange={(e) => setEditModalState((prev) => ({ ...prev, title: e.target.value }))}
+              placeholder="e.g. Centrifugal Pump Cavitation & Bearing Vibration"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 font-medium focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
+                Priority / Severity *
+              </label>
+              <select
+                value={editModalState.severity}
+                onChange={(e) =>
+                  setEditModalState((prev) => ({
+                    ...prev,
+                    severity: e.target.value as MaintenanceCaseSeverity,
+                  }))
+                }
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 font-medium focus:outline-none focus:border-blue-500 focus:bg-white"
+              >
+                <option value="CRITICAL">Critical (Plant Shutdown Risk)</option>
+                <option value="HIGH">High (Impaired Quality / Anomaly)</option>
+                <option value="MEDIUM">Medium (Normal Preventive Repair)</option>
+                <option value="LOW">Low (Minor Cosmetic / Inspection)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
+                Alarm / Error Code
+              </label>
+              <input
+                type="text"
+                value={editModalState.errorCode}
+                onChange={(e) => setEditModalState((prev) => ({ ...prev, errorCode: e.target.value }))}
+                placeholder="e.g. ALM-VIB-902"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-900 font-mono font-medium focus:outline-none focus:border-blue-500 focus:bg-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
+              Observed Symptoms &amp; Telemetry Findings *
+            </label>
+            <textarea
+              rows={4}
+              value={editModalState.symptoms}
+              onChange={(e) => setEditModalState((prev) => ({ ...prev, symptoms: e.target.value }))}
+              placeholder="Describe observed physical symptoms, sensor telemetry spikes, and operating conditions..."
+              className="w-full p-2.5 rounded-lg bg-slate-50 border border-slate-300 text-xs text-slate-900 font-sans focus:outline-none focus:border-blue-500 focus:bg-white leading-relaxed"
+            />
+          </div>
+
+          <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded-lg text-[11px] text-blue-900 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>
+              Saving will immediately update this ticket across all modules and record an immutable audit event in the work order history.
+            </span>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
