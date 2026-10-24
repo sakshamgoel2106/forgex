@@ -178,8 +178,28 @@ Respond in strict JSON with:
 
         const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${this._apiKey}`;
         
-        // Prepare multimodal parts: Text prompt + inline audio data if present
+        // Prepare multimodal parts: Text prompt + inline audio/image data if present
         const parts: any[] = [{ text: prompt }];
+
+        if (request.imageBase64) {
+          const rawImg = request.imageBase64;
+          let imgMime = 'image/jpeg';
+          let imgData = rawImg;
+          if (rawImg.startsWith('data:')) {
+            const m = rawImg.match(/^data:([^;]+);base64,(.+)$/);
+            if (m) {
+              imgMime = m[1];
+              imgData = m[2];
+            }
+          }
+          parts.push({
+            inlineData: {
+              mimeType: imgMime,
+              data: imgData,
+            },
+          });
+        }
+
         if (request.acousticTelemetry?.audioBase64) {
           const rawAudio = request.acousticTelemetry.audioBase64;
           let audioMime = request.acousticTelemetry.audioMimeType || 'audio/webm';

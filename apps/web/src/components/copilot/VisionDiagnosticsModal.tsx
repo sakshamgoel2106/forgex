@@ -42,7 +42,7 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
   // Hardware Camera Device States
   const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
-  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [isMirrored, setIsMirrored] = useState<boolean>(false);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
@@ -68,6 +68,32 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
     }
   }, [isOpen, selectedMachine, currentLanguage]);
 
+  // Global Ctrl+V / Cmd+V Clipboard Image Paste Listener
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          const file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            processImageFile(file, 'Clipboard Paste (Ctrl+V)');
+            break;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+    };
+  }, [isOpen]);
+
   // Clean up camera stream on close
   const stopCamera = useCallback(() => {
     if (streamRef.current) {
@@ -92,8 +118,8 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
     }
   }, [selectedCameraId]);
 
-  // Start live hardware camera stream
-  const startCamera = useCallback(async (deviceIdToUse?: string, forcedFacing?: 'environment' | 'user') => {
+  // Start live hardware camera stream (Desktop widescreen 1280x720)
+  const startCamera = useCallback(async (deviceIdToUse?: string) => {
     setCameraError(null);
     stopCamera();
 
@@ -103,13 +129,12 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
     }
 
     try {
-      const targetFacing = forcedFacing || facingMode;
       const targetDeviceId = deviceIdToUse || selectedCameraId;
 
       const constraints: MediaStreamConstraints = {
         video: targetDeviceId
-          ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-          : { facingMode: targetFacing, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       };
 
@@ -129,14 +154,11 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
         `Camera Error: ${err?.message || 'Access denied or device is currently in use'}. Please permit webcam access or use file upload.`
       );
     }
-  }, [selectedCameraId, facingMode, stopCamera, enumerateCameras]);
+  }, [selectedCameraId, stopCamera, enumerateCameras]);
 
-  // Flip between front and rear cameras
-  const toggleFacingMode = () => {
-    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
-    setFacingMode(nextFacing);
-    setSelectedCameraId('');
-    startCamera(undefined, nextFacing);
+  // Toggle Horizontal Mirror for Desktop Webcam
+  const toggleMirror = () => {
+    setIsMirrored((prev) => !prev);
   };
 
   // Switch camera by device ID
@@ -156,16 +178,20 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    if (isMirrored) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUri = canvas.toDataURL('image/jpeg', 0.94);
 
     setSelectedImage(dataUri);
-    setImageSourceLabel('Live Hardware Camera Capture');
+    setImageSourceLabel('Desktop HD Webcam Capture');
     stopCamera();
   };
 
-  // Process uploaded image file
-  const processImageFile = (file: File) => {
+  // Process uploaded or pasted image file
+  const processImageFile = (file: File, sourceName?: string) => {
     if (!file) return;
     if (!file.type.startsWith('image/')) {
       alert('Please upload a valid image file (.jpg, .png, .webp)');
@@ -177,7 +203,7 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
       const dataUri = event.target?.result as string;
       if (dataUri) {
         setSelectedImage(dataUri);
-        setImageSourceLabel(`Uploaded Photo: ${file.name}`);
+        setImageSourceLabel(sourceName || `Uploaded Photo: ${file.name}`);
         stopCamera();
       }
     };
@@ -352,12 +378,16 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
 
               <button
                 type="button"
-                onClick={toggleFacingMode}
-                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
-                title="Toggle Front/Rear Camera"
+                onClick={toggleMirror}
+                className={`px-2.5 py-1 rounded-lg border text-xs font-mono flex items-center gap-1.5 transition cursor-pointer ${
+                  isMirrored
+                    ? 'bg-blue-600/30 border-blue-500 text-blue-300'
+                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+                }`}
+                title="Toggle Horizontal Mirror View"
               >
                 <Repeat className="w-3 h-3 text-blue-400" />
-                <span>Flip ({facingMode === 'environment' ? 'Rear' : 'Front'})</span>
+                <span>Mirror: {isMirrored ? 'ON' : 'OFF'}</span>
               </button>
 
               <button
@@ -396,7 +426,7 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
                       autoPlay
                       playsInline
                       muted
-                      className="w-full h-full object-cover"
+                      className={`w-full h-full object-cover ${isMirrored ? '-scale-x-100' : ''}`}
                     />
 
                     {/* Industrial Targeting Reticle Overlay */}
@@ -406,7 +436,7 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
                       </div>
                       <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-mono text-emerald-400 border border-emerald-500/40 flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                        LIVE VIEWFINDER · 1080p
+                        LIVE HD WEBCAM · 720p
                       </div>
                     </div>
 
@@ -452,13 +482,13 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
                   Drop Shop-Floor Photo or Click to Browse
                 </h4>
                 <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                  Upload high-resolution camera photos of analog pressure gauges, isolation padlocks, nameplates, or corroded mechanical seals.
+                  Drag any analog pressure gauge, valve, breaker, or mechanical part photo directly from PC explorer, or press <strong className="text-blue-400 font-mono">Ctrl+V</strong> anywhere to paste a clipboard screenshot.
                 </p>
                 <div className="mt-3 flex items-center gap-2 text-[10px] font-mono text-slate-500">
                   <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">PNG</span>
                   <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">JPEG</span>
                   <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">WEBP</span>
-                  <span className="text-slate-400">Up to 50 MB</span>
+                  <span className="px-2 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-700/60 font-bold">Ctrl+V Paste Ready</span>
                 </div>
               </div>
             )}

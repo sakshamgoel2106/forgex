@@ -67,6 +67,8 @@ export interface GenerationRequest {
   retrievalQuery?: string;
   acousticTelemetry?: AcousticTelemetry;
   visionDiagnostic?: VisionDiagnosticResult;
+  imageBase64?: string;
+  imageMimeType?: string;
 }
 
 export interface RawCitationOutput {

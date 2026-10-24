@@ -195,6 +195,11 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
           'Work Order Dispatched',
           `Ticket ${json.data.caseNumber || json.data.id} created & routed to ${assignedQueue.replace(/_/g, ' ')}.`
         );
+        try {
+          sessionStorage.setItem('forgex_latest_case', JSON.stringify(json.data));
+          window.dispatchEvent(new CustomEvent('forgex:case-created', { detail: json.data }));
+          window.dispatchEvent(new CustomEvent('forgex:ticket-created', { detail: json.data }));
+        } catch {}
         onWorkOrderCreated?.(json.data);
         onClose();
       } else {

@@ -17,10 +17,10 @@ import {
   MicOff,
   Volume2,
   Radio,
-  SwitchCamera,
+  Repeat,
   FileUp,
+  X,
 } from 'lucide-react';
-import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
 import { apiFetch } from '../../lib/api';
 import type { SupportedLanguageCode } from '@forgex/shared-types';
@@ -97,7 +97,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
-  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [isMirrored, setIsMirrored] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -244,9 +244,35 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     }
   }, [selectedCameraId]);
 
-  // Start live hardware camera stream
+  // Global Ctrl+V / Cmd+V Clipboard Image Paste Listener for Step 3
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          const file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            processImageFile(file);
+            break;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+    };
+  }, [isOpen]);
+
+  // Start live hardware camera stream (Desktop widescreen 1280x720)
   const startCamera = useCallback(
-    async (deviceIdToUse?: string, forcedFacing?: 'environment' | 'user') => {
+    async (deviceIdToUse?: string) => {
       setCameraError(null);
       stopCamera();
 
@@ -256,13 +282,12 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
       }
 
       try {
-        const targetFacing = forcedFacing || facingMode;
         const targetDeviceId = deviceIdToUse || selectedCameraId;
 
         const constraints: MediaStreamConstraints = {
           video: targetDeviceId
-            ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-            : { facingMode: targetFacing, width: { ideal: 1920 }, height: { ideal: 1080 } },
+            ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
         };
 
@@ -283,15 +308,12 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
         setIsCameraActive(false);
       }
     },
-    [selectedCameraId, facingMode, stopCamera, enumerateCameras]
+    [selectedCameraId, stopCamera, enumerateCameras]
   );
 
-  // Flip front/rear camera
-  const toggleFacingMode = () => {
-    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
-    setFacingMode(nextFacing);
-    setSelectedCameraId('');
-    startCamera(undefined, nextFacing);
+  // Toggle horizontal mirror for desktop webcam
+  const toggleMirror = () => {
+    setIsMirrored((prev) => !prev);
   };
 
   // Switch camera by ID
@@ -305,10 +327,14 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     if (!videoRef.current) return;
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1920;
-    canvas.height = video.videoHeight || 1080;
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
     if (ctx) {
+      if (isMirrored) {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUri = canvas.toDataURL('image/jpeg', 0.95);
       stopCamera();
@@ -636,55 +662,49 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     }
   }, [isOpen, stopVoiceRecognition]);
 
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={() => {
-        stopCamera();
-        stopVoiceRecognition();
-        onClose();
-      }}
-      title="OSHA 1910.147 Vision-Locked Lockout/Tagout (LOTO)"
-      subtitle={`Machine Energy Isolation & Zero-Energy Verification Protocol · Target: ${assetTag}`}
-      maxWidth="2xl"
-      footer={
-        <div className="flex items-center justify-between w-full">
-          <Button variant="secondary" size="sm" onClick={handleReset} className="flex items-center gap-1.5 text-xs">
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset LOTO Sequence</span>
-          </Button>
+  if (!isOpen) return null;
 
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                stopCamera();
-                stopVoiceRecognition();
-                onClose();
-              }}
-            >
-              Close
-            </Button>
-            {step4Completed && (
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => {
-                  stopCamera();
-                  stopVoiceRecognition();
-                  onClose();
-                }}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
-              >
-                Proceed to Mechanical Maintenance &rarr;
-              </Button>
-            )}
+  return (
+    <div className="fixed inset-0 z-50 overflow-hidden flex justify-end bg-slate-950/40 backdrop-blur-xs animate-in fade-in duration-150">
+      <div
+        className="absolute inset-0 cursor-pointer"
+        onClick={() => {
+          stopCamera();
+          stopVoiceRecognition();
+          onClose();
+        }}
+      />
+      <div className="relative w-full max-w-2xl bg-white border-l border-slate-200 shadow-2xl flex flex-col h-full z-10 animate-in slide-in-from-right duration-200 overflow-hidden">
+        {/* Slide-Over Header */}
+        <div className="px-6 py-4 border-b border-slate-200 bg-white flex items-center justify-between shrink-0">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-900 tracking-tight font-sans">
+                OSHA 1910.147 Vision-Locked Lockout/Tagout (LOTO)
+              </h3>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800 border border-blue-300">
+                SPLIT-PANE DESK
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5 font-sans">
+              Machine Energy Isolation Protocol · Target: {assetTag}
+            </p>
           </div>
+          <button
+            onClick={() => {
+              stopCamera();
+              stopVoiceRecognition();
+              onClose();
+            }}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
-      }
-    >
-      <div className="space-y-4 font-sans text-xs">
+
+        {/* Slide-Over Scrollable Body */}
+        <div className="p-6 overflow-y-auto flex-1 text-xs text-slate-700 bg-white">
+          <div className="space-y-4 font-sans text-xs">
         {/* Top Compliance Header Banner + Hands-Free Voice Toggle */}
         <div
           className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
@@ -1086,10 +1106,10 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                     >
                       <FileUp className="w-6 h-6 text-slate-400 mx-auto mb-1.5" />
                       <p className="text-xs font-semibold text-slate-700">
-                        Drop real shop-floor photo here, or click to browse
+                        Drop real pressure gauge photo here, or click to browse
                       </p>
                       <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
-                        Supports real JPG, PNG, WebP photos of gauges, padlocks, or valves
+                        Supports real JPG, PNG, WebP photos · Or press <strong className="text-blue-600 font-bold">Ctrl+V</strong> anywhere to paste clipboard screenshot
                       </p>
                     </div>
                   </div>
@@ -1099,7 +1119,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                     <div className="absolute top-2 left-2 right-2 z-10 flex items-center justify-between pointer-events-auto">
                       <div className="flex items-center gap-1.5 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-white text-[11px] font-mono">
                         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                        <span>LIVE 1080P VIEWFINDER</span>
+                        <span>LIVE HD WEBCAM · 720p</span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         {cameraDevices.length > 1 && (
@@ -1117,14 +1137,16 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                         )}
                         <button
                           type="button"
-                          onClick={toggleFacingMode}
-                          className="px-2 py-1 rounded-md bg-black/70 hover:bg-black text-white text-xs border border-white/20 flex items-center gap-1"
-                          title="Flip Front / Rear Camera"
+                          onClick={toggleMirror}
+                          className={`px-2 py-1 rounded-md text-xs border flex items-center gap-1 transition ${
+                            isMirrored
+                              ? 'bg-blue-600/40 text-blue-200 border-blue-400'
+                              : 'bg-black/70 hover:bg-black text-white border-white/20'
+                          }`}
+                          title="Toggle Horizontal Mirror View"
                         >
-                          <SwitchCamera className="w-3.5 h-3.5" />
-                          <span className="text-[10px] hidden sm:inline">
-                            {facingMode === 'environment' ? 'Rear' : 'Front'}
-                          </span>
+                          <Repeat className="w-3.5 h-3.5" />
+                          <span className="text-[10px]">Mirror: {isMirrored ? 'ON' : 'OFF'}</span>
                         </button>
                         <button
                           type="button"
@@ -1141,7 +1163,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                       autoPlay
                       playsInline
                       muted
-                      className="w-full h-56 object-cover"
+                      className={`w-full h-56 object-cover ${isMirrored ? '-scale-x-100' : ''}`}
                     />
 
                     {/* Circular Alignment Reticle */}
@@ -1355,6 +1377,44 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
           </div>
         </div>
       </div>
-    </Modal>
+    </div>
+
+    {/* Slide-Over Footer */}
+    <div className="px-6 py-3.5 border-t border-slate-200 bg-slate-50/90 flex items-center justify-between gap-2 shrink-0">
+      <Button variant="secondary" size="sm" onClick={handleReset} className="flex items-center gap-1.5 text-xs">
+        <RotateCcw className="w-3.5 h-3.5" />
+        <span>Reset LOTO</span>
+      </Button>
+
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            stopCamera();
+            stopVoiceRecognition();
+            onClose();
+          }}
+        >
+          Close
+        </Button>
+        {step4Completed && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => {
+              stopCamera();
+              stopVoiceRecognition();
+              onClose();
+            }}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+          >
+            Proceed to Maintenance &rarr;
+          </Button>
+        )}
+      </div>
+    </div>
+  </div>
+</div>
   );
 };
