@@ -6,18 +6,16 @@ import {
   VolumeX,
   Mic,
   Play,
+  Pause,
   Sparkles,
   CheckCircle2,
   AlertTriangle,
-  Radio,
-  ShieldCheck,
   RefreshCw,
   Cpu,
   Gauge,
+  ChevronDown,
 } from 'lucide-react';
 import type { AcousticTelemetry, AcousticAnomalyPattern, Machine } from '@forgex/shared-types';
-
-export type AcousticSourceMode = 'MIC' | 'PRESET_CAVITATION' | 'PRESET_BEARING' | 'PRESET_NORMAL';
 
 interface AcousticDiagnosticsModalProps {
   isOpen: boolean;
@@ -38,23 +36,32 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
   onDiagnose,
   currentLanguage = 'en-US',
 }) => {
-  // Source Selection
-  const [sourceMode, setSourceMode] = useState<AcousticSourceMode>('PRESET_CAVITATION');
-  const [audioMonitorEnabled, setAudioMonitorEnabled] = useState(false);
+  // Hardware Audio Devices State
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [selectedDeviceLabel, setSelectedDeviceLabel] = useState<string>('Default Hardware Microphone');
+  const [isDeviceMenuOpen, setIsDeviceMenuOpen] = useState(false);
   const [micPermissionError, setMicPermissionError] = useState<string | null>(null);
+  const [audioMonitorEnabled, setAudioMonitorEnabled] = useState(false);
 
-  // Scanning State
+  // Scanning & Recording State
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState(0); // 0 - 100%
   const [timeRemainingSec, setTimeRemainingSec] = useState(5.0);
   const [isScanComplete, setIsScanComplete] = useState(false);
 
-  // Real-time Telemetry State
-  const [liveDominantHz, setLiveDominantHz] = useState(1450);
-  const [livePeakDb, setLivePeakDb] = useState(-14.2);
-  const [liveBandEnergy, setLiveBandEnergy] = useState({ low: 0.15, mid: 0.65, high: 0.20 });
-  const [liveCrestFactor, setLiveCrestFactor] = useState<'LOW' | 'MEDIUM' | 'HIGH'>('HIGH');
-  const [detectedPattern, setDetectedPattern] = useState<AcousticAnomalyPattern>('CAVITATION_SUSPECTED');
+  // Audio Playback State for Recorded Machine Audio
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+  const [recordedBase64, setRecordedBase64] = useState<string | null>(null);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+
+  // Real-time Hardware Telemetry State
+  const [liveDominantHz, setLiveDominantHz] = useState(120);
+  const [livePeakDb, setLivePeakDb] = useState(-42.0);
+  const [liveBandEnergy, setLiveBandEnergy] = useState({ low: 0.33, mid: 0.34, high: 0.33 });
+  const [liveCrestFactor, setLiveCrestFactor] = useState<'LOW' | 'MEDIUM' | 'HIGH'>('LOW');
+  const [detectedPattern, setDetectedPattern] = useState<AcousticAnomalyPattern>('NOMINAL');
   const [capturedTelemetry, setCapturedTelemetry] = useState<AcousticTelemetry | null>(null);
 
   // Machine Target
@@ -66,16 +73,19 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     area: 'Cooling Loop Alpha',
   };
 
-  // Audio Context & Analyser Refs
+  // Audio Context, Nodes & MediaRecorder Refs
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const sourceNodeRef = useRef<AudioNode | null>(null);
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const monitorGainRef = useRef<GainNode | null>(null);
-  const synthNodesRef = useRef<AudioNode[]>([]);
   const animationFrameRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const scanTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+
+  // Rolling Sample Accumulator during 5-second scan
   const accumulatedSamplesRef = useRef<{
     domHzList: number[];
     peakDbList: number[];
@@ -92,17 +102,46 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     snapshots: [],
   });
 
-  // Stop synthetic audio nodes safely
-  const stopSyntheticNodes = useCallback(() => {
-    synthNodesRef.current.forEach((node) => {
-      try {
-        if ('stop' in node && typeof (node as any).stop === 'function') {
-          (node as any).stop();
+  // Enumerate physical hardware audio devices
+  const enumerateHardwareMics = useCallback(async (requestPermissionFirst = false) => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) {
+      setMicPermissionError('Web Audio API or MediaDevices not supported in this browser.');
+      return;
+    }
+
+    try {
+      if (requestPermissionFirst) {
+        try {
+          const tempStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
+          });
+          tempStream.getTracks().forEach((t) => t.stop());
+        } catch {
+          // If denied, enumerate will still return default device without label
         }
-        node.disconnect();
-      } catch {}
-    });
-    synthNodesRef.current = [];
+      }
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((d) => d.kind === 'audioinput');
+      setAudioDevices(audioInputs);
+
+      if (audioInputs.length > 0) {
+        // If current selection is invalid or empty, pick the first
+        setSelectedDeviceId((prev) => {
+          const exists = audioInputs.some((d) => d.deviceId === prev);
+          if (exists && prev) return prev;
+          const first = audioInputs[0];
+          setSelectedDeviceLabel(first.label || 'Default Physical Microphone');
+          return first.deviceId;
+        });
+      }
+    } catch (err: any) {
+      console.warn('Failed to enumerate hardware audio devices:', err);
+    }
   }, []);
 
   // Stop live microphone stream safely
@@ -117,9 +156,15 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       } catch {}
       sourceNodeRef.current = null;
     }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+      mediaRecorderRef.current = null;
+    }
   }, []);
 
-  // Cleanup all audio resources
+  // Teardown all Web Audio resources
   const teardownAudio = useCallback(() => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -129,7 +174,6 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       clearInterval(scanTimerRef.current);
       scanTimerRef.current = null;
     }
-    stopSyntheticNodes();
     stopMicStream();
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       try {
@@ -139,25 +183,34 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     }
     analyserRef.current = null;
     monitorGainRef.current = null;
-  }, [stopSyntheticNodes, stopMicStream]);
 
-  // Setup Web Audio Graph for selected mode
-  const setupAudioGraph = useCallback(async (mode: AcousticSourceMode) => {
-    stopSyntheticNodes();
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      setIsPlayingAudio(false);
+    }
+  }, [stopMicStream]);
+
+  // Setup Web Audio Graph with RAW, UNFILTERED Hardware Stream
+  const setupHardwareAudio = useCallback(async (deviceIdToUse?: string) => {
     stopMicStream();
     setMicPermissionError(null);
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setMicPermissionError('Browser does not support navigator.mediaDevices.getUserMedia');
+      return;
+    }
 
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-        audioContextRef.current = new AudioCtx();
+        audioContextRef.current = new AudioCtx({ sampleRate: 48000 });
       }
       const ctx = audioContextRef.current;
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
 
-      // Analyser Node configuration
+      // Analyser Node configuration (FFT 2048)
       if (!analyserRef.current) {
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
@@ -166,189 +219,83 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       }
       const analyser = analyserRef.current;
 
-      // Monitor Gain Node (audio output to speakers/headphones)
+      // Monitor Gain Node (audio output to headphones/speakers)
       if (!monitorGainRef.current) {
         const gain = ctx.createGain();
-        gain.gain.value = audioMonitorEnabled ? 0.08 : 0.0;
+        gain.gain.value = audioMonitorEnabled ? 0.05 : 0.0;
         gain.connect(ctx.destination);
         monitorGainRef.current = gain;
       }
 
-      if (mode === 'MIC') {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-            },
-          });
-          micStreamRef.current = stream;
-          const source = ctx.createMediaStreamSource(stream);
-          sourceNodeRef.current = source;
-          source.connect(analyser);
-          // Do not route mic to speakers to avoid feedback loop
-        } catch (err: any) {
-          setMicPermissionError('Microphone permission denied or device busy. Falling back to Acoustic Presets.');
-          setSourceMode('PRESET_CAVITATION');
-          return;
-        }
-      } else if (mode === 'PRESET_CAVITATION') {
-        // Synthesize Real Cavitation Acoustic Signature:
-        // White/Pink noise buffer filtered through 1450 Hz bandpass (blade pass & bubble collapse)
-        // plus low frequency 60/120 Hz shaft rumble
-        const bufferSize = ctx.sampleRate * 3;
-        const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const output = noiseBuffer.getChannelData(0);
-        let lastOut = 0.0;
-        for (let i = 0; i < bufferSize; i++) {
-          const white = Math.random() * 2 - 1;
-          output[i] = (lastOut + 0.02 * white) / 1.02; // pinkish noise
-          lastOut = output[i];
-          // Add random cavitation crackle impulses
-          if (Math.random() < 0.015) {
-            output[i] += (Math.random() - 0.5) * 1.5;
-          }
-        }
+      // STRICT INDUSTRIAL AUDIO CAPTURE: Voice filters completely disabled
+      const effectiveDeviceId = deviceIdToUse || selectedDeviceId;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: effectiveDeviceId ? { exact: effectiveDeviceId } : undefined,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1,
+          sampleRate: 48000,
+        },
+      });
 
-        const noiseSource = ctx.createBufferSource();
-        noiseSource.buffer = noiseBuffer;
-        noiseSource.loop = true;
+      micStreamRef.current = stream;
 
-        const bandpass = ctx.createBiquadFilter();
-        bandpass.type = 'bandpass';
-        bandpass.frequency.value = 1450;
-        bandpass.Q.value = 2.4;
-
-        const rumbleOsc = ctx.createOscillator();
-        rumbleOsc.type = 'sawtooth';
-        rumbleOsc.frequency.value = 60;
-
-        const rumbleGain = ctx.createGain();
-        rumbleGain.gain.value = 0.15;
-
-        const masterPresetGain = ctx.createGain();
-        masterPresetGain.gain.value = 0.75;
-
-        noiseSource.connect(bandpass);
-        bandpass.connect(masterPresetGain);
-        rumbleOsc.connect(rumbleGain);
-        rumbleGain.connect(masterPresetGain);
-
-        masterPresetGain.connect(analyser);
-        if (monitorGainRef.current) {
-          masterPresetGain.connect(monitorGainRef.current);
-        }
-
-        noiseSource.start();
-        rumbleOsc.start();
-
-        synthNodesRef.current = [noiseSource, bandpass, rumbleOsc, rumbleGain, masterPresetGain];
-      } else if (mode === 'PRESET_BEARING') {
-        // Synthesize Real High-Frequency Bearing Wear Signature:
-        // High frequency harmonic resonance peaks (3420 Hz & 4850 Hz) + high-pass friction noise
-        const bufferSize = ctx.sampleRate * 2;
-        const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-        const output = noiseBuffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-          output[i] = (Math.random() * 2 - 1) * 0.4;
-        }
-
-        const noiseSource = ctx.createBufferSource();
-        noiseSource.buffer = noiseBuffer;
-        noiseSource.loop = true;
-
-        const highpass = ctx.createBiquadFilter();
-        highpass.type = 'highpass';
-        highpass.frequency.value = 2800;
-
-        const peakOsc1 = ctx.createOscillator();
-        peakOsc1.type = 'sine';
-        peakOsc1.frequency.value = 3420; // Dominant bearing ring frequency
-
-        const peakOsc2 = ctx.createOscillator();
-        peakOsc2.type = 'sine';
-        peakOsc2.frequency.value = 4850; // Second harmonic
-
-        const amModulator = ctx.createOscillator();
-        amModulator.type = 'sawtooth';
-        amModulator.frequency.value = 138; // Ball pass frequency impact pulses
-
-        const amGain = ctx.createGain();
-        amGain.gain.value = 0.35;
-
-        const masterPresetGain = ctx.createGain();
-        masterPresetGain.gain.value = 0.65;
-
-        noiseSource.connect(highpass);
-        highpass.connect(masterPresetGain);
-        peakOsc1.connect(masterPresetGain);
-        peakOsc2.connect(masterPresetGain);
-        amModulator.connect(amGain);
-        amGain.connect(masterPresetGain.gain);
-
-        masterPresetGain.connect(analyser);
-        if (monitorGainRef.current) {
-          masterPresetGain.connect(monitorGainRef.current);
-        }
-
-        noiseSource.start();
-        peakOsc1.start();
-        peakOsc2.start();
-        amModulator.start();
-
-        synthNodesRef.current = [noiseSource, highpass, peakOsc1, peakOsc2, amModulator, amGain, masterPresetGain];
-      } else if (mode === 'PRESET_NORMAL') {
-        // Synthesize Normal Baseline Pump Operation:
-        // Smooth 60 Hz + 120 Hz electrical motor hum + gentle baseline noise
-        const humOsc1 = ctx.createOscillator();
-        humOsc1.type = 'sine';
-        humOsc1.frequency.value = 60;
-
-        const humOsc2 = ctx.createOscillator();
-        humOsc2.type = 'sine';
-        humOsc2.frequency.value = 120;
-
-        const humGain = ctx.createGain();
-        humGain.gain.value = 0.25;
-
-        const masterPresetGain = ctx.createGain();
-        masterPresetGain.gain.value = 0.45;
-
-        humOsc1.connect(humGain);
-        humOsc2.connect(humGain);
-        humGain.connect(masterPresetGain);
-
-        masterPresetGain.connect(analyser);
-        if (monitorGainRef.current) {
-          masterPresetGain.connect(monitorGainRef.current);
-        }
-
-        humOsc1.start();
-        humOsc2.start();
-
-        synthNodesRef.current = [humOsc1, humOsc2, humGain, masterPresetGain];
+      // Update active device label from acquired track
+      const activeTrack = stream.getAudioTracks()[0];
+      if (activeTrack && activeTrack.label) {
+        setSelectedDeviceLabel(activeTrack.label);
       }
-    } catch (e) {
-      console.error('Failed to initialize audio graph:', e);
+
+      // Connect physical stream to Analyser
+      const source = ctx.createMediaStreamSource(stream);
+      sourceNodeRef.current = source;
+      source.connect(analyser);
+
+      // Optional monitor routing
+      if (monitorGainRef.current) {
+        source.connect(monitorGainRef.current);
+      }
+    } catch (err: any) {
+      console.error('Failed to initialize raw hardware microphone stream:', err);
+      setMicPermissionError(
+        `Microphone Access Error: ${err?.message || 'Permission denied or audio device is locked by another program'}. Please allow microphone access in your browser bar.`
+      );
     }
-  }, [audioMonitorEnabled, stopSyntheticNodes, stopMicStream]);
+  }, [selectedDeviceId, audioMonitorEnabled, stopMicStream]);
+
+  // Handle changing input device from dropdown
+  const handleSelectDevice = async (device: MediaDeviceInfo) => {
+    setSelectedDeviceId(device.deviceId);
+    setSelectedDeviceLabel(device.label || `Microphone (${device.deviceId.slice(0, 6)}...)`);
+    setIsDeviceMenuOpen(false);
+    await setupHardwareAudio(device.deviceId);
+  };
 
   // Monitor Volume Toggle
   const toggleAudioMonitor = () => {
     const next = !audioMonitorEnabled;
     setAudioMonitorEnabled(next);
     if (monitorGainRef.current && audioContextRef.current) {
-      monitorGainRef.current.gain.setValueAtTime(next ? 0.08 : 0.0, audioContextRef.current.currentTime);
+      monitorGainRef.current.gain.setValueAtTime(next ? 0.05 : 0.0, audioContextRef.current.currentTime);
     }
   };
 
-  // Start 5-Second Diagnostic Capture
+  // Start 5-Second Real Hardware Diagnostic Recording
   const handleStartScan = () => {
+    if (!micStreamRef.current) {
+      setMicPermissionError('No active hardware audio stream found. Please ensure microphone access is granted.');
+      return;
+    }
+
     setIsScanComplete(false);
     setCapturedTelemetry(null);
     setScanProgress(0);
     setTimeRemainingSec(5.0);
+    setRecordedAudioUrl(null);
+    setRecordedBase64(null);
+    setIsPlayingAudio(false);
     setIsScanning(true);
 
     accumulatedSamplesRef.current = {
@@ -359,6 +306,41 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       highList: [],
       snapshots: [],
     };
+
+    // Initialize MediaRecorder for 100% Real Machine Audio Capture
+    try {
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+        ? 'audio/ogg;codecs=opus'
+        : 'audio/webm';
+
+      recordedChunksRef.current = [];
+      const recorder = new MediaRecorder(micStreamRef.current, { mimeType });
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const audioBlob = new Blob(recordedChunksRef.current, { type: mimeType });
+        const url = URL.createObjectURL(audioBlob);
+        setRecordedAudioUrl(url);
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64 = reader.result as string;
+          setRecordedBase64(base64);
+        };
+        reader.readAsDataURL(audioBlob);
+      };
+
+      recorder.start(100);
+      mediaRecorderRef.current = recorder;
+    } catch (err) {
+      console.warn('MediaRecorder error for live acoustic capture:', err);
+    }
 
     const startTime = Date.now();
     const duration = 5000;
@@ -380,40 +362,51 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     }, 100);
   };
 
-  // Finalize 5-Second Scan and Compute Diagnostic Payload
+  // Finalize 5-Second Scan and Compute Diagnostic Payload from Physical Hardware Data
   const finishScan = () => {
     setIsScanning(false);
     setIsScanComplete(true);
 
+    // Stop MediaRecorder to trigger onstop blob packaging
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+    }
+
     const data = accumulatedSamplesRef.current;
     const count = data.domHzList.length || 1;
 
-    const avgDomHz = Math.round(data.domHzList.reduce((a, b) => a + b, 0) / count) || 1450;
-    const avgPeakDb = parseFloat((data.peakDbList.reduce((a, b) => a + b, 0) / count).toFixed(1)) || -14.2;
-    const avgLow = parseFloat((data.lowList.reduce((a, b) => a + b, 0) / count).toFixed(3)) || 0.15;
-    const avgMid = parseFloat((data.midList.reduce((a, b) => a + b, 0) / count).toFixed(3)) || 0.65;
-    const avgHigh = parseFloat((data.highList.reduce((a, b) => a + b, 0) / count).toFixed(3)) || 0.20;
+    const avgDomHz = Math.round(data.domHzList.reduce((a, b) => a + b, 0) / count) || 120;
+    const avgPeakDb = parseFloat((data.peakDbList.reduce((a, b) => a + b, 0) / count).toFixed(1)) || -38.5;
+    const avgLow = parseFloat((data.lowList.reduce((a, b) => a + b, 0) / count).toFixed(3)) || 0.33;
+    const avgMid = parseFloat((data.midList.reduce((a, b) => a + b, 0) / count).toFixed(3)) || 0.34;
+    const avgHigh = parseFloat((data.highList.reduce((a, b) => a + b, 0) / count).toFixed(3)) || 0.33;
 
     // Normalize band energy
-    const totalBand = (avgLow + avgMid + avgHigh) || 1.0;
+    const totalBand = avgLow + avgMid + avgHigh || 1.0;
     const normalizedBands = {
       low: parseFloat((avgLow / totalBand).toFixed(3)),
       mid: parseFloat((avgMid / totalBand).toFixed(3)),
       high: parseFloat((avgHigh / totalBand).toFixed(3)),
     };
 
-    // Classify Anomaly Pattern
+    // Real Physical Machine DSP Classification:
+    // Mid-Band resonance (500-2500 Hz) with high peak energy -> Cavitation
+    // High-Band friction (>2500 Hz) -> Bearing Wear / Raceway Breakdown
+    // Low-Band resonance (<500 Hz) -> Mechanical Unbalance / Misalignment
     let pattern: AcousticAnomalyPattern = 'NOMINAL';
-    if (normalizedBands.mid >= 0.45 && avgDomHz >= 600 && avgDomHz <= 2500) {
+    if (normalizedBands.mid >= 0.42 && avgDomHz >= 500 && avgDomHz <= 2500 && avgPeakDb > -50) {
       pattern = 'CAVITATION_SUSPECTED';
-    } else if (normalizedBands.high >= 0.32 || avgDomHz > 2500) {
+    } else if ((normalizedBands.high >= 0.32 || avgDomHz > 2500) && avgPeakDb > -50) {
       pattern = 'BEARING_WEAR_SUSPECTED';
-    } else if (normalizedBands.low >= 0.50 && avgDomHz < 500) {
+    } else if (normalizedBands.low >= 0.48 && avgDomHz < 500 && avgPeakDb > -50) {
       pattern = 'IMBALANCE_SUSPECTED';
     }
 
-    // Pick a representative 32-bin snapshot for sparkline
-    const latestSnapshot = data.snapshots[data.snapshots.length - 1] || Array.from({ length: 32 }, () => Math.random() * 0.5);
+    // 32-bin snapshot for UI sparkline
+    const latestSnapshot =
+      data.snapshots[data.snapshots.length - 1] || Array.from({ length: 32 }, () => 0.05);
 
     const telemetry: AcousticTelemetry = {
       dominantFrequencyHz: avgDomHz,
@@ -421,13 +414,34 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       bandEnergy: normalizedBands,
       detectedPattern: pattern,
       sampleDurationMs: 5000,
-      spectralCentroidHz: Math.round(avgDomHz * 1.15),
-      crestFactor: pattern === 'BEARING_WEAR_SUSPECTED' ? 'HIGH' : pattern === 'CAVITATION_SUSPECTED' ? 'HIGH' : 'MEDIUM',
+      spectralCentroidHz: Math.round(avgDomHz * 1.12),
+      crestFactor: avgPeakDb > -22 ? 'HIGH' : avgPeakDb > -38 ? 'MEDIUM' : 'LOW',
       waveformSnapshot: latestSnapshot.slice(0, 32),
+      inputDeviceName: selectedDeviceLabel,
+      recordingDurationSec: 5.0,
     };
 
     setDetectedPattern(pattern);
     setCapturedTelemetry(telemetry);
+  };
+
+  // Toggle playback of recorded machine audio
+  const togglePlayRecordedAudio = () => {
+    if (!audioElementRef.current && recordedAudioUrl) {
+      const audio = new Audio(recordedAudioUrl);
+      audio.onended = () => setIsPlayingAudio(false);
+      audioElementRef.current = audio;
+    }
+
+    if (audioElementRef.current) {
+      if (isPlayingAudio) {
+        audioElementRef.current.pause();
+        setIsPlayingAudio(false);
+      } else {
+        audioElementRef.current.play();
+        setIsPlayingAudio(true);
+      }
+    }
   };
 
   // Submit Telemetry and Auto-Dispatch to Copilot
@@ -435,19 +449,26 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     if (!capturedTelemetry) return;
 
     const patternTitles: Record<AcousticAnomalyPattern, string> = {
-      CAVITATION_SUSPECTED: 'Impeller Cavitation & Fluid Turbulence suspected',
+      CAVITATION_SUSPECTED: 'Impeller Cavitation & Fluid Recirculation suspected',
       BEARING_WEAR_SUSPECTED: 'High-Frequency Metallic Bearing Wear & Raceway Spalling suspected',
       IMBALANCE_SUSPECTED: 'Mechanical Rotational Unbalance or Coupling Misalignment suspected',
-      NOMINAL: 'Baseline Nominal Operation verified',
+      NOMINAL: 'Baseline Nominal Machine Operation verified',
     };
 
-    const promptText = `Perform acoustic vibration diagnosis on ${targetMachine.assetTag}: Dominant peak at ${Math.round(
-      capturedTelemetry.dominantFrequencyHz
-    )} Hz (${capturedTelemetry.peakDecibels} dB), with ${
-      patternTitles[capturedTelemetry.detectedPattern]
-    }. Analyze probable failure mode, fluid/mechanical causes, and provide verified inspection steps.`;
+    // Attach recorded audio base64 if available
+    const finalTelemetry: AcousticTelemetry = {
+      ...capturedTelemetry,
+      audioBase64: recordedBase64 || undefined,
+      audioMimeType: 'audio/webm',
+    };
 
-    onDiagnose(capturedTelemetry, promptText);
+    const promptText = `Perform acoustic vibration diagnosis on ${targetMachine.assetTag} captured via hardware microphone (${selectedDeviceLabel}): Dominant frequency at ${Math.round(
+      finalTelemetry.dominantFrequencyHz
+    )} Hz (${finalTelemetry.peakDecibels} dB), with ${
+      patternTitles[finalTelemetry.detectedPattern]
+    }. Cross-reference with OEM engineering manual and prescribe corrective actions.`;
+
+    onDiagnose(finalTelemetry, promptText);
     teardownAudio();
     onClose();
   };
@@ -458,21 +479,41 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     setCapturedTelemetry(null);
     setScanProgress(0);
     setTimeRemainingSec(5.0);
+    setRecordedAudioUrl(null);
+    setRecordedBase64(null);
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      setIsPlayingAudio(false);
+    }
   };
 
-  // Initialize or Switch Audio Graph
+  // Initialize Hardware Audio on Open
   useEffect(() => {
     if (isOpen) {
-      setupAudioGraph(sourceMode);
+      enumerateHardwareMics(true);
+      setupHardwareAudio();
     } else {
       teardownAudio();
     }
     return () => {
       teardownAudio();
     };
-  }, [isOpen, sourceMode, setupAudioGraph, teardownAudio]);
+  }, [isOpen, enumerateHardwareMics, setupHardwareAudio, teardownAudio]);
 
-  // 60FPS FFT Canvas Drawing Loop
+  // Re-enumerate audio devices on physical plug/unplug
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices) {
+      const handleDeviceChange = () => {
+        enumerateHardwareMics(false);
+      };
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+      return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      };
+    }
+  }, [enumerateHardwareMics]);
+
+  // 60FPS Hardware FFT Canvas Loop
   useEffect(() => {
     if (!isOpen) return;
 
@@ -493,29 +534,29 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
           const dataArray = new Uint8Array(bufferLength);
           analyser.getByteFrequencyData(dataArray);
 
-          // Dark industrial background
+          // Deep industrial chassis background
           ctx.fillStyle = '#090D14';
           ctx.fillRect(0, 0, width, height);
 
-          // Draw Diagnostic Frequency Band Background Highlights
-          // Low: 20–500 Hz (~0 to 6% of spectrum at 44.1kHz)
+          // Diagnostic Frequency Bands
+          // Low: 20–500 Hz (~0 to 6% of spectrum at 48kHz)
           // Mid: 500–2500 Hz (~6% to 23%)
           // High: 2500–8000 Hz (~23% to 65%)
           const lowXEnd = width * 0.18;
           const midXEnd = width * 0.58;
           const highXEnd = width * 0.95;
 
-          // Band Underlay Fills
-          ctx.fillStyle = 'rgba(245, 158, 11, 0.04)'; // Amber tint for Low Band
+          // Band Underlay Tints
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.05)'; // Amber for Low
           ctx.fillRect(0, 0, lowXEnd, height);
 
-          ctx.fillStyle = 'rgba(99, 102, 241, 0.05)'; // Indigo tint for Mid Band
+          ctx.fillStyle = 'rgba(99, 102, 241, 0.06)'; // Indigo for Mid
           ctx.fillRect(lowXEnd, 0, midXEnd - lowXEnd, height);
 
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.04)'; // Rose tint for High Band
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.05)'; // Rose for High
           ctx.fillRect(midXEnd, 0, highXEnd - midXEnd, height);
 
-          // Grid Lines
+          // Subtle Grid Lines
           ctx.strokeStyle = '#162032';
           ctx.lineWidth = 1;
           for (let y = 0; y < height; y += height / 4) {
@@ -526,7 +567,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
           }
 
           // Band Divider Lines
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.09)';
           ctx.setLineDash([4, 4]);
           ctx.beginPath();
           ctx.moveTo(lowXEnd, 0);
@@ -536,17 +577,17 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
           ctx.stroke();
           ctx.setLineDash([]);
 
-          // Band Labels on Canvas Header
-          ctx.font = '10px Inter, sans-serif';
+          // Band Top Header Labels
+          ctx.font = '10px Inter, monospace';
           ctx.fillStyle = '#F59E0B';
-          ctx.fillText('LOW (20–500 Hz)', 8, 14);
+          ctx.fillText('LOW (20–500 Hz) · SHAFT/MOTOR', 8, 15);
           ctx.fillStyle = '#818CF8';
-          ctx.fillText('MID (500–2.5 kHz) · CAVITATION', lowXEnd + 8, 14);
+          ctx.fillText('MID (500–2.5 kHz) · PUMP CAVITATION', lowXEnd + 8, 15);
           ctx.fillStyle = '#F87171';
-          ctx.fillText('HIGH (2.5–8 kHz) · BEARING', midXEnd + 8, 14);
+          ctx.fillText('HIGH (2.5–8 kHz) · BEARING FRICTION', midXEnd + 8, 15);
 
-          // Frequency Calculation Metrics
-          const nyquist = (audioContextRef.current?.sampleRate || 44100) / 2;
+          // Nyquist Calculation for 48kHz Stream
+          const nyquist = (audioContextRef.current?.sampleRate || 48000) / 2;
           const binSize = nyquist / bufferLength;
 
           let maxVal = 0;
@@ -555,7 +596,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
           let midSum = 0;
           let highSum = 0;
 
-          // Draw Spectrum Bars
+          // Render Real FFT Spectrum Bars
           const barCount = 120;
           const barWidth = width / barCount;
           const step = Math.floor(bufferLength / (barCount * 1.5));
@@ -592,9 +633,9 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
             }
           }
 
-          // Calculate metrics
-          const currentDominantHz = Math.round(maxBin * binSize) || 1200;
-          const currentPeakDb = parseFloat((-60 + (maxVal / 255) * 55).toFixed(1));
+          // Real Hardware DSP Metrics
+          const currentDominantHz = Math.round(maxBin * binSize) || 120;
+          const currentPeakDb = parseFloat((-70 + (maxVal / 255) * 65).toFixed(1));
           const totalEnergy = lowSum + midSum + highSum || 1;
           const currentBands = {
             low: parseFloat((lowSum / totalEnergy).toFixed(2)),
@@ -605,11 +646,20 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
           setLiveDominantHz(currentDominantHz);
           setLivePeakDb(currentPeakDb);
           setLiveBandEnergy(currentBands);
+          setLiveCrestFactor(currentPeakDb > -22 ? 'HIGH' : currentPeakDb > -38 ? 'MEDIUM' : 'LOW');
 
-          // Crest factor estimation
-          setLiveCrestFactor(currentPeakDb > -18 ? 'HIGH' : currentPeakDb > -30 ? 'MEDIUM' : 'LOW');
+          // Dynamically compute live pattern
+          let livePattern: AcousticAnomalyPattern = 'NOMINAL';
+          if (currentBands.mid >= 0.42 && currentDominantHz >= 500 && currentDominantHz <= 2500 && currentPeakDb > -50) {
+            livePattern = 'CAVITATION_SUSPECTED';
+          } else if ((currentBands.high >= 0.32 || currentDominantHz > 2500) && currentPeakDb > -50) {
+            livePattern = 'BEARING_WEAR_SUSPECTED';
+          } else if (currentBands.low >= 0.48 && currentDominantHz < 500 && currentPeakDb > -50) {
+            livePattern = 'IMBALANCE_SUSPECTED';
+          }
+          setDetectedPattern(livePattern);
 
-          // Accumulate if actively scanning
+          // Accumulate rolling samples during 5s scan
           if (isScanning) {
             const compactSnap = Array.from({ length: 32 }, (_, sIdx) => {
               const bin = Math.min(bufferLength - 1, sIdx * 8);
@@ -641,7 +691,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
       <div className="bg-[#0F172A] border border-[#334155] rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Modal Header */}
         <div className="px-6 py-4 bg-[#1E293B] border-b border-[#334155] flex items-center justify-between shrink-0">
@@ -650,15 +700,16 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
               <Activity className="w-5 h-5 animate-pulse" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-sm font-bold text-white tracking-wide font-sans">
-                  ACOUSTIC DIAGNOSTICS &amp; SPECTRUM ANALYZER
+                  ACOUSTIC DIAGNOSTICS &amp; HARDWARE DSP ANALYZER
                 </h2>
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-950 text-indigo-300 border border-indigo-700/50">
-                  FFT 2048
+                  FFT 2048 · 48 kHz
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-700/50">
-                  STAGE-PROOF SYNTH
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-700/50 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  LIVE HARDWARE DSP
                 </span>
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
                   {currentLanguage}
@@ -690,7 +741,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
               teardownAudio();
               onClose();
             }}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -698,83 +749,104 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
 
         {/* Modal Body */}
         <div className="p-6 space-y-5 overflow-y-auto flex-1">
-          {/* Controls Bar: Source Mode + Scoped Asset + Audio Monitor Toggle */}
+          {/* Hardware Microphone Device Selector Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-[#1E293B]/70 border border-[#334155]">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Acoustic Source:</span>
-              <div className="inline-flex rounded-lg bg-slate-900 p-0.5 border border-slate-700">
-                <button
-                  type="button"
-                  onClick={() => setSourceMode('MIC')}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
-                    sourceMode === 'MIC'
-                      ? 'bg-rose-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <Mic className="w-3.5 h-3.5" />
-                  <span>Live Mic</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSourceMode('PRESET_CAVITATION')}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
-                    sourceMode === 'PRESET_CAVITATION'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <Radio className="w-3.5 h-3.5" />
-                  <span>Cavitation (PUMP-001)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSourceMode('PRESET_BEARING')}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
-                    sourceMode === 'PRESET_BEARING'
-                      ? 'bg-rose-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <Radio className="w-3.5 h-3.5" />
-                  <span>Bearing Wear</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSourceMode('PRESET_NORMAL')}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition ${
-                    sourceMode === 'PRESET_NORMAL'
-                      ? 'bg-emerald-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Normal Baseline</span>
-                </button>
+            <div className="flex items-center gap-2.5 flex-1 min-w-[280px]">
+              <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                <Mic className="w-4 h-4 animate-pulse" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                    Active Physical Input:
+                  </span>
+                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-rose-950 text-rose-300 border border-rose-800 font-bold">
+                    UNFILTERED RAW DSP
+                  </span>
+                </div>
+
+                {/* Device Dropdown Trigger */}
+                <div className="relative mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsDeviceMenuOpen(!isDeviceMenuOpen)}
+                    className="w-full text-left bg-slate-900 border border-slate-700 hover:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-white flex items-center justify-between gap-2 transition cursor-pointer"
+                  >
+                    <span className="truncate font-mono font-medium">
+                      {selectedDeviceLabel}
+                    </span>
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  </button>
+
+                  {/* Device Popover Menu */}
+                  {isDeviceMenuOpen && (
+                    <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-800">
+                      {audioDevices.length === 0 ? (
+                        <div className="p-3 text-xs text-slate-400 font-mono">
+                          No audio input devices detected. Please plug in or enable your microphone.
+                        </div>
+                      ) : (
+                        audioDevices.map((dev, idx) => {
+                          const isSelected = dev.deviceId === selectedDeviceId;
+                          return (
+                            <button
+                              key={dev.deviceId || idx}
+                              type="button"
+                              onClick={() => handleSelectDevice(dev)}
+                              className={`w-full text-left p-2.5 text-xs font-mono transition flex items-center justify-between ${
+                                isSelected
+                                  ? 'bg-indigo-950/70 text-indigo-300 font-bold'
+                                  : 'text-slate-300 hover:bg-slate-800'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Mic className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-slate-500'}`} />
+                                <span className="truncate">
+                                  {dev.label || `Audio Input Device #${idx + 1}`}
+                                </span>
+                              </div>
+                              {isSelected && <span className="text-[10px] text-emerald-400 font-bold shrink-0">ACTIVE</span>}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5 shrink-0">
+              {/* Refresh Devices Button */}
+              <button
+                type="button"
+                onClick={() => enumerateHardwareMics(true)}
+                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs transition cursor-pointer"
+                title="Refresh physical audio input devices"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+
               {/* Speaker Audio Monitor Toggle */}
               <button
                 type="button"
                 onClick={toggleAudioMonitor}
-                className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition ${
+                className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
                   audioMonitorEnabled
                     ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
                     : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
                 }`}
-                title="Toggle subtle audio playback through laptop speakers"
+                title="Listen to microphone signal through headphones (keep muted if using laptop speakers)"
               >
                 {audioMonitorEnabled ? (
                   <>
                     <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Audio Output: ON</span>
+                    <span>Monitor: ON</span>
                   </>
                 ) : (
                   <>
                     <VolumeX className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Audio Output: Muted</span>
+                    <span>Monitor: Muted</span>
                   </>
                 )}
               </button>
@@ -782,13 +854,13 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
           </div>
 
           {micPermissionError && (
-            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2">
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
               <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
               <span>{micPermissionError}</span>
             </div>
           )}
 
-          {/* Real-time FFT Canvas Display */}
+          {/* Real-time Hardware FFT Canvas Display */}
           <div className="relative rounded-2xl overflow-hidden border border-[#334155] shadow-inner bg-[#090D14]">
             <canvas
               ref={canvasRef}
@@ -841,7 +913,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                 />
               </div>
               <p className="text-[10px] text-slate-400 pt-0.5">
-                Mechanical Unbalance, Soft Foot, Shaft Misalignment
+                Mechanical Unbalance, Shaft Misalignment, Motor Hum
               </p>
             </div>
 
@@ -888,16 +960,16 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
             </div>
           </div>
 
-          {/* 5-Second Scan Action Area */}
+          {/* 5-Second Scan & MediaRecorder Action Area */}
           <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 to-[#1E293B] border border-slate-700/80 space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
                   <Cpu className="w-4 h-4 text-indigo-400" />
-                  <span>5-Second Diagnostic Sampling Window</span>
+                  <span>5-Second Hardware Acoustic Recording Window</span>
                 </h4>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Captures rolling peak decibels, dominant frequency, spectral centroid, and crest factor.
+                  Records raw physical audio at 48 kHz via MediaRecorder while computing FFT spectral centroid &amp; crest factor.
                 </p>
               </div>
 
@@ -908,7 +980,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                   className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-2 transition shadow-lg shadow-indigo-600/30 cursor-pointer"
                 >
                   <Play className="w-4 h-4 fill-current" />
-                  <span>Start 5s Acoustic Sample</span>
+                  <span>Start 5s Hardware Sample</span>
                 </button>
               )}
 
@@ -916,7 +988,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                 <div className="flex items-center gap-3">
                   <div className="text-right font-mono">
                     <span className="text-xs font-bold text-white">{timeRemainingSec.toFixed(1)}s</span>
-                    <span className="text-[10px] text-slate-400 block">Sampling FFT...</span>
+                    <span className="text-[10px] text-slate-400 block">Recording Mic Stream...</span>
                   </div>
                   <div className="w-8 h-8 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
                 </div>
@@ -927,7 +999,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                   <button
                     type="button"
                     onClick={handleResetScan}
-                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition"
+                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                     <span>Re-Sample</span>
@@ -955,20 +1027,20 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                   />
                 </div>
                 <div className="flex justify-between text-[10px] font-mono text-slate-400">
-                  <span>Capturing continuous acoustic waveform buffers...</span>
+                  <span>Recording 48 kHz raw machine waveform buffer...</span>
                   <span>{scanProgress}%</span>
                 </div>
               </div>
             )}
 
-            {/* Diagnostic Result Card when scan completes */}
+            {/* Diagnostic Result Card & Audio Player when scan completes */}
             {isScanComplete && capturedTelemetry && (
               <div className="p-4 rounded-xl bg-slate-950/70 border border-emerald-500/30 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                     <span className="text-xs font-bold text-white">
-                      ACOUSTIC ANOMALY SIGNATURE IDENTIFIED
+                      PHYSICAL ACOUSTIC SIGNATURE CAPTURED
                     </span>
                   </div>
                   <span
@@ -984,6 +1056,37 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                   </span>
                 </div>
 
+                {/* Recorded Machine Audio Player Bar */}
+                {recordedAudioUrl && (
+                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={togglePlayRecordedAudio}
+                        className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center transition cursor-pointer"
+                        title={isPlayingAudio ? 'Pause Recorded Audio' : 'Play Recorded Machine Audio'}
+                      >
+                        {isPlayingAudio ? (
+                          <Pause className="w-4 h-4 fill-current" />
+                        ) : (
+                          <Play className="w-4 h-4 fill-current ml-0.5" />
+                        )}
+                      </button>
+                      <div>
+                        <span className="text-[11px] font-mono text-white font-bold block">
+                          Recorded Machine Audio (5.0s)
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          Captured from: {selectedDeviceLabel}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">
+                      AUDIO/WEBM · 48 kHz
+                    </span>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
                   <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
                     <span className="text-[10px] text-slate-400 block">Dominant Peak</span>
@@ -995,7 +1098,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                   </div>
                   <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
                     <span className="text-[10px] text-slate-400 block">Crest Factor</span>
-                    <strong className="text-indigo-400 text-xs">{capturedTelemetry.crestFactor} (Impulses)</strong>
+                    <strong className="text-indigo-400 text-xs">{capturedTelemetry.crestFactor}</strong>
                   </div>
                   <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
                     <span className="text-[10px] text-slate-400 block">Mid-Band Cavitation Ratio</span>

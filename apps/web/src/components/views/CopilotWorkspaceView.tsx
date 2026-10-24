@@ -1731,6 +1731,25 @@ export const CopilotWorkspaceView: React.FC = () => {
                           <strong className="text-amber-400">{(msg as any).acousticTelemetry.crestFactor || 'HIGH'}</strong>
                         </div>
                       </div>
+
+                      {/* Hardware Machine Audio Playback */}
+                      {(msg as any).acousticTelemetry.audioBase64 && (
+                        <div className="pt-2 border-t border-indigo-900/50 space-y-1">
+                          <div className="flex items-center justify-between text-[9px] font-mono text-indigo-300">
+                            <span>RAW HARDWARE RECORDING · 48 kHz</span>
+                            {(msg as any).acousticTelemetry.inputDeviceName && (
+                              <span className="truncate max-w-[200px] text-slate-400">
+                                Mic: {(msg as any).acousticTelemetry.inputDeviceName}
+                              </span>
+                            )}
+                          </div>
+                          <audio
+                            controls
+                            src={(msg as any).acousticTelemetry.audioBase64}
+                            className="w-full h-8 rounded"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

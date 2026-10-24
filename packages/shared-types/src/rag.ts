@@ -57,6 +57,10 @@ export interface AcousticTelemetry {
   spectralCentroidHz?: number;
   crestFactor?: 'LOW' | 'MEDIUM' | 'HIGH';
   waveformSnapshot?: number[];
+  audioBase64?: string;
+  audioMimeType?: string;
+  inputDeviceName?: string;
+  recordingDurationSec?: number;
 }
 
 export type VisionMode = 'COPILOT_DIAGNOSTIC' | 'LOTO_ZERO_ENERGY_CHECK';
