@@ -1720,8 +1720,8 @@ export const TroubleshootingView: React.FC<{
       {!activeSession ? (
         <div className="py-3 px-4 md:px-6 bg-white border-b border-[#E2E8F0] flex items-center justify-between w-full shrink-0">
           <div>
-            <h2 className="text-sm md:text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide">
-              Root Cause Analysis & Troubleshooting Copilot
+            <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide whitespace-nowrap shrink-0">
+              RCA & Diagnostic Copilot
             </h2>
             <p className="text-xs text-[#64748B] mt-0.5 font-sans">
               Diagnostic reasoning grounded in Knowledge Hub manuals, maintenance engineer field notes, and failure logs.
@@ -1729,17 +1729,17 @@ export const TroubleshootingView: React.FC<{
           </div>
         </div>
       ) : (
-        <div className="py-2.5 px-4 bg-white border-b border-[#E2E8F0] flex flex-col md:flex-row justify-between items-center gap-2.5 w-full shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <h2 className="text-xs md:text-sm font-bold font-mono text-[#0F172A] uppercase tracking-wide whitespace-nowrap">
-              Root Cause Analysis & Troubleshooting Copilot
+        <div className="py-2.5 px-4 bg-white border-b border-[#E2E8F0] flex items-center justify-between gap-3 flex-wrap xl:flex-nowrap w-full shrink-0">
+          <div className="flex items-center gap-2 min-w-0 shrink-0">
+            <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide whitespace-nowrap shrink-0">
+              RCA & Diagnostic Copilot
             </h2>
             <span className="hidden xl:inline-block text-[11px] text-[#64748B] font-sans truncate">
               — Machine: <strong className="text-slate-800 font-mono">{activeSession.assetTag}</strong>
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 flex-wrap xl:flex-nowrap shrink-0">
             {/* Start New Investigation Button */}
             <button
               type="button"
@@ -1748,7 +1748,7 @@ export const TroubleshootingView: React.FC<{
               title="Reset active investigation to clean empty state"
             >
               <Plus className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span className="whitespace-nowrap">New Investigation</span>
+              <span className="whitespace-nowrap">+ New</span>
             </button>
 
             {/* Recent RCAs Dropdown Selector */}
@@ -1897,8 +1897,8 @@ export const TroubleshootingView: React.FC<{
       {/* Main Split Content Area */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
         {/* Left Panel: Machine Context, Status & Quick Symptom Chips */}
-        <div className="w-full lg:w-96 border-b lg:border-b-0 lg:border-r border-[#E2E8F0] bg-white p-5 overflow-y-auto space-y-4 shrink-0 shadow-sm flex flex-col">
-          <div className="space-y-4">
+        <div className="w-full lg:w-96 border-b lg:border-b-0 lg:border-r border-[#E2E8F0] bg-white p-4 overflow-y-auto space-y-2.5 shrink-0 shadow-sm flex flex-col">
+          <div className="space-y-2.5">
             {/* Target Asset / Machine Field (Strictly Uploaded Machines) */}
             <div>
               <label className="text-[10px] font-mono font-bold text-[#64748B] uppercase tracking-wider block mb-1">
@@ -1906,17 +1906,17 @@ export const TroubleshootingView: React.FC<{
               </label>
 
               {isLoadingMachines ? (
-                <div className="py-2.5 text-xs font-mono text-slate-400 flex items-center gap-2">
+                <div className="py-2 text-xs font-mono text-slate-400 flex items-center gap-2">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
                   <span>Loading ingested assets...</span>
                 </div>
               ) : hasNoDocuments || machines.length === 0 ? (
-                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5 font-sans">
+                <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1 font-sans">
                   <div className="flex items-center gap-1.5 font-bold font-mono text-[11px] text-amber-800 uppercase">
                     <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
                     <span>No Ingested Machine Documents</span>
                   </div>
-                  <p className="leading-snug text-[11px]">
+                  <p className="leading-snug text-[10px]">
                     No equipment documentation exists in Knowledge Hub yet. Ingest an OEM manual or SOP first to run grounded AI diagnostics.
                   </p>
                 </div>
@@ -1924,7 +1924,7 @@ export const TroubleshootingView: React.FC<{
                 <select
                   value={selectedMachineTag}
                   onChange={(e) => setSelectedMachineTag(e.target.value)}
-                  className="w-full py-2 px-2.5 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs font-mono font-bold text-[#0F172A] focus:outline-none focus:border-[#2563EB] cursor-pointer"
+                  className="w-full py-1.5 px-2.5 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs font-mono font-bold text-[#0F172A] focus:outline-none focus:border-[#2563EB] cursor-pointer"
                 >
                   <option value="">-- Select Uploaded Machine --</option>
                   {machines.map((m) => {
@@ -1947,7 +1947,7 @@ export const TroubleshootingView: React.FC<{
               <select
                 value={machineStatus}
                 onChange={(e) => setMachineStatus(e.target.value as any)}
-                className="w-full py-2 px-2.5 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs font-sans font-medium text-[#0F172A] focus:outline-none focus:border-[#2563EB] cursor-pointer"
+                className="w-full py-1.5 px-2.5 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs font-sans font-medium text-[#0F172A] focus:outline-none focus:border-[#2563EB] cursor-pointer"
               >
                 <option value="">-- Select Machine Status --</option>
                 <option value="Running - Abnormal">Running - Abnormal</option>
@@ -1967,13 +1967,13 @@ export const TroubleshootingView: React.FC<{
                 </span>
               </div>
               <div className="relative">
-                <Zap className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                <Zap className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
                 <input
                   type="text"
                   value={errorCode}
                   onChange={(e) => setErrorCode(e.target.value)}
-                  placeholder="Optional: Enter PLC code or leave blank for AI auto-detection"
-                  className="w-full py-2 pl-8 pr-2.5 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs font-mono font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-[#2563EB]"
+                  placeholder="Optional: PLC code or blank for AI auto-detection"
+                  className="w-full py-1.5 pl-8 pr-2.5 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs font-mono font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-[#2563EB]"
                 />
               </div>
             </div>
@@ -1984,16 +1984,16 @@ export const TroubleshootingView: React.FC<{
                 Field Symptom Description <span className="text-rose-500">*</span>
               </label>
               <textarea
-                rows={3}
+                rows={2}
                 placeholder="Describe acoustic noise, thermal spike, vibration harmonics, or fluid seal leaks..."
                 value={symptom}
                 onChange={(e) => setSymptom(e.target.value)}
-                className="w-full p-2.5 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] outline-none focus:border-[#2563EB] font-sans leading-relaxed"
+                className="w-full p-2 bg-slate-50 border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] outline-none focus:border-[#2563EB] font-sans leading-relaxed"
               />
 
               {/* Quick Symptom Chips */}
-              <div className="mt-2 space-y-1">
-                <span className="text-[10px] font-mono text-slate-400 block uppercase">
+              <div className="mt-1.5 space-y-1">
+                <span className="text-[9px] font-mono text-slate-400 block uppercase">
                   Quick Symptom Chips:
                 </span>
                 <div className="flex flex-wrap gap-1">
@@ -2002,7 +2002,7 @@ export const TroubleshootingView: React.FC<{
                       key={chip}
                       type="button"
                       onClick={() => handleAddSymptomChip(chip)}
-                      className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-700 border border-slate-200 transition active:scale-95 flex items-center gap-0.5"
+                      className="text-[9px] font-mono px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-700 border border-slate-200 transition active:scale-95 flex items-center gap-0.5"
                     >
                       <Plus className="w-2.5 h-2.5" />
                       <span>{chip}</span>
@@ -2016,30 +2016,30 @@ export const TroubleshootingView: React.FC<{
             <button
               onClick={handleRunAnalysis}
               disabled={isAnalyzing || !symptom.trim() || hasNoDocuments || machines.length === 0}
-              className="w-full py-2.5 bg-[#0F172A] hover:bg-black disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-sm border border-slate-800"
+              className="w-full py-2 bg-[#0F172A] hover:bg-black disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-sm border border-slate-800 cursor-pointer"
             >
               {isAnalyzing ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
                   <span>Synthesizing Equipment Records...</span>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-4 h-4 text-blue-400" />
+                  <Sparkles className="w-3.5 h-3.5 text-blue-400" />
                   <span>Run AI Root Cause Analysis</span>
                 </>
               )}
             </button>
 
             {analysisError && (
-              <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-start gap-2">
+              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
                 <span>{analysisError}</span>
               </div>
             )}
 
             {/* Compact Evidence Traceability Box */}
-            <div className="p-2.5 rounded-lg bg-blue-50/60 border border-blue-200 text-[11px] text-slate-600 space-y-0.5">
+            <div className="p-2 rounded-lg bg-blue-50/60 border border-blue-200 text-[10px] text-slate-600 space-y-0.5">
               <div className="flex items-center gap-1.5 font-bold text-blue-700 font-mono">
                 <ShieldCheck className="w-3.5 h-3.5" />
                 <span>Evidence Traceability Model</span>
@@ -2168,64 +2168,66 @@ export const TroubleshootingView: React.FC<{
             </div>
           ) : (
             <div className="space-y-6 flex-1">
-              {/* Active Case Top Summary */}
-              <div className="bg-white rounded-xl border border-[#E2E8F0] shadow-sm overflow-hidden">
-                <div className="flex flex-col lg:flex-row justify-between items-start gap-4 p-4">
-                  {/* Left Content */}
+              {/* Active Case Top Summary - Deep Navy-to-Indigo Gradient Header */}
+              <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 rounded-xl shadow-sm border border-indigo-950/60 overflow-hidden">
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
+                  {/* Left: Machine Tag & Name + Inline Pills */}
                   <div className="flex-1 min-w-0 flex flex-col gap-2">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono font-bold text-sm text-[#0F172A]">
+                      <span className="font-mono font-bold text-base text-white tracking-wide">
                         {activeSession.assetTag}
                       </span>
                       {activeSession.machineName && activeSession.machineName !== activeSession.assetTag && (
-                        <span className="text-xs text-slate-500 font-sans">
-                          ({activeSession.machineName})
+                        <span className="text-xs text-indigo-200/90 font-sans font-medium">
+                          • {activeSession.machineName}
                         </span>
                       )}
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-medium shrink-0">
+                      <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700 font-medium">
                         State: {activeSession.machineStatus || 'Running'}
                       </span>
+                      {activeSession.detectedFaultCode && (
+                        <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold">
+                          Alarm: {activeSession.detectedFaultCode.replace(/^FAULT\s*\/\s*ALARM\s*CODE:\s*/i, '')}
+                        </span>
+                      )}
+                      {activeSession.symptom && (
+                        <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 font-medium truncate max-w-xs md:max-w-md" title={activeSession.symptom}>
+                          Symptom: {toShortSentence(activeSession.symptom, 8)}
+                        </span>
+                      )}
                     </div>
 
-                    {activeSession.detectedFaultCode && (
-                      <div className="inline-flex items-center max-w-full">
-                        <span className="text-[10px] font-mono px-2.5 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 font-bold break-words whitespace-normal leading-relaxed">
-                          {activeSession.detectedFaultCode.toUpperCase().includes('FAULT') || activeSession.detectedFaultCode.toUpperCase().includes('ALARM')
-                            ? activeSession.detectedFaultCode
-                            : `FAULT / ALARM CODE: ${activeSession.detectedFaultCode}`}
-                        </span>
-                      </div>
+                    {/* Clean un-truncated symptom description */}
+                    {activeSession.symptom && (
+                      <p className="text-xs text-slate-300 font-sans leading-relaxed line-clamp-2">
+                        <strong className="text-indigo-300 font-mono text-[10px] uppercase tracking-wider mr-1">Observed Field Symptom:</strong>
+                        <span className="text-slate-200">{activeSession.symptom}</span>
+                      </p>
                     )}
                   </div>
 
-                  {/* Right Content */}
+                  {/* Right: Glassmorphism Buttons */}
                   <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={() => setIsLotoModalOpen(true)}
-                      className="px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-xs font-mono font-bold text-amber-900 flex items-center gap-1.5 transition shadow-xs whitespace-nowrap cursor-pointer"
+                      className="px-3 py-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 hover:bg-amber-400/20 text-xs font-mono font-bold text-amber-200 flex items-center gap-1.5 transition shadow-xs whitespace-nowrap cursor-pointer backdrop-blur-sm"
                       title="View OSHA 1910.147 LOTO & PPE Isolation Points"
                     >
-                      <ShieldAlert className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                      <span>LOTO & PPE Checklist — View</span>
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                      <span>🛡️ LOTO & PPE Checklist</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={handleExportRcaSummary}
-                      className="px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-xs font-mono font-semibold text-indigo-800 flex items-center gap-1.5 transition shadow-xs whitespace-nowrap cursor-pointer"
+                      className="px-3 py-1.5 rounded-lg border border-indigo-300/30 bg-white/10 hover:bg-white/20 text-xs font-mono font-semibold text-white flex items-center gap-1.5 transition shadow-xs whitespace-nowrap cursor-pointer backdrop-blur-sm"
                       title="Download professional PDF RCA summary report"
                     >
-                      <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                      <span>Export RCA Summary</span>
+                      <FileText className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
+                      <span>📄 Export RCA Summary</span>
                     </button>
                   </div>
-                </div>
-
-                {/* Full Un-truncated Symptom Text */}
-                <div className="text-xs text-slate-700 font-sans leading-relaxed px-4 py-3 bg-slate-50/50 border-t border-slate-100 flex items-start gap-1.5">
-                  <strong className="text-slate-900 font-mono text-[11px] uppercase shrink-0">Observed Field Symptom:</strong>
-                  <span className="break-words text-slate-800 font-medium">{activeSession.symptom}</span>
                 </div>
               </div>
 
@@ -2260,16 +2262,16 @@ export const TroubleshootingView: React.FC<{
                           key={hyp.id}
                           className={`rounded-xl border p-3.5 transition bg-white shadow-xs space-y-2.5 ${
                             hyp.status === 'CONFIRMED'
-                              ? 'border-emerald-500 ring-1 ring-emerald-500 bg-emerald-50/15'
+                              ? 'ring-2 ring-indigo-600 bg-gradient-to-br from-white to-indigo-50/30 border-indigo-500 shadow-md'
                               : hyp.status === 'RULED_OUT'
                               ? 'opacity-60 border-slate-200 bg-slate-50'
-                              : 'border-[#E2E8F0] hover:border-blue-300'
+                              : 'border-[#E2E8F0] hover:border-indigo-300'
                           }`}
                         >
-                          {/* Compact Top Row: Rank, Title, Severity, Confidence, & Status Actions in a single tight line */}
+                          {/* Top Row: Rank Badge (Gradient), Title, Severity, Confidence Progress Bar & Confirm / Rule Out */}
                           <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className="w-5 h-5 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-mono font-bold shrink-0">
+                              <span className="w-5 h-5 rounded-full bg-gradient-to-r from-slate-900 to-indigo-900 text-white flex items-center justify-center text-[10px] font-mono font-bold shrink-0 shadow-2xs">
                                 #{index + 1}
                               </span>
                               <h4 className="text-sm font-bold text-slate-900 truncate">
@@ -2297,7 +2299,7 @@ export const TroubleshootingView: React.FC<{
                                   <div
                                     className={`h-full rounded-full ${
                                       hyp.probability >= 80
-                                        ? 'bg-emerald-500'
+                                        ? 'bg-gradient-to-r from-indigo-500 to-blue-500'
                                         : hyp.probability >= 60
                                         ? 'bg-amber-500'
                                         : 'bg-blue-500'
@@ -2311,9 +2313,9 @@ export const TroubleshootingView: React.FC<{
                               {/* Confirm / Rule Out Action Buttons */}
                               <div className="flex items-center gap-1 font-mono text-xs">
                                 {hyp.status === 'CONFIRMED' ? (
-                                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold flex items-center gap-1">
-                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                    <span>Confirmed</span>
+                                  <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-indigo-600 to-blue-600 text-white border border-indigo-500 text-[10px] font-mono font-bold flex items-center gap-1 shadow-xs">
+                                    <CheckCircle2 className="w-3 h-3 text-white" />
+                                    <span>✓ CONFIRMED PRIMARY CAUSE</span>
                                   </span>
                                 ) : (
                                   <button
@@ -2339,7 +2341,7 @@ export const TroubleshootingView: React.FC<{
                             </div>
                           </div>
 
-                          {/* Single-Line Meta Strip */}
+                          {/* Compact Sub-Row: MTTR, Skill, Risk */}
                           <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 border border-slate-200">
                               <Clock className="w-2.5 h-2.5 text-blue-600" />
@@ -2364,20 +2366,27 @@ export const TroubleshootingView: React.FC<{
                             </span>
                           </div>
 
-                          {/* Concise Summary & Recommended Fix (Short, high-signal single line display) */}
-                          <div className="space-y-1 text-xs font-sans text-slate-700 pt-1">
-                            <p className="line-clamp-2 leading-relaxed">
-                              <strong className="text-slate-900 font-mono text-[11px] uppercase mr-1">
-                                Mechanism:
-                              </strong>
-                              {toShortSentence(hyp.mechanismExplanation, 14)}
-                            </p>
-                            <p className="line-clamp-2 leading-relaxed">
-                              <strong className="text-slate-900 font-mono text-[11px] uppercase mr-1">
-                                Recommended Fix:
-                              </strong>
-                              <span className="text-slate-800 font-medium">{toShortSentence(hyp.recommendedFix, 14)}</span>
-                            </p>
+                          {/* 2-Column Mini Grid for Mechanism and Recommended Fix */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 my-2.5">
+                            {/* Left Box: Failure Mechanism */}
+                            <div className="bg-slate-50 border border-slate-200/80 p-2.5 rounded-lg flex flex-col justify-between gap-1">
+                              <span className="text-[10px] font-mono font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                                ⚙️ FAILURE MECHANISM
+                              </span>
+                              <p className="text-xs text-slate-800 font-sans leading-relaxed">
+                                {toShortSentence(hyp.mechanismExplanation, 16)}
+                              </p>
+                            </div>
+
+                            {/* Right Box: Recommended Field Fix */}
+                            <div className="bg-indigo-50/50 border border-indigo-100 p-2.5 rounded-lg flex flex-col justify-between gap-1">
+                              <span className="text-[10px] font-mono font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                                🔧 RECOMMENDED FIELD FIX
+                              </span>
+                              <p className="text-xs text-slate-800 font-sans leading-relaxed font-medium">
+                                {toShortSentence(hyp.recommendedFix, 16)}
+                              </p>
+                            </div>
                           </div>
 
                           {/* Collapsible Drawer Toggle Bar */}
@@ -2430,45 +2439,61 @@ export const TroubleshootingView: React.FC<{
                             </button>
                           </div>
 
-                          {/* Collapsible 5-Why Drawer */}
+                          {/* Collapsible 5-Why Drawer - Connected Horizontal Flow Grid */}
                           {isWhyOpen && (
-                            <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3 space-y-2.5 animate-in fade-in duration-150">
+                            <div className="rounded-lg border border-indigo-200 bg-indigo-50/30 p-3 space-y-2.5 animate-in fade-in duration-150">
                               <div className="flex items-center justify-between text-[11px] font-mono font-bold text-slate-800 uppercase tracking-wide">
                                 <span className="flex items-center gap-1.5">
-                                  <GitBranch className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                  5-Why Failure Causal Sequence
+                                  <GitBranch className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                  5-Why Causal Flow Chain
                                 </span>
                                 <span className="text-slate-500 font-normal lowercase">click any step to inspect physics</span>
                               </div>
 
-                              <div className="flex flex-wrap items-center gap-1.5 text-xs font-sans">
+                              {/* Connected Horizontal Flow Grid */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 my-1">
                                 {chain.map((step, sIdx, arr) => {
+                                  const isLast = sIdx === arr.length - 1;
                                   const isSelected =
                                     selectedWhyStep?.hypId === hyp.id &&
                                     selectedWhyStep?.stepIndex === sIdx;
+                                  const badgeLabel = isLast ? '🎯 Root Cause' : `Why ${sIdx + 1}`;
+                                  const stepContent = step.replace(/^(Why \d+:|Observed Symptom:)\s*/i, '');
 
                                   return (
-                                    <React.Fragment key={sIdx}>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleToggleWhyStep(hyp.id, sIdx)}
-                                        title="Click to inspect physical failure mechanism, verification method, and reference"
-                                        className={`px-2.5 py-1 rounded-lg border text-[11px] leading-tight font-medium shadow-2xs transition-all cursor-pointer text-left select-none ${
-                                          isSelected
-                                            ? 'ring-2 ring-blue-500 bg-blue-100 text-blue-900 border-blue-400 font-bold scale-102'
-                                            : sIdx === arr.length - 1
-                                            ? 'bg-rose-50 text-rose-800 border-rose-300 font-bold hover:bg-rose-100'
-                                            : sIdx === 0
-                                            ? 'bg-blue-50 text-blue-900 border-blue-200 font-bold hover:bg-blue-100'
-                                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                                        }`}
-                                      >
-                                        {step}
-                                      </button>
-                                      {sIdx < arr.length - 1 && (
-                                        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                      )}
-                                    </React.Fragment>
+                                    <button
+                                      key={sIdx}
+                                      type="button"
+                                      onClick={() => handleToggleWhyStep(hyp.id, sIdx)}
+                                      title="Click to inspect physical failure mechanism, verification method, and reference"
+                                      className={`relative p-2.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 shadow-2xs ${
+                                        isSelected
+                                          ? 'ring-2 ring-indigo-600 border-indigo-500 bg-indigo-50/90 font-bold scale-[1.02]'
+                                          : isLast
+                                          ? 'bg-gradient-to-b from-rose-50/60 to-white border-rose-200 hover:border-rose-300'
+                                          : 'bg-white border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/20'
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-1 w-full">
+                                        <span
+                                          className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                                            isLast
+                                              ? 'bg-gradient-to-r from-rose-600 to-red-600 text-white shadow-2xs'
+                                              : isSelected
+                                              ? 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-2xs'
+                                              : 'bg-slate-100 text-slate-700 border border-slate-200'
+                                          }`}
+                                        >
+                                          {badgeLabel}
+                                        </span>
+                                        {sIdx < arr.length - 1 && (
+                                          <ChevronRight className="w-3 h-3 text-slate-400 hidden lg:inline-block shrink-0" />
+                                        )}
+                                      </div>
+                                      <p className="text-[11px] font-sans text-slate-800 leading-snug line-clamp-3">
+                                        {stepContent}
+                                      </p>
+                                    </button>
                                   );
                                 })}
                               </div>
@@ -2597,7 +2622,7 @@ export const TroubleshootingView: React.FC<{
                     <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all duration-300 ${
-                          progressPercent === 100 ? 'bg-emerald-600' : 'bg-blue-600'
+                          progressPercent === 100 ? 'bg-gradient-to-r from-indigo-500 to-blue-500' : 'bg-blue-600'
                         }`}
                         style={{ width: `${progressPercent}%` }}
                       />
@@ -2626,7 +2651,7 @@ export const TroubleshootingView: React.FC<{
                           key={step.id}
                           className={`rounded-xl border p-3.5 bg-white shadow-xs transition space-y-2 ${
                             isPassed
-                              ? 'border-emerald-300 bg-emerald-50/20'
+                              ? 'border-l-4 border-l-indigo-600 bg-gradient-to-r from-indigo-50/20 to-white border-slate-200'
                               : isFailed
                               ? 'border-rose-400 bg-rose-50/30'
                               : isBlockedByPriorFailure
@@ -2641,7 +2666,7 @@ export const TroubleshootingView: React.FC<{
                               <span
                                 className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono font-bold shrink-0 mt-0.5 ${
                                   isPassed
-                                    ? 'bg-emerald-600 text-white'
+                                    ? 'bg-indigo-600 text-white'
                                     : isFailed
                                     ? 'bg-rose-600 text-white'
                                     : 'bg-slate-800 text-white'
@@ -2677,9 +2702,9 @@ export const TroubleshootingView: React.FC<{
                                   <span>🚨 FAILED (Anomaly Confirmed)</span>
                                 </span>
                               ) : isStepLocked ? (
-                                <span className="px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs">
-                                  <Lock className="w-3 h-3 text-emerald-700" />
-                                  <span>🔒 Verified & Locked</span>
+                                <span className="px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs">
+                                  <Check className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>✓ Verified & Locked</span>
                                 </span>
                               ) : isAwaitingPrevious ? (
                                 <span
@@ -2808,62 +2833,54 @@ export const TroubleshootingView: React.FC<{
                     );
                   })()}
 
-                  {/* Persistent Bottom Summary Bar: 100% Investigation Verified & Closed Audit Record (Compact) */}
+                  {/* Persistent Bottom Summary Bar: 100% Investigation Verified & Closed Audit Record (Signature Deep Navy-to-Indigo Gradient) */}
                   {(activeSession.status === 'VERIFIED_CLOSED' ||
                     activeSession.isLocked ||
                     (totalStepsCount > 0 && passedStepsCount === totalStepsCount)) && (
-                    <div className="rounded-xl border border-emerald-300 bg-emerald-50/90 p-3 shadow-2xs space-y-2 animate-in fade-in">
+                    <div className="rounded-xl border border-indigo-900/60 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 shadow-md space-y-2.5 animate-in fade-in">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs shrink-0 shadow-2xs">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs shrink-0 shadow-2xs">
                             <CheckCircle2 className="w-3.5 h-3.5 text-white" />
                           </span>
                           <div className="min-w-0">
-                            <h3 className="text-xs font-bold font-mono text-emerald-950 uppercase tracking-wide">
+                            <h3 className="text-xs font-bold font-mono text-white uppercase tracking-wide">
                               100% Investigation Verified & Closed
                             </h3>
-                            <p className="text-[11px] text-emerald-800 font-sans truncate">
+                            <p className="text-[11px] text-indigo-200/90 font-sans truncate">
                               All verification safety checks confirmed by technician. Permanent audit entry sealed in Maintenance History.
                             </p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-                          <button
-                            type="button"
-                            onClick={() => handleResolveTicketAndSaveRecord()}
-                            className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-2xs cursor-pointer transition"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Resolve & Save</span>
-                          </button>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400 font-bold">
-                            LOCKED
+                          <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/40 font-bold tracking-wider">
+                            LOCKED & SEALED
                           </span>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1.5 border-t border-emerald-200/80 text-[11px] font-mono">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-indigo-900/80 text-[11px] font-mono">
                         <div>
-                          <span className="text-emerald-700 block text-[9px] uppercase font-semibold">Verified</span>
-                          <strong className="text-slate-900 truncate block">
+                          <span className="text-indigo-300/80 block text-[9px] uppercase font-semibold">Verified</span>
+                          <strong className="text-white truncate block">
                             {activeSession.completedAt
                               ? new Date(activeSession.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                               : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </strong>
                         </div>
                         <div>
-                          <span className="text-emerald-700 block text-[9px] uppercase font-semibold">Asset Tag</span>
-                          <strong className="text-slate-900 truncate block">{activeSession.assetTag}</strong>
+                          <span className="text-indigo-300/80 block text-[9px] uppercase font-semibold">Asset Tag</span>
+                          <strong className="text-white truncate block">{activeSession.assetTag}</strong>
                         </div>
                         <div>
-                          <span className="text-emerald-700 block text-[9px] uppercase font-semibold">Fault / Alarm</span>
-                          <strong className="text-rose-700 truncate block">
+                          <span className="text-indigo-300/80 block text-[9px] uppercase font-semibold">Fault / Alarm</span>
+                          <strong className="text-rose-300 truncate block">
                             {activeSession.detectedFaultCode || activeSession.errorCode || 'ALM-THRM-402'}
                           </strong>
                         </div>
                         <div>
-                          <span className="text-emerald-700 block text-[9px] uppercase font-semibold">Verifying User</span>
-                          <strong className="text-slate-900 truncate block">
+                          <span className="text-indigo-300/80 block text-[9px] uppercase font-semibold">Verifying User</span>
+                          <strong className="text-white truncate block">
                             {typeof activeSession.verifiedBy === 'object'
                               ? activeSession.verifiedBy?.name
                               : activeSession.verifiedBy || user?.fullName || user?.email || 'Plant Specialist'}
@@ -2888,7 +2905,7 @@ export const TroubleshootingView: React.FC<{
                     variant="primary"
                     size="sm"
                     onClick={() => handleResolveTicketAndSaveRecord()}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+                    className="bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white shadow-sm whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 cursor-pointer border-0"
                   >
                     <CheckCircle2 className="w-4 h-4 shrink-0" />
                     <span>Resolve & Save Record</span>
@@ -2900,9 +2917,9 @@ export const TroubleshootingView: React.FC<{
                     size="sm"
                     disabled={isSavingToExpert}
                     onClick={handleSaveToExpertKnowledge}
-                    className="bg-white border-slate-300 hover:bg-slate-100 text-slate-700 whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+                    className="bg-gradient-to-r from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800 text-white whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs flex items-center justify-center gap-2 cursor-pointer border border-slate-700"
                   >
-                    <Lightbulb className="w-4 h-4 text-amber-500 shrink-0" />
+                    <Lightbulb className="w-4 h-4 text-amber-400 shrink-0" />
                     <span>{isSavingToExpert ? 'Saving...' : 'Save to Expert Knowledge'}</span>
                   </Button>
 
@@ -2911,9 +2928,9 @@ export const TroubleshootingView: React.FC<{
                     variant="primary"
                     size="sm"
                     onClick={handleOpenEscalateModal}
-                    className="bg-slate-900 hover:bg-black text-white whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+                    className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-sm whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 cursor-pointer border-0"
                   >
-                    <Send className="w-4 h-4 text-sky-400 shrink-0" />
+                    <Send className="w-4 h-4 text-sky-200 shrink-0" />
                     <span>Escalate to Technician</span>
                   </Button>
                 </div>
