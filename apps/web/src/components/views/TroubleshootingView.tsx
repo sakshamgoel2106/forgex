@@ -1235,13 +1235,16 @@ Top AI Root Cause Hypothesis:
         (m) => (m.asset_tag || m.assetTag || m.name || m.id) === activeSession.assetTag
       );
 
-      // Compute exact Date & Time formatted: e.g. "22 Oct 2026, 09:25 PM"
+      // Compute exact Date & Time formatted: e.g. "24 Oct 2026, 03:58 PM"
       const now = new Date();
-      const day = now.getDate().toString().padStart(2, '0');
-      const month = now.toLocaleString('en-US', { month: 'short' });
-      const year = now.getFullYear();
-      const time = now.toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-      const createdAtFormatted = `${day} ${month} ${year}, ${time}`;
+      const createdAtFormatted = now.toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
 
       const passedCount = activeSession.investigationSteps.filter((s) => s.status === 'PASS').length;
       const totalCount = activeSession.investigationSteps.length;
@@ -1435,13 +1438,16 @@ Investigation Progress: ${progressStr}`;
 
       let ticketNum: string | null = null;
 
-      // Compute exact Date & Time formatted: e.g. "22 Oct 2026, 09:25 PM"
+      // Compute exact Date & Time formatted: e.g. "24 Oct 2026, 03:58 PM"
       const now = new Date();
-      const day = now.getDate().toString().padStart(2, '0');
-      const month = now.toLocaleString('en-US', { month: 'short' });
-      const year = now.getFullYear();
-      const time = now.toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-      const createdAtFormatted = `${day} ${month} ${year}, ${time}`;
+      const createdAtFormatted = now.toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
 
       const passedCount = activeSession.investigationSteps.filter((s) => s.status === 'PASS').length;
       const totalCount = activeSession.investigationSteps.length;

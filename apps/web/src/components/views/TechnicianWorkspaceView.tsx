@@ -245,20 +245,35 @@ export const TechnicianWorkspaceView: React.FC<{
       const ticketsJson = ticketsRes && ticketsRes.ok ? await ticketsRes.json() : null;
 
       const formatDt = (rawDate?: string) => {
-        if (!rawDate) return 'Oct 23, 12:07 PM';
         try {
-          const d = new Date(rawDate);
-          if (isNaN(d.getTime())) return 'Oct 23, 12:07 PM';
-          const month = d.toLocaleString('en-US', { month: 'short' });
-          const day = d.getDate();
-          let hours = d.getHours();
-          const minutes = d.getMinutes().toString().padStart(2, '0');
-          const ampm = hours >= 12 ? 'PM' : 'AM';
-          hours = hours % 12;
-          hours = hours ? hours : 12;
-          return `${month} ${day}, ${hours}:${minutes} ${ampm}`;
+          const d = rawDate ? new Date(rawDate) : new Date();
+          if (isNaN(d.getTime())) {
+            return new Date().toLocaleString('en-IN', {
+              day: '2-digit',
+              month: 'short',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true,
+            });
+          }
+          return d.toLocaleString('en-IN', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+          });
         } catch {
-          return 'Oct 23, 12:07 PM';
+          return new Date().toLocaleString('en-IN', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+          });
         }
       };
 
