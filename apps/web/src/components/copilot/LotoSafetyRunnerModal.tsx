@@ -9,7 +9,6 @@ import {
   Upload,
   RotateCcw,
   Check,
-  Gauge,
   Zap,
   Clock,
   Sparkles,
@@ -18,14 +17,12 @@ import {
   MicOff,
   Volume2,
   Radio,
+  SwitchCamera,
+  FileUp,
 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
 import { apiFetch } from '../../lib/api';
-import {
-  generateOverpressureGaugeSvg,
-  generateZeroEnergyGaugeSvg,
-} from '../../utils/shopFloorImagePresets';
 import type { SupportedLanguageCode } from '@forgex/shared-types';
 
 export interface LotoSafetyRunnerModalProps {
@@ -88,15 +85,20 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     safetyMessage: string;
     timestamp: string;
     inspectorSummary?: string;
+    safetyStatus?: string;
   } | null>(null);
 
   // Step 4 final sign-off state
   const [step4Completed, setStep4Completed] = useState(false);
   const [step4Timestamp, setStep4Timestamp] = useState<string | null>(null);
 
-  // Camera states
+  // Camera & Device states
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -215,31 +217,8 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     }
   }, [step2V101, step2V102, step2Completed, isHandsFreeVoiceActive, readCurrentStepAloud]);
 
-  // Start live webcam stream
-  const startCamera = async () => {
-    setCameraError(null);
-    try {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      setIsCameraActive(true);
-    } catch (err: any) {
-      setCameraError(err?.message || 'Camera access denied or unavailable');
-      setIsCameraActive(false);
-    }
-  };
-
-  // Stop camera stream
-  const stopCamera = () => {
+  // Clean up camera stream on close
+  const stopCamera = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -248,28 +227,101 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
       videoRef.current.srcObject = null;
     }
     setIsCameraActive(false);
+  }, []);
+
+  // Enumerate physical video devices
+  const enumerateCameras = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      setCameraDevices(videoInputs);
+      if (videoInputs.length > 0 && !selectedCameraId) {
+        setSelectedCameraId(videoInputs[0].deviceId);
+      }
+    } catch (err) {
+      console.warn('Failed to enumerate video cameras:', err);
+    }
+  }, [selectedCameraId]);
+
+  // Start live hardware camera stream
+  const startCamera = useCallback(
+    async (deviceIdToUse?: string, forcedFacing?: 'environment' | 'user') => {
+      setCameraError(null);
+      stopCamera();
+
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        setCameraError('Camera access is not supported in this browser environment.');
+        return;
+      }
+
+      try {
+        const targetFacing = forcedFacing || facingMode;
+        const targetDeviceId = deviceIdToUse || selectedCameraId;
+
+        const constraints: MediaStreamConstraints = {
+          video: targetDeviceId
+            ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+            : { facingMode: targetFacing, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        streamRef.current = stream;
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        setIsCameraActive(true);
+        enumerateCameras();
+      } catch (err: any) {
+        console.warn('Camera access error:', err);
+        setCameraError(
+          `Camera Error: ${err?.message || 'Access denied or device is currently in use'}. Please permit webcam access or use file upload.`
+        );
+        setIsCameraActive(false);
+      }
+    },
+    [selectedCameraId, facingMode, stopCamera, enumerateCameras]
+  );
+
+  // Flip front/rear camera
+  const toggleFacingMode = () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextFacing);
+    setSelectedCameraId('');
+    startCamera(undefined, nextFacing);
   };
 
-  // Capture snapshot from live camera
+  // Switch camera by ID
+  const handleSelectCameraDevice = (deviceId: string) => {
+    setSelectedCameraId(deviceId);
+    startCamera(deviceId);
+  };
+
+  // High-resolution snapshot capture from live hardware camera
   const captureSnapshot = () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUri = canvas.toDataURL('image/jpeg', 0.9);
+      const dataUri = canvas.toDataURL('image/jpeg', 0.95);
       stopCamera();
       verifyGaugeImage(dataUri);
     }
   };
 
-  // Handle local file upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Process uploaded or dropped image file
+  const processImageFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setCameraError('Only valid image files (.jpg, .png, .webp) are supported.');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (uploadEvent) => {
       const dataUri = uploadEvent.target?.result as string;
@@ -279,6 +331,14 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  // Handle local file upload
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processImageFile(file);
+    }
     e.target.value = '';
   };
 
@@ -295,19 +355,36 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
         body: JSON.stringify({
           imageBase64: dataUri,
           assetId,
-          requiredReading: 0,
-          tolerance: 0.5,
-          unit: 'bar',
+          assetTag: assetTag || 'PUMP-001',
+          language: currentLanguage,
         }),
       });
 
       const json = await res.json();
       if (res.ok && json.success && json.data) {
-        setVisionVerificationResult(json.data);
-        if (json.data.verified && isHandsFreeVoiceActive) {
+        const loto = json.data;
+        setVisionVerificationResult({
+          verified: loto.verified,
+          readingValue: loto.diagnostic?.readingValue ?? null,
+          readingUnit: loto.diagnostic?.readingUnit ?? 'bar',
+          alertType: loto.alertType,
+          safetyMessage: loto.message,
+          timestamp: loto.diagnostic?.timestamp || new Date().toISOString(),
+          inspectorSummary: loto.diagnostic?.summary,
+          safetyStatus: loto.diagnostic?.safetyStatus,
+        });
+
+        if (loto.verified && isHandsFreeVoiceActive) {
           speakText('Zero energy confirmed at 0 Bar. Step 4 maintenance authorized.');
-        } else if (!json.data.verified && isHandsFreeVoiceActive) {
-          speakText('Danger: Residual pressure detected. Do not open pump casing.');
+        } else if (!loto.verified && isHandsFreeVoiceActive) {
+          if (
+            loto.diagnostic?.safetyStatus === 'INVALID_EVIDENCE' ||
+            loto.message?.toLowerCase().includes('no pressure gauge')
+          ) {
+            speakText('Invalid verification photo. No pressure gauge or isolation point detected in frame.');
+          } else {
+            speakText('Danger: Residual pressure detected. Do not open pump casing.');
+          }
         }
       } else {
         // Fallback safety block
@@ -316,7 +393,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
           readingValue: null,
           readingUnit: 'bar',
           alertType: 'CRITICAL_BLOCK',
-          safetyMessage: json?.error?.message || 'Zero-energy verification failed. Residual pressure unresolved.',
+          safetyMessage: json?.error?.message || json?.error || 'Zero-energy verification failed. Residual pressure unresolved.',
           timestamp: new Date().toISOString(),
           inspectorSummary: 'Could not verify zero pressure reading. For safety, pump disassembly remains locked.',
         });
@@ -333,19 +410,6 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     } finally {
       setIsAnalyzingVision(false);
     }
-  };
-
-  // Quick 1-click Stage Demo Preset Handlers
-  const handleTestOverpressureSample = () => {
-    stopCamera();
-    const uri = generateOverpressureGaugeSvg();
-    verifyGaugeImage(uri);
-  };
-
-  const handleTestZeroEnergySample = () => {
-    stopCamera();
-    const uri = generateZeroEnergyGaugeSvg();
-    verifyGaugeImage(uri);
   };
 
   // Step 4 final sign-off
@@ -416,21 +480,24 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
           t.includes('verify') ||
           t.includes('safe') ||
           t.includes('shunya') ||
-          t.includes('haan') ||
-          t.includes('done') ||
-          t.includes('aage') ||
-          t.includes('pudhe')
+          t.includes('capture') ||
+          t.includes('photo') ||
+          t.includes('snap') ||
+          t.includes('camera') ||
+          t.includes('tasveer') ||
+          t.includes('khicho')
         ) {
-          setLastVoiceMatch("Recognized: 'Verify Zero Energy State'");
-          speakText('Analyzing gauge for zero-energy verification.');
-          handleTestZeroEnergySample();
-          return;
-        }
-        if (t.includes('overpressure') || t.includes('28') || t.includes('danger') || t.includes('high')) {
-          setLastVoiceMatch("Recognized: 'Test Overpressure Sample'");
-          speakText('Testing residual line overpressure condition.');
-          handleTestOverpressureSample();
-          return;
+          if (isCameraActive && videoRef.current) {
+            setLastVoiceMatch("Recognized: 'Capture & Verify Live Frame'");
+            speakText('Capturing frame for zero-energy verification.');
+            captureSnapshot();
+            return;
+          } else {
+            setLastVoiceMatch("Recognized: 'Open Camera for Verification'");
+            speakText('Opening hardware camera viewfinder. Align pressure gauge and confirm.');
+            startCamera();
+            return;
+          }
         }
       }
 
@@ -947,101 +1014,158 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
             {/* Vision Gate Active Controls */}
             {step2Completed && (
               <div className="mt-3.5 pt-3 border-t border-slate-200 space-y-3">
-                {/* 1-Click Fast Stage Demo Presets Bar */}
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
-                  <span className="text-[10px] font-mono text-slate-500 font-bold uppercase tracking-wider block mb-1.5">
-                    Stage-Proof Demo Presets (Instant Simulation):
-                  </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {/* Trigger Hard Red Safety Block */}
-                    <button
-                      type="button"
-                      disabled={isAnalyzingVision}
-                      onClick={handleTestOverpressureSample}
-                      className="p-2 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-800 font-mono text-xs font-bold flex items-center justify-between transition cursor-pointer text-left shadow-2xs"
-                    >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Gauge className="w-4 h-4 text-rose-600 shrink-0" />
-                        <span className="truncate">Sample: 28 Bar Residual</span>
-                      </div>
-                      <span className="text-[9px] bg-rose-200/80 text-rose-900 px-1.5 py-0.2 rounded font-mono shrink-0">
-                        TEST REJECT
-                      </span>
-                    </button>
-
-                    {/* Trigger Green Unlock */}
-                    <button
-                      type="button"
-                      disabled={isAnalyzingVision}
-                      onClick={handleTestZeroEnergySample}
-                      className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 font-mono text-xs font-bold flex items-center justify-between transition cursor-pointer text-left shadow-2xs"
-                    >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span className="truncate">Sample: 0 PSI Verified</span>
-                      </div>
-                      <span className="text-[9px] bg-emerald-200/80 text-emerald-900 px-1.5 py-0.2 rounded font-mono shrink-0">
-                        TEST UNLOCK
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Live Camera Viewfinder or Upload Box */}
+                {/* Hardware Camera Viewfinder & File Drag-and-Drop */}
                 {!isCameraActive ? (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      disabled={isAnalyzingVision}
-                      onClick={startCamera}
-                      className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-black text-white text-xs font-bold font-mono flex items-center gap-1.5 transition cursor-pointer shadow-xs"
-                    >
-                      <Camera className="w-3.5 h-3.5" />
-                      <span>Open Live Viewfinder</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={isAnalyzingVision}
-                      onClick={() => fileInputRef.current?.click()}
-                      className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
-                    >
-                      <Upload className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Upload Gauge Photo</span>
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-
-                    {cameraError && (
-                      <span className="text-[11px] text-rose-600 font-medium">{cameraError}</span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="rounded-xl overflow-hidden border border-slate-300 bg-black relative">
-                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-48 object-cover" />
-                    <div className="absolute inset-0 border-2 border-emerald-400/40 pointer-events-none flex items-center justify-center">
-                      <div className="w-32 h-32 rounded-full border border-dashed border-emerald-300/80 animate-pulse" />
-                    </div>
-                    <div className="absolute bottom-2 left-0 right-0 px-3 flex items-center justify-between">
+                  <div className="space-y-2.5">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
-                        onClick={stopCamera}
-                        className="px-2 py-1 rounded bg-black/70 text-white text-xs hover:bg-black"
+                        disabled={isAnalyzingVision}
+                        onClick={() => startCamera()}
+                        className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-black text-white text-xs font-bold font-mono flex items-center gap-1.5 transition cursor-pointer shadow-xs disabled:opacity-50"
                       >
-                        Cancel
+                        <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Open Live Hardware Camera</span>
                       </button>
+
+                      <button
+                        type="button"
+                        disabled={isAnalyzingVision}
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-xs disabled:opacity-50"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Upload Real Photo</span>
+                      </button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/*"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                      />
+
+                      {cameraDevices.length > 1 && (
+                        <select
+                          value={selectedCameraId}
+                          onChange={(e) => handleSelectCameraDevice(e.target.value)}
+                          className="text-[11px] font-mono py-1 px-2 border border-slate-300 rounded-md bg-white text-slate-700"
+                        >
+                          {cameraDevices.map((d, i) => (
+                            <option key={d.deviceId || i} value={d.deviceId}>
+                              {d.label || `Camera ${i + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      {cameraError && (
+                        <span className="text-[11px] text-rose-600 font-medium">{cameraError}</span>
+                      )}
+                    </div>
+
+                    {/* Drag-and-Drop Zone for Real Shop-Floor Photos */}
+                    <div
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setIsDraggingOver(true);
+                      }}
+                      onDragLeave={() => setIsDraggingOver(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setIsDraggingOver(false);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) processImageFile(file);
+                      }}
+                      onClick={() => fileInputRef.current?.click()}
+                      className={`p-4 rounded-xl border-2 border-dashed transition-all cursor-pointer text-center ${
+                        isDraggingOver
+                          ? 'border-blue-500 bg-blue-50/80 scale-[1.01]'
+                          : 'border-slate-300 bg-slate-50/70 hover:bg-slate-50 hover:border-slate-400'
+                      }`}
+                    >
+                      <FileUp className="w-6 h-6 text-slate-400 mx-auto mb-1.5" />
+                      <p className="text-xs font-semibold text-slate-700">
+                        Drop real shop-floor photo here, or click to browse
+                      </p>
+                      <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                        Supports real JPG, PNG, WebP photos of gauges, padlocks, or valves
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl overflow-hidden border border-slate-800 bg-black relative shadow-md">
+                    {/* Camera Control Header */}
+                    <div className="absolute top-2 left-2 right-2 z-10 flex items-center justify-between pointer-events-auto">
+                      <div className="flex items-center gap-1.5 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-white text-[11px] font-mono">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        <span>LIVE 1080P VIEWFINDER</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {cameraDevices.length > 1 && (
+                          <select
+                            value={selectedCameraId}
+                            onChange={(e) => handleSelectCameraDevice(e.target.value)}
+                            className="text-[10px] font-mono py-1 px-2 border border-white/20 rounded-md bg-black/80 text-white"
+                          >
+                            {cameraDevices.map((d, i) => (
+                              <option key={d.deviceId || i} value={d.deviceId}>
+                                {d.label || `Camera ${i + 1}`}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          type="button"
+                          onClick={toggleFacingMode}
+                          className="px-2 py-1 rounded-md bg-black/70 hover:bg-black text-white text-xs border border-white/20 flex items-center gap-1"
+                          title="Flip Front / Rear Camera"
+                        >
+                          <SwitchCamera className="w-3.5 h-3.5" />
+                          <span className="text-[10px] hidden sm:inline">
+                            {facingMode === 'environment' ? 'Rear' : 'Front'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={stopCamera}
+                          className="px-2 py-1 rounded-md bg-black/70 hover:bg-black text-white text-xs border border-white/20"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </div>
+
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-56 object-cover"
+                    />
+
+                    {/* Circular Alignment Reticle */}
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                      <div className="w-36 h-36 rounded-full border-2 border-dashed border-emerald-400/80 animate-pulse flex items-center justify-center shadow-lg">
+                        <span className="text-[9px] font-mono text-emerald-300 font-bold bg-black/60 px-1.5 py-0.5 rounded">
+                          ALIGN GAUGE DIAL
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Bottom Action Bar */}
+                    <div className="absolute bottom-2 left-2 right-2 z-10 flex items-center justify-between pointer-events-auto">
+                      <span className="text-[10px] font-mono text-white/80 bg-black/60 px-2 py-0.5 rounded">
+                        Say &quot;Capture&quot; or press button
+                      </span>
                       <button
                         type="button"
                         onClick={captureSnapshot}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs shadow-md flex items-center gap-1.5"
+                        disabled={isAnalyzingVision}
+                        className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs shadow-lg flex items-center gap-1.5 transition cursor-pointer"
                       >
-                        <Camera className="w-3.5 h-3.5" />
-                        <span>Capture &amp; Verify</span>
+                        <Camera className="w-4 h-4" />
+                        <span>Capture &amp; Verify Frame</span>
                       </button>
                     </div>
                   </div>
@@ -1055,31 +1179,59 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                   </div>
                 )}
 
-                {/* RED SAFETY BLOCK: When pressure is non-zero */}
+                {/* REJECTION BLOCK: Invalid evidence OR residual overpressure */}
                 {visionVerificationResult && !isGateVerified && (
-                  <div className="p-3.5 rounded-xl bg-rose-50 border-2 border-rose-500 text-rose-900 space-y-2 animate-bounce-short shadow-sm">
-                    <div className="flex items-center gap-2 font-bold uppercase tracking-wide text-rose-800 text-xs">
-                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                      <span>CRITICAL OSHA 1910.147 SAFETY LOCK: RESIDUAL PRESSURE DETECTED</span>
+                  <div
+                    className={`p-3.5 rounded-xl border-2 space-y-2 animate-bounce-short shadow-sm ${
+                      visionVerificationResult.safetyStatus === 'INVALID_EVIDENCE' ||
+                      visionVerificationResult.safetyMessage?.toLowerCase().includes('no pressure gauge')
+                        ? 'bg-amber-50/90 border-amber-500 text-amber-950'
+                        : 'bg-rose-50 border-rose-500 text-rose-900'
+                    }`}
+                  >
+                    <div
+                      className={`flex items-center gap-2 font-bold uppercase tracking-wide text-xs ${
+                        visionVerificationResult.safetyStatus === 'INVALID_EVIDENCE' ||
+                        visionVerificationResult.safetyMessage?.toLowerCase().includes('no pressure gauge')
+                          ? 'text-amber-800'
+                          : 'text-rose-800'
+                      }`}
+                    >
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>
+                        {visionVerificationResult.safetyStatus === 'INVALID_EVIDENCE' ||
+                        visionVerificationResult.safetyMessage?.toLowerCase().includes('no pressure gauge')
+                          ? 'EVIDENCE REJECTED: NO INDUSTRIAL GAUGE OR ISOLATION DETECTED'
+                          : 'CRITICAL OSHA 1910.147 SAFETY LOCK: RESIDUAL PRESSURE DETECTED'}
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-3">
                       {capturedImage && (
                         <img
                           src={capturedImage}
-                          alt="Rejected Gauge"
-                          className="w-16 h-16 rounded-lg object-cover border-2 border-rose-400 shrink-0 shadow-xs"
+                          alt="Rejected Verification Evidence"
+                          className="w-16 h-16 rounded-lg object-cover border-2 shrink-0 shadow-xs border-amber-400"
                         />
                       )}
                       <div className="space-y-1">
-                        <p className="text-xs font-bold text-rose-950 leading-snug">
+                        <p className="text-xs font-bold leading-snug">
                           {visionVerificationResult.safetyMessage}
                         </p>
-                        <p className="text-[11px] text-rose-800 leading-relaxed">
+                        <p className="text-[11px] leading-relaxed opacity-90">
                           {visionVerificationResult.inspectorSummary ||
-                            'High residual pressure detected. Opening pump casing at this stage risks catastrophic fluid discharge and severe injury.'}
+                            (visionVerificationResult.safetyStatus === 'INVALID_EVIDENCE'
+                              ? 'OSHA 1910.147 mandates visual evidence of analog pressure gauge PG-101 or padlocked disconnect switch. Random objects cannot unlock maintenance.'
+                              : 'High residual pressure detected. Opening pump casing at this stage risks catastrophic fluid discharge and severe injury.')}
                         </p>
-                        <div className="text-[10px] font-mono text-rose-700 bg-rose-100/80 px-2 py-0.5 rounded border border-rose-200 inline-block font-bold">
+                        <div
+                          className={`text-[10px] font-mono px-2 py-0.5 rounded border inline-block font-bold ${
+                            visionVerificationResult.safetyStatus === 'INVALID_EVIDENCE' ||
+                            visionVerificationResult.safetyMessage?.toLowerCase().includes('no pressure gauge')
+                              ? 'bg-amber-100 border-amber-300 text-amber-900'
+                              : 'bg-rose-100/80 border-rose-200 text-rose-700'
+                          }`}
+                        >
                           Step 4 remains strictly locked until zero energy is visually certified.
                         </div>
                       </div>

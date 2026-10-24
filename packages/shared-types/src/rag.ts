@@ -69,12 +69,14 @@ export type DetectedVisualObject =
   | 'ANALOG_GAUGE'
   | 'MECHANICAL_COMPONENT'
   | 'NAMEPLATE'
-  | 'LOTO_PADLOCK';
+  | 'LOTO_PADLOCK'
+  | 'UNKNOWN';
 
 export type VisionSafetyStatus =
   | 'SAFE_ZERO_ENERGY'
   | 'CRITICAL_OVERPRESSURE'
   | 'WEAR_DETECTED'
+  | 'INVALID_EVIDENCE'
   | 'NORMAL';
 
 export interface VisionDiagnosticResult {

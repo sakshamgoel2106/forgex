@@ -54,6 +54,10 @@ describe('ForgeX AI v1.4.2 — Multimodal Gauge & Part Vision + Vision-Locked LO
       '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" data-sample-id="CORRODED_SEAL"><text y="200">CORRODED MECHANICAL SEAL</text></svg>'
     ).toString('base64');
 
+  const sampleRandomObjectDataUri =
+    'data:image/jpeg;base64,' +
+    Buffer.from('COFFEE_CUP_OR_RANDOM_DESK_PHOTO_NOT_AN_INDUSTRIAL_GAUGE').toString('base64');
+
   beforeEach(async () => {
     authAdapter = new LocalDevAuthAdapter(jwtSecret);
     dataStore = new InMemoryDataStore();
@@ -189,6 +193,20 @@ describe('ForgeX AI v1.4.2 — Multimodal Gauge & Part Vision + Vision-Locked LO
       expect(result.summary).toContain('0.0 Bar');
       expect(result.summary).toContain('सुरक्षित');
     });
+
+    it('strictly rejects non-gauge/random objects with INVALID_EVIDENCE during LOTO verification', async () => {
+      const result = await MultimodalVisionService.analyzeImage({
+        imageBase64: sampleRandomObjectDataUri,
+        visionMode: 'LOTO_ZERO_ENERGY_CHECK',
+        assetTag: 'PUMP-001',
+        language: 'en-US',
+      });
+
+      expect(result.detectedObject).toBe('UNKNOWN');
+      expect(result.safetyStatus).toBe('INVALID_EVIDENCE');
+      expect(result.readingValue).toBeNull();
+      expect(result.summary).toContain('Invalid verification photo: No pressure gauge or isolation point detected in frame.');
+    });
   });
 
   describe('2. Dedicated Vision API Endpoints', () => {
@@ -245,6 +263,40 @@ describe('ForgeX AI v1.4.2 — Multimodal Gauge & Part Vision + Vision-Locked LO
       expect(res.body.data.alertType).toBe('SAFE');
       expect(res.body.data.message).toContain('Zero Energy State Verified');
       expect(res.body.data.message).toContain('0 Bar / 0 PSI');
+    });
+
+    it('POST /api/v1/visual/loto-verify rejects random non-gauge photo with INVALID_EVIDENCE and blocks gate', async () => {
+      const res = await request(app)
+        .post('/api/v1/visual/loto-verify')
+        .set('Authorization', `Bearer ${tokenTech}`)
+        .send({
+          imageBase64: sampleRandomObjectDataUri,
+          assetTag: 'PUMP-001',
+          language: 'en-US',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.verified).toBe(false);
+      expect(res.body.data.alertType).toBe('CRITICAL_BLOCK');
+      expect(res.body.data.diagnostic.safetyStatus).toBe('INVALID_EVIDENCE');
+      expect(res.body.data.message).toContain('Invalid verification photo: No pressure gauge or isolation point detected in frame.');
+    });
+
+    it('POST /api/v1/visual/loto-verify returns native Hindi error for non-gauge photo', async () => {
+      const res = await request(app)
+        .post('/api/v1/visual/loto-verify')
+        .set('Authorization', `Bearer ${tokenTech}`)
+        .send({
+          imageBase64: sampleRandomObjectDataUri,
+          assetTag: 'PUMP-001',
+          language: 'hi-IN',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.verified).toBe(false);
+      expect(res.body.data.message).toContain('अमान्य सत्यापन फोटो: फ्रेम में कोई प्रेशर गेज या आइसोलेशन पॉइंट नहीं मिला।');
     });
   });
 

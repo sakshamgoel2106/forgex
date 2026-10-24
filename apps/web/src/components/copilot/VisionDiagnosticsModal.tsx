@@ -3,20 +3,14 @@ import {
   Camera,
   Upload,
   X,
-  Sparkles,
-  AlertTriangle,
-  CheckCircle2,
   ScanEye,
   VideoOff,
   Sliders,
   Send,
-  Wrench,
-  Check,
+  RefreshCw,
+  Repeat,
+  ImageIcon,
 } from 'lucide-react';
-import {
-  SHOP_FLOOR_PRESETS,
-  ShopFloorPreset,
-} from '../../utils/shopFloorImagePresets';
 import type { SupportedLanguageCode } from '@forgex/shared-types';
 
 interface VisionDiagnosticsModalProps {
@@ -40,25 +34,39 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
   onSelectMachine,
   currentLanguage = 'en-US',
 }) => {
-  const [activeTab, setActiveTab] = useState<'camera' | 'upload' | 'samples'>('samples');
+  const [activeTab, setActiveTab] = useState<'camera' | 'upload'>('camera');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [selectedPreset, setSelectedPreset] = useState<ShopFloorPreset | null>(null);
+  const [imageSourceLabel, setImageSourceLabel] = useState<string>('Live Camera');
   const [customPrompt, setCustomPrompt] = useState<string>('');
+
+  // Hardware Camera Device States
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Auto-select the first preset on open for instantaneous stage demo readiness
+  // Set default prompt on open
   useEffect(() => {
-    if (isOpen && !selectedImage) {
-      const defaultPreset = SHOP_FLOOR_PRESETS[0];
-      setSelectedPreset(defaultPreset);
-      setSelectedImage(defaultPreset.getDataUri());
-      setCustomPrompt(`Perform visual inspection on ${selectedMachine?.assetTag || 'PUMP-001'} analog pressure gauge. Read pressure and verify against OEM MAWP limits.`);
+    if (isOpen) {
+      const isHindi = currentLanguage === 'hi-IN';
+      const isMarathi = currentLanguage === 'mr-IN';
+      const defaultText = isHindi
+        ? `${selectedMachine?.assetTag || 'PUMP-001'} के एनालॉग प्रेशर गेज और मैकेनिकल सील का दृश्य निरीक्षण करें। गेज रीडिंग पढ़ें और OEM MAWP सीमाओं के विरुद्ध सत्यापित करें।`
+        : isMarathi
+        ? `${selectedMachine?.assetTag || 'PUMP-001'} वरील प्रेशर गेज आणि मेकॅनिकल सीलची व्हिज्युअल तपासणी करा आणि मर्यादा तपासा.`
+        : `Perform visual inspection on ${
+            selectedMachine?.assetTag || 'PUMP-001'
+          } analog pressure gauge and mechanical seal. Extract readings and verify against OEM MAWP limits.`;
+      setCustomPrompt(defaultText);
     }
-  }, [isOpen, selectedImage, selectedMachine]);
+  }, [isOpen, selectedMachine, currentLanguage]);
 
   // Clean up camera stream on close
   const stopCamera = useCallback(() => {
@@ -66,100 +74,174 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    setIsCameraActive(false);
   }, []);
 
-  useEffect(() => {
-    if (!isOpen) {
-      stopCamera();
-    }
-  }, [isOpen, stopCamera]);
-
-  // Start live webcam feed
-  const startCamera = async () => {
-    setCameraError(null);
+  // Enumerate physical video input devices
+  const enumerateCameras = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return;
     try {
-      stopCamera();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      setCameraDevices(videoInputs);
+      if (videoInputs.length > 0 && !selectedCameraId) {
+        setSelectedCameraId(videoInputs[0].deviceId);
+      }
+    } catch (err) {
+      console.warn('Failed to enumerate video cameras:', err);
+    }
+  }, [selectedCameraId]);
+
+  // Start live hardware camera stream
+  const startCamera = useCallback(async (deviceIdToUse?: string, forcedFacing?: 'environment' | 'user') => {
+    setCameraError(null);
+    stopCamera();
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera access is not supported in this browser environment.');
+      return;
+    }
+
+    try {
+      const targetFacing = forcedFacing || facingMode;
+      const targetDeviceId = deviceIdToUse || selectedCameraId;
+
+      const constraints: MediaStreamConstraints = {
+        video: targetDeviceId
+          ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+          : { facingMode: targetFacing, width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: false,
-      });
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play();
       }
+      setIsCameraActive(true);
       setActiveTab('camera');
+      enumerateCameras();
     } catch (err: any) {
-      console.warn('Webcam access error:', err);
-      setCameraError('Camera access denied or unavailable. You can use sample stage presets or upload a photo.');
+      console.warn('Camera access error:', err);
+      setCameraError(
+        `Camera Error: ${err?.message || 'Access denied or device is currently in use'}. Please permit webcam access or use file upload.`
+      );
     }
+  }, [selectedCameraId, facingMode, stopCamera, enumerateCameras]);
+
+  // Flip between front and rear cameras
+  const toggleFacingMode = () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextFacing);
+    setSelectedCameraId('');
+    startCamera(undefined, nextFacing);
   };
 
-  // Capture current frame from live video
+  // Switch camera by device ID
+  const handleSelectCameraDevice = (deviceId: string) => {
+    setSelectedCameraId(deviceId);
+    startCamera(deviceId);
+  };
+
+  // Capture high-resolution frame from live camera
   const captureSnapshot = () => {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUri = canvas.toDataURL('image/jpeg', 0.92);
+    const dataUri = canvas.toDataURL('image/jpeg', 0.94);
+
     setSelectedImage(dataUri);
-    setSelectedPreset(null);
+    setImageSourceLabel('Live Hardware Camera Capture');
     stopCamera();
   };
 
-  // Handle local file upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  // Process uploaded image file
+  const processImageFile = (file: File) => {
     if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Please upload a valid image file (.jpg, .png, .webp)');
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUri = event.target?.result as string;
       if (dataUri) {
         setSelectedImage(dataUri);
-        setSelectedPreset(null);
+        setImageSourceLabel(`Uploaded Photo: ${file.name}`);
+        stopCamera();
       }
     };
     reader.readAsDataURL(file);
   };
 
-  // Handle preset selection
-  const handleSelectPreset = (preset: ShopFloorPreset) => {
-    setSelectedPreset(preset);
-    setSelectedImage(preset.getDataUri());
-    if (preset.expectedStatus === 'CRITICAL_OVERPRESSURE') {
-      setCustomPrompt(`Read analog pressure gauge PG-101 on ${selectedMachine?.assetTag || 'PUMP-001'} and compare against OEM MAWP ratings.`);
-    } else if (preset.expectedStatus === 'SAFE_ZERO_ENERGY') {
-      setCustomPrompt(`Verify zero energy state on ${selectedMachine?.assetTag || 'PUMP-001'} pressure gauge for OSHA 1910.147 LOTO clearance.`);
-    } else {
-      setCustomPrompt(`Perform visual component inspection on ${selectedMachine?.assetTag || 'PUMP-001'} mechanical seal face for dry-running damage.`);
-    }
+  // Handle local file input change
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processImageFile(file);
+    e.target.value = '';
   };
 
-  // Send selected image to Copilot
+  // Drag and drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processImageFile(file);
+  };
+
+  // Dispatch photo to Copilot
   const handleDispatch = () => {
     if (!selectedImage) return;
     const prompt =
       customPrompt.trim() ||
-      (selectedPreset?.expectedStatus === 'CRITICAL_OVERPRESSURE'
-        ? `Read analog pressure gauge PG-101 on ${selectedMachine?.assetTag || 'PUMP-001'} and compare against OEM MAWP ratings.`
-        : selectedPreset?.expectedStatus === 'SAFE_ZERO_ENERGY'
-        ? `Verify zero energy state on ${selectedMachine?.assetTag || 'PUMP-001'} pressure gauge for OSHA 1910.147 LOTO clearance.`
-        : `Inspect component image on ${selectedMachine?.assetTag || 'PUMP-001'} and evaluate surface wear against OEM specifications.`);
+      `Perform visual inspection on ${
+        selectedMachine?.assetTag || 'PUMP-001'
+      } analog pressure gauge and mechanical seal. Extract readings and verify against OEM MAWP limits.`;
 
     const callback = onDiagnose || onSendToCopilot;
     callback?.(selectedImage, prompt);
+    stopCamera();
     onClose();
   };
+
+  // Lifecycle camera auto-start on modal open
+  useEffect(() => {
+    if (isOpen) {
+      enumerateCameras();
+      startCamera();
+    } else {
+      stopCamera();
+      setSelectedImage(null);
+    }
+    return () => {
+      stopCamera();
+    };
+  }, [isOpen, enumerateCameras, startCamera, stopCamera]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn">
       <div className="bg-[#0D1527] border border-blue-900/60 w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] text-white">
         {/* Header Bar */}
         <div className="px-6 py-4 bg-[#090F1E] border-b border-blue-950 flex items-center justify-between shrink-0">
@@ -170,14 +252,17 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-sans font-bold text-base text-white tracking-wide">
-                  Multimodal Vision &amp; Gauge Diagnostics
+                  Multimodal Hardware Vision &amp; Gauge Diagnostics
                 </h3>
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-950 text-blue-400 border border-blue-800 uppercase">
-                  Gemini 2.5 Flash
+                  Gemini Multimodal Live
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                  REAL HARDWARE
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-sans">
-                Read analog pressure gauges, verify zero-energy LOTO, and detect mechanical component wear
+                Real-time optical dial reading, mechanical seal wear evaluation, and OEM engineering verification
               </p>
             </div>
           </div>
@@ -203,7 +288,10 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
             )}
 
             <button
-              onClick={onClose}
+              onClick={() => {
+                stopCamera();
+                onClose();
+              }}
               className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
             >
               <X className="w-5 h-5" />
@@ -211,93 +299,94 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
           </div>
         </div>
 
-        {/* 1-Click Stage Demo Presets Bar (Always visible for stage reliability) */}
-        <div className="px-6 py-2.5 bg-[#070B16] border-b border-blue-950/80 flex items-center justify-between gap-2 overflow-x-auto shrink-0">
-          <div className="flex items-center gap-2 shrink-0 text-xs font-semibold text-slate-400">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span>Stage Demo Presets:</span>
+        {/* Source Mode Tabs & Camera Controls Strip */}
+        <div className="px-6 py-2.5 bg-[#070B16] border-b border-blue-950/80 flex items-center justify-between gap-3 overflow-x-auto shrink-0">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setActiveTab('camera');
+                if (!isCameraActive) startCamera();
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer border ${
+                activeTab === 'camera'
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+              }`}
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>Live Camera Stream</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('upload');
+                stopCamera();
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer border ${
+                activeTab === 'upload'
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+              }`}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Upload Photo (JPG/PNG/WEBP)</span>
+            </button>
           </div>
 
-          <div className="flex items-center gap-2 overflow-x-auto py-0.5">
-            {SHOP_FLOOR_PRESETS.map((preset) => {
-              const isSelected = selectedPreset?.id === preset.id;
-              return (
-                <button
-                  key={preset.id}
-                  onClick={() => handleSelectPreset(preset)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-sans font-medium transition shrink-0 flex items-center gap-1.5 cursor-pointer border ${
-                    isSelected
-                      ? 'bg-blue-600 text-white border-blue-400 shadow-sm shadow-blue-500/30 font-bold'
-                      : 'bg-slate-900/80 hover:bg-slate-800 text-slate-300 border-slate-800 hover:border-slate-700'
-                  }`}
+          {/* Camera Device Switcher & Flip (when on Camera tab) */}
+          {activeTab === 'camera' && (
+            <div className="flex items-center gap-2">
+              {cameraDevices.length > 1 && (
+                <select
+                  value={selectedCameraId}
+                  onChange={(e) => handleSelectCameraDevice(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 text-white text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-blue-500 font-mono"
                 >
-                  {preset.expectedStatus === 'CRITICAL_OVERPRESSURE' ? (
-                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                  ) : preset.expectedStatus === 'SAFE_ZERO_ENERGY' ? (
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  ) : (
-                    <Wrench className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                  )}
-                  <span>{preset.name}</span>
-                </button>
-              );
-            })}
-          </div>
+                  {cameraDevices.map((dev, idx) => (
+                    <option key={dev.deviceId || idx} value={dev.deviceId}>
+                      {dev.label || `Camera Device ${idx + 1}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <button
+                type="button"
+                onClick={toggleFacingMode}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+                title="Toggle Front/Rear Camera"
+              >
+                <Repeat className="w-3 h-3 text-blue-400" />
+                <span>Flip ({facingMode === 'environment' ? 'Rear' : 'Front'})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => startCamera()}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 transition cursor-pointer"
+                title="Restart Camera"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Main Content Area */}
         <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-12 gap-6">
-          {/* Left Column: Input Modes & Camera Viewfinder */}
+          {/* Left Column: Camera Viewfinder or Upload Dropzone */}
           <div className="md:col-span-7 flex flex-col space-y-4">
-            {/* Input Mode Tabs */}
-            <div className="flex items-center gap-2 p-1 bg-slate-900/90 rounded-xl border border-slate-800 text-xs shrink-0">
-              <button
-                onClick={() => {
-                  setActiveTab('samples');
-                  stopCamera();
-                }}
-                className={`flex-1 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeTab === 'samples' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Shop-Floor Presets</span>
-              </button>
-              <button
-                onClick={startCamera}
-                className={`flex-1 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeTab === 'camera' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Camera className="w-3.5 h-3.5" />
-                <span>Live Camera</span>
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTab('upload');
-                  stopCamera();
-                }}
-                className={`flex-1 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                  activeTab === 'upload' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Upload Image</span>
-              </button>
-            </div>
-
-            {/* Camera Viewfinder View */}
             {activeTab === 'camera' && (
-              <div className="relative rounded-xl overflow-hidden bg-black border border-blue-900/60 aspect-video flex items-center justify-center">
+              <div className="relative rounded-2xl overflow-hidden bg-black border border-blue-900/60 aspect-video flex items-center justify-center shadow-inner">
                 {cameraError ? (
-                  <div className="p-6 text-center space-y-2">
-                    <VideoOff className="w-8 h-8 text-rose-400 mx-auto" />
-                    <p className="text-xs text-rose-300 font-sans">{cameraError}</p>
+                  <div className="p-6 text-center space-y-3">
+                    <VideoOff className="w-10 h-10 text-rose-400 mx-auto" />
+                    <p className="text-xs text-rose-300 font-sans max-w-sm mx-auto">{cameraError}</p>
                     <button
-                      onClick={() => setActiveTab('samples')}
-                      className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white transition"
+                      onClick={() => startCamera()}
+                      className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white transition cursor-pointer"
                     >
-                      Use Stage Demo Presets
+                      Retry Camera Access
                     </button>
                   </div>
                 ) : (
@@ -309,191 +398,157 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
                       muted
                       className="w-full h-full object-cover"
                     />
-                    {/* Viewfinder Reticle / Crosshair Overlay */}
-                    <div className="absolute inset-0 pointer-events-none border-2 border-blue-500/30 m-6 rounded-lg flex items-center justify-center">
-                      <div className="w-16 h-16 border-2 border-blue-400/80 rounded-full flex items-center justify-center animate-pulse">
-                        <div className="w-2 h-2 bg-blue-400 rounded-full" />
+
+                    {/* Industrial Targeting Reticle Overlay */}
+                    <div className="absolute inset-0 border border-blue-500/30 pointer-events-none flex items-center justify-center">
+                      <div className="w-44 h-44 rounded-full border-2 border-dashed border-blue-400/80 animate-pulse flex items-center justify-center">
+                        <div className="w-3 h-3 rounded-full bg-blue-500/50" />
                       </div>
-                      <div className="absolute top-2 left-2 text-[10px] font-mono text-blue-300/80">
-                        ALIGN GAUGE DIAL OR COMPONENT
+                      <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-mono text-emerald-400 border border-emerald-500/40 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        LIVE VIEWFINDER · 1080p
                       </div>
                     </div>
 
-                    {/* Snapshot Action Button */}
-                    <div className="absolute bottom-4 inset-x-0 flex items-center justify-center gap-3">
+                    {/* Capture Frame Button Floating on Video */}
+                    <div className="absolute bottom-4 left-0 right-0 px-6 flex items-center justify-center">
                       <button
+                        type="button"
                         onClick={captureSnapshot}
-                        className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-600/40 cursor-pointer"
+                        className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-blue-600/40 flex items-center gap-2 transition cursor-pointer"
                       >
                         <Camera className="w-4 h-4" />
-                        <span>Capture Frame</span>
+                        <span>Capture Dial / Part Snapshot</span>
                       </button>
                     </div>
                   </>
                 )}
-                <canvas ref={canvasRef} className="hidden" />
               </div>
             )}
 
-            {/* Upload Dropzone View */}
             {activeTab === 'upload' && (
-              <label className="rounded-xl border-2 border-dashed border-slate-700 hover:border-blue-500 bg-slate-900/50 hover:bg-slate-900/90 aspect-video flex flex-col items-center justify-center cursor-pointer transition p-6 text-center group">
-                <Upload className="w-10 h-10 text-slate-500 group-hover:text-blue-400 mb-2 transition" />
-                <span className="text-sm font-bold text-white mb-1">
-                  Click or drag and drop plant photo
-                </span>
-                <span className="text-xs text-slate-400">
-                  Supports PNG, JPEG, and WebP (up to 50MB)
-                </span>
+              <div
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`relative rounded-2xl border-2 border-dashed p-8 aspect-video flex flex-col items-center justify-center text-center transition cursor-pointer ${
+                  isDraggingFile
+                    ? 'border-blue-400 bg-blue-950/40'
+                    : 'border-slate-700 bg-slate-900/60 hover:border-blue-500 hover:bg-slate-900'
+                }`}
+              >
                 <input
+                  ref={fileInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={handleFileUpload}
+                  accept="image/png,image/jpeg,image/webp,image/*"
+                  onChange={handleFileInputChange}
                   className="hidden"
                 />
-              </label>
-            )}
-
-            {/* Stage Samples Grid View */}
-            {activeTab === 'samples' && (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {SHOP_FLOOR_PRESETS.map((preset) => {
-                  const isSelected = selectedPreset?.id === preset.id;
-                  return (
-                    <button
-                      key={preset.id}
-                      onClick={() => handleSelectPreset(preset)}
-                      className={`p-3 rounded-xl border text-left flex flex-col justify-between space-y-2 transition cursor-pointer ${
-                        isSelected
-                          ? 'bg-blue-950/70 border-blue-400 ring-2 ring-blue-500/40 shadow-md shadow-blue-950'
-                          : 'bg-slate-900/60 border-slate-800 hover:bg-slate-800/80 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase border ${
-                              preset.expectedStatus === 'CRITICAL_OVERPRESSURE'
-                                ? 'bg-rose-950 text-rose-300 border-rose-800'
-                                : preset.expectedStatus === 'SAFE_ZERO_ENERGY'
-                                ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
-                                : 'bg-amber-950 text-amber-300 border-amber-800'
-                            }`}
-                          >
-                            {preset.category}
-                          </span>
-                          {isSelected && <Check className="w-3.5 h-3.5 text-blue-400" />}
-                        </div>
-                        <h4 className="text-xs font-bold text-white line-clamp-1">{preset.name}</h4>
-                        <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">
-                          {preset.description}
-                        </p>
-                      </div>
-
-                      <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-[10px] font-mono">
-                        <span className="text-slate-400 font-bold">Status:</span>
-                        <span
-                          className={
-                            preset.expectedStatus === 'CRITICAL_OVERPRESSURE'
-                              ? 'text-rose-400 font-bold'
-                              : preset.expectedStatus === 'SAFE_ZERO_ENERGY'
-                              ? 'text-emerald-400 font-bold'
-                              : 'text-amber-400 font-bold'
-                          }
-                        >
-                          {preset.expectedStatus.replace(/_/g, ' ')}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
+                <div className="w-12 h-12 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 mb-3">
+                  <Upload className="w-6 h-6" />
+                </div>
+                <h4 className="font-bold text-sm text-white font-sans">
+                  Drop Shop-Floor Photo or Click to Browse
+                </h4>
+                <p className="text-xs text-slate-400 mt-1 max-w-sm">
+                  Upload high-resolution camera photos of analog pressure gauges, isolation padlocks, nameplates, or corroded mechanical seals.
+                </p>
+                <div className="mt-3 flex items-center gap-2 text-[10px] font-mono text-slate-500">
+                  <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">PNG</span>
+                  <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">JPEG</span>
+                  <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">WEBP</span>
+                  <span className="text-slate-400">Up to 50 MB</span>
+                </div>
               </div>
             )}
 
-            {/* Custom Question / Instructions input */}
-            <div className="space-y-1 pt-1">
-              <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                <span>Inquiry / Inspection Prompt:</span>
-                <span className="text-[10px] font-mono text-slate-500">
-                  Target Language: {currentLanguage}
-                </span>
+            {/* Hidden canvas used for high-res frame snapshot */}
+            <canvas ref={canvasRef} className="hidden" />
+
+            {/* Equipment Safety Information Card */}
+            <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs font-mono space-y-1">
+              <div className="flex items-center justify-between text-slate-400 text-[10px]">
+                <span>OEM CALIBRATION SCOPE:</span>
+                <span className="text-blue-400 font-bold">Lowara e-SV Standard</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Maximum Allowable Working Pressure (MAWP):</span>
+                <strong className="text-white">25.0 Bar (362.6 PSI)</strong>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>OSHA 1910.147 Zero Energy Tolerance:</span>
+                <strong className="text-emerald-400">0.0 Bar / 0.0 PSI (Residual: None)</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Selected Photo Preview & Diagnostic Dispatch */}
+          <div className="md:col-span-5 flex flex-col space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center justify-between">
+                <span>Inspection Photo Preview:</span>
+                {selectedImage && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedImage(null);
+                      if (activeTab === 'camera') startCamera();
+                    }}
+                    className="text-[11px] text-rose-400 hover:text-rose-300 transition"
+                  >
+                    Clear / Retake
+                  </button>
+                )}
+              </label>
+
+              {selectedImage ? (
+                <div className="relative rounded-xl overflow-hidden border border-blue-500/50 bg-black aspect-video flex items-center justify-center shadow-md">
+                  <img
+                    src={selectedImage}
+                    alt="Captured shop-floor machine evidence"
+                    className="w-full h-full object-contain"
+                  />
+                  <div className="absolute bottom-2 left-2 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-mono text-blue-300 border border-blue-500/40 truncate max-w-[90%]">
+                    {imageSourceLabel}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 aspect-video flex flex-col items-center justify-center text-center p-4 text-slate-500">
+                  <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
+                  <p className="text-xs font-mono">No inspection frame captured yet</p>
+                  <p className="text-[10px] text-slate-600 mt-0.5">
+                    Click &ldquo;Capture Snapshot&rdquo; or upload a gauge photo on the left
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Diagnostic Query / Instructions Input */}
+            <div className="space-y-1.5 flex-1 flex flex-col justify-end">
+              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">
+                Multimodal Inspection Directive:
               </label>
               <textarea
                 value={customPrompt}
                 onChange={(e) => setCustomPrompt(e.target.value)}
-                rows={2}
-                placeholder="Ask Copilot about this image (e.g. 'Read pressure gauge and verify OEM MAWP limits')..."
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-sans"
+                rows={3}
+                className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs font-sans text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none shadow-inner"
+                placeholder="Direct Gemini to read dial pressure, inspect nameplate, or check seal wear..."
               />
-            </div>
-          </div>
 
-          {/* Right Column: High-Res Image Snapshot Preview & Telemetry Overlay */}
-          <div className="md:col-span-5 flex flex-col justify-between space-y-4 bg-[#090F1E] border border-blue-950 rounded-xl p-4">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono font-bold uppercase tracking-wider text-blue-400">
-                  Active Capture Preview
-                </span>
-                {selectedPreset && (
-                  <span
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${selectedPreset.badgeColor}`}
-                  >
-                    {selectedPreset.badgeText}
-                  </span>
-                )}
-              </div>
-
-              {/* Render Selected Image Preview */}
-              <div className="rounded-xl overflow-hidden bg-black/80 border border-slate-800 aspect-square flex items-center justify-center p-2 relative group">
-                {selectedImage ? (
-                  <img
-                    src={selectedImage}
-                    alt="Inspection Snapshot Preview"
-                    className="w-full h-full object-contain"
-                  />
-                ) : (
-                  <div className="text-center text-xs text-slate-500 space-y-1">
-                    <ScanEye className="w-8 h-8 mx-auto text-slate-600" />
-                    <span>Select a preset or capture camera snapshot</span>
-                  </div>
-                )}
-
-                {/* Scoped Equipment Watermark */}
-                <div className="absolute top-3 left-3 bg-slate-950/80 backdrop-blur-xs px-2 py-1 rounded text-[10px] font-mono border border-slate-800 text-slate-300">
-                  Target: {selectedMachine?.assetTag || 'PUMP-001'}
-                </div>
-              </div>
-
-              {/* Verified OEM Limits Snapshot */}
-              <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 text-xs space-y-1.5 font-sans">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400">OEM Equipment:</span>
-                  <span className="font-bold text-white truncate">
-                    {selectedMachine?.name || 'Lowara e-SV Multistage Pump'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400">Design MAWP Limit:</span>
-                  <strong className="text-amber-400 font-mono">25.0 Bar (362.6 PSI)</strong>
-                </div>
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400">LOTO Standard:</span>
-                  <span className="text-emerald-400 font-mono font-bold">OSHA 1910.147</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Send to Copilot Action Button */}
-            <div className="pt-3 border-t border-blue-950/80 space-y-2">
               <button
                 type="button"
-                onClick={handleDispatch}
                 disabled={!selectedImage}
-                className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-blue-600/30 cursor-pointer"
+                onClick={handleDispatch}
+                className={`w-full py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-lg ${
+                  selectedImage
+                    ? 'bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-500 text-white shadow-blue-600/30'
+                    : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
+                }`}
               >
                 <Send className="w-4 h-4" />
-                <span>Analyze with Gemini &amp; Send to Copilot</span>
+                <span>Send to Gemini Copilot for Grounded Diagnosis</span>
               </button>
             </div>
           </div>
