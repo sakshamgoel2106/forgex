@@ -201,7 +201,7 @@ const AppContent: React.FC = () => {
           />
         );
       case 'expert':
-        return <ExpertKnowledgeView />;
+        return <ExpertKnowledgeView onNavigateToCopilot={(_assetTag) => setActiveModule('copilot')} />;
       case 'maintenance':
         return <MaintenanceWorkspaceView initialCaseId={navTargetId} />;
       case 'history':

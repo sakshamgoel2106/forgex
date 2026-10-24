@@ -274,7 +274,11 @@ function getNonRedundantAiInsight(note: ExpertNote): string | null {
   return rawInsight.trim();
 }
 
-export const ExpertKnowledgeView: React.FC = () => {
+export interface ExpertKnowledgeViewProps {
+  onNavigateToCopilot?: (assetTag: string) => void;
+}
+
+export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavigateToCopilot }) => {
   const { toast } = useToast();
   const { user, organization, membership, isOwnerOrAdmin } = useAuth();
 
@@ -283,7 +287,8 @@ export const ExpertKnowledgeView: React.FC = () => {
     isOwnerOrAdmin ||
     userRole === 'ORGANIZATION_OWNER' ||
     userRole === 'ORGANIZATION_ADMIN' ||
-    (userRole as string) === 'ADMIN'
+    (userRole as string) === 'ADMIN' ||
+    (userRole as string) === 'SUPERVISOR'
   );
 
   const canEditOrDeleteNote = useCallback(
@@ -696,9 +701,25 @@ export const ExpertKnowledgeView: React.FC = () => {
       e.preventDefault();
       e.stopPropagation();
     }
-    const prompt = `Troubleshooting guidance for ${note.title} on machine ${note.machineAssetTag || note.assetTag || 'PLANT_WIDE'}: ${note.symptom ? `Trigger: ${note.symptom}. ` : ''}${note.description || note.content || ''}`;
-    window.dispatchEvent(new CustomEvent('open-ai-copilot', { detail: { prompt } }));
-    toast.info('Copilot Prompt Ready', 'Opened AI Copilot with this note context.');
+    const tag = note.machineAssetTag || note.assetTag || (note.machineAssetTags && note.machineAssetTags[0]) || 'PLANT_WIDE';
+    const prompt = `Troubleshooting guidance for ${note.title} on machine ${tag}: ${note.symptom ? `Trigger: ${note.symptom}. ` : ''}${note.description || note.content || ''}`;
+    
+    try {
+      sessionStorage.setItem(
+        'forgex_copilot_handoff',
+        JSON.stringify({
+          assetTag: tag !== 'PLANT_WIDE' ? tag : '',
+          prompt,
+          issueSummary: note.title,
+        })
+      );
+    } catch (err) {
+      console.warn('Failed to save copilot handoff to sessionStorage:', err);
+    }
+
+    window.dispatchEvent(new CustomEvent('open-ai-copilot', { detail: { prompt, assetTag: tag } }));
+    toast.info('Copilot Prompt Ready', `Navigating to AI Copilot with context for ${tag}...`);
+    onNavigateToCopilot?.(tag);
   };
 
   // Delete Handler (Restricted to Admin/Owner only)
@@ -978,7 +999,6 @@ export const ExpertKnowledgeView: React.FC = () => {
   // Compact 3-Column Note Card Renderer (Fits 4-6 Notes on Screen)
   const renderNoteCard = (note: ExpertNote) => {
     const displayAuthor = note.authorName || note.author || note.authorEmail || 'Senior Technician';
-    const displayRole = note.authorRole || note.role || 'Frontline Expert';
     const displayContent = note.description || note.content || '';
     const displayDate = formatObservedDateTime(note.observedAt || note.createdAt || note.date);
 
@@ -1000,92 +1020,89 @@ export const ExpertKnowledgeView: React.FC = () => {
       <div
         key={note.id}
         onClick={() => setSelectedNoteForModal(note)}
-        className="p-4 rounded-xl bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md transition cursor-pointer flex flex-col justify-between h-[190px] group select-none shadow-2xs"
+        className="p-3.5 rounded-xl bg-white border border-slate-200 hover:border-blue-400 hover:shadow-md transition cursor-pointer flex flex-col gap-2 group select-none shadow-2xs"
       >
-        {/* Top Row: Asset Tag Badge + Category / Fault Pill + Verified Badge */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-1.5 flex-wrap">
-            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-              <span className="text-[10px] font-mono text-blue-800 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 font-bold shrink-0 truncate max-w-[130px]">
-                {primaryTag}
-              </span>
-              <span
-                className={`text-[10px] font-mono px-2 py-0.5 rounded-md border font-semibold truncate max-w-[140px] ${getCategoryBadgeClasses(
-                  note.category
-                )}`}
-              >
-                {note.category}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1 shrink-0">
-              {needsReview ? (
-                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800 font-bold flex items-center gap-0.5 animate-pulse">
-                  <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
-                  Review
-                </span>
-              ) : (
-                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 font-bold flex items-center gap-0.5">
-                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
-                  Verified
-                </span>
-              )}
-              {hasReviews && (
-                <span className="text-[10px] font-mono text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-bold flex items-center gap-0.5">
-                  <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
-                  {avgRating}
-                </span>
-              )}
-            </div>
+        {/* Top Row: Compact badges (KILN-001, Category, and ✓ Verified aligned cleanly on the right) */}
+        <div className="flex items-center justify-between gap-1.5 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+            <span className="text-[10px] font-mono text-blue-800 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 font-bold shrink-0 truncate max-w-[120px]">
+              {primaryTag}
+            </span>
+            <span
+              className={`text-[10px] font-mono px-2 py-0.5 rounded-md border font-semibold truncate max-w-[130px] ${getCategoryBadgeClasses(
+                note.category
+              )}`}
+            >
+              {note.category}
+            </span>
           </div>
 
-          {/* Middle: Bold Note Title & 2-Line preview of Recommended Field Action */}
-          <div>
-            <h4
-              className="text-sm font-bold text-slate-900 group-hover:text-blue-600 transition-colors line-clamp-1"
-              title={note.title}
-            >
-              {note.title}
-            </h4>
-            <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed mt-1">
-              {displayContent}
-            </p>
+          <div className="flex items-center gap-1 shrink-0 ml-auto">
+            {needsReview ? (
+              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-800 font-bold flex items-center gap-0.5 animate-pulse">
+                <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                Review
+              </span>
+            ) : (
+              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 font-bold flex items-center gap-0.5">
+                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                Verified
+              </span>
+            )}
+            {hasReviews && (
+              <span className="text-[10px] font-mono text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-bold flex items-center gap-0.5">
+                <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                {avgRating}
+              </span>
+            )}
           </div>
         </div>
 
-        {/* Bottom Footer: Contributor Name & Role, Date/Time, and subtle View Full Note ↗ */}
-        <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] font-mono">
+        {/* Middle: 1-line bold title (truncate) + 2-line overview preview (line-clamp-2 text-xs text-slate-600) with zero dead space below */}
+        <div className="min-w-0">
+          <h4
+            className="text-xs sm:text-sm font-bold text-slate-900 group-hover:text-blue-600 transition-colors truncate"
+            title={note.title}
+          >
+            {note.title}
+          </h4>
+          <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed mt-0.5">
+            {displayContent}
+          </p>
+        </div>
+
+        {/* Bottom Row: pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] */}
+        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[11px] font-mono">
           <div className="flex items-center gap-1.5 min-w-0">
             <div className="w-4 h-4 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
               <User className="w-2.5 h-2.5 text-slate-500" />
             </div>
-            <span className="text-slate-700 font-medium truncate max-w-[110px]">{displayAuthor}</span>
-            <span className="text-slate-400 text-[10px] truncate hidden sm:inline">({displayRole})</span>
+            <span className="text-slate-700 font-medium truncate max-w-[100px]">{displayAuthor}</span>
+            {displayDate && (
+              <span className="text-slate-400 text-[10px] hidden sm:inline">• {displayDate}</span>
+            )}
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-slate-400 text-[10px] hidden md:inline">{displayDate}</span>
-            <span className="text-xs font-semibold text-blue-600 group-hover:text-blue-700 flex items-center gap-1">
-              <span>View Full Note</span>
-              <ExternalLink className="w-3 h-3" />
-            </span>
-          </div>
+          <span className="text-xs font-semibold text-blue-600 group-hover:text-blue-700 flex items-center gap-1 shrink-0 transition-colors">
+            <span>View Full Note</span>
+            <ExternalLink className="w-3 h-3" />
+          </span>
         </div>
       </div>
     );
   };
 
   return (
-    <div className="flex-1 min-h-0 min-w-0 w-full h-full p-5 md:p-6 overflow-y-auto bg-[#F8FAFC] space-y-6">
+    <div className="flex-1 min-h-0 min-w-0 w-full h-full p-4 md:p-5 overflow-y-auto bg-[#F8FAFC] space-y-3.5">
       {/* Top Banner Toolbar with KPI Pills */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-[#E2E8F0] gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2.5 border-b border-[#E2E8F0] gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-[#2563EB] flex items-center justify-center border border-blue-100 shadow-sm">
+            <div className="w-8 h-8 rounded-lg bg-blue-50 text-[#2563EB] flex items-center justify-center border border-blue-100 shadow-sm shrink-0">
               <GraduationCap className="w-4 h-4 text-[#2563EB]" />
             </div>
             <div>
-              <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide flex flex-wrap items-center gap-2">
+              <h2 className="text-sm sm:text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide flex flex-wrap items-center gap-2">
                 <span>Tribal & Expert Knowledge Repository</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-slate-100 text-slate-600 border border-slate-200 font-semibold">
                   {notes.length} Active Notes
@@ -1116,16 +1133,16 @@ export const ExpertKnowledgeView: React.FC = () => {
             setIsSubmitOpen(true);
           }}
           leftIcon={<Plus className="w-3.5 h-3.5" />}
-          className="bg-[#0F172A] hover:bg-black text-white font-semibold rounded-lg shadow-sm border border-slate-800"
+          className="bg-[#0F172A] hover:bg-black text-white font-semibold rounded-lg shadow-sm border border-slate-800 shrink-0"
         >
           Submit Field Note(s)
         </Button>
       </div>
 
-      {/* Filter Toolbar - Single Clean Horizontal Row (No segmented All Notes | Group by Machine) */}
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-white p-3 rounded-xl border border-[#E2E8F0] shadow-sm">
-        {/* 1) Search Input (flex-1) */}
-        <div className="relative flex-1">
+      {/* Filter Toolbar - Single Compact Horizontal Row taking half height */}
+      <div className="flex flex-wrap lg:flex-nowrap items-center gap-2 p-2.5 bg-white rounded-xl border border-[#E2E8F0] shadow-sm">
+        {/* 1) Search Input */}
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
@@ -1146,8 +1163,8 @@ export const ExpertKnowledgeView: React.FC = () => {
           )}
         </div>
 
-        {/* 2-5) Dropdown Filters in single clean horizontal row */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* 2-5) Dropdown Filters in single compact row */}
+        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
           {/* 2) Uploaded Machine Filter */}
           <div className="flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1 text-xs">
             <Cpu className="w-3 h-3 text-slate-500" />
@@ -1223,7 +1240,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                 setSeverityFilter('ALL');
                 setMachineFilter('ALL');
               }}
-              className="text-[11px] font-mono text-blue-600 hover:underline px-2 py-1"
+              className="text-[11px] font-mono text-blue-600 hover:underline px-2 py-1 shrink-0"
             >
               Reset
             </button>
@@ -1281,8 +1298,8 @@ export const ExpertKnowledgeView: React.FC = () => {
           </Button>
         </div>
       ) : (
-        /* Single Clean 3-Column Compact Grid */
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        /* 3-Column Compact Grid - Fits 6 notes on one screen */
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
           {sortedAndFilteredNotes.map((note) => renderNoteCard(note))}
         </div>
       )}
@@ -1362,19 +1379,49 @@ export const ExpertKnowledgeView: React.FC = () => {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setSelectedNoteForModal(null)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer shrink-0"
-                  title="Close modal"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {canEditOrDelete && (
+                    <div className="flex items-center gap-1.5 mr-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          setSelectedNoteForModal(null);
+                          handleOpenEdit(modalNote, e);
+                        }}
+                        className="h-7 px-2.5 rounded-lg text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 text-xs font-mono font-semibold flex items-center gap-1 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 cursor-pointer"
+                        title="Edit Note"
+                      >
+                        <Pencil className="w-3 h-3 text-blue-600" />
+                        <span>Edit Note</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          setSelectedNoteForModal(null);
+                          handleDelete(modalNote, e);
+                        }}
+                        className="h-7 px-2.5 rounded-lg text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 hover:border-rose-300 text-xs font-mono font-semibold flex items-center gap-1 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 cursor-pointer"
+                        title="Delete Note"
+                      >
+                        <Trash2 className="w-3 h-3 text-rose-600" />
+                        <span>Delete Note</span>
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedNoteForModal(null)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                    title="Close modal"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
 
-              {/* Complete Field Observation / Context */}
+              {/* 1. Complete Field Observation / Context */}
               {(modalNote.symptom || modalNote.taskDuringIssue) && (
-                <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-3.5 space-y-1.5">
+                <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-3 space-y-1">
                   <div className="flex items-center gap-1.5 font-mono font-bold text-amber-900 text-xs uppercase tracking-wider">
                     <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                     <span>WHEN TO APPLY / TRIGGER CONDITION:</span>
@@ -1392,8 +1439,8 @@ export const ExpertKnowledgeView: React.FC = () => {
                 </div>
               )}
 
-              {/* Complete Recommended Field Action */}
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
+              {/* 2. Complete Recommended Field Action */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1">
                 <div className="flex items-center gap-1.5 font-mono font-bold text-slate-800 text-xs uppercase tracking-wider">
                   <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   <span>RECOMMENDED FIELD ACTION & GUIDANCE:</span>
@@ -1403,12 +1450,12 @@ export const ExpertKnowledgeView: React.FC = () => {
                 </p>
               </div>
 
-              {/* AI Supplement & Manual Cross-Check in compact structured block */}
+              {/* 3. AI Supplement & Manual Cross-Check in compact aligned block - single clean Lucide icon, no double emoji */}
               {aiInsight && (
-                <div className="bg-indigo-50/90 border border-indigo-200 rounded-xl p-3.5 space-y-1.5">
+                <div className="bg-indigo-50/90 border border-indigo-200 rounded-xl p-3 space-y-1">
                   <div className="flex items-center gap-1.5 font-mono font-bold text-indigo-950 text-xs uppercase tracking-wider">
                     <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                    <span>🤖 AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK:</span>
+                    <span>AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK:</span>
                   </div>
                   <p className="text-xs text-indigo-950 leading-relaxed font-sans pl-5 whitespace-pre-line">
                     {aiInsight}
@@ -1416,13 +1463,13 @@ export const ExpertKnowledgeView: React.FC = () => {
                 </div>
               )}
 
-              {/* Worker Reviews & Upvoting inside modal */}
+              {/* Worker Reviews, Upvoting, and Ask Copilot in Bottom Action Bar */}
               <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={(e) => handleUpvote(modalNote.id, e)}
-                    className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-3 rounded-lg border border-blue-200 transition active:scale-95 text-xs font-mono cursor-pointer"
+                    className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-3 rounded-lg border border-blue-200 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 text-xs font-mono cursor-pointer"
                   >
                     <ThumbsUp className="w-3.5 h-3.5 text-blue-600" />
                     <span>Helpful ({modalNote.upvotes || 0})</span>
@@ -1430,17 +1477,25 @@ export const ExpertKnowledgeView: React.FC = () => {
                   <button
                     type="button"
                     onClick={(e) => handleDislike(modalNote.id, e)}
-                    className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-3 rounded-lg border border-rose-200 transition active:scale-95 text-xs font-mono cursor-pointer"
+                    className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-3 rounded-lg border border-rose-200 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 text-xs font-mono cursor-pointer"
                   >
                     <ThumbsDown className="w-3.5 h-3.5 text-rose-600" />
                     <span>Did Not Work ({modalNote.downvotes || 0})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAskCopilot(modalNote)}
+                    className="h-8 flex items-center gap-1.5 text-indigo-700 hover:text-indigo-800 font-bold bg-indigo-50 hover:bg-indigo-100 px-3 rounded-lg border border-indigo-200 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 text-xs font-mono cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>💬 Ask Copilot</span>
                   </button>
                 </div>
 
                 <button
                   type="button"
                   onClick={(e) => toggleReviews(modalNote.id, e)}
-                  className="h-8 flex items-center gap-1.5 px-3 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 cursor-pointer"
+                  className="h-8 flex items-center gap-1.5 px-3 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 cursor-pointer"
                 >
                   <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
                   <span>Worker Feedback ({reviewsList.length})</span>
@@ -1471,7 +1526,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                             <Star
                               className={`w-4 h-4 ${
                                 star <= (reviewFormData[modalNote.id]?.rating ?? 0)
-                                  ? 'fill-amber-400 text-amber-400'
+                                    ? 'fill-amber-400 text-amber-400'
                                   : 'text-slate-300'
                               }`}
                             />
@@ -1509,7 +1564,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                         size="sm"
                         variant="primary"
                         disabled={!!submittingReview[modalNote.id]}
-                        className="text-xs shrink-0"
+                        className="text-xs shrink-0 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
                       >
                         {submittingReview[modalNote.id] ? 'Posting...' : 'Post'}
                       </Button>
@@ -1531,28 +1586,18 @@ export const ExpertKnowledgeView: React.FC = () => {
                 </div>
               )}
 
-              {/* Action Buttons in Modal Footer (Copy Note, Delete Note, Ask Copilot, Close) */}
-              <div className="flex items-center justify-between pt-3 border-t border-slate-100 gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
+              {/* Action Buttons in Modal Footer (Copy Note, Edit Note, Delete Note, Close) */}
+              <div className="flex items-center justify-between pt-2.5 border-t border-slate-100 gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
                   <Button
                     variant="outline"
                     size="sm"
                     type="button"
                     onClick={() => handleCopyTip(modalNote)}
-                    className="text-xs font-mono flex items-center gap-1.5"
+                    className="text-xs font-mono flex items-center gap-1.5 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
                   >
                     <Copy className="w-3.5 h-3.5" />
                     <span>Copy Note</span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    onClick={() => handleAskCopilot(modalNote)}
-                    className="text-xs font-mono text-indigo-700 border-indigo-200 hover:bg-indigo-50 flex items-center gap-1.5"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Ask Copilot</span>
                   </Button>
                   {canEditOrDelete && (
                     <>
@@ -1564,10 +1609,10 @@ export const ExpertKnowledgeView: React.FC = () => {
                           setSelectedNoteForModal(null);
                           handleOpenEdit(modalNote, e);
                         }}
-                        className="text-xs font-mono text-slate-700 hover:bg-slate-50 border-slate-200 flex items-center gap-1.5"
+                        className="text-xs font-mono text-slate-700 hover:text-blue-700 hover:bg-blue-50 border-slate-200 flex items-center gap-1.5 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
                       >
-                        <Pencil className="w-3.5 h-3.5" />
-                        <span>Edit Note</span>
+                        <Pencil className="w-3.5 h-3.5 text-blue-600" />
+                        <span>✏️ Edit Note</span>
                       </Button>
                       <Button
                         variant="outline"
@@ -1577,10 +1622,10 @@ export const ExpertKnowledgeView: React.FC = () => {
                           setSelectedNoteForModal(null);
                           handleDelete(modalNote, e);
                         }}
-                        className="text-xs font-mono text-rose-600 hover:bg-rose-50 border-rose-200 flex items-center gap-1.5"
+                        className="text-xs font-mono text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 flex items-center gap-1.5 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete Note</span>
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                        <span>🗑️ Delete Note</span>
                       </Button>
                     </>
                   )}
@@ -1601,7 +1646,7 @@ export const ExpertKnowledgeView: React.FC = () => {
         );
       })()}
 
-      {/* Multi-Note Submission Modal */}
+      {/* Multi-Note Submission Modal - Zero-Scroll 1-Screen Layout */}
       <Modal
         isOpen={isSubmitOpen}
         onClose={() => {
@@ -1610,74 +1655,91 @@ export const ExpertKnowledgeView: React.FC = () => {
         title="Submit Frontline Expert Note(s)"
         subtitle="Capture plant wisdom, non-standard tooling tips, or preventive observations. Automatically indexed for AI Copilot."
         maxWidth="2xl"
+        bodyClassName="p-4 overflow-y-auto flex-1 text-xs text-slate-700 bg-white"
       >
         <form
           onSubmit={(e) => {
             e.preventDefault();
             submitNotes(true);
           }}
-          className="space-y-4 max-h-[75vh] overflow-y-auto pr-1"
+          className="space-y-2.5 max-h-[82vh] overflow-y-auto pr-1"
         >
           {formNotes.map((noteItem, index) => (
             <div
               key={noteItem.clientId}
-              className={`p-4 rounded-xl border ${
+              className={`rounded-xl ${
                 formNotes.length > 1
-                  ? 'border-blue-200 bg-slate-50/70 shadow-sm'
-                  : 'border-slate-200 bg-white'
-              } space-y-3.5 relative`}
+                  ? 'p-3 border border-blue-200 bg-slate-50/70 shadow-sm space-y-2.5'
+                  : 'space-y-2.5'
+              } relative`}
             >
-              {/* Card Header for Multi-Notes */}
-              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-                <div className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-[#0F172A] text-white flex items-center justify-center text-[10px] font-mono font-bold">
-                    {index + 1}
-                  </span>
-                  <span className="text-xs font-mono font-bold uppercase text-slate-700 tracking-wider">
-                    {formNotes.length > 1 ? `Field Note #${index + 1}` : 'Expert Field Note Entry'}
-                  </span>
-                </div>
+              {/* Card Header only rendered for multi-note entries to avoid clipped header artifacts on 1-screen view */}
+              {formNotes.length > 1 && (
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-4 h-4 rounded-full bg-[#0F172A] text-white flex items-center justify-center text-[10px] font-mono font-bold">
+                      {index + 1}
+                    </span>
+                    <span className="text-xs font-mono font-bold uppercase text-slate-700 tracking-wider">
+                      Field Note #{index + 1}
+                    </span>
+                  </div>
 
-                {formNotes.length > 1 && (
                   <button
                     type="button"
                     onClick={() => handleRemoveSection(index)}
-                    className="text-xs text-rose-600 hover:text-rose-700 hover:underline font-mono flex items-center gap-1"
+                    className="text-xs text-rose-600 hover:text-rose-700 hover:underline font-mono flex items-center gap-1 cursor-pointer"
                   >
                     <Trash2 className="w-3 h-3" />
                     <span>Remove</span>
                   </button>
-                )}
-              </div>
+                </div>
+              )}
 
-              {/* Row 1: Title / Subject */}
-              <div>
-                <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
-                  Title / Subject <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={noteItem.title}
-                  onChange={(e) => updateFormNote(index, { title: e.target.value })}
-                  placeholder="e.g. Always purge bypass loop before closing suction valve on startup"
-                  className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
-                />
-              </div>
-
-              {/* Row 2: Equipment Tag & Task During Issue (Clean Select Dropdowns matching Category) */}
+              {/* Row 1: Title / Subject + Symptom / When to Apply (Trigger) (2-Column Row) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                <div>
+                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
+                    Title / Subject <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={noteItem.title}
+                    onChange={(e) => updateFormNote(index, { title: e.target.value })}
+                    placeholder="e.g. Always purge bypass loop before closing suction valve"
+                    className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
+                    Symptom / When to Apply (Trigger)
+                  </label>
+                  <input
+                    type="text"
+                    value={noteItem.symptom}
+                    onChange={(e) => updateFormNote(index, { symptom: e.target.value })}
+                    placeholder="e.g. Cold startup below 0°C, seal chatter, high vibration"
+                    className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
+                  />
+                </div>
+              </div>
+
+              {/* Row 2: Target Machine, Task / Operation, Category (Compact 3-Column Row) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-start">
+                {/* Target Machine */}
                 <div>
                   <div className="h-4 flex items-center mb-1">
                     <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
-                      Target Machine / Equipment Tag(s) <span className="text-rose-500">*</span>
+                      Target Machine <span className="text-rose-500">*</span>
                     </label>
                   </div>
                   <select
                     required
                     value={noteItem.assetTag}
                     onChange={(e) => updateFormNote(index, { assetTag: e.target.value })}
-                    className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
+                    className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
                   >
                     <option value="" disabled>
                       -- Select Machine --
@@ -1690,10 +1752,11 @@ export const ExpertKnowledgeView: React.FC = () => {
                   </select>
                 </div>
 
+                {/* Task / Operation */}
                 <div>
                   <div className="h-4 flex items-center justify-between mb-1">
                     <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
-                      Task / Operation During Issue <span className="text-rose-500">*</span>
+                      Task / Operation <span className="text-rose-500">*</span>
                     </label>
                     {noteItem.isCustomTask && (
                       <button
@@ -1706,7 +1769,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                         }}
                         className="text-[10px] font-mono text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer"
                       >
-                        <span>↩ Select from list</span>
+                        <span>↩ List</span>
                       </button>
                     )}
                   </div>
@@ -1719,8 +1782,8 @@ export const ExpertKnowledgeView: React.FC = () => {
                         required
                         value={noteItem.customTask ?? ''}
                         onChange={(e) => updateFormNote(index, { customTask: e.target.value })}
-                        placeholder="Type custom task or operation during issue..."
-                        className="w-full pl-3 pr-24 py-1.5 bg-white border border-[#2563EB] ring-1 ring-[#2563EB]/20 rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
+                        placeholder="Type custom task..."
+                        className="w-full pl-2.5 pr-14 py-1.5 bg-white border border-[#2563EB] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
                       />
                       <button
                         type="button"
@@ -1730,8 +1793,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                             taskDuringIssue: COMMON_TASKS.includes(noteItem.taskDuringIssue) ? noteItem.taskDuringIssue : '',
                           });
                         }}
-                        className="absolute right-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 transition cursor-pointer"
-                        title="Switch back to dropdown list"
+                        className="absolute right-1 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 transition cursor-pointer"
                       >
                         ↩ List
                       </button>
@@ -1753,10 +1815,10 @@ export const ExpertKnowledgeView: React.FC = () => {
                           });
                         }
                       }}
-                      className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
+                      className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
                     >
                       <option value="" disabled>
-                        -- Select Task / Operation --
+                        -- Select Task --
                       </option>
                       {COMMON_TASKS.map((task) => (
                         <option key={task} value={task}>
@@ -1764,15 +1826,13 @@ export const ExpertKnowledgeView: React.FC = () => {
                         </option>
                       ))}
                       <option value="__CUSTOM_TASK__" className="text-blue-700 font-bold bg-blue-50/50">
-                        + Other / Custom Task (Type manually)...
+                        + Other / Custom Task...
                       </option>
                     </select>
                   )}
                 </div>
-              </div>
 
-              {/* Row 3: Category & Impact / Severity */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                {/* Category */}
                 <div>
                   <div className="h-4 flex items-center justify-between mb-1">
                     <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
@@ -1789,7 +1849,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                         }}
                         className="text-[10px] font-mono text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer"
                       >
-                        <span>↩ Select from list</span>
+                        <span>↩ List</span>
                       </button>
                     )}
                   </div>
@@ -1803,7 +1863,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                         value={noteItem.customCategory ?? ''}
                         onChange={(e) => updateFormNote(index, { customCategory: e.target.value })}
                         placeholder="Type custom category..."
-                        className="w-full pl-3 pr-24 py-1.5 bg-white border border-[#2563EB] ring-1 ring-[#2563EB]/20 rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
+                        className="w-full pl-2.5 pr-14 py-1.5 bg-white border border-[#2563EB] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
                       />
                       <button
                         type="button"
@@ -1813,8 +1873,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                             category: (PRACTICAL_CATEGORIES as string[]).includes(noteItem.category) ? noteItem.category : '',
                           });
                         }}
-                        className="absolute right-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 hover:border-blue-200 transition cursor-pointer"
-                        title="Switch back to dropdown list"
+                        className="absolute right-1 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 transition cursor-pointer"
                       >
                         ↩ List
                       </button>
@@ -1836,7 +1895,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                           });
                         }
                       }}
-                      className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
+                      className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
                     >
                       <option value="" disabled>
                         -- Select Category --
@@ -1847,12 +1906,15 @@ export const ExpertKnowledgeView: React.FC = () => {
                         </option>
                       ))}
                       <option value="__CUSTOM_CATEGORY__" className="text-blue-700 font-bold bg-blue-50/50">
-                        + Other / Custom Category (Type manually)...
+                        + Custom Category...
                       </option>
                     </select>
                   )}
                 </div>
+              </div>
 
+              {/* Row 3: Impact / Severity & Observed Date & Time (Compact 2-Column Row) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-start">
                 <div>
                   <div className="h-4 flex items-center mb-1">
                     <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
@@ -1863,7 +1925,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                     required
                     value={noteItem.severity}
                     onChange={(e) => updateFormNote(index, { severity: e.target.value as ExpertSeverity })}
-                    className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
+                    className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
                   >
                     <option value="" disabled>
                       -- Select Impact / Severity --
@@ -1875,70 +1937,56 @@ export const ExpertKnowledgeView: React.FC = () => {
                     ))}
                   </select>
                 </div>
-              </div>
 
-              {/* Row 4: Observed Date & Time + Symptom Trigger */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
                 <div>
-                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
-                    Observed Date & Time
-                  </label>
+                  <div className="h-4 flex items-center mb-1">
+                    <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
+                      Observed Date & Time
+                    </label>
+                  </div>
                   <input
                     type="datetime-local"
                     value={noteItem.observedAt}
                     onChange={(e) => updateFormNote(index, { observedAt: e.target.value })}
-                    className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
-                    Symptom / When to Apply (Trigger)
-                  </label>
-                  <input
-                    type="text"
-                    value={noteItem.symptom}
-                    onChange={(e) => updateFormNote(index, { symptom: e.target.value })}
-                    placeholder="e.g. Cold startup below 0°C, seal chatter, high vibration"
-                    className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
+                    className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono"
                   />
                 </div>
               </div>
 
-              {/* Row 5: Observation & Field Guidance */}
+              {/* Row 4: Observation & Field Guidance (Textarea rows={2}) */}
               <div>
                 <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider mb-1">
                   Observation & Field Guidance <span className="text-rose-500">*</span>
                 </label>
                 <textarea
                   required
-                  rows={3}
+                  rows={2}
                   value={noteItem.content}
                   onChange={(e) => updateFormNote(index, { content: e.target.value })}
-                  placeholder="Describe the operational symptom, root cause mechanism, and recommended field practice..."
-                  className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] font-sans"
+                  placeholder="Describe operational symptom, root cause mechanism, and recommended field practice..."
+                  className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] font-sans"
                 />
               </div>
             </div>
           ))}
 
-          {/* Add Another Field Note Button (Single Plus Sign) */}
-          <div className="pt-1">
+          {/* Add Another Field Note Button (Sleek Slim Bar py-1.5 text-xs) */}
+          <div className="pt-0.5">
             <button
               type="button"
               onClick={handleAddAnotherSection}
-              className="w-full py-2 px-3 border border-dashed border-blue-400 bg-blue-50/60 hover:bg-blue-50 text-blue-700 rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition active:scale-[0.99]"
+              className="w-full py-1.5 px-3 border border-dashed border-blue-400 bg-blue-50/60 hover:bg-blue-50 text-blue-700 rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-2xs active:scale-95 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Add Another Field Note</span>
+              <span>+ Add Another Field Note</span>
             </button>
           </div>
 
-          {/* Modal Footer Controls */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-[#E2E8F0] mt-2">
+          {/* Modal Footer Controls - Tightly Aligned */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-2.5 border-t border-[#E2E8F0] mt-1">
             <div className="flex items-center gap-1.5 text-xs font-mono text-slate-500 whitespace-nowrap shrink-0">
               <Layers className="w-3.5 h-3.5 text-slate-400" />
-              <span>{formNotes.length} note(s) ready to submit</span>
+              <span>{formNotes.length} note(s) ready</span>
             </div>
 
             <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap sm:flex-nowrap">
@@ -1948,7 +1996,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                 type="button"
                 disabled={isSubmitting}
                 onClick={() => setIsSubmitOpen(false)}
-                className="text-[#64748B] hover:text-[#0F172A] whitespace-nowrap px-3 text-xs"
+                className="text-[#64748B] hover:text-[#0F172A] whitespace-nowrap px-3 text-xs py-1.5 transition-all duration-150 hover:-translate-y-0.5 active:scale-95"
               >
                 Cancel
               </Button>
@@ -1960,7 +2008,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                 type="button"
                 disabled={isSubmitting}
                 onClick={() => submitNotes(false)}
-                className="font-semibold text-xs border-slate-300 hover:bg-slate-50 whitespace-nowrap px-3"
+                className="font-semibold text-xs border-slate-300 hover:bg-slate-50 whitespace-nowrap px-3 py-1.5 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
               >
                 Save & Add Another
               </Button>
@@ -1971,7 +2019,7 @@ export const ExpertKnowledgeView: React.FC = () => {
                 size="sm"
                 type="submit"
                 disabled={isSubmitting}
-                className="bg-[#0F172A] text-white hover:bg-black font-semibold rounded-lg shadow-sm whitespace-nowrap px-3.5 text-xs shrink-0"
+                className="bg-[#0F172A] text-white hover:bg-black font-semibold rounded-lg shadow-sm whitespace-nowrap px-3.5 text-xs py-1.5 shrink-0 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
               >
                 {isSubmitting
                   ? 'Publishing...'
@@ -2049,7 +2097,7 @@ export const ExpertKnowledgeView: React.FC = () => {
               type="button"
               disabled={isSavingEdit}
               onClick={() => setEditingNote(null)}
-              className="text-[#64748B] hover:text-[#0F172A] text-xs px-3"
+              className="text-[#64748B] hover:text-[#0F172A] text-xs px-3 transition-all duration-150 hover:-translate-y-0.5 active:scale-95"
             >
               Cancel
             </Button>
@@ -2058,7 +2106,7 @@ export const ExpertKnowledgeView: React.FC = () => {
               size="sm"
               type="submit"
               disabled={isSavingEdit}
-              className="bg-[#0F172A] text-white hover:bg-black font-semibold rounded-lg shadow-sm text-xs px-4"
+              className="bg-[#0F172A] text-white hover:bg-black font-semibold rounded-lg shadow-sm text-xs px-4 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
             >
               {isSavingEdit ? 'Saving...' : 'Save Changes'}
             </Button>

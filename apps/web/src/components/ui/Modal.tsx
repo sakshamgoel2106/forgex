@@ -9,6 +9,7 @@ export interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
+  bodyClassName?: string;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -19,6 +20,7 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   footer,
   maxWidth = 'md',
+  bodyClassName,
 }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -69,7 +71,7 @@ export const Modal: React.FC<ModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto flex-1 text-xs text-slate-700 bg-white">{children}</div>
+        <div className={bodyClassName || "p-6 overflow-y-auto flex-1 text-xs text-slate-700 bg-white"}>{children}</div>
 
         {/* Modal Footer */}
         {footer && (
