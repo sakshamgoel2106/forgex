@@ -44,13 +44,17 @@ export type AcousticAnomalyPattern =
   | 'IMBALANCE_SUSPECTED'
   | 'NOMINAL';
 
+export type AcousticSourceMode = 'LIVE_MIC' | 'FILE_UPLOAD' | 'TAB_SYSTEM_AUDIO';
+
 export interface AcousticTelemetry {
   dominantFrequencyHz: number;
   peakDecibels: number;
+  rmsLevelDbfs?: number;
+  crestFactorDb?: number;
   bandEnergy: {
-    low: number;
-    mid: number;
-    high: number;
+    low: number; // 20–500 Hz
+    mid: number; // 500–2,500 Hz
+    high: number; // 2,500–12,000 Hz
   };
   detectedPattern: AcousticAnomalyPattern;
   sampleDurationMs: number;
@@ -61,6 +65,7 @@ export interface AcousticTelemetry {
   audioMimeType?: string;
   inputDeviceName?: string;
   recordingDurationSec?: number;
+  sourceMode?: AcousticSourceMode;
 }
 
 export type VisionMode = 'COPILOT_DIAGNOSTIC' | 'LOTO_ZERO_ENERGY_CHECK';
@@ -149,6 +154,8 @@ export interface RAGQueryRequest {
   questionMode?: QuestionHandlingMode;
   language?: string;
   acousticTelemetry?: AcousticTelemetry;
+  audioBase64?: string;
+  audioMimeType?: string;
 }
 
 export interface RAGQueryResponse {

@@ -58,8 +58,18 @@ export class CopilotController {
         visionDiagnostic,
         topK,
         acousticTelemetry,
+        audioBase64,
+        audioMimeType,
       } = req.body;
       const rawAssetTag = req.body.assetTag;
+
+      if (audioBase64) {
+        acousticTelemetry = {
+          ...(acousticTelemetry || {}),
+          audioBase64,
+          audioMimeType: audioMimeType || acousticTelemetry?.audioMimeType || 'audio/webm',
+        };
+      }
 
       if (!query) {
         res.status(400).json({

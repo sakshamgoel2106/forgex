@@ -192,4 +192,44 @@ describe('ForgeX AI v1.4.2 — Live Acoustic Diagnostics ("Shazam for Factory Ma
     expect(res.body.data.userMessage.acousticTelemetry.detectedPattern).toBe('BEARING_WEAR_SUSPECTED');
     expect(res.body.data.userMessage.acousticTelemetry.dominantFrequencyHz).toBe(3420);
   });
+
+  it('4. Handles multimodal audioBase64 field recording and real physical DSP metrics', async () => {
+    const fakeAudioBase64 = 'data:audio/webm;base64,GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOAZwEAAAAAAAHTEU2bdL';
+    const acousticTelemetry: AcousticTelemetry = {
+      dominantFrequencyHz: 1240,
+      peakDecibels: -9.4,
+      rmsLevelDbfs: -18.2,
+      crestFactorDb: 8.8,
+      bandEnergy: { low: 0.12, mid: 0.68, high: 0.20 },
+      detectedPattern: 'CAVITATION_SUSPECTED',
+      sampleDurationMs: 5000,
+      spectralCentroidHz: 1480,
+      sourceMode: 'FILE_UPLOAD',
+      audioBase64: fakeAudioBase64,
+      audioMimeType: 'audio/webm',
+    };
+
+    const res = await request(app)
+      .post('/api/v1/copilot/query')
+      .set('Authorization', `Bearer ${tokenTech}`)
+      .send({
+        query: 'Analyze uploaded field recording for cavitation on PUMP-001',
+        plantId: plant.id,
+        assetTag: 'PUMP-001',
+        machineId: machinePump.id,
+        acousticTelemetry,
+        audioBase64: fakeAudioBase64,
+        audioMimeType: 'audio/webm',
+        language: 'en-US',
+      });
+
+    expect(res.body.status || 200).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.answer).toBeDefined();
+    expect(res.body.data.userMessage.acousticTelemetry).toBeDefined();
+    expect(res.body.data.userMessage.acousticTelemetry.sourceMode).toBe('FILE_UPLOAD');
+    expect(res.body.data.userMessage.acousticTelemetry.rmsLevelDbfs).toBe(-18.2);
+    expect(res.body.data.userMessage.acousticTelemetry.crestFactorDb).toBe(8.8);
+    expect(res.body.data.userMessage.acousticTelemetry.audioBase64).toBe(fakeAudioBase64);
+  });
 });

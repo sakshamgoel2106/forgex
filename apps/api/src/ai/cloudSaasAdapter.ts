@@ -139,13 +139,16 @@ ${request.assetContext ? `EQUIPMENT PROFILE & ACTIVE SPECIFICATIONS:
 - Name: ${request.assetContext.name}
 ${(request.assetContext as any).specs ? (request.assetContext as any).specs.join('\n') : ''}
 ` : ''}
-${request.acousticTelemetry ? `ACOUSTIC FREQUENCY SPECTRUM TELEMETRY:
+${request.acousticTelemetry ? `ACOUSTIC FREQUENCY SPECTRUM & PHYSICAL DSP TELEMETRY:
 - Dominant Peak Frequency: ${Math.round(request.acousticTelemetry.dominantFrequencyHz)} Hz
 - Peak Decibel Level: ${request.acousticTelemetry.peakDecibels.toFixed(1)} dB
-- Energy Distribution: Low (20–500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.low || 0) * 100)}%, Mid (500–2,500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.mid || 0) * 100)}%, High (2,500–8,000 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.high || 0) * 100)}%
+- RMS Level: ${request.acousticTelemetry.rmsLevelDbfs !== undefined ? `${request.acousticTelemetry.rmsLevelDbfs.toFixed(1)} dBFS` : 'Calculated'}
+- Crest Factor: ${request.acousticTelemetry.crestFactorDb !== undefined ? `${request.acousticTelemetry.crestFactorDb.toFixed(1)} dB` : request.acousticTelemetry.crestFactor || 'NORMAL'}
+- Spectral Centroid: ${request.acousticTelemetry.spectralCentroidHz ? `${Math.round(request.acousticTelemetry.spectralCentroidHz)} Hz` : 'N/A'}
+- Energy Distribution: Low (20–500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.low || 0) * 100)}%, Mid (500–2,500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.mid || 0) * 100)}%, High (2,500–12,000 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.high || 0) * 100)}%
 - Automated Spectral Anomaly Classification: ${request.acousticTelemetry.detectedPattern}
+- Audio Source Mode: ${request.acousticTelemetry.sourceMode || 'LIVE_MIC'} (${request.acousticTelemetry.inputDeviceName || 'Hardware Stream'})
 - Sampling Window: ${request.acousticTelemetry.sampleDurationMs} ms
-${request.acousticTelemetry.crestFactor ? `- Crest Factor: ${request.acousticTelemetry.crestFactor}` : ''}
 
 Acoustic Diagnostic Instructions:
 1. Provide an authoritative acoustic diagnostic breakdown: state what this frequency pattern indicates for ${request.assetContext?.assetTag || 'the machine'}.
@@ -174,11 +177,33 @@ Respond in strict JSON with:
         }
 
         const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${this._apiKey}`;
+        
+        // Prepare multimodal parts: Text prompt + inline audio data if present
+        const parts: any[] = [{ text: prompt }];
+        if (request.acousticTelemetry?.audioBase64) {
+          const rawAudio = request.acousticTelemetry.audioBase64;
+          let audioMime = request.acousticTelemetry.audioMimeType || 'audio/webm';
+          let audioData = rawAudio;
+          if (rawAudio.startsWith('data:')) {
+            const m = rawAudio.match(/^data:([^;]+);base64,(.+)$/);
+            if (m) {
+              audioMime = m[1];
+              audioData = m[2];
+            }
+          }
+          parts.push({
+            inlineData: {
+              mimeType: audioMime,
+              data: audioData,
+            },
+          });
+        }
+
         const res = await fetch(geminiEndpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
+            contents: [{ parts }],
             generationConfig: {
               temperature: 0.1,
               responseMimeType: 'application/json',

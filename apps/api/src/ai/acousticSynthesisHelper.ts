@@ -17,6 +17,33 @@ export function synthesizeAcousticReport(
   const midPct = Math.round((telemetry.bandEnergy?.mid || 0) * 100);
   const highPct = Math.round((telemetry.bandEnergy?.high || 0) * 100);
   const crest = telemetry.crestFactor || (telemetry.detectedPattern === 'BEARING_WEAR_SUSPECTED' ? 'HIGH' : 'MEDIUM');
+  const rmsStr = telemetry.rmsLevelDbfs !== undefined ? `${telemetry.rmsLevelDbfs.toFixed(1)} dBFS` : 'N/A';
+  const crestDbStr = telemetry.crestFactorDb !== undefined ? `${telemetry.crestFactorDb.toFixed(1)} dB` : crest;
+  const centroidStr = telemetry.spectralCentroidHz !== undefined ? `${Math.round(telemetry.spectralCentroidHz)} Hz` : 'N/A';
+
+  const sourceLabelEn = telemetry.sourceMode === 'LIVE_MIC'
+    ? 'Hardware Desktop Microphone'
+    : telemetry.sourceMode === 'FILE_UPLOAD'
+    ? 'Decoded Field Recording'
+    : telemetry.sourceMode === 'TAB_SYSTEM_AUDIO'
+    ? 'Desktop Tab / System Audio'
+    : 'Acoustic Sensor Stream';
+
+  const sourceLabelHi = telemetry.sourceMode === 'LIVE_MIC'
+    ? 'डेस्कटॉप हार्डवेयर माइक्रोफोन'
+    : telemetry.sourceMode === 'FILE_UPLOAD'
+    ? 'फील्ड रिकॉर्डिंग फाइल (डिकोडेड)'
+    : telemetry.sourceMode === 'TAB_SYSTEM_AUDIO'
+    ? 'डेस्कटॉप टैब / सिस्टम ऑडियो'
+    : 'ध्वनिक सेंसर स्ट्रीम';
+
+  const sourceLabelMr = telemetry.sourceMode === 'LIVE_MIC'
+    ? 'डेस्कटॉप हार्डवेअर मायक्रोफोन'
+    : telemetry.sourceMode === 'FILE_UPLOAD'
+    ? 'फील्ड रेकॉर्डिंग फाईल (डिकोडेड)'
+    : telemetry.sourceMode === 'TAB_SYSTEM_AUDIO'
+    ? 'डेस्कटॉप टॅब / सिस्टम ऑडिओ'
+    : 'ध्वनिक सेन्सर प्रवाह';
 
   if (targetLanguage.startsWith('hi')) {
     // Hindi (हिंदी)
@@ -25,6 +52,14 @@ export function synthesizeAcousticReport(
 
 **ध्वनिक स्पेक्ट्रल विश्लेषण:**
 स्पेक्ट्रम विश्लेषक ने **${domHz} Hz** (${peakDb} dB) पर एक प्रमुख पीक की पहचान की है, जिसमें मध्य-आवृत्ति बैंड (500–2,500 Hz) में ऊर्जा का घनत्व **${midPct}%** है। यह ध्वनिक हस्ताक्षर इम्पेलर वेन पास फ्रीक्वेंसी के आसपास वाष्प गुहिकाओं (vapor cavities) के हिंसक पतन और द्रव अशांति (fluid turbulence) की स्पष्ट पुष्टि करता है।
+
+**भौतिक डीएसपी मेट्रिक्स (Physical DSP Metrics):**
+- **ऑडियो स्रोत:** ${sourceLabelHi}
+- **शिखर आवृत्ति (Peak Frequency):** ${domHz} Hz (${peakDb} dB)
+- **स्पेक्ट्रल सेंट्रोइड:** ${centroidStr}
+- **RMS स्तर:** ${rmsStr}
+- **शिखा कारक (Crest Factor):** ${crestDbStr}
+- **ऊर्जा वितरण:** निम्न: ${lowPct}% | मध्य: ${midPct}% | उच्च: ${highPct}%
 
 **संभावित मूल कारण (Root Cause):**
 1. **अपर्याप्त NPSH:** उपलब्ध नेट पॉजिटिव सक्शन हेड (NPSHa) आवश्यक मान (NPSHr) से नीचे चला गया है।
@@ -46,6 +81,14 @@ export function synthesizeAcousticReport(
 **ध्वनिक स्पेक्ट्रल विश्लेषण:**
 उच्च-आवृत्ति बैंड (2,500–8,000 Hz) में **${highPct}%** का असामान्य ऊर्जा संकेन्द्रण पाया गया है, जिसमें **${domHz} Hz** (${peakDb} dB) पर तीक्ष्ण हार्मोनिक पीक और उच्च शिखा कारक (${crest} Crest Factor) देखा गया है। यह धातु-से-धातु घर्षण और बियरिंग रेसवे पर प्रारंभिक सतह क्षरण (spalling) का विशिष्ट संकेत है।
 
+**भौतिक डीएसपी मेट्रिक्स (Physical DSP Metrics):**
+- **ऑडियो स्रोत:** ${sourceLabelHi}
+- **शिखर आवृत्ति (Peak Frequency):** ${domHz} Hz (${peakDb} dB)
+- **स्पेक्ट्रल सेंट्रोइड:** ${centroidStr}
+- **RMS स्तर:** ${rmsStr}
+- **शिखा कारक (Crest Factor):** ${crestDbStr}
+- **ऊर्जा वितरण:** निम्न: ${lowPct}% | मध्य: ${midPct}% | उच्च: ${highPct}%
+
 **संभावित मूल कारण (Root Cause):**
 1. **स्नेहन अपघटन:** ग्रीस सूखना, अत्यधिक ग्रीसिंग के कारण मंथन (churning), या लुब्रिकेंट का संदूषण।
 2. **रोलिंग एलीमेंट थकान:** बॉल या रोलर रेसवे पर सूक्ष्म-गड्ढे (micro-pitting)।
@@ -66,6 +109,13 @@ export function synthesizeAcousticReport(
 **ध्वनिक स्पेक्ट्रल विश्लेषण:**
 निम्न-आवृत्ति बैंड (20–500 Hz) में ऊर्जा का प्रभुत्व **${lowPct}%** है, जो **${domHz} Hz** (${peakDb} dB) पर 1X/2X घूर्णी आवृत्ति के अनुरूप है। यह शाफ्ट के यांत्रिक असंतुलन या कपलिंग मिसअलाइनमेंट का संकेत देता है।
 
+**भौतिक डीएसपी मेट्रिक्स (Physical DSP Metrics):**
+- **ऑडियो स्रोत:** ${sourceLabelHi}
+- **शिखर आवृत्ति (Peak Frequency):** ${domHz} Hz (${peakDb} dB)
+- **स्पेक्ट्रल सेंट्रोइड:** ${centroidStr}
+- **RMS स्तर:** ${rmsStr}
+- **शिखा कारक (Crest Factor):** ${crestDbStr}
+
 **संभावित मूल कारण (Root Cause):**
 1. इम्पेलर या रोटर पर गंदगी का असमान जमाव।
 2. लचीले कपलिंग इन्सर्ट का घिस जाना।
@@ -81,6 +131,13 @@ export function synthesizeAcousticReport(
 **ध्वनिक स्पेक्ट्रल विश्लेषण:**
 स्पेक्ट्रम सामान्य परिचालन सीमा में संतुलित है। प्रमुख आवृत्ति **${domHz} Hz** (${peakDb} dB) है और किसी असामान्य हार्मोनिक स्पाइक का पता नहीं चला है (निम्न: ${lowPct}%, मध्य: ${midPct}%, उच्च: ${highPct}%)।
 
+**भौतिक डीएसपी मेट्रिक्स (Physical DSP Metrics):**
+- **ऑडियो स्रोत:** ${sourceLabelHi}
+- **शिखर आवृत्ति (Peak Frequency):** ${domHz} Hz (${peakDb} dB)
+- **स्पेक्ट्रल सेंट्रोइड:** ${centroidStr}
+- **RMS स्तर:** ${rmsStr}
+- **शिखा कारक (Crest Factor):** ${crestDbStr}
+
 **स्थिति:**
 उपकरण विनिर्माता के मानक परिचालन दिशानिर्देशों के अनुसार स्वस्थ स्थिति में चल रहा है। किसी तत्काल सुधारात्मक रखरखाव की आवश्यकता नहीं है। नियमित निगरानी जारी रखें।`;
   }
@@ -92,6 +149,14 @@ export function synthesizeAcousticReport(
 
 **ध्वनिक स्पेक्ट्रल विश्लेषण:**
 स्पेक्ट्रम अ‍ॅनालायझरने **${domHz} Hz** (${peakDb} dB) वर प्रमुख वारंवारता नोंदवली आहे, ज्यामध्ये मध्यम फ्रिक्वेन्सी बँडमध्ये (500–2,500 Hz) **${midPct}%** ऊर्जा केंद्रित आहे. हा ध्वनिक पॅटर्न इम्पेलर व्हेन पासिंग फ्रिक्वेन्सीजवळ पोकळी निर्माण (Cavitation) आणि द्रव अशांततेची (Fluid Turbulence) स्पष्ट पुष्टी करतो.
+
+**भौतिक डीएसपी मेट्रिक्स (Physical DSP Metrics):**
+- **ऑडिओ स्रोत:** ${sourceLabelMr}
+- **शिखर वारंवारता (Peak Frequency):** ${domHz} Hz (${peakDb} dB)
+- **स्पेक्ट्रल सेंट्रोइड:** ${centroidStr}
+- **RMS पातळी:** ${rmsStr}
+- **क्रेस्ट फॅक्टर:** ${crestDbStr}
+- **ऊर्जा वितरण:** कमी: ${lowPct}% | मध्यम: ${midPct}% | उच्च: ${highPct}%
 
 **संभाव्य मूळ कारणे (Root Cause):**
 1. **अपुरा NPSH:** उपलब्ध नेट पॉझिटिव्ह सक्शन हेड आवश्यक मूल्यापेक्षा कमी झाला आहे.
@@ -113,6 +178,14 @@ export function synthesizeAcousticReport(
 **ध्वनिक स्पेक्ट्रल विश्लेषण:**
 उच्च फ्रिक्वेन्सी बँडमध्ये (2,500–8,000 Hz) **${highPct}%** ची असामान्य ऊर्जा नोंदवली गेली आहे, ज्यामध्ये **${domHz} Hz** (${peakDb} dB) वर तीक्ष्ण हार्मोनिक स्पाइक आढळला आहे. हे बेअरिंग रेसवेवरील धातूचे घर्षण आणि पृष्ठभागाचे नुकसान (Spalling) दर्शवते.
 
+**भौतिक डीएसपी मेट्रिक्स (Physical DSP Metrics):**
+- **ऑडिओ स्रोत:** ${sourceLabelMr}
+- **शिखर वारंवारता (Peak Frequency):** ${domHz} Hz (${peakDb} dB)
+- **स्पेक्ट्रल सेंट्रोइड:** ${centroidStr}
+- **RMS पातळी:** ${rmsStr}
+- **क्रेस्ट फॅक्टर:** ${crestDbStr}
+- **ऊर्जा वितरण:** कमी: ${lowPct}% | मध्यम: ${midPct}% | उच्च: ${highPct}%
+
 **संभाव्य मूळ कारणे (Root Cause):**
 1. **स्नेहन बिघाड:** ग्रीस सुकणे किंवा अयोग्य वंगण.
 2. **रोलिंग घटकांचा थकवा:** बॉल किंवा रोलर रेसवेवर सूक्ष्म खड्डे.
@@ -131,6 +204,13 @@ export function synthesizeAcousticReport(
 **ध्वनिक स्पेक्ट्रल विश्लेषण:**
 स्पेक्ट्रम सामान्य परिचालन मर्यादेत संतुलित आहे. प्रमुख फ्रिक्वेन्सी **${domHz} Hz** (${peakDb} dB) असून कोणतेही असामान्य कंपन आढळलेले नाही (कमी: ${lowPct}%, मध्यम: ${midPct}%, उच्च: ${highPct}%).
 
+**भौतिक डीएसपी मेट्रिक्स (Physical DSP Metrics):**
+- **ऑडिओ स्रोत:** ${sourceLabelMr}
+- **शिखर वारंवारता (Peak Frequency):** ${domHz} Hz (${peakDb} dB)
+- **स्पेक्ट्रल सेंट्रोइड:** ${centroidStr}
+- **RMS पातळी:** ${rmsStr}
+- **क्रेस्ट फॅक्टर:** ${crestDbStr}
+
 **स्थिती:**
 मशीन मानक कार्यक्षमतेनुसार सुरळीत सुरू आहे. तातडीच्या देखभालीची आवश्यकता नाही.`;
   }
@@ -141,6 +221,14 @@ export function synthesizeAcousticReport(
 
 **Acoustic Spectral Analysis:**
 The real-time spectrum analyzer captured a dominant resonance peak at **${domHz} Hz** (${peakDb} dB), with **${midPct}%** of total acoustic energy concentrated in the mid-frequency band (500–2,500 Hz). This acoustic profile matches high-velocity vapor cavity collapse, blade-pass turbulence, and localized suction cavitation.
+
+**Physical DSP Metrics:**
+- **Source Mode:** ${sourceLabelEn}
+- **Dominant Peak:** ${domHz} Hz (${peakDb} dB)
+- **Spectral Centroid:** ${centroidStr}
+- **RMS Level:** ${rmsStr}
+- **Crest Factor:** ${crestDbStr}
+- **Band Power Distribution:** Low (20–500 Hz): ${lowPct}% | Mid (500–2,500 Hz): ${midPct}% | High (2,500–12,000 Hz): ${highPct}%
 
 **Probable Root Causes:**
 1. **Inadequate NPSH Margin:** Net Positive Suction Head available ($NPSH_a$) has fallen below manufacturer required limits ($NPSH_r$).
@@ -163,6 +251,14 @@ Before opening inspection ports, casing plugs, or servicing suction strainers, d
 **Acoustic Spectral Analysis:**
 Elevated high-frequency energy (**${highPct}%** in the 2,500–8,000 Hz band) was detected with a sharp resonance peak at **${domHz} Hz** (${peakDb} dB) and high crest factor impulses (${crest}). This ultrasonic/high-frequency signature indicates boundary lubrication failure, raceway micro-spalling, and metal-to-metal contact.
 
+**Physical DSP Metrics:**
+- **Source Mode:** ${sourceLabelEn}
+- **Dominant Peak:** ${domHz} Hz (${peakDb} dB)
+- **Spectral Centroid:** ${centroidStr}
+- **RMS Level:** ${rmsStr}
+- **Crest Factor:** ${crestDbStr}
+- **Band Power Distribution:** Low (20–500 Hz): ${lowPct}% | Mid (500–2,500 Hz): ${midPct}% | High (2,500–12,000 Hz): ${highPct}%
+
 **Probable Root Causes:**
 1. **Lubricant Breakdown:** Oil film depletion, grease churning, or particulate contamination in the bearing cavity.
 2. **Rolling Element Fatigue:** Early-stage ball/roller raceway flaking or cage fatigue.
@@ -183,6 +279,14 @@ Tag out electrical power and allow the unit to come to a complete mechanical sto
 **Acoustic Spectral Analysis:**
 Low-frequency mechanical energy dominates the spectrum (**${lowPct}%** in the 20–500 Hz band), peaking at **${domHz} Hz** (${peakDb} dB), corresponding to $1\\times$ and $2\\times$ running speed harmonics. This indicates rotational unbalance or shaft coupling misalignment.
 
+**Physical DSP Metrics:**
+- **Source Mode:** ${sourceLabelEn}
+- **Dominant Peak:** ${domHz} Hz (${peakDb} dB)
+- **Spectral Centroid:** ${centroidStr}
+- **RMS Level:** ${rmsStr}
+- **Crest Factor:** ${crestDbStr}
+- **Band Power Distribution:** Low (20–500 Hz): ${lowPct}% | Mid (500–2,500 Hz): ${midPct}% | High (2,500–12,000 Hz): ${highPct}%
+
 **Probable Root Causes:**
 1. Particulate buildup or uneven scaling on the rotating impeller/rotor assembly.
 2. Loose motor/pump foundation hold-down bolts (soft-foot condition).
@@ -199,6 +303,14 @@ Low-frequency mechanical energy dominates the spectrum (**${lowPct}%** in the 20
 
 **Acoustic Spectral Analysis:**
 The frequency spectrum demonstrates balanced, healthy baseline operation. Dominant frequency is at **${domHz} Hz** (${peakDb} dB) with uniform energy distribution (Low: ${lowPct}%, Mid: ${midPct}%, High: ${highPct}%) and no abnormal high-frequency harmonics or cavitation transients.
+
+**Physical DSP Metrics:**
+- **Source Mode:** ${sourceLabelEn}
+- **Dominant Peak:** ${domHz} Hz (${peakDb} dB)
+- **Spectral Centroid:** ${centroidStr}
+- **RMS Level:** ${rmsStr}
+- **Crest Factor:** ${crestDbStr}
+- **Band Power Distribution:** Low (20–500 Hz): ${lowPct}% | Mid (500–2,500 Hz): ${midPct}% | High (2,500–12,000 Hz): ${highPct}%
 
 **Operational Status:**
 Operating parameters are fully nominal and compliant with OEM baseline vibration thresholds. No corrective maintenance required. Maintain standard planned inspection schedule.`;

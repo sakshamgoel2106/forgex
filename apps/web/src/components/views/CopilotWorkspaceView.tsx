@@ -654,6 +654,8 @@ export const CopilotWorkspaceView: React.FC = () => {
           acousticTelemetry: acousticTelemetry || undefined,
           imageBase64: imageBase64 || undefined,
           visionDiagnostic: visionDiagnostic || undefined,
+          audioBase64: acousticTelemetry?.audioBase64 || undefined,
+          audioMimeType: acousticTelemetry?.audioMimeType || undefined,
         }),
       });
 
@@ -1674,12 +1676,19 @@ export const CopilotWorkspaceView: React.FC = () => {
 
                   {/* Compact Acoustic Telemetry Badge */}
                   {(msg as any).acousticTelemetry && (
-                    <div className="mt-2.5 p-3 rounded-lg bg-[#0B132B] border border-indigo-500/40 text-white space-y-2 shadow-sm">
-                      <div className="flex items-center justify-between gap-2 flex-wrap border-b border-indigo-900/60 pb-1.5">
-                        <div className="flex items-center gap-1.5">
+                    <div className="mt-2.5 p-3 rounded-lg bg-[#0B132B] border border-indigo-500/40 text-white space-y-2.5 shadow-sm">
+                      <div className="flex items-center justify-between gap-2 flex-wrap border-b border-indigo-900/60 pb-2">
+                        <div className="flex items-center gap-2">
                           <Activity className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
                           <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-200">
                             ACOUSTIC SIGNATURE CAPTURE
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-indigo-900/60 text-indigo-300 border border-indigo-700/50">
+                            {(msg as any).acousticTelemetry.sourceMode === 'FILE_UPLOAD'
+                              ? 'FIELD RECORDING'
+                              : (msg as any).acousticTelemetry.sourceMode === 'TAB_SYSTEM_AUDIO'
+                              ? 'SYSTEM / TAB AUDIO'
+                              : 'LIVE HARDWARE MIC'}
                           </span>
                         </div>
                         <span
@@ -1710,43 +1719,65 @@ export const CopilotWorkspaceView: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Telemetry Metrics 4-Col Grid */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px] font-mono">
-                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
+                      {/* Telemetry Metrics 6-Col Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-1.5 text-[10px] font-mono">
+                        <div className="p-1.5 rounded bg-black/40 border border-indigo-900/30">
                           <span className="text-slate-400 block text-[9px]">Dominant Peak</span>
                           <strong className="text-white">{(msg as any).acousticTelemetry.dominantFrequencyHz} Hz</strong>
                         </div>
-                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
+                        <div className="p-1.5 rounded bg-black/40 border border-indigo-900/30">
                           <span className="text-slate-400 block text-[9px]">Peak Level</span>
                           <strong className="text-white">{(msg as any).acousticTelemetry.peakDecibels} dB</strong>
                         </div>
-                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
-                          <span className="text-slate-400 block text-[9px]">Mid-Band Cavitation</span>
-                          <strong className="text-indigo-300">
-                            {Math.round(((msg as any).acousticTelemetry.bandEnergy?.mid || 0) * 100)}%
+                        <div className="p-1.5 rounded bg-black/40 border border-indigo-900/30">
+                          <span className="text-slate-400 block text-[9px]">RMS Level</span>
+                          <strong className="text-indigo-200">
+                            {(msg as any).acousticTelemetry.rmsLevelDbfs !== undefined
+                              ? `${(msg as any).acousticTelemetry.rmsLevelDbfs.toFixed(1)} dBFS`
+                              : '-24.0 dBFS'}
                           </strong>
                         </div>
-                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
+                        <div className="p-1.5 rounded bg-black/40 border border-indigo-900/30">
                           <span className="text-slate-400 block text-[9px]">Crest Factor</span>
-                          <strong className="text-amber-400">{(msg as any).acousticTelemetry.crestFactor || 'HIGH'}</strong>
+                          <strong className="text-amber-400">
+                            {(msg as any).acousticTelemetry.crestFactorDb !== undefined
+                              ? `${(msg as any).acousticTelemetry.crestFactorDb.toFixed(1)} dB`
+                              : (msg as any).acousticTelemetry.crestFactor || 'HIGH'}
+                          </strong>
+                        </div>
+                        <div className="p-1.5 rounded bg-black/40 border border-indigo-900/30">
+                          <span className="text-slate-400 block text-[9px]">Centroid</span>
+                          <strong className="text-emerald-300">
+                            {(msg as any).acousticTelemetry.spectralCentroidHz
+                              ? `${Math.round((msg as any).acousticTelemetry.spectralCentroidHz)} Hz`
+                              : '1,420 Hz'}
+                          </strong>
+                        </div>
+                        <div className="p-1.5 rounded bg-black/40 border border-indigo-900/30">
+                          <span className="text-slate-400 block text-[9px]">Low/Mid/High</span>
+                          <strong className="text-cyan-300">
+                            {Math.round(((msg as any).acousticTelemetry.bandEnergy?.low || 0) * 100)}/
+                            {Math.round(((msg as any).acousticTelemetry.bandEnergy?.mid || 0) * 100)}/
+                            {Math.round(((msg as any).acousticTelemetry.bandEnergy?.high || 0) * 100)}%
+                          </strong>
                         </div>
                       </div>
 
-                      {/* Hardware Machine Audio Playback */}
+                      {/* Desktop Real Audio Playback */}
                       {(msg as any).acousticTelemetry.audioBase64 && (
-                        <div className="pt-2 border-t border-indigo-900/50 space-y-1">
+                        <div className="pt-2 border-t border-indigo-900/50 space-y-1.5">
                           <div className="flex items-center justify-between text-[9px] font-mono text-indigo-300">
-                            <span>RAW HARDWARE RECORDING · 48 kHz</span>
+                            <span>DESKTOP FIELD RECORDING (48 kHz)</span>
                             {(msg as any).acousticTelemetry.inputDeviceName && (
-                              <span className="truncate max-w-[200px] text-slate-400">
-                                Mic: {(msg as any).acousticTelemetry.inputDeviceName}
+                              <span className="truncate max-w-[240px] text-slate-400">
+                                Source: {(msg as any).acousticTelemetry.inputDeviceName}
                               </span>
                             )}
                           </div>
                           <audio
                             controls
                             src={(msg as any).acousticTelemetry.audioBase64}
-                            className="w-full h-8 rounded"
+                            className="w-full h-8 rounded bg-slate-900"
                           />
                         </div>
                       )}
