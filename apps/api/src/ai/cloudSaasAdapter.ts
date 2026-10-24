@@ -8,6 +8,7 @@ import type {
 } from './ai.interface.js';
 import { logger } from '../utils/logger.js';
 import { getLanguageConfig } from '@forgex/shared-types';
+import { synthesizeAcousticReport } from './acousticSynthesisHelper.js';
 
 export class CloudSaasAdapter implements IMultimodalGenerationProvider {
   constructor(
@@ -138,6 +139,20 @@ ${request.assetContext ? `EQUIPMENT PROFILE & ACTIVE SPECIFICATIONS:
 - Name: ${request.assetContext.name}
 ${(request.assetContext as any).specs ? (request.assetContext as any).specs.join('\n') : ''}
 ` : ''}
+${request.acousticTelemetry ? `ACOUSTIC FREQUENCY SPECTRUM TELEMETRY:
+- Dominant Peak Frequency: ${Math.round(request.acousticTelemetry.dominantFrequencyHz)} Hz
+- Peak Decibel Level: ${request.acousticTelemetry.peakDecibels.toFixed(1)} dB
+- Energy Distribution: Low (20–500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.low || 0) * 100)}%, Mid (500–2,500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.mid || 0) * 100)}%, High (2,500–8,000 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.high || 0) * 100)}%
+- Automated Spectral Anomaly Classification: ${request.acousticTelemetry.detectedPattern}
+- Sampling Window: ${request.acousticTelemetry.sampleDurationMs} ms
+${request.acousticTelemetry.crestFactor ? `- Crest Factor: ${request.acousticTelemetry.crestFactor}` : ''}
+
+Acoustic Diagnostic Instructions:
+1. Provide an authoritative acoustic diagnostic breakdown: state what this frequency pattern indicates for ${request.assetContext?.assetTag || 'the machine'}.
+2. Explain the physical mechanism (e.g. fluid cavitation / bubble implosion vs. mechanical unbalance vs. high-frequency bearing raceway spalling).
+3. Provide practical, sequential field verification steps (including pressure checks, vibration checks, and safe LOTO de-energization if physical inspection is required).
+4. Output the response natively in ${langConfig.name} without boilerplate or document filenames.
+` : ''}
 AUTHORIZED CONTEXT:
 ${authorizedEvidence
   .map(
@@ -225,6 +240,18 @@ Respond in strict JSON with:
     }
 
     // Offline / Fallback grounded synthesis without boilerplate templates or manual leaks
+    if (request.acousticTelemetry) {
+      const acousticReport = synthesizeAcousticReport(request.acousticTelemetry, request.assetContext, targetLang);
+      return {
+        answerText: acousticReport,
+        confidence: 'HIGH',
+        isInsufficientEvidence: false,
+        conflictDetected: false,
+        usedEvidenceChunkIds: authorizedEvidence.slice(0, 2).map((e) => e.chunkId),
+        modelUsed: this.modelName,
+      };
+    }
+
     const candidateLines: string[] = [];
     for (const ev of authorizedEvidence.slice(0, 4)) {
       const lines = ev.content

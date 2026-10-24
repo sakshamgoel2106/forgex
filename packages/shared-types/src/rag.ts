@@ -38,6 +38,27 @@ export interface MessageFeedback {
   createdAt: string;
 }
 
+export type AcousticAnomalyPattern =
+  | 'CAVITATION_SUSPECTED'
+  | 'BEARING_WEAR_SUSPECTED'
+  | 'IMBALANCE_SUSPECTED'
+  | 'NOMINAL';
+
+export interface AcousticTelemetry {
+  dominantFrequencyHz: number;
+  peakDecibels: number;
+  bandEnergy: {
+    low: number;
+    mid: number;
+    high: number;
+  };
+  detectedPattern: AcousticAnomalyPattern;
+  sampleDurationMs: number;
+  spectralCentroidHz?: number;
+  crestFactor?: 'LOW' | 'MEDIUM' | 'HIGH';
+  waveformSnapshot?: number[];
+}
+
 export interface CopilotMessage {
   id: string;
   conversationId: string;
@@ -54,6 +75,7 @@ export interface CopilotMessage {
   ticketNumber?: string | null;
   createdAt: string;
   feedback?: MessageFeedback | null;
+  acousticTelemetry?: AcousticTelemetry;
 }
 
 export interface Conversation {
@@ -80,6 +102,7 @@ export interface RAGQueryRequest {
   disclosurePolicy?: string | null;
   questionMode?: QuestionHandlingMode;
   language?: string;
+  acousticTelemetry?: AcousticTelemetry;
 }
 
 export interface RAGQueryResponse {

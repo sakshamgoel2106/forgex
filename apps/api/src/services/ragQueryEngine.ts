@@ -172,7 +172,17 @@ export class RAGQueryEngine {
     const { plantId, assetId: rawAssetId, query, conversationId, imageUrl, topK = 5 } = request;
     const targetLanguage = request.language || 'en-US';
     const langConfig = getLanguageConfig(targetLanguage);
-    const effectiveSearchQuery = RAGQueryEngine.normalizeToEnglishRetrievalQuery(query, targetLanguage);
+    let effectiveSearchQuery = RAGQueryEngine.normalizeToEnglishRetrievalQuery(query, targetLanguage);
+    if (request.acousticTelemetry) {
+      const patternHints: Record<string, string> = {
+        CAVITATION_SUSPECTED: 'cavitation NPSH suction pressure impeller vapor bubbles pitting acoustic noise',
+        BEARING_WEAR_SUSPECTED: 'bearing raceway lubrication grease vibration high frequency metallic spalling',
+        IMBALANCE_SUSPECTED: 'unbalance alignment shaft runout coupling vibration baseline',
+        NOMINAL: 'normal baseline vibration operating limits maintenance inspection',
+      };
+      const acousticHints = patternHints[request.acousticTelemetry.detectedPattern] || 'acoustic vibration diagnosis';
+      effectiveSearchQuery = `${effectiveSearchQuery} ${acousticHints}`;
+    }
     const rawMachineId = (request as any).machineId;
     const rawAssetTag = (request as any).assetTag;
     const cleanAssetId = rawAssetId ? sanitizeMachineOrAssetId(rawAssetId) : undefined;
@@ -861,6 +871,9 @@ ${generalKnowledgeText}
       senderType: 'USER',
       content: query,
     });
+    if (request.acousticTelemetry) {
+      (userMessage as any).acousticTelemetry = request.acousticTelemetry;
+    }
 
     // 4. Retrieve Candidate Chunks (Qdrant Hybrid Search Dense 768-dim + BM25 Sparse with RRF)
     let vectorHits: VectorSearchResult[] = [];
@@ -1455,6 +1468,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
         imageUrl,
         targetLanguage,
         retrievalQuery: effectiveSearchQuery,
+        acousticTelemetry: request.acousticTelemetry,
       });
     } else {
       generationResult = await this.generationProvider.generateAnswer({
@@ -1464,6 +1478,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
         plantContext: { code: plant.code, name: plant.name },
         targetLanguage,
         retrievalQuery: effectiveSearchQuery,
+        acousticTelemetry: request.acousticTelemetry,
       });
     }
 
@@ -1477,6 +1492,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
     let createdTask: any = null;
 
     const isOldOrIncompleteMachine =
+      !request.acousticTelemetry &&
       machine !== null &&
       (machine.documentationReadiness === 'INCOMPLETE' ||
        machine.verificationState === 'UNVERIFIED' ||
@@ -1507,6 +1523,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
       );
 
     const shouldEscalate =
+      !request.acousticTelemetry &&
       !isGeneralKnowledgeQuestion &&
       !isMachineIssueWithoutIdentity &&
       (isWorkerRequestingSupport ||
@@ -1832,7 +1849,10 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
 
     return {
       conversationId: conversation.id,
-      userMessage,
+      userMessage: {
+        ...userMessage,
+        acousticTelemetry: request.acousticTelemetry || (userMessage as any).acousticTelemetry,
+      },
       assistantMessage: completeAssistantMessage,
       questionMode: determinedQuestionMode,
       safetyAlerts: deterministicSafetyAlerts.length > 0 ? deterministicSafetyAlerts : undefined,

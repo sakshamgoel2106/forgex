@@ -6,6 +6,7 @@ import type {
   InferenceMode,
 } from './ai.interface.js';
 import { getLanguageConfig } from '@forgex/shared-types';
+import { synthesizeAcousticReport } from './acousticSynthesisHelper.js';
 
 export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
   private shouldFailNext = false;
@@ -32,6 +33,19 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
     const { query, authorizedEvidence } = request;
     const targetLang = request.targetLanguage || 'en-US';
     const langConfig = getLanguageConfig(targetLang);
+
+    // 0. Priority handling for Acoustic Diagnostic Telemetry ("Shazam for Factory Machines")
+    if (request.acousticTelemetry) {
+      const acousticReport = synthesizeAcousticReport(request.acousticTelemetry, request.assetContext, targetLang);
+      return {
+        answerText: acousticReport,
+        confidence: 'HIGH',
+        isInsufficientEvidence: false,
+        conflictDetected: false,
+        usedEvidenceChunkIds: authorizedEvidence.slice(0, 2).map((e) => e.chunkId),
+        modelUsed: this.modelName,
+      };
+    }
 
     // 1. Check for Insufficient Evidence
     const genericWords = new Set([

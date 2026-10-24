@@ -45,7 +45,7 @@ export class CopilotController {
         return;
       }
 
-      let { query, plantId, assetId, machineId, conversationId, imageUrl, topK } = req.body;
+      let { query, plantId, assetId, machineId, conversationId, imageUrl, topK, acousticTelemetry } = req.body;
       const rawAssetTag = req.body.assetTag;
 
       if (!query) {
@@ -107,6 +107,7 @@ export class CopilotController {
           conversationId,
           imageUrl,
           topK,
+          acousticTelemetry,
         } as any,
         {
           organizationId,
@@ -131,6 +132,8 @@ export class CopilotController {
           confidence: result.assistantMessage.confidence,
           isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
           ticketNumber: result.assistantMessage.ticketNumber,
+          hasAcousticTelemetry: Boolean(acousticTelemetry),
+          acousticPattern: acousticTelemetry?.detectedPattern,
         },
       });
 
@@ -138,6 +141,11 @@ export class CopilotController {
       const sanitizedAssistantMessage = {
         ...result.assistantMessage,
         citations: [],
+      };
+
+      const userMessageWithTelemetry = {
+        ...result.userMessage,
+        acousticTelemetry: acousticTelemetry || (result.userMessage as any).acousticTelemetry,
       };
 
       res.status(200).json({
@@ -157,7 +165,7 @@ export class CopilotController {
           ticketId: result.assistantMessage.ticketId,
           ticketNumber: result.assistantMessage.ticketNumber,
           missingInfoTask: (result as any).missingInfoTask || null,
-          userMessage: result.userMessage,
+          userMessage: userMessageWithTelemetry,
           assistantMessage: sanitizedAssistantMessage,
         },
       });

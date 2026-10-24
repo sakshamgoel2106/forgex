@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   X,
   Mic,
+  Activity,
   Volume2,
   VolumeX,
   Languages,
@@ -45,9 +46,11 @@ import {
   type QuestionHandlingMode,
   type Machine,
   type SupportedLanguageCode,
+  type AcousticTelemetry,
   SUPPORTED_LANGUAGES,
   getLanguageConfig,
 } from '@forgex/shared-types';
+import { AcousticDiagnosticsModal } from '../copilot/AcousticDiagnosticsModal';
 
 /**
  * Clean, safe Markdown renderer for assistant messages:
@@ -251,6 +254,9 @@ export const CopilotWorkspaceView: React.FC = () => {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [speechLanguage, setSpeechLanguage] = useState<SupportedLanguageCode>('en-US');
   const recognitionRef = useRef<any>(null);
+
+  // Acoustic Diagnostics ("Shazam for Factory Machines")
+  const [isAcousticModalOpen, setIsAcousticModalOpen] = useState(false);
 
   // Active Language Configuration
   const currentLangConfig = useMemo(() => getLanguageConfig(speechLanguage), [speechLanguage]);
@@ -541,7 +547,7 @@ export const CopilotWorkspaceView: React.FC = () => {
   };
 
   // Execute Grounded RAG Query
-  const handleSendQuery = async (queryText?: string) => {
+  const handleSendQuery = async (queryText?: string, acousticTelemetry?: AcousticTelemetry) => {
     stopSpeech();
 
     const text = (queryText || queryInput).trim();
@@ -549,7 +555,11 @@ export const CopilotWorkspaceView: React.FC = () => {
 
     setQueryError(null);
     setIsQuerying(true);
-    setQueryStep('Validating factory context and equipment access...');
+    setQueryStep(
+      acousticTelemetry
+        ? 'Analyzing FFT vibration spectrum and acoustic anomalies...'
+        : 'Validating factory context and equipment access...'
+    );
 
     const userMessageId = `user-${Date.now()}`;
     const newUserMsg: CopilotMessage = {
@@ -559,6 +569,7 @@ export const CopilotWorkspaceView: React.FC = () => {
       content: text,
       confidence: 'HIGH',
       citations: [],
+      acousticTelemetry,
       createdAt: new Date().toISOString(),
     };
 
@@ -566,8 +577,24 @@ export const CopilotWorkspaceView: React.FC = () => {
     setQueryInput('');
 
     try {
-      setTimeout(() => setQueryStep('Reviewing authorized technical manuals & engineering specs...'), 350);
-      setTimeout(() => setQueryStep('Correlating relational asset documentation and safety limits...'), 700);
+      setTimeout(
+        () =>
+          setQueryStep(
+            acousticTelemetry
+              ? 'Evaluating fluid turbulence and harmonic blade pass signatures...'
+              : 'Reviewing authorized technical manuals & engineering specs...'
+          ),
+        350
+      );
+      setTimeout(
+        () =>
+          setQueryStep(
+            acousticTelemetry
+              ? 'Cross-referencing bearing raceway and cavitation tolerances...'
+              : 'Correlating relational asset documentation and safety limits...'
+          ),
+        700
+      );
       setTimeout(() => setQueryStep('Synthesizing operational guidance and verified specifications...'), 1100);
 
       const resolvedPlant = activePlantObj?.code || activePlant || undefined;
@@ -582,6 +609,7 @@ export const CopilotWorkspaceView: React.FC = () => {
           assetTag: selectedMachine?.assetTag || undefined,
           conversationId: activeConversationId || undefined,
           language: speechLanguage,
+          acousticTelemetry: acousticTelemetry || undefined,
         }),
       });
 
@@ -1509,7 +1537,7 @@ export const CopilotWorkspaceView: React.FC = () => {
             >
               {/* User Inquiry Bubble */}
               {msg.senderType === 'USER' ? (
-                <div className="max-w-2xl bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-4 shadow-2xs space-y-1">
+                <div className="max-w-2xl bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-4 shadow-2xs space-y-2">
                   <div className="flex items-center justify-between text-[10px] font-sans text-[#1E40AF] pb-1 border-b border-[#DBEAFE]">
                     <span className="font-bold">TECHNICIAN INQUIRY</span>
                     <span className="text-blue-600">{new Date(msg.createdAt).toLocaleTimeString()}</span>
@@ -1517,6 +1545,68 @@ export const CopilotWorkspaceView: React.FC = () => {
                   <p className="text-xs font-sans text-[#1E3A8A] whitespace-pre-wrap leading-relaxed mt-1">
                     {msg.content}
                   </p>
+
+                  {/* Compact Acoustic Telemetry Badge */}
+                  {(msg as any).acousticTelemetry && (
+                    <div className="mt-2.5 p-3 rounded-lg bg-[#0B132B] border border-indigo-500/40 text-white space-y-2 shadow-sm">
+                      <div className="flex items-center justify-between gap-2 flex-wrap border-b border-indigo-900/60 pb-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <Activity className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-200">
+                            ACOUSTIC SIGNATURE CAPTURE
+                          </span>
+                        </div>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                            (msg as any).acousticTelemetry.detectedPattern === 'CAVITATION_SUSPECTED'
+                              ? 'bg-rose-950/80 text-rose-300 border border-rose-700/60'
+                              : (msg as any).acousticTelemetry.detectedPattern === 'BEARING_WEAR_SUSPECTED'
+                              ? 'bg-amber-950/80 text-amber-300 border border-amber-700/60'
+                              : (msg as any).acousticTelemetry.detectedPattern === 'IMBALANCE_SUSPECTED'
+                              ? 'bg-amber-950/80 text-amber-300 border border-amber-700/60'
+                              : 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60'
+                          }`}
+                        >
+                          {(msg as any).acousticTelemetry.detectedPattern.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+
+                      {/* Mini Waveform Sparkline */}
+                      {Array.isArray((msg as any).acousticTelemetry.waveformSnapshot) && (
+                        <div className="h-6 w-full flex items-end gap-0.5 bg-black/50 p-1 rounded border border-indigo-950">
+                          {(msg as any).acousticTelemetry.waveformSnapshot.map((val: number, idx: number) => (
+                            <div
+                              key={idx}
+                              className="flex-1 bg-gradient-to-t from-indigo-500 to-emerald-400 rounded-t-xs"
+                              style={{ height: `${Math.max(10, Math.min(100, Math.round(val * 100)))}%` }}
+                            />
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Telemetry Metrics 4-Col Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px] font-mono">
+                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
+                          <span className="text-slate-400 block text-[9px]">Dominant Peak</span>
+                          <strong className="text-white">{(msg as any).acousticTelemetry.dominantFrequencyHz} Hz</strong>
+                        </div>
+                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
+                          <span className="text-slate-400 block text-[9px]">Peak Level</span>
+                          <strong className="text-white">{(msg as any).acousticTelemetry.peakDecibels} dB</strong>
+                        </div>
+                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
+                          <span className="text-slate-400 block text-[9px]">Mid-Band Cavitation</span>
+                          <strong className="text-indigo-300">
+                            {Math.round(((msg as any).acousticTelemetry.bandEnergy?.mid || 0) * 100)}%
+                          </strong>
+                        </div>
+                        <div className="p-1 rounded bg-black/40 border border-indigo-900/30">
+                          <span className="text-slate-400 block text-[9px]">Crest Factor</span>
+                          <strong className="text-amber-400">{(msg as any).acousticTelemetry.crestFactor || 'HIGH'}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 /* Assistant Grounded Response Card */
@@ -1722,7 +1812,7 @@ export const CopilotWorkspaceView: React.FC = () => {
             {/* Real Web Speech Push-To-Talk Mic Button */}
             <button
               onClick={handleTogglePushToTalk}
-              className={`p-2.5 rounded-xl border transition shrink-0 flex items-center gap-1.5 shadow-sm ${
+              className={`p-2.5 rounded-xl border transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer ${
                 isListening
                   ? 'bg-rose-50 border-rose-300 text-rose-600 animate-pulse ring-2 ring-rose-400'
                   : 'bg-[#F8FAFC] hover:bg-[#F1F5F9] border-[#CBD5E1] text-[#1A202C]'
@@ -1748,6 +1838,19 @@ export const CopilotWorkspaceView: React.FC = () => {
                   </span>
                 </>
               )}
+            </button>
+
+            {/* Acoustic Scan ("Shazam for Factory Machines") */}
+            <button
+              type="button"
+              onClick={() => setIsAcousticModalOpen(true)}
+              className="p-2.5 rounded-xl border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
+              title="Acoustic Diagnostics: Real-time FFT spectrum scan & anomaly diagnosis (Shazam for Machines)"
+            >
+              <Activity className="w-4 h-4 text-indigo-600 animate-pulse" />
+              <span className="text-[10px] font-sans font-bold hidden sm:inline">
+                Acoustic Scan
+              </span>
             </button>
 
             {/* Text Input Field */}
@@ -1851,6 +1954,19 @@ export const CopilotWorkspaceView: React.FC = () => {
           )}
         </div>
       </Modal>
+
+      {/* Live Acoustic Diagnostics Modal ("Shazam for Factory Machines") */}
+      <AcousticDiagnosticsModal
+        isOpen={isAcousticModalOpen}
+        onClose={() => setIsAcousticModalOpen(false)}
+        selectedMachine={selectedMachine}
+        machines={machines}
+        onSelectMachine={(id) => setSelectedMachineId(id)}
+        onDiagnose={(telemetry, prompt) => {
+          handleSendQuery(prompt, telemetry);
+        }}
+        currentLanguage={speechLanguage}
+      />
     </div>
   );
 };
