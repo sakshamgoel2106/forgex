@@ -2,14 +2,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   HelpCircle,
   ShieldCheck,
-  UserCheck,
   Check,
   X,
   Loader2,
   Sparkles,
   AlertCircle,
   Wrench,
-  BookOpen,
   GraduationCap,
   Plus,
   Send,
@@ -19,23 +17,34 @@ import {
   History,
   FileText,
   CheckCircle2,
-  ExternalLink,
   Lock,
   Clock,
   ShieldAlert,
   Package,
   AlertTriangle,
   Trash2,
+  GitBranch,
+  MessageSquare,
+  Lightbulb,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
-import type { RcaSession, TeardownSop } from '@forgex/shared-types';
+import type { RcaSession } from '@forgex/shared-types';
 import { generateRcaPdfReport } from '../../utils/rcaPdfReport';
 import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill } from '../modals/ExpertKnowledgeCaptureModal';
 import { selectBestTechnician } from './SopExecutionView';
+
+const toShortSentence = (text?: string, maxWords = 14): string => {
+  if (!text) return '';
+  const clean = text.replace(/[\r\n]+/g, ' ').trim();
+  const firstSentence = clean.split(/(?<=[.!?])\s+/)[0] || clean;
+  const words = firstSentence.split(/\s+/);
+  if (words.length <= maxWords) return firstSentence.trim();
+  return words.slice(0, maxWords).join(' ').replace(/[,;:]$/, '') + '.';
+};
 
 interface MachineItem {
   id: string;
@@ -59,7 +68,7 @@ const QUICK_SYMPTOM_CHIPS = [
 export const TroubleshootingView: React.FC<{
   onNavigateToSop?: () => void;
   onNavigateToMaintenance?: (assetId: string) => void;
-}> = ({ onNavigateToSop, onNavigateToMaintenance }) => {
+}> = ({ onNavigateToSop, onNavigateToMaintenance: _onNavigateToMaintenance }) => {
   const { toast } = useToast();
   const { organization, user } = useAuth();
 
@@ -290,14 +299,7 @@ export const TroubleshootingView: React.FC<{
     }
   };
 
-  // Teardown SOP Modal State
-  const [isTeardownOpen, setIsTeardownOpen] = useState(false);
-  const [teardownSop, setTeardownSop] = useState<TeardownSop | null>(null);
-  const [isLoadingSop, setIsLoadingSop] = useState(false);
-  const [verifiedLotoSteps, setVerifiedLotoSteps] = useState<Record<number, boolean>>({});
-
   // Action Loop State
-  const [isCreatingWorkOrder, setIsCreatingWorkOrder] = useState(false);
   const [isSavingToExpert, setIsSavingToExpert] = useState(false);
 
   // Close history dropdown on outside click
@@ -992,24 +994,14 @@ export const TroubleshootingView: React.FC<{
   // Open Escalation Modal with Pre-filled Failed Step Context
   const handleOpenEscalateForFailedStep = (failedStep: any) => {
     if (!activeSession) return;
-    const targetTag = activeSession.assetTag || selectedMachineTag || 'PLANT-MACHINE';
     const currentSymptom = activeSession.symptom?.trim() || symptom?.trim() || '';
     const topHyp =
       activeSession.hypotheses?.find((h) => h.status === 'CONFIRMED') ||
       activeSession.hypotheses?.[0];
-    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
-
-    const prefill = `Maintenance Engineer ${engineerName} reported symptom on ${targetTag}: ${currentSymptom}
-
-🚨 HALTED AT FAILED INVESTIGATION STEP:
-- Step #${failedStep.stepNumber}: ${failedStep.name}
-- Expected Reading: ${failedStep.expectedReading || 'Normal baseline parameter'}
-- Field Observation: Physical check failed; critical anomaly confirmed on equipment.
-
-Top AI Root Cause Hypothesis:
-- Suspected Cause: ${topHyp?.title || 'Unknown Failure Mode'} (${topHyp?.probability || 88}% confidence)
-- Mechanism: ${topHyp?.mechanismExplanation || 'Boundary condition breakdown'}
-- Recommended Remediation: ${topHyp?.recommendedFix || 'Execute isolation and specialist inspection.'}`;
+    const activeFault =
+      activeSession.detectedFaultCode || activeSession.errorCode || errorCode || 'ALM-STEP-FAIL';
+    const topFix = toShortSentence(topHyp?.recommendedFix, 14) || 'Execute energy isolation and specialist inspection.';
+    const prefill = `• Symptom: ${currentSymptom}${activeFault ? ` (${activeFault})` : ''} — Failed Step #${failedStep.stepNumber} (${failedStep.name})\n• Suspected Cause & Fix: ${topHyp?.title || 'Physical Anomaly'} — ${topFix}`;
 
     setEscalateDiscipline('Mechanical / Rotating Equipment Lead');
     setEscalateSeverity('CRITICAL');
@@ -1234,113 +1226,7 @@ Top AI Root Cause Hypothesis:
     toast.info('Session Loaded', `Loaded previous RCA investigation for ${session.assetTag}.`);
   };
 
-  // Open Teardown SOP Modal
-  const handleOpenTeardownSop = async () => {
-    const targetTag = activeSession?.assetTag || selectedMachineTag;
-    setIsTeardownOpen(true);
-    setIsLoadingSop(true);
-    try {
-      const res = await apiFetch(`/api/v1/rca/teardown-sop?assetTag=${encodeURIComponent(targetTag)}`);
-      const json = await res.json();
-      if (res.ok && json.success && json.data) {
-        setTeardownSop(json.data);
-      }
-    } catch (err) {
-      console.warn('Could not load teardown SOP from API:', err);
-    } finally {
-      setIsLoadingSop(false);
-    }
-  };
 
-  // Quick Action 1: Create Work Order from RCA
-  const handleCreateWorkOrder = async () => {
-    if (!activeSession) return;
-    setIsCreatingWorkOrder(true);
-
-    try {
-      const topHypothesis =
-        activeSession.hypotheses.find((h) => h.status === 'CONFIRMED') ||
-        activeSession.hypotheses[0];
-      const matchedMachine = machines.find(
-        (m) => (m.asset_tag || m.assetTag || m.name || m.id) === activeSession.assetTag
-      );
-
-      // Compute exact Date & Time formatted: e.g. "24 Oct 2026, 03:58 PM"
-      const now = new Date();
-      const createdAtFormatted = now.toLocaleString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      });
-
-      const passedCount = activeSession.investigationSteps.filter((s) => s.status === 'PASS').length;
-      const totalCount = activeSession.investigationSteps.length;
-      const progressStr = `${passedCount}/${totalCount} Steps Verified`;
-
-      const title = `RCA Corrective Work Order: ${topHypothesis?.title || 'Machine Remediation'}`;
-      const description = `Corrective work order generated from AI Root Cause Analysis on ${activeSession.assetTag}.
-Plant Area: ${matchedMachine?.plant_area || organization?.name || 'Main Manufacturing Facility'}
-Reported By: ${user?.fullName || 'Plant Technician'} (${(user as any)?.role || 'Field Reliability Specialist'})
-Creation Time: ${createdAtFormatted}
-Operational State: ${activeSession.machineStatus || 'Running - Abnormal'}
-Detected Alarm / Fault Code: ${activeSession.detectedFaultCode || activeSession.errorCode || 'ALM-THRM-402'}
-Primary Root Cause: ${topHypothesis?.title} (${topHypothesis?.probability}% Confidence)
-Mechanism: ${topHypothesis?.mechanismExplanation}
-Recommended Fix: ${topHypothesis?.recommendedFix}
-Observed Symptom: ${activeSession.symptom}
-Investigation Progress: ${progressStr}`;
-
-      const res = await apiFetch('/api/v1/maintenance/cases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assetId: matchedMachine?.id || activeSession.assetId,
-          assetTag: activeSession.assetTag,
-          assetName: matchedMachine?.name || activeSession.machineName || activeSession.assetTag,
-          title,
-          description,
-          severity: topHypothesis?.severity || 'HIGH',
-          priority: topHypothesis?.severity || 'HIGH',
-          symptomDescription: activeSession.symptom,
-          machineStatus: activeSession.machineStatus || 'Running - Abnormal',
-          faultCode: activeSession.detectedFaultCode || activeSession.errorCode || 'ALM-THRM-402',
-          topRootCause: topHypothesis?.title,
-          probability: topHypothesis?.probability,
-          recommendedFix: topHypothesis?.recommendedFix,
-          investigationProgress: progressStr,
-          specialistDiscipline: topHypothesis?.requiredSkill || 'Mechanical Rotating Equipment Specialist',
-          lotoApplied: true,
-          plantName: matchedMachine?.plant_area || organization?.name || 'Main Manufacturing Facility',
-          reportedByRole: (user as any)?.role || 'Field Reliability Specialist',
-          createdAtFormatted,
-          technicianNotes: `Generated from Root Cause Analysis with ${topHypothesis?.probability}% confidence in: ${topHypothesis?.title}. Remediation procedure: ${topHypothesis?.recommendedFix}`,
-        }),
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to create maintenance case.');
-      }
-
-      const data = await res.json();
-      const caseNumber = data?.data?.caseNumber || 'WO-ACTIVE';
-      toast.success(
-        'Work Order Generated',
-        `Maintenance Case #${caseNumber} created with top root cause and remediation fix.`
-      );
-
-      if (onNavigateToMaintenance && (matchedMachine?.id || activeSession.assetTag)) {
-        onNavigateToMaintenance(matchedMachine?.id || activeSession.assetTag);
-      }
-    } catch (err: any) {
-      toast.error('Work Order Error', err.message || 'Could not create work order from RCA.');
-    } finally {
-      setIsCreatingWorkOrder(false);
-    }
-  };
 
   // Quick Action 2: Save Finding to Expert Knowledge
   const handleSaveToExpertKnowledge = async () => {
@@ -1399,25 +1285,18 @@ Investigation Progress: ${progressStr}`;
   // Open Escalation Modal with Pre-filled Context (Binds directly to Left Panel symptom and top AI root cause)
   const handleOpenEscalateModal = () => {
     if (!activeSession) return;
-    const targetTag = activeSession.assetTag || selectedMachineTag || '';
     const currentSymptom = activeSession.symptom?.trim() || symptom?.trim() || '';
     const topHyp =
       activeSession.hypotheses?.find((h) => h.status === 'CONFIRMED') ||
       activeSession.hypotheses?.[0];
-    const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
 
     const failedStep = activeSession.investigationSteps?.find((s) => s.status === 'FAIL');
     setFailedStepForEscalation(failedStep || null);
 
-    const prefill = `Maintenance Engineer ${engineerName} reported symptom on ${targetTag}: ${currentSymptom}${
-      failedStep
-        ? `\n\n🚨 HALTED AT FAILED INVESTIGATION STEP:\n- Step #${failedStep.stepNumber}: ${failedStep.name}\n- Expected Reading: ${failedStep.expectedReading || 'In-spec baseline'}\n- Field Check Observation: Physical check failed / anomaly confirmed on equipment.`
-        : ''
-    }${
-      topHyp
-        ? `\n\nTop AI Root Cause Hypothesis:\n- Suspected Cause: ${topHyp.title} (${topHyp.probability}% confidence)\n- Mechanism: ${topHyp.mechanismExplanation}\n- Recommended Remediation: ${topHyp.recommendedFix}`
-        : ''
-    }`;
+    const activeFault =
+      activeSession.detectedFaultCode || activeSession.errorCode || errorCode || '';
+    const topFix = toShortSentence(topHyp?.recommendedFix, 14) || 'Inspect component and replace worn assembly to spec.';
+    const prefill = `• Symptom: ${currentSymptom}${activeFault ? ` (${activeFault})` : ''}\n• Suspected Cause & Fix: ${topHyp?.title || 'Operational Anomaly'} — ${topFix}`;
 
     // Reset dropdowns to ensure clean unselected start
     setEscalateDiscipline(failedStep ? 'Mechanical / Rotating Equipment Lead' : '');
@@ -1708,110 +1587,119 @@ Investigation Progress: ${progressStr}`;
   return (
     <div className="flex-1 min-h-0 min-w-0 w-full h-full flex flex-col bg-[#F8FAFC]">
       {/* Top Banner Toolbar */}
-      <div className="p-4 md:px-6 bg-white border-b border-[#E2E8F0] flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 w-full shrink-0">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide break-words">
+      {!activeSession ? (
+        <div className="py-3 px-4 md:px-6 bg-white border-b border-[#E2E8F0] flex items-center justify-between w-full shrink-0">
+          <div>
+            <h2 className="text-sm md:text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide">
               Root Cause Analysis & Troubleshooting Copilot
             </h2>
+            <p className="text-xs text-[#64748B] mt-0.5 font-sans">
+              Diagnostic reasoning grounded in Knowledge Hub manuals, maintenance engineer field notes, and failure logs.
+            </p>
           </div>
-          <p className="text-xs text-[#64748B] mt-0.5 font-sans break-words">
-            Diagnostic reasoning grounded in Knowledge Hub manuals, maintenance engineer field notes, and failure logs.
-          </p>
         </div>
+      ) : (
+        <div className="py-2.5 px-4 bg-white border-b border-[#E2E8F0] flex flex-col md:flex-row justify-between items-center gap-2.5 w-full shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="text-xs md:text-sm font-bold font-mono text-[#0F172A] uppercase tracking-wide whitespace-nowrap">
+              Root Cause Analysis & Troubleshooting Copilot
+            </h2>
+            <span className="hidden xl:inline-block text-[11px] text-[#64748B] font-sans truncate">
+              — Machine: <strong className="text-slate-800 font-mono">{activeSession.assetTag}</strong>
+            </span>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          {/* + Start New Investigation Button in Top Header Toolbar */}
-          <button
-            type="button"
-            onClick={handleStartNewInvestigation}
-            className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-xs font-mono font-bold text-blue-700 flex items-center gap-1.5 transition shadow-xs whitespace-nowrap shrink-0 cursor-pointer"
-            title="Reset active investigation to clean empty state"
-          >
-            <Plus className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-            <span className="whitespace-nowrap">Start New Investigation</span>
-          </button>
-
-          {/* Recent RCAs Dropdown Selector - always displayed in toolbar */}
-          <div className="relative shrink-0" ref={historyDropdownRef}>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Start New Investigation Button */}
             <button
               type="button"
-              onClick={() => setIsHistoryDropdownOpen(!isHistoryDropdownOpen)}
-              className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-mono font-medium text-slate-700 flex items-center gap-1.5 transition shadow-sm whitespace-nowrap shrink-0 cursor-pointer"
+              onClick={handleStartNewInvestigation}
+              className="px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-xs font-mono font-bold text-blue-700 flex items-center gap-1.5 transition shadow-2xs whitespace-nowrap shrink-0 cursor-pointer"
+              title="Reset active investigation to clean empty state"
             >
-              <History className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span className="whitespace-nowrap">Recent RCAs ({recentSessions.length})</span>
-              <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+              <Plus className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span className="whitespace-nowrap">New Investigation</span>
             </button>
 
-            {isHistoryDropdownOpen && (
-              <div className="absolute right-0 mt-1.5 w-84 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 text-xs animate-in fade-in slide-in-from-top-1">
-                <div className="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between font-mono font-bold text-[10px] uppercase text-slate-400">
-                  <span>Previous Investigations</span>
-                  <span>{recentSessions.length} total</span>
-                </div>
-                <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
-                  {recentSessions.length === 0 ? (
-                    <div className="p-4 text-center text-slate-400 font-mono text-xs">
-                      No previous RCA investigations found.
-                    </div>
-                  ) : (
-                    recentSessions.map((session) => {
-                      const isLocked = checkIsRcaLocked(session);
-                      return (
-                        <div
-                          key={session.id}
-                          onClick={() => handleLoadSession(session)}
-                          className="w-full text-left p-2.5 hover:bg-blue-50/70 transition flex items-center justify-between gap-2 group cursor-pointer"
-                        >
-                          <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                            <div className="flex items-center justify-between">
-                              <span className="font-mono font-bold text-blue-700">
-                                {session.assetTag}
-                              </span>
-                              <span className="text-[10px] font-mono text-slate-400">
-                                {session.createdAt?.split('T')[0]}
-                              </span>
-                            </div>
-                            {session.detectedFaultCode && (
-                              <span className="text-[10px] font-mono font-semibold text-rose-600 truncate">
-                                {session.detectedFaultCode}
-                              </span>
-                            )}
-                            <p className="text-slate-600 text-[11px] truncate">{session.symptom}</p>
-                          </div>
-                          {isLocked ? (
-                            <span
-                              title="Locked — Linked to Active Ticket/History"
-                              className="p-1 text-slate-400 cursor-not-allowed shrink-0"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <Lock className="w-3.5 h-3.5 text-slate-400" />
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              title="Delete this RCA record"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeleteRcaConfirmation({ isOpen: true, session });
-                              }}
-                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition shrink-0 cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+            {/* Recent RCAs Dropdown Selector */}
+            <div className="relative shrink-0" ref={historyDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setIsHistoryDropdownOpen(!isHistoryDropdownOpen)}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-mono font-medium text-slate-700 flex items-center gap-1.5 transition shadow-2xs whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <History className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span className="whitespace-nowrap">Recent RCAs ({recentSessions.length})</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+              </button>
 
-          {/* Tab Switcher if active session exists */}
-          {activeSession && (
+              {isHistoryDropdownOpen && (
+                <div className="absolute right-0 mt-1.5 w-84 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 text-xs animate-in fade-in slide-in-from-top-1">
+                  <div className="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between font-mono font-bold text-[10px] uppercase text-slate-400">
+                    <span>Previous Investigations</span>
+                    <span>{recentSessions.length} total</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
+                    {recentSessions.length === 0 ? (
+                      <div className="p-4 text-center text-slate-400 font-mono text-xs">
+                        No previous RCA investigations found.
+                      </div>
+                    ) : (
+                      recentSessions.map((session) => {
+                        const isLocked = checkIsRcaLocked(session);
+                        return (
+                          <div
+                            key={session.id}
+                            onClick={() => handleLoadSession(session)}
+                            className="w-full text-left p-2.5 hover:bg-blue-50/70 transition flex items-center justify-between gap-2 group cursor-pointer"
+                          >
+                            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono font-bold text-blue-700">
+                                  {session.assetTag}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  {session.createdAt?.split('T')[0]}
+                                </span>
+                              </div>
+                              {session.detectedFaultCode && (
+                                <span className="text-[10px] font-mono font-semibold text-rose-600 truncate">
+                                  {session.detectedFaultCode}
+                                </span>
+                              )}
+                              <p className="text-slate-600 text-[11px] truncate">{session.symptom}</p>
+                            </div>
+                            {isLocked ? (
+                              <span
+                                title="Locked — Linked to Active Ticket/History"
+                                className="p-1 text-slate-400 cursor-not-allowed shrink-0"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Lock className="w-3.5 h-3.5 text-slate-400" />
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                title="Delete this RCA record"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteRcaConfirmation({ isOpen: true, session });
+                                }}
+                                className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition shrink-0 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Segmented Switch: RCA Matrix / Investigation Steps */}
             <div className="flex items-center rounded-lg border border-[#CBD5E1] bg-slate-100 p-0.5 text-xs font-mono font-medium shrink-0">
               <button
                 onClick={() => setActiveTab('rca')}
@@ -1837,25 +1725,25 @@ Investigation Progress: ${progressStr}`;
                 </span>
               </button>
             </div>
-          )}
 
-          {/* Escalate Ticket to Technician Button */}
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handleOpenEscalateModal}
-            disabled={!activeSession}
-            className={`text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed ${
-              escalatedTicketId ? 'ring-2 ring-emerald-500' : ''
-            }`}
-          >
-            <UserCheck className="w-3.5 h-3.5 shrink-0" />
-            <span className="whitespace-nowrap">
-              {escalatedTicketId ? `Dispatched (${escalatedTicketId})` : 'Escalate Ticket to Technician'}
-            </span>
-          </Button>
+            {/* Escalate Ticket to Technician Button */}
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleOpenEscalateModal}
+              disabled={!activeSession}
+              className={`text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 transition bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed ${
+                escalatedTicketId ? 'ring-2 ring-emerald-500' : ''
+              }`}
+            >
+              <Send className="w-3.5 h-3.5 shrink-0" />
+              <span className="whitespace-nowrap">
+                {escalatedTicketId ? `Dispatched (${escalatedTicketId})` : 'Escalate Ticket to Technician'}
+              </span>
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Confirmation Banner for Dispatched Specialist Ticket */}
       {escalationBanner && (
@@ -2189,7 +2077,7 @@ Investigation Progress: ${progressStr}`;
                       title="View OSHA 1910.147 LOTO & PPE Isolation Points"
                     >
                       <ShieldAlert className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                      <span>🛡️ LOTO & PPE Checklist — View</span>
+                      <span>LOTO & PPE Checklist — View</span>
                     </button>
 
                     <button
@@ -2218,9 +2106,6 @@ Investigation Progress: ${progressStr}`;
                     <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-700">
                       Ranked Root Cause Hypotheses ({activeSession.hypotheses.length})
                     </h3>
-                    <span className="text-[11px] font-sans text-slate-500">
-                      Grounded in OEM manuals, expert notes & maintenance failure logs
-                    </span>
                   </div>
 
                   <div className="space-y-3.5">
@@ -2298,7 +2183,7 @@ Investigation Progress: ${progressStr}`;
                                 {hyp.status === 'CONFIRMED' ? (
                                   <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold flex items-center gap-1">
                                     <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                    <span>✓ Confirmed</span>
+                                    <span>Confirmed</span>
                                   </span>
                                 ) : (
                                   <button
@@ -2339,56 +2224,36 @@ Investigation Progress: ${progressStr}`;
                             <span
                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${
                                 (hyp.downtimeRisk || 'High').toLowerCase() === 'critical'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : (hyp.downtimeRisk || 'High').toLowerCase() === 'high'
-                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                    : (hyp.downtimeRisk || 'High').toLowerCase() === 'high'
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                               }`}
                             >
                               <span>Risk: <strong>{hyp.downtimeRisk || 'High'}</strong></span>
                             </span>
-
-                            {hyp.verifiedSources && hyp.verifiedSources.map((source, sIdx) => (
-                              <span
-                                key={sIdx}
-                                className={`px-2 py-0.5 rounded border flex items-center gap-1 ${
-                                  source.type === 'MANUAL'
-                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                    : source.type === 'EXPERT_NOTE'
-                                    ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                }`}
-                              >
-                                {source.type === 'MANUAL' ? (
-                                  <BookOpen className="w-2.5 h-2.5" />
-                                ) : (
-                                  <GraduationCap className="w-2.5 h-2.5" />
-                                )}
-                                <span className="truncate max-w-[150px]">{source.reference}</span>
-                              </span>
-                            ))}
                           </div>
 
-                          {/* Concise Summary & Recommended Fix (2-Line Display) */}
+                          {/* Concise Summary & Recommended Fix (Short, high-signal single line display) */}
                           <div className="space-y-1 text-xs font-sans text-slate-700 pt-1">
                             <p className="line-clamp-2 leading-relaxed">
                               <strong className="text-slate-900 font-mono text-[11px] uppercase mr-1">
                                 Mechanism:
                               </strong>
-                              {hyp.mechanismExplanation}
+                              {toShortSentence(hyp.mechanismExplanation, 14)}
                             </p>
                             <p className="line-clamp-2 leading-relaxed">
                               <strong className="text-slate-900 font-mono text-[11px] uppercase mr-1">
                                 Recommended Fix:
                               </strong>
-                              <span className="text-slate-800 font-medium">{hyp.recommendedFix}</span>
+                              <span className="text-slate-800 font-medium">{toShortSentence(hyp.recommendedFix, 14)}</span>
                             </p>
                           </div>
 
                           {/* Collapsible Drawer Toggle Bar */}
                           <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 flex-wrap">
-                              {/* 🌳 5-Why Toggle Button */}
+                              {/* 5-Why Toggle Button */}
                               <button
                                 type="button"
                                 onClick={() => toggleCardDrawer(hyp.id, 'why')}
@@ -2398,13 +2263,14 @@ Investigation Progress: ${progressStr}`;
                                     : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 font-medium'
                                 }`}
                               >
-                                <span>🌳 View 5-Why Chain ({chain.length} steps)</span>
+                                <GitBranch className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                <span>View 5-Why Chain ({chain.length} steps)</span>
                                 <ChevronDown
                                   className={`w-3 h-3 transition-transform ${isWhyOpen ? 'rotate-180 text-blue-700' : 'text-slate-400'}`}
                                 />
                               </button>
 
-                              {/* 🧰 Tools & Parts Toggle Button */}
+                              {/* Tools & Parts Toggle Button */}
                               <button
                                 type="button"
                                 onClick={() => toggleCardDrawer(hyp.id, 'tools')}
@@ -2414,7 +2280,8 @@ Investigation Progress: ${progressStr}`;
                                     : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100 font-medium'
                                 }`}
                               >
-                                <span>🧰 Tools & Parts ({toolsCount + partsCount})</span>
+                                <Wrench className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                <span>Tools & Parts ({toolsCount + partsCount})</span>
                                 <ChevronDown
                                   className={`w-3 h-3 transition-transform ${isToolsOpen ? 'rotate-180 text-amber-700' : 'text-slate-400'}`}
                                 />
@@ -2428,15 +2295,19 @@ Investigation Progress: ${progressStr}`;
                               className="text-[11px] font-mono font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-md transition flex items-center gap-1 shadow-2xs active:scale-95 cursor-pointer ml-auto"
                               title="Pass complete 5-Why context directly to AI Copilot"
                             >
-                              <span>💬 Deep-Dive in AI Copilot →</span>
+                              <MessageSquare className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                              <span>Deep-Dive in AI Copilot →</span>
                             </button>
                           </div>
 
-                          {/* 🌳 Collapsible 5-Why Drawer (Hidden by default) */}
+                          {/* Collapsible 5-Why Drawer */}
                           {isWhyOpen && (
                             <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3 space-y-2.5 animate-in fade-in duration-150">
                               <div className="flex items-center justify-between text-[11px] font-mono font-bold text-slate-800 uppercase tracking-wide">
-                                <span>🌳 5-Why Failure Causal Sequence</span>
+                                <span className="flex items-center gap-1.5">
+                                  <GitBranch className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                  5-Why Failure Causal Sequence
+                                </span>
                                 <span className="text-slate-500 font-normal lowercase">click any step to inspect physics</span>
                               </div>
 
@@ -2709,7 +2580,7 @@ Investigation Progress: ${progressStr}`;
                                     className="px-2.5 py-1 rounded border flex items-center gap-1 transition bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 font-bold cursor-pointer active:scale-95 shadow-xs"
                                     title="Fault resolved at this step — mark resolved and log record to Maintenance History"
                                   >
-                                    <CheckCircle2 className="w-3 h-3" /> ✓ Resolve Ticket & Save Record
+                                    <CheckCircle2 className="w-3 h-3" /> Resolve Ticket & Save Record
                                   </button>
                                 </>
                               )}
@@ -2720,7 +2591,7 @@ Investigation Progress: ${progressStr}`;
                           {isFailed && (
                             <div className="ml-8 mt-2.5 p-3 rounded-lg bg-rose-100/80 border border-rose-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in">
                               <div className="text-xs text-rose-950 font-sans">
-                                <strong className="font-mono text-rose-800 uppercase">🚨 Critical Anomaly Confirmed:</strong> Expected reading <span className="font-mono font-bold">"{step.expectedReading || 'In-spec baseline'}"</span> was not met. Subsequent checks halted.
+                                <strong className="font-mono text-rose-800 uppercase">Critical Anomaly Confirmed:</strong> Expected reading <span className="font-mono font-bold">"{step.expectedReading || 'In-spec baseline'}"</span> was not met. Subsequent checks halted.
                               </div>
                               <Button
                                 type="button"
@@ -2729,7 +2600,8 @@ Investigation Progress: ${progressStr}`;
                                 onClick={() => handleOpenEscalateForFailedStep(step)}
                                 className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5 shrink-0 py-1.5 px-3 cursor-pointer active:scale-95"
                               >
-                                <span>🚨 Escalate Ticket to Technician →</span>
+                                <Send className="w-3.5 h-3.5 shrink-0" />
+                                <span>Escalate Ticket to Technician →</span>
                               </Button>
                             </div>
                           )}
@@ -2798,7 +2670,8 @@ Investigation Progress: ${progressStr}`;
                             onClick={() => handleOpenEscalateForFailedStep(failedStep)}
                             className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-2xs flex items-center justify-center gap-1.5 shrink-0 py-1.5 px-3 cursor-pointer active:scale-95 transition"
                           >
-                            <span>🚨 Escalate Ticket to Technician →</span>
+                            <Send className="w-3.5 h-3.5 shrink-0" />
+                            <span>Escalate Ticket to Technician →</span>
                           </Button>
                         </div>
                       </div>
@@ -2813,11 +2686,11 @@ Investigation Progress: ${progressStr}`;
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs shrink-0 shadow-2xs">
-                            🔒
+                            <CheckCircle2 className="w-3.5 h-3.5 text-white" />
                           </span>
                           <div className="min-w-0">
                             <h3 className="text-xs font-bold font-mono text-emerald-950 uppercase tracking-wide">
-                              🔒 100% Investigation Verified & Closed
+                              100% Investigation Verified & Closed
                             </h3>
                             <p className="text-[11px] text-emerald-800 font-sans truncate">
                               All verification safety checks confirmed by technician. Permanent audit entry sealed in Maintenance History.
@@ -2831,7 +2704,7 @@ Investigation Progress: ${progressStr}`;
                             className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-2xs cursor-pointer transition"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>✓ Resolve & Save</span>
+                            <span>Resolve & Save</span>
                           </button>
                           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-400 font-bold">
                             LOCKED
@@ -2879,16 +2752,16 @@ Investigation Progress: ${progressStr}`;
                   <span className="text-[11px] font-normal text-slate-500">Fast-dispatch, seal maintenance records, or capture tribal insights</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                   {/* Resolve Ticket & Save Record */}
                   <Button
                     variant="primary"
                     size="sm"
                     onClick={() => handleResolveTicketAndSaveRecord()}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white py-2 px-3 text-xs font-medium rounded-lg shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">✅ Resolve & Save Record</span>
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>Resolve & Save Record</span>
                   </Button>
 
                   {/* Save to Expert Knowledge */}
@@ -2897,34 +2770,21 @@ Investigation Progress: ${progressStr}`;
                     size="sm"
                     disabled={isSavingToExpert}
                     onClick={handleSaveToExpertKnowledge}
-                    className="bg-white border-slate-300 hover:bg-slate-100 text-slate-700 py-2 px-3 text-xs font-medium rounded-lg shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="bg-white border-slate-300 hover:bg-slate-100 text-slate-700 whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <GraduationCap className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                    <span className="truncate">{isSavingToExpert ? 'Saving...' : '💡 Save to Expert Knowledge'}</span>
+                    <Lightbulb className="w-4 h-4 text-amber-500 shrink-0" />
+                    <span>{isSavingToExpert ? 'Saving...' : 'Save to Expert Knowledge'}</span>
                   </Button>
 
-                  {/* Create Work Order from RCA */}
+                  {/* Escalate to Technician */}
                   <Button
                     variant="primary"
                     size="sm"
-                    disabled={isCreatingWorkOrder}
-                    onClick={handleCreateWorkOrder}
-                    className="bg-slate-900 hover:bg-black text-white py-2 px-3 text-xs font-medium rounded-lg shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    onClick={handleOpenEscalateModal}
+                    className="bg-slate-900 hover:bg-black text-white whitespace-nowrap px-4 py-2 text-xs font-semibold rounded-lg shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <Wrench className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                    <span className="truncate">{isCreatingWorkOrder ? 'Creating...' : '🚀 Escalate / Create Work Order'}</span>
-                  </Button>
-
-                  {/* Teardown SOP Modal Launcher */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleOpenTeardownSop}
-                    className="bg-white border-slate-300 hover:bg-blue-50 text-blue-700 hover:border-blue-300 py-2 px-3 text-xs font-medium rounded-lg shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <FileText className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                    <span className="truncate">📋 Teardown SOP</span>
-                    <ExternalLink className="w-3 h-3 text-blue-400 shrink-0" />
+                    <Send className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span>Escalate to Technician</span>
                   </Button>
                 </div>
               </div>
@@ -2943,9 +2803,9 @@ Investigation Progress: ${progressStr}`;
         subtitle="Dispatch high-priority support ticket into Raised Tickets with smart AI auto-assignment and availability fallback."
         maxWidth="2xl"
       >
-        <form onSubmit={handleEscalateSubmit} className="space-y-4">
+        <form onSubmit={handleEscalateSubmit} className="space-y-3">
           {/* Active Context Banner */}
-          <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-2 font-mono">
+          <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1.5 font-mono">
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <span className="text-slate-500 block text-[10px] uppercase font-semibold">Asset / Machine:</span>{' '}
@@ -2965,7 +2825,7 @@ Investigation Progress: ${progressStr}`;
               </span>
             </div>
             {activeSession?.hypotheses?.[0] && (
-              <div className="pt-1.5 border-t border-slate-200">
+              <div className="pt-1 border-t border-slate-200">
                 <span className="text-slate-500 block text-[10px] uppercase font-semibold">AI Suspected Cause:</span>{' '}
                 <span className="text-blue-700 font-bold font-sans">
                   {activeSession.hypotheses[0].title}
@@ -2974,7 +2834,7 @@ Investigation Progress: ${progressStr}`;
               </div>
             )}
             {failedStepForEscalation && (
-              <div className="p-3 rounded-lg bg-rose-100/80 border border-rose-300 text-xs text-rose-950 space-y-1 font-mono mt-2">
+              <div className="p-2 rounded-lg bg-rose-100/80 border border-rose-300 text-xs text-rose-950 space-y-0.5 font-mono mt-1.5">
                 <div className="flex items-center gap-1.5 font-bold text-rose-800 uppercase text-[10px]">
                   <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
                   <span>Failed Investigation Step:</span>
@@ -2990,7 +2850,7 @@ Investigation Progress: ${progressStr}`;
           </div>
 
           {/* Form Fields: Discipline & Severity */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div>
               <label className="block text-xs font-mono text-[#64748B] uppercase font-bold mb-1">
                 Target Specialist / Discipline <span className="text-rose-500">*</span>
@@ -3066,7 +2926,7 @@ Investigation Progress: ${progressStr}`;
               MAINTENANCE ENGINEER / FIELD NOTES & CONTEXT (EDITABLE)
             </label>
             <textarea
-              rows={4}
+              rows={3}
               value={escalateNotes}
               onChange={(e) => setEscalateNotes(e.target.value)}
               placeholder="Provide specific plant conditions, tooling constraints, or requested vendor specialist..."
@@ -3182,7 +3042,7 @@ Investigation Progress: ${progressStr}`;
                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-sm"
                 >
                   <Check className="w-3.5 h-3.5" />
-                  <span>Confirm & Lock Step ✓</span>
+                  <span>Confirm & Lock Step</span>
                 </Button>
               </div>
             </div>
@@ -3245,165 +3105,16 @@ Investigation Progress: ${progressStr}`;
         </div>
       </Modal>
 
-      {/* Teardown & LOTO Disassembly SOP Modal */}
-      <Modal
-        isOpen={isTeardownOpen}
-        onClose={() => setIsTeardownOpen(false)}
-        title="Teardown & LOTO Disassembly SOP"
-        subtitle={`Standard Operating Procedure extracted from Knowledge Hub for ${
-          activeSession?.assetTag || selectedMachineTag
-        }`}
-        maxWidth="3xl"
-      >
-        <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
-          {isLoadingSop ? (
-            <div className="p-8 text-center text-xs font-mono text-slate-500 flex items-center justify-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-              <span>Extracting Teardown Protocol from Knowledge Hub Manuals...</span>
-            </div>
-          ) : teardownSop ? (
-            <div className="space-y-4">
-              {/* Document Reference Header */}
-              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-lg flex items-center justify-between text-xs font-mono">
-                <div>
-                  <span className="font-bold text-blue-900">{teardownSop.machineName}</span>
-                  <span className="text-blue-700 ml-2">[{teardownSop.machineAssetTag}]</span>
-                </div>
-                <span className="text-slate-500">{teardownSop.documentReference}</span>
-              </div>
-
-              {/* Safety Pre-requisites & PPE */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="p-3 rounded-lg border border-rose-200 bg-rose-50/40 text-xs space-y-1.5">
-                  <span className="font-mono font-bold uppercase text-rose-800 text-[10px] block">
-                    Safety Prerequisites & Energy Control:
-                  </span>
-                  <ul className="list-disc list-inside space-y-1 text-slate-700 font-sans">
-                    {teardownSop.safetyPrerequisites.map((req, i) => (
-                      <li key={i}>{req}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs space-y-1.5">
-                  <span className="font-mono font-bold uppercase text-slate-700 text-[10px] block">
-                    Required PPE & Special Tooling:
-                  </span>
-                  <div className="space-y-1 font-sans text-slate-700 text-[11px]">
-                    <div>
-                      <strong>PPE:</strong> {teardownSop.requiredPpe.join(', ')}
-                    </div>
-                    <div>
-                      <strong>Tools:</strong> {teardownSop.requiredTools.join(', ')}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* LOTO Isolation Checklist */}
-              <div className="p-3.5 rounded-lg border border-amber-200 bg-amber-50/50 space-y-2">
-                <span className="font-mono font-bold uppercase text-amber-900 text-xs flex items-center gap-1.5">
-                  <Zap className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Mandatory LOTO Zero Energy Verification:</span>
-                </span>
-                <div className="space-y-1.5">
-                  {teardownSop.lotoIsolationSteps.map((step, idx) => (
-                    <label
-                      key={idx}
-                      className="flex items-start gap-2 text-xs font-sans text-slate-800 cursor-pointer p-1 rounded hover:bg-amber-100/40"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={!!verifiedLotoSteps[idx]}
-                        onChange={(e) =>
-                          setVerifiedLotoSteps((prev) => ({ ...prev, [idx]: e.target.checked }))
-                        }
-                        className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className={verifiedLotoSteps[idx] ? 'line-through text-slate-400' : ''}>
-                        {step}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Step-by-Step Disassembly Sequence */}
-              <div className="space-y-3">
-                <span className="font-mono font-bold uppercase text-slate-700 text-xs block">
-                  Component Disassembly Sequence:
-                </span>
-                <div className="space-y-2.5">
-                  {teardownSop.disassemblySteps.map((step) => (
-                    <div
-                      key={step.stepNumber}
-                      className="p-3 rounded-lg border border-slate-200 bg-white space-y-1.5 shadow-xs"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono font-bold text-xs text-blue-700">
-                          Step {step.stepNumber}: {step.title}
-                        </span>
-                        {step.torqueSpec && (
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-bold">
-                            {step.torqueSpec}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-700 font-sans leading-relaxed">
-                        {step.instruction}
-                      </p>
-                      {step.safetyHazard && (
-                        <p className="text-[11px] font-sans text-rose-700 font-medium">
-                          ⚠️ Hazard: {step.safetyHazard}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Torque Specifications Table */}
-              <div className="p-3 rounded-lg border border-slate-200 bg-slate-50 space-y-2">
-                <span className="font-mono font-bold uppercase text-slate-700 text-xs block">
-                  Critical Torque Specifications:
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
-                  {Object.entries(teardownSop.torqueSpecifications).map(([part, spec]) => (
-                    <div key={part} className="flex items-center justify-between p-1.5 bg-white rounded border border-slate-200">
-                      <span className="text-slate-600">{part}:</span>
-                      <strong className="text-slate-900">{spec}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Reassembly Guidance */}
-              <div className="p-3 rounded-lg bg-blue-50/50 border border-blue-200 text-xs text-slate-700 font-sans leading-relaxed">
-                <strong className="font-mono text-blue-900 uppercase block mb-1">
-                  Reassembly & Alignment Guidance:
-                </strong>
-                {teardownSop.reassemblyGuidance}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="flex justify-end pt-2 border-t border-[#E2E8F0]">
-            <Button variant="primary" size="sm" onClick={() => setIsTeardownOpen(false)}>
-              Close SOP
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* 🛡️ OSHA 1910.147 LOTO & PPE Readiness Checklist Popup Modal */}
+      {/* OSHA 1910.147 LOTO & PPE Readiness Checklist Popup Modal */}
       <Modal
         isOpen={isLotoModalOpen}
         onClose={() => setIsLotoModalOpen(false)}
         title="OSHA 1910.147 MANDATORY LOTO & PPE SAFETY READINESS"
+        maxWidth="2xl"
       >
-        <div className="space-y-4 text-xs font-sans">
+        <div className="p-4 space-y-3.5 text-xs font-sans">
           {/* Header Warning Banner */}
-          <div className="rounded-xl border border-amber-300 bg-amber-50/90 p-3.5 space-y-2">
+          <div className="rounded-xl border border-amber-300 bg-amber-50/90 p-3 space-y-1.5">
             <div className="flex items-center gap-2">
               <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
               <span className="font-mono font-bold text-amber-950 uppercase tracking-wide text-[11px]">
@@ -3416,55 +3127,67 @@ Investigation Progress: ${progressStr}`;
             </p>
           </div>
 
-          {/* PPE Requirements */}
-          <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-mono font-bold text-slate-800 uppercase text-[11px] flex items-center gap-1.5">
-                <ShieldAlert className="w-3.5 h-3.5 text-blue-600" />
-                Required Personal Protective Equipment (PPE)
-              </span>
-              <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-bold">
-                MANDATORY
-              </span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-              {(activeSession?.safetyReadiness?.requiredPpe || [
-                'Impact Safety Glasses (ANSI Z87.1)',
-                'Arc Flash Rated Face Shield (NFPA 70E)',
-                'Heavy Nitrile Chemical Gloves',
-                'Steel-Toe Metatarsal Safety Boots',
-              ]).map((ppe, pIdx) => (
-                <div
-                  key={pIdx}
-                  className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-medium font-mono text-[11px]"
-                >
-                  <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>{ppe}</span>
+          {/* Structured 2-Column Grid: Isolation Points and Required PPE */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+            {/* Column 1: Designated Energy Isolation Points */}
+            <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+                  <span className="font-mono font-bold text-slate-800 uppercase text-[11px] flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    Isolation Points (Zero Energy)
+                  </span>
+                  <span className="text-[10px] font-mono text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-bold">
+                    LOTO
+                  </span>
                 </div>
-              ))}
+                <div className="space-y-1.5 pt-2">
+                  {(activeSession?.safetyReadiness?.isolationPoints || [
+                    `MCC Main Feeder Breaker Lockout for ${activeSession?.assetTag || 'Machine'}`,
+                    'Suction & Discharge Manual Handwheel Gate Valves',
+                    'Casing Bleed Drain Manifold (Verify 0.0 PSIG / 0.0 VAC)',
+                  ]).map((point, ptIdx) => (
+                    <div
+                      key={ptIdx}
+                      className="flex items-center gap-2 p-2 rounded-lg bg-amber-50/60 border border-amber-200 text-slate-800 text-xs"
+                    >
+                      <span className="font-mono font-bold text-amber-800 shrink-0 text-[11px]">[{ptIdx + 1}]</span>
+                      <span className="font-medium leading-tight">{point}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
 
-          {/* Designated Energy Isolation Points */}
-          <div className="rounded-xl border border-slate-200 bg-white p-3.5 space-y-2">
-            <span className="font-mono font-bold text-slate-800 uppercase text-[11px] flex items-center gap-1.5">
-              <Lock className="w-3.5 h-3.5 text-amber-600" />
-              Designated Energy Isolation Points (Zero Energy State)
-            </span>
-            <div className="space-y-1.5 pt-1">
-              {(activeSession?.safetyReadiness?.isolationPoints || [
-                `MCC Main Feeder Breaker Lockout for ${activeSession?.assetTag || 'Machine'}`,
-                'Suction & Discharge Manual Handwheel Gate Valves',
-                'Casing Bleed Drain Manifold (Verify 0.0 PSIG)',
-              ]).map((point, ptIdx) => (
-                <div
-                  key={ptIdx}
-                  className="flex items-start gap-2 p-2 rounded-lg bg-amber-50/50 border border-amber-200 text-slate-800 text-xs"
-                >
-                  <span className="font-mono font-bold text-amber-700 shrink-0">[{ptIdx + 1}]</span>
-                  <span className="font-medium">{point}</span>
+            {/* Column 2: Required Personal Protective Equipment (PPE) */}
+            <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+                  <span className="font-mono font-bold text-slate-800 uppercase text-[11px] flex items-center gap-1.5">
+                    <ShieldAlert className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    Required PPE Equipment
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 font-bold">
+                    MANDATORY
+                  </span>
                 </div>
-              ))}
+                <div className="space-y-1.5 pt-2">
+                  {(activeSession?.safetyReadiness?.requiredPpe || [
+                    'Impact Safety Glasses with Side Shields (ANSI Z87.1)',
+                    'Arc Flash Rated Face Shield (NFPA 70E / 8 cal/cm²)',
+                    'ANSI Level 4 Cut-Resistant & Heavy Nitrile Chemical Gloves',
+                    'Steel-Toe Metatarsal Safety Boots',
+                  ]).map((ppe, pIdx) => (
+                    <div
+                      key={pIdx}
+                      className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-800 font-medium font-mono text-[11px]"
+                    >
+                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span className="leading-tight">{ppe}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -3473,7 +3196,7 @@ Investigation Progress: ${progressStr}`;
               variant="primary"
               size="sm"
               onClick={() => setIsLotoModalOpen(false)}
-              className="bg-slate-900 text-white font-mono text-xs"
+              className="bg-slate-900 text-white font-mono text-xs px-4 py-1.5"
             >
               Acknowledge & Close Checklist
             </Button>
@@ -3542,13 +3265,14 @@ Investigation Progress: ${progressStr}`;
               }}
               className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm py-2 px-3.5"
             >
-              <span>🚨 Escalate Ticket to Technician →</span>
+              <Send className="w-3.5 h-3.5 shrink-0" />
+              <span>Escalate Ticket to Technician →</span>
             </Button>
           </div>
         </div>
       </Modal>
 
-      {/* 🔒 Center 100% Verification Complete Popup Modal (Auto-pops when all steps pass) */}
+      {/* Center 100% Verification Complete Popup Modal (Auto-pops when all steps pass) */}
       <Modal
         isOpen={verificationCompleteModal}
         onClose={() => setVerificationCompleteModal(false)}
@@ -3556,8 +3280,8 @@ Investigation Progress: ${progressStr}`;
       >
         <div className="space-y-4 text-xs font-sans">
           <div className="p-4 rounded-xl border-2 border-emerald-500 bg-emerald-50/90 space-y-2 text-center">
-            <div className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto text-base font-bold shadow-sm">
-              ✓
+            <div className="w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto shadow-sm">
+              <CheckCircle2 className="w-6 h-6 text-white" />
             </div>
             <h4 className="font-bold font-mono text-emerald-950 uppercase text-sm">
               All Investigation Steps Successfully Verified
@@ -3605,7 +3329,7 @@ Investigation Progress: ${progressStr}`;
               className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm py-2 px-3.5"
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>✓ Resolve Ticket & Save Record</span>
+              <span>Resolve Ticket & Save Record</span>
             </Button>
             <Button
               type="button"

@@ -324,14 +324,14 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
   ]
 }`;
 
-        // Attempt Gemini 2.5 Flash with strict 2.5s latency budget
+        // Attempt Gemini 2.5 Flash with strict 600ms latency budget for instant synthesis
         try {
           const gemRes = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              signal: AbortSignal.timeout(2500),
+              signal: AbortSignal.timeout(600),
               body: JSON.stringify({
                 contents: [{ parts: [{ text: prompt }] }],
                 generationConfig: {
