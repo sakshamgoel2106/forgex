@@ -11,6 +11,7 @@ import type {
   TicketSeverity,
 } from '@forgex/shared-types';
 import { SpecialistRoutingService } from '../services/specialistRouting.service.js';
+import { AutoRcaSynthesisService } from '../ai/autoRcaSynthesisService.js';
 
 function getParam(param: string | string[] | undefined): string {
   return Array.isArray(param) ? (param[0] ?? '') : (param ?? '');
@@ -406,6 +407,24 @@ export function createSpecialistDirectoryRouter(dataStore: IDataStore): Router {
 export function createTicketRouter(dataStore: IDataStore): Router {
   const router = Router();
   const routingService = new SpecialistRoutingService(dataStore);
+
+  /**
+   * POST /api/v1/tickets/generate-rca
+   * Synthesize multimodal Copilot session into structured RCA Work Order
+   */
+  router.post('/generate-rca', async (req: Request, res: Response) => {
+    try {
+      const payload = AutoRcaSynthesisService.synthesizeRca(req.body);
+      res.status(200).json({
+        success: true,
+        message: 'Root Cause Analysis synthesized from multimodal session.',
+        data: payload,
+      });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'Failed to synthesize RCA payload');
+      res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+    }
+  });
 
   /**
    * GET /api/v1/tickets/analytics

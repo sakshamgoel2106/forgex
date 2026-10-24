@@ -4,6 +4,7 @@ import type { IDataStore } from '../db/dataStore.interface.js';
 import type { RAGQueryEngine } from '../services/ragQueryEngine.js';
 import type { ISpeechToTextProvider, ITextToSpeechProvider } from '../speech/speech.interface.js';
 import { requireRole } from '../middleware/auth.middleware.js';
+import { AutoRcaSynthesisService } from '../ai/autoRcaSynthesisService.js';
 
 export function createCopilotRouter(
   dataStore: IDataStore,
@@ -133,6 +134,36 @@ export function createCopilotRouter(
       'VIEWER',
     ]),
     controller.getSupportedLanguages
+  );
+
+  // 1-Click Auto-Filled Root Cause Analysis (RCA) Ticket Synthesis
+  router.post(
+    '/synthesize-rca',
+    requireRole([
+      'ORGANIZATION_ADMIN',
+      'ORGANIZATION_OWNER',
+      'PLANT_MANAGER',
+      'ENGINEER',
+      'TECHNICIAN',
+      'WORKER',
+      'ENGINEER_TECHNICIAN',
+      'VIEWER',
+    ]),
+    (req, res) => {
+      try {
+        const payload = AutoRcaSynthesisService.synthesizeRca(req.body);
+        res.status(200).json({
+          success: true,
+          message: 'Root Cause Analysis synthesized from multimodal session.',
+          data: payload,
+        });
+      } catch (err: any) {
+        res.status(500).json({
+          success: false,
+          error: { code: 'FORGEX_RCA_ERROR', message: err?.message || 'Failed to synthesize RCA.' },
+        });
+      }
+    }
   );
 
   return router;

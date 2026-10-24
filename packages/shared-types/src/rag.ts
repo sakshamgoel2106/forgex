@@ -238,4 +238,37 @@ export interface WakeWordConfig {
   sensitivity?: number;
 }
 
+export interface AutoRcaTicketPayload {
+  title: string;
+  assetCode: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  detectedSymptoms: string[];
+  rootCauseAnalysis: string;
+  recommendedParts: string[];
+  lotoVerificationStatus: 'VERIFIED_ZERO_ENERGY' | 'PENDING_ISOLATION';
+  estimatedDowntimeMinutes: number;
+  assignedQueue: 'MECHANICAL_MAINTENANCE' | 'ELECTRICAL_INSTRUMENTATION';
+  acousticTelemetry?: AcousticTelemetry;
+  visionDiagnostic?: VisionDiagnosticResult;
+  oemReference?: string;
+  synthesizedAt?: string;
+  sourceConversationId?: string;
+}
+
+export interface GenerateRcaRequest {
+  conversationId?: string;
+  assetId?: string;
+  assetTag?: string;
+  messages?: Array<{
+    role: string;
+    content: string;
+    acousticTelemetry?: AcousticTelemetry;
+    visionDiagnostic?: VisionDiagnosticResult;
+  }>;
+  acousticTelemetry?: AcousticTelemetry;
+  visionDiagnostic?: VisionDiagnosticResult;
+  lotoVerified?: boolean;
+  language?: string;
+}
+
 

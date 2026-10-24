@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   ShieldCheck,
   AlertTriangle,
@@ -14,6 +14,10 @@ import {
   Clock,
   Sparkles,
   FileCheck2,
+  Mic,
+  MicOff,
+  Volume2,
+  Radio,
 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
@@ -22,6 +26,7 @@ import {
   generateOverpressureGaugeSvg,
   generateZeroEnergyGaugeSvg,
 } from '../../utils/shopFloorImagePresets';
+import type { SupportedLanguageCode } from '@forgex/shared-types';
 
 export interface LotoSafetyRunnerModalProps {
   isOpen: boolean;
@@ -29,7 +34,31 @@ export interface LotoSafetyRunnerModalProps {
   assetId?: string;
   assetTag?: string;
   onLotoVerified?: () => void;
+  currentLanguage?: SupportedLanguageCode;
 }
+
+const STEP_VOICE_SCRIPTS: Record<number, Record<string, string>> = {
+  1: {
+    'en-US': "Step 1: Isolate primary electrical breaker MCC-04. Open disconnect, padlock, and tag out. Say 'Confirm' or 'Done' to record lockout.",
+    'hi-IN': "कदम 1: मुख्य इलेक्ट्रिकल ब्रेकर MCC-04 को बंद करें और पैडलॉक लगाएं। पूरा होने पर 'हाँ' या 'हो गया' बोलें।",
+    'mr-IN': "पायरी 1: मुख्य इलेक्ट्रिकल ब्रेकर MCC-04 आयसोलेट करा आणि कुलूप लावा. पूर्ण झाल्यावर 'हो' किंवा 'झाला' म्हणा.",
+  },
+  2: {
+    'en-US': "Step 2: Close suction valve V-101 and discharge valve V-102. Say 'Confirm' or 'Valves closed' when both are sealed.",
+    'hi-IN': "कदम 2: सक्शन वाल्व V-101 और डिस्चार्ज वाल्व V-102 को बंद करें। दोनों बंद होने पर 'हो गया' बोलें।",
+    'mr-IN': "पायरी 2: व्हॉल्व्ह V-101 आणि V-102 बंद करा. दोन्ही बंद झाल्यावर 'हो' म्हणा.",
+  },
+  3: {
+    'en-US': "Step 3: Vision Safety Gate. Bleed line pressure into pan. Capture gauge PG-101. Say 'Zero verified' to test zero energy.",
+    'hi-IN': "कदम 3: विजन सेफ्टी गेट। लाइन का प्रेशर खाली करें। शून्य प्रेशर जांचने के लिए 'शून्य' या 'वेरीफाई' बोलें।",
+    'mr-IN': "पायरी 3: व्हिजन सेफ्टी गेट. प्रेशर काढा. शून्य प्रेशर पडताळण्यासाठी 'शून्य' म्हणा.",
+  },
+  4: {
+    'en-US': "Step 4: Zero energy verified. Safe for mechanical maintenance. Say 'Sign off' to certify LOTO protocol.",
+    'hi-IN': "कदम 4: शून्य ऊर्जा प्रमाणित। कार्य शुरू करने के लिए सुरक्षित। प्रोटोकॉल पूरा करने के लिए 'साइन ऑफ' बोलें।",
+    'mr-IN': "पायरी 4: शून्य ऊर्जा प्रमाणित. काम सुरू करण्यास सुरक्षित. 'साइन ऑफ' म्हणा.",
+  },
+};
 
 export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
   isOpen,
@@ -37,6 +66,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
   assetId = 'PUMP-001',
   assetTag = 'PUMP-001 (Lowara 10SV08F030T)',
   onLotoVerified,
+  currentLanguage = 'en-US',
 }) => {
   // Step completion states
   const [step1Completed, setStep1Completed] = useState(false);
@@ -71,9 +101,68 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Hands-Free Voice Control States
+  const [isHandsFreeVoiceActive, setIsHandsFreeVoiceActive] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState<string>('');
+  const [lastVoiceMatch, setLastVoiceMatch] = useState<string | null>(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  const isGateVerified = visionVerificationResult?.verified === true;
+
+  // Active current step (1 to 4)
+  const currentStepNumber = !step1Completed
+    ? 1
+    : !step2Completed
+    ? 2
+    : !isGateVerified
+    ? 3
+    : 4;
+
+  // Browser Text-to-Speech Engine
+  const speakText = useCallback(
+    (text: string) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = currentLanguage;
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const langPrefix = currentLanguage.split('-')[0].toLowerCase();
+      const voice = voices.find(
+        (v) => v.lang.toLowerCase() === currentLanguage.toLowerCase() || v.lang.toLowerCase().startsWith(langPrefix)
+      );
+      if (voice) {
+        utterance.voice = voice;
+      }
+
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+
+      window.speechSynthesis.speak(utterance);
+    },
+    [currentLanguage]
+  );
+
+  // Read current active step instructions aloud
+  const readCurrentStepAloud = useCallback(
+    (stepNum: number) => {
+      const scriptGroup = STEP_VOICE_SCRIPTS[stepNum] || STEP_VOICE_SCRIPTS[1];
+      const text = scriptGroup[currentLanguage] || scriptGroup['en-US'];
+      speakText(text);
+    },
+    [currentLanguage, speakText]
+  );
+
   // Reset or restart LOTO sequence
   const handleReset = () => {
     stopCamera();
+    stopVoiceRecognition();
+    setIsHandsFreeVoiceActive(false);
     setStep1Completed(false);
     setStep1Timestamp(null);
     setStep2V101(false);
@@ -85,6 +174,8 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     setVisionVerificationResult(null);
     setStep4Completed(false);
     setStep4Timestamp(null);
+    setLiveTranscript('');
+    setLastVoiceMatch(null);
   };
 
   // Step 1 toggle
@@ -102,6 +193,9 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     } else {
       setStep1Completed(true);
       setStep1Timestamp(new Date().toLocaleTimeString());
+      if (isHandsFreeVoiceActive) {
+        readCurrentStepAloud(2);
+      }
     }
   };
 
@@ -110,13 +204,16 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     if (step2V101 && step2V102 && !step2Completed) {
       setStep2Completed(true);
       setStep2Timestamp(new Date().toLocaleTimeString());
+      if (isHandsFreeVoiceActive) {
+        readCurrentStepAloud(3);
+      }
     } else if ((!step2V101 || !step2V102) && step2Completed) {
       setStep2Completed(false);
       setStep2Timestamp(null);
       setVisionVerificationResult(null);
       setStep4Completed(false);
     }
-  }, [step2V101, step2V102, step2Completed]);
+  }, [step2V101, step2V102, step2Completed, isHandsFreeVoiceActive, readCurrentStepAloud]);
 
   // Start live webcam stream
   const startCamera = async () => {
@@ -207,6 +304,11 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
       const json = await res.json();
       if (res.ok && json.success && json.data) {
         setVisionVerificationResult(json.data);
+        if (json.data.verified && isHandsFreeVoiceActive) {
+          speakText('Zero energy confirmed at 0 Bar. Step 4 maintenance authorized.');
+        } else if (!json.data.verified && isHandsFreeVoiceActive) {
+          speakText('Danger: Residual pressure detected. Do not open pump casing.');
+        }
       } else {
         // Fallback safety block
         setVisionVerificationResult({
@@ -253,20 +355,226 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     onLotoVerified?.();
   };
 
-  // Cleanup camera on unmount or close
+  // Continuous Hands-Free Voice Commands Handler
+  const handleVoiceInput = useCallback(
+    (rawTranscript: string) => {
+      const t = rawTranscript.toLowerCase().trim();
+      setLiveTranscript(rawTranscript);
+
+      // Step 1: Confirm electrical isolation
+      if (!step1Completed) {
+        if (
+          t.includes('confirm') ||
+          t.includes('done') ||
+          t.includes('locked') ||
+          t.includes('breaker') ||
+          t.includes('yes') ||
+          t.includes('haan') ||
+          t.includes('ha') ||
+          t.includes('ho gaya') ||
+          t.includes('theek hai') ||
+          t.includes('jhala') ||
+          t.includes('ho')
+        ) {
+          setStep1Completed(true);
+          setStep1Timestamp(new Date().toLocaleTimeString());
+          setLastVoiceMatch("Recognized: 'Confirm Electrical Lockout'");
+          speakText('Step 1 verified. Breaker MCC-04 locked out. Moving to Step 2 isolation valves.');
+          return;
+        }
+      }
+
+      // Step 2: Confirm dual valves
+      if (step1Completed && !step2Completed) {
+        if (
+          t.includes('valves') ||
+          t.includes('closed') ||
+          t.includes('isolated') ||
+          t.includes('confirm') ||
+          t.includes('done') ||
+          t.includes('yes') ||
+          t.includes('haan') ||
+          t.includes('ho gaya') ||
+          t.includes('jhala') ||
+          t.includes('ho')
+        ) {
+          setStep2V101(true);
+          setStep2V102(true);
+          setStep2Completed(true);
+          setStep2Timestamp(new Date().toLocaleTimeString());
+          setLastVoiceMatch("Recognized: 'Confirm Valve Isolation'");
+          speakText('Step 2 verified. Suction and discharge valves isolated. Opening Step 3 Vision Gate.');
+          return;
+        }
+      }
+
+      // Step 3: Vision Gate zero-pressure verification
+      if (step2Completed && !isGateVerified) {
+        if (
+          t.includes('zero') ||
+          t.includes('zero verified') ||
+          t.includes('verify') ||
+          t.includes('safe') ||
+          t.includes('shunya') ||
+          t.includes('haan') ||
+          t.includes('done') ||
+          t.includes('aage') ||
+          t.includes('pudhe')
+        ) {
+          setLastVoiceMatch("Recognized: 'Verify Zero Energy State'");
+          speakText('Analyzing gauge for zero-energy verification.');
+          handleTestZeroEnergySample();
+          return;
+        }
+        if (t.includes('overpressure') || t.includes('28') || t.includes('danger') || t.includes('high')) {
+          setLastVoiceMatch("Recognized: 'Test Overpressure Sample'");
+          speakText('Testing residual line overpressure condition.');
+          handleTestOverpressureSample();
+          return;
+        }
+      }
+
+      // Step 4: Final sign off
+      if (isGateVerified && !step4Completed) {
+        if (
+          t.includes('sign off') ||
+          t.includes('complete') ||
+          t.includes('commence') ||
+          t.includes('done') ||
+          t.includes('finish') ||
+          t.includes('haan') ||
+          t.includes('ho gaya') ||
+          t.includes('jhala') ||
+          t.includes('ho')
+        ) {
+          setLastVoiceMatch("Recognized: 'Certify & Sign Off'");
+          handleSignOff();
+          speakText('LOTO protocol complete. Pump casing disassembly authorized.');
+          return;
+        }
+      }
+
+      // General Step query
+      if (t.includes('repeat') || t.includes('read step') || t.includes('what step')) {
+        readCurrentStepAloud(currentStepNumber);
+      }
+    },
+    [
+      step1Completed,
+      step2Completed,
+      isGateVerified,
+      step4Completed,
+      currentStepNumber,
+      speakText,
+      readCurrentStepAloud,
+    ]
+  );
+
+  // Start continuous Web Speech recognition
+  const startVoiceRecognition = useCallback(() => {
+    const SpeechRecognitionAPI =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionAPI) {
+      setCameraError('Speech recognition is not supported in this browser.');
+      return;
+    }
+
+    try {
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
+      }
+
+      const recognition = new SpeechRecognitionAPI();
+      recognitionRef.current = recognition;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = currentLanguage;
+
+      recognition.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+        }
+        if (transcript.trim()) {
+          handleVoiceInput(transcript);
+        }
+      };
+
+      recognition.onerror = (err: any) => {
+        if (err.error !== 'no-speech' && err.error !== 'aborted') {
+          console.warn('LOTO voice recognition error:', err.error);
+        }
+      };
+
+      recognition.onend = () => {
+        // Auto-restart if hands-free mode is still active
+        if (isHandsFreeVoiceActive) {
+          try {
+            recognition.start();
+          } catch {}
+        }
+      };
+
+      recognition.start();
+    } catch (err: any) {
+      console.warn('Failed to start LOTO voice listener:', err);
+    }
+  }, [currentLanguage, handleVoiceInput, isHandsFreeVoiceActive]);
+
+  // Stop voice recognition
+  const stopVoiceRecognition = useCallback(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.abort();
+      recognitionRef.current = null;
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
+
+  // Toggle Hands-Free Voice Mode
+  const toggleHandsFreeVoice = () => {
+    if (isHandsFreeVoiceActive) {
+      setIsHandsFreeVoiceActive(false);
+      stopVoiceRecognition();
+      setLiveTranscript('');
+      setLastVoiceMatch(null);
+    } else {
+      setIsHandsFreeVoiceActive(true);
+      startVoiceRecognition();
+      readCurrentStepAloud(currentStepNumber);
+    }
+  };
+
+  // Sync voice recognition when toggle changes
+  useEffect(() => {
+    if (isOpen && isHandsFreeVoiceActive) {
+      startVoiceRecognition();
+    } else {
+      stopVoiceRecognition();
+    }
+    return () => {
+      stopVoiceRecognition();
+    };
+  }, [isOpen, isHandsFreeVoiceActive, startVoiceRecognition, stopVoiceRecognition]);
+
+  // Cleanup camera and voice on close
   useEffect(() => {
     if (!isOpen) {
       stopCamera();
+      stopVoiceRecognition();
+      setIsHandsFreeVoiceActive(false);
     }
-  }, [isOpen]);
-
-  const isGateVerified = visionVerificationResult?.verified === true;
+  }, [isOpen, stopVoiceRecognition]);
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={() => {
         stopCamera();
+        stopVoiceRecognition();
         onClose();
       }}
       title="OSHA 1910.147 Vision-Locked Lockout/Tagout (LOTO)"
@@ -285,6 +593,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
               size="sm"
               onClick={() => {
                 stopCamera();
+                stopVoiceRecognition();
                 onClose();
               }}
             >
@@ -296,6 +605,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                 size="sm"
                 onClick={() => {
                   stopCamera();
+                  stopVoiceRecognition();
                   onClose();
                 }}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
@@ -308,9 +618,9 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
       }
     >
       <div className="space-y-4 font-sans text-xs">
-        {/* Top Compliance Header Banner */}
+        {/* Top Compliance Header Banner + Hands-Free Voice Toggle */}
         <div
-          className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 ${
+          className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
             step4Completed
               ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
               : isGateVerified
@@ -331,7 +641,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-bold text-sm tracking-tight">OSHA 1910.147 Isolation Gate</span>
                 <span
                   className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase ${
@@ -354,7 +664,86 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
               </p>
             </div>
           </div>
+
+          {/* Hands-Free Voice Mode Toggle Button */}
+          <button
+            type="button"
+            onClick={toggleHandsFreeVoice}
+            className={`px-3 py-1.5 rounded-xl border font-bold text-xs flex items-center gap-2 transition cursor-pointer shrink-0 shadow-xs ${
+              isHandsFreeVoiceActive
+                ? 'bg-amber-500 text-white border-amber-600 ring-2 ring-amber-300 animate-pulse'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
+            }`}
+            title="Toggle Hands-Free Voice Control for noisy factory shop floors"
+          >
+            {isHandsFreeVoiceActive ? (
+              <>
+                <Mic className="w-4 h-4 text-white animate-bounce" />
+                <span className="font-mono text-[11px]">Hands-Free Active</span>
+              </>
+            ) : (
+              <>
+                <MicOff className="w-4 h-4 text-slate-500" />
+                <span className="font-mono text-[11px]">Hands-Free Voice</span>
+              </>
+            )}
+          </button>
         </div>
+
+        {/* HIGH-CONTRAST SHOP-FLOOR VOICE HUD (Active when Hands-Free Voice Mode is Enabled) */}
+        {isHandsFreeVoiceActive && (
+          <div className="p-3.5 rounded-xl bg-slate-950 border-2 border-amber-400/90 text-white shadow-xl ring-4 ring-amber-400/30 animate-pulse-short space-y-2.5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
+                </span>
+                <span className="font-mono text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Radio className="w-3.5 h-3.5 text-amber-400" />
+                  SHOP-FLOOR HANDS-FREE VOICE HUD · {currentLanguage}
+                  {isSpeaking && <span className="text-[10px] text-emerald-300 font-normal animate-pulse">(Speaking...)</span>}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => readCurrentStepAloud(currentStepNumber)}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-mono text-slate-300 flex items-center gap-1 transition"
+                  title="Re-read active step instructions aloud"
+                >
+                  <Volume2 className="w-3 h-3 text-amber-400" />
+                  <span>Re-read Step</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Live Voice Prompt & Transcript Feedback */}
+            <div className="flex items-center justify-between gap-2 text-xs font-mono">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-slate-400 text-[10px] uppercase font-bold shrink-0">Hearing:</span>
+                <span className="text-emerald-300 truncate">
+                  {liveTranscript ? `"${liveTranscript}"` : 'Listening for "Confirm", "Zero Verified", "Sign Off"...'}
+                </span>
+              </div>
+              {lastVoiceMatch && (
+                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-700 shrink-0">
+                  ✓ {lastVoiceMatch}
+                </span>
+              )}
+            </div>
+
+            {/* Voice Command Cheat Sheet Chips */}
+            <div className="pt-1 flex items-center gap-1.5 flex-wrap text-[10px] font-mono text-slate-400">
+              <span className="text-slate-500">Voice Triggers:</span>
+              <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-200 border border-slate-700">"Confirm" / "हाँ"</span>
+              <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-200 border border-slate-700">"Valves Closed"</span>
+              <span className="px-1.5 py-0.2 rounded bg-emerald-900/60 text-emerald-300 border border-emerald-700">"Zero Verified" / "शून्य"</span>
+              <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-200 border border-slate-700">"Sign Off" / "Done"</span>
+            </div>
+          </div>
+        )}
 
         {/* 4-Step Interactive LOTO Flow */}
         <div className="space-y-3">
@@ -392,7 +781,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                   {step1Timestamp && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-700 font-bold mt-1">
                       <Clock className="w-3 h-3" />
-                      Locked & Tagged out at {step1Timestamp}
+                      Locked &amp; Tagged out at {step1Timestamp}
                     </span>
                   )}
                 </div>

@@ -32,6 +32,7 @@ import {
   Radio,
   Building2,
   Camera,
+  Zap,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Modal } from '../ui/Modal';
@@ -55,6 +56,7 @@ import {
 import { AcousticDiagnosticsModal } from '../copilot/AcousticDiagnosticsModal';
 import { VisionDiagnosticsModal } from '../copilot/VisionDiagnosticsModal';
 import { LotoSafetyRunnerModal } from '../copilot/LotoSafetyRunnerModal';
+import { RcaTicketModal } from '../copilot/RcaTicketModal';
 
 /**
  * Clean, safe Markdown renderer for assistant messages:
@@ -265,6 +267,10 @@ export const CopilotWorkspaceView: React.FC = () => {
   // Vision Diagnostics & Vision-Locked LOTO Safety Gate
   const [isVisionModalOpen, setIsVisionModalOpen] = useState(false);
   const [isLotoModalOpen, setIsLotoModalOpen] = useState(false);
+  const [isLotoVerifiedZeroEnergy, setIsLotoVerifiedZeroEnergy] = useState(false);
+
+  // 1-Click Auto-Filled RCA Ticket Modal
+  const [isRcaModalOpen, setIsRcaModalOpen] = useState(false);
 
   // Active Language Configuration
   const currentLangConfig = useMemo(() => getLanguageConfig(speechLanguage), [speechLanguage]);
@@ -329,6 +335,21 @@ export const CopilotWorkspaceView: React.FC = () => {
       [areaName]: !prev[areaName],
     }));
   };
+
+  // Derive latest acoustic and vision telemetry from active conversation
+  const latestAcousticTelemetry = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if ((messages[i] as any).acousticTelemetry) return (messages[i] as any).acousticTelemetry;
+    }
+    return undefined;
+  }, [messages]);
+
+  const latestVisionDiagnostic = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if ((messages[i] as any).visionDiagnostic) return (messages[i] as any).visionDiagnostic;
+    }
+    return undefined;
+  }, [messages]);
 
   // Close header machine picker popover on click outside
   useEffect(() => {
@@ -1287,8 +1308,17 @@ export const CopilotWorkspaceView: React.FC = () => {
             </span>
           </div>
 
-          {/* Voice Toolbar: Language Selection & Auto-Speak Toggle */}
-          <div className="flex items-center gap-3">
+          {/* Top Actions: 1-Click RCA Ticket & Voice Toolbar */}
+          <div className="flex items-center gap-2.5">
+            {/* 1-Click Auto-Filled RCA Ticket Generator Trigger */}
+            <button
+              onClick={() => setIsRcaModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white font-bold text-xs shadow-xs hover:shadow-md transition cursor-pointer"
+              title="Synthesize conversation into an enterprise RCA Work Order"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+              <span>1-Click RCA Ticket</span>
+            </button>
             {/* Language Selector */}
             <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] px-2.5 py-1 rounded-lg text-[11px] font-sans shadow-sm">
               <Languages className="w-3.5 h-3.5 text-[#2563EB]" />
@@ -1850,6 +1880,17 @@ export const CopilotWorkspaceView: React.FC = () => {
                         <span>Start Vision-Guided LOTO</span>
                       </button>
 
+                      {/* 1-Click Auto-Filled RCA Ticket Button */}
+                      <button
+                        type="button"
+                        onClick={() => setIsRcaModalOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                        title="Generate enterprise Root Cause Analysis Work Order from this diagnostic session"
+                      >
+                        <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
+                        <span>⚡ Generate 1-Click RCA Ticket</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => handleRaiseTicketForRca(msg)}
@@ -2111,6 +2152,32 @@ export const CopilotWorkspaceView: React.FC = () => {
             ? `${selectedMachine.assetTag} (${selectedMachine.name})`
             : 'PUMP-001 (Lowara 10SV08F030T)'
         }
+        onLotoVerified={() => setIsLotoVerifiedZeroEnergy(true)}
+        currentLanguage={speechLanguage}
+      />
+
+      {/* 1-Click Auto-Filled RCA Ticket Modal */}
+      <RcaTicketModal
+        isOpen={isRcaModalOpen}
+        onClose={() => setIsRcaModalOpen(false)}
+        conversationId={activeConversationId || undefined}
+        assetId={selectedMachine?.assetTag || selectedMachine?.id || 'PUMP-001'}
+        assetTag={
+          selectedMachine
+            ? `${selectedMachine.assetTag} (${selectedMachine.name})`
+            : 'PUMP-001 (Lowara 10SV08F030T)'
+        }
+        messages={messages}
+        acousticTelemetry={latestAcousticTelemetry}
+        visionDiagnostic={latestVisionDiagnostic}
+        lotoVerified={isLotoVerifiedZeroEnergy}
+        language={speechLanguage}
+        onWorkOrderCreated={(createdCase) => {
+          toast.success(
+            'Enterprise Work Order Created',
+            `Case ${createdCase?.caseNumber || createdCase?.id || ''} successfully logged in Maintenance Queue`
+          );
+        }}
       />
     </div>
   );

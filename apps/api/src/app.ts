@@ -235,6 +235,7 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   // Phase B Industrial Machine Registry, Tasks, Mappings, Knowledge, Specialist Routing & Badges
   app.use('/api/v1/employees', authenticate, createEmployeeRouter(dataStore));
   app.use('/api/v1/tickets', authenticate, createTicketRouter(dataStore));
+  app.use('/api/tickets', authenticate, createTicketRouter(dataStore));
   app.use('/api/v1/specialists', authenticate, createSpecialistDirectoryRouter(dataStore));
   app.use('/api/v1/machines', authenticate, createMachineSpecialistRouter(dataStore));
   app.use('/api/v1/machines', authenticate, createMachineRouter(dataStore));
