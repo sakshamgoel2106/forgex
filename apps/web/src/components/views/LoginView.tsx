@@ -2909,64 +2909,6 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
                           </>
                         )}
                       </button>
-
-                      {/* Quick Dev Sign-In Personas */}
-                      <div className="pt-3 pb-1 border-t border-dashed border-gray-200 mt-3">
-                        <div className="flex items-center justify-between text-[11px] text-gray-500 mb-2 font-mono">
-                          <span className="uppercase tracking-wider">Quick Sign-In Personas</span>
-                          <span className="text-[10px] text-blue-600 font-sans">Click to fill</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIdentifier('admin@forgex.industrial');
-                              setPassword('Admin@1234');
-                              setFieldErrors({});
-                            }}
-                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
-                          >
-                            <div className="font-semibold text-gray-800">Plant Admin</div>
-                            <div className="text-[10px] text-gray-500 truncate font-mono">admin@forgex...</div>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIdentifier('engineer@forgex.industrial');
-                              setPassword('Engineer@1234');
-                              setFieldErrors({});
-                            }}
-                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
-                          >
-                            <div className="font-semibold text-gray-800">Lead Engineer</div>
-                            <div className="text-[10px] text-gray-500 truncate font-mono">engineer@forgex...</div>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIdentifier('sagarmaheshwari200761@gmail.com');
-                              setPassword('Admin@1234');
-                              setFieldErrors({});
-                            }}
-                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
-                          >
-                            <div className="font-semibold text-gray-800">Sagar (Owner)</div>
-                            <div className="text-[10px] text-gray-500 truncate font-mono">sagarmaheshwari...</div>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIdentifier('tech@forgex.industrial');
-                              setPassword('Tech@1234');
-                              setFieldErrors({});
-                            }}
-                            className="p-1.5 text-left bg-gray-50 hover:bg-blue-50 border border-gray-200 hover:border-blue-300 rounded-lg transition"
-                          >
-                            <div className="font-semibold text-gray-800">Technician</div>
-                            <div className="text-[10px] text-gray-500 truncate font-mono">tech@forgex...</div>
-                          </button>
-                        </div>
-                      </div>
                     </form>
                   </>
                 )}

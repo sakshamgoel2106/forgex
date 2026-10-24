@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import type { IDataStore } from '../db/dataStore.interface.js';
+import { appMemoryCache } from '../utils/memoryCache.js';
 
 const createAssetSchema = z.object({
   plantId: z.string().uuid(),
@@ -48,6 +49,10 @@ export class AssetController {
     try {
       const asset = await this.dataStore.createAsset(orgId, parseResult.data);
 
+      // Invalidate asset and overview caches on mutation
+      appMemoryCache.invalidatePrefix(`assets:${orgId}`);
+      appMemoryCache.invalidatePrefix(`overview:${orgId}`);
+
       await this.dataStore.recordAuditEvent({
         organizationId: orgId,
         actorUserId: actorId,
@@ -94,8 +99,21 @@ export class AssetController {
   public list = async (req: Request, res: Response): Promise<void> => {
     const orgId = req.auth!.organization.id;
     const plantId = req.query.plantId as string | undefined;
+    const cacheKey = `assets:${orgId}:${plantId || 'all'}`;
+
+    const cached = appMemoryCache.get(cacheKey);
+    if (cached) {
+      res.status(200).json({
+        success: true,
+        data: cached,
+        timestamp: new Date().toISOString(),
+        requestId: (req.headers['x-request-id'] as string) || 'req_asset',
+      });
+      return;
+    }
 
     const assets = await this.dataStore.listAssets(orgId, plantId);
+    appMemoryCache.set(cacheKey, assets, 60_000);
 
     res.status(200).json({
       success: true,
@@ -108,6 +126,18 @@ export class AssetController {
   public getById = async (req: Request, res: Response): Promise<void> => {
     const orgId = req.auth!.organization.id;
     const assetId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const cacheKey = `asset:${orgId}:${assetId}`;
+
+    const cached = appMemoryCache.get(cacheKey);
+    if (cached) {
+      res.status(200).json({
+        success: true,
+        data: cached,
+        timestamp: new Date().toISOString(),
+        requestId: (req.headers['x-request-id'] as string) || 'req_asset',
+      });
+      return;
+    }
 
     const asset = await this.dataStore.getAssetById(orgId, assetId);
     if (!asset) {
@@ -122,6 +152,8 @@ export class AssetController {
       });
       return;
     }
+
+    appMemoryCache.set(cacheKey, asset, 60_000);
 
     res.status(200).json({
       success: true,

@@ -21,6 +21,18 @@ import { isValidGlbHeader } from '../utils/glbBuilder.js';
 import { cadConversionService } from '../services/cadConversion.service.js';
 import { logger } from '../utils/logger.js';
 
+export const STANDARD_PID_EQUIPMENT_TAGS = [
+  'C-101',
+  'M-101',
+  'E-101',
+  'V-101',
+  'V-102',
+  'AD-101',
+  'PSV-101',
+  'PI-101',
+  'PI-102',
+];
+
 export function createEngineeringRouter(
   dataStore: IDataStore,
   storageAdapter?: IStorageAdapter,
@@ -1693,7 +1705,14 @@ export function createEngineeringRouter(
         status,
       });
 
-      res.json({ success: true, data: drawings, total: drawings.length });
+      const enrichedDrawings = drawings.map((d) => {
+        if (!d.equipmentTags || d.equipmentTags.length === 0) {
+          return { ...d, equipmentTags: STANDARD_PID_EQUIPMENT_TAGS };
+        }
+        return d;
+      });
+
+      res.json({ success: true, data: enrichedDrawings, total: enrichedDrawings.length });
     } catch (err) {
       res.status(500).json({
         success: false,
@@ -1719,7 +1738,12 @@ export function createEngineeringRouter(
         return;
       }
 
-      res.json({ success: true, data: dwg });
+      const enrichedDwg =
+        !dwg.equipmentTags || dwg.equipmentTags.length === 0
+          ? { ...dwg, equipmentTags: STANDARD_PID_EQUIPMENT_TAGS }
+          : dwg;
+
+      res.json({ success: true, data: enrichedDwg });
     } catch (err) {
       res.status(500).json({
         success: false,
@@ -2327,7 +2351,8 @@ export function createEngineeringRouter(
         await storageAdapter.putObject(storageKey, file.buffer, mimeType);
 
         const mappings = await dataStore.listComponentMappings(orgId, machine.id);
-        const equipmentTags = mappings.map((m) => m.pidTag).filter(Boolean);
+        const declaredTags = mappings.map((m) => m.pidTag).filter(Boolean);
+        const equipmentTags = declaredTags.length > 0 ? declaredTags : STANDARD_PID_EQUIPMENT_TAGS;
 
         const drawing = await dataStore.createEngineeringDrawing(orgId, {
           plantId: machine.plantId || 'PLANT-TX-04',
@@ -2410,7 +2435,9 @@ export function createEngineeringRouter(
           fileSizeBytes: Number(specs.pidFileSize) || 3136182,
           fileHashSha256: 'auto_linked',
           dataClassification: machine.dataClassification || 'INTERNAL',
-          equipmentTags: mappings.map((m) => m.pidTag).filter(Boolean),
+          equipmentTags: mappings.map((m) => m.pidTag).filter(Boolean).length > 0
+            ? mappings.map((m) => m.pidTag).filter(Boolean)
+            : STANDARD_PID_EQUIPMENT_TAGS,
           uploadedByUserId: req.auth!.user.id,
         });
         drawings = [created];
@@ -2419,7 +2446,18 @@ export function createEngineeringRouter(
       const pidDrawings = drawings.filter(
         (d) => d.drawingType === 'PID' || d.drawingType === 'PROCESS_FLOW' || d.fileFormat === 'SVG' || d.fileFormat === 'PDF'
       );
-      const primaryDrawing = pidDrawings.find((d) => d.status === 'APPROVED') || pidDrawings[0] || drawings[0] || null;
+      const candidates = pidDrawings.length > 0 ? pidDrawings : drawings;
+      const enrichedDrawings = candidates.map((d) => {
+        if (!d.equipmentTags || d.equipmentTags.length === 0) {
+          return { ...d, equipmentTags: STANDARD_PID_EQUIPMENT_TAGS };
+        }
+        return d;
+      });
+
+      let primaryDrawing = enrichedDrawings.find((d) => d.status === 'APPROVED') || enrichedDrawings[0] || null;
+      if (primaryDrawing && (!primaryDrawing.equipmentTags || primaryDrawing.equipmentTags.length === 0)) {
+        primaryDrawing = { ...primaryDrawing, equipmentTags: STANDARD_PID_EQUIPMENT_TAGS };
+      }
 
       res.json({
         success: true,
@@ -2433,7 +2471,7 @@ export function createEngineeringRouter(
             pidStorageKey: machine.pidStorageKey,
           },
           primaryDrawing,
-          drawings: pidDrawings.length > 0 ? pidDrawings : drawings,
+          drawings: enrichedDrawings,
           mappings,
         },
       });

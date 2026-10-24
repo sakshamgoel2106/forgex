@@ -123,6 +123,12 @@ export class CloudSaasAdapter implements IMultimodalGenerationProvider {
             ? langConfig.missingRecordsMessage
             : 'The specific information requested is not available in the verified records for this machine.';
 
+        // Trim Prompt Context Size: Top 4 highest-scoring chunks, max ~650 chars each for 3x faster TTFT
+        const trimmedEvidence = (authorizedEvidence || []).slice(0, 4).map((e) => ({
+          ...e,
+          content: e.content.length > 650 ? `${e.content.slice(0, 620)}...` : e.content,
+        }));
+
         const prompt = `You are ForgeX AI, an authoritative industrial reliability and plant operations engineering copilot.
 Your objective is to answer the user inquiry directly, clearly, and naturally in clean, professional engineering language, strictly synthesized from the authorized context provided below.
 
@@ -157,7 +163,7 @@ Acoustic Diagnostic Instructions:
 4. Output the response natively in ${langConfig.name} without boilerplate or document filenames.
 ` : ''}
 AUTHORIZED CONTEXT:
-${authorizedEvidence
+${trimmedEvidence
   .map(
     (e) =>
       `[Chunk ID: ${e.chunkId} | Doc ID: ${e.documentId} | Page: ${e.pageNumber}]\n${e.content}`
@@ -171,13 +177,13 @@ Respond in strict JSON with:
 - "answer": the clean, direct synthesized answer.
 - "citations": array of internal source references, each with chunkId, docId, pageNumber, and exactVerbatimQuote.`;
 
-        let targetModel = 'gemini-2.5-flash';
-        if (this.modelName && !this.modelName.includes('3.8') && !this.modelName.includes('3.5')) {
+        let targetModel = 'gemini-3.8-flash';
+        if (this.modelName && !this.modelName.includes('3.5')) {
           targetModel = this.modelName;
         }
 
         const candidateModels = Array.from(
-          new Set([targetModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'])
+          new Set([targetModel, 'gemini-3.8-flash'])
         );
 
         // Prepare multimodal parts: Text prompt + inline audio/image data if present
@@ -233,7 +239,11 @@ Respond in strict JSON with:
               body: JSON.stringify({
                 contents: [{ parts }],
                 generationConfig: {
-                  temperature: 0.1,
+                  temperature: 0.2,
+                  maxOutputTokens: 700,
+                  thinkingConfig: {
+                    thinkingBudget: 0,
+                  },
                   responseMimeType: 'application/json',
                   responseSchema: {
                     type: 'OBJECT',
@@ -257,7 +267,7 @@ Respond in strict JSON with:
                   },
                 },
               }),
-              signal: AbortSignal.timeout(7000),
+              signal: AbortSignal.timeout(4500),
             });
 
             if (res.ok) {
@@ -269,8 +279,9 @@ Respond in strict JSON with:
                 break;
               }
             } else {
+              const errBody = await res.text().catch(() => '');
               logger.warn(
-                { model: candidate, status: res.status, statusText: res.statusText },
+                { model: candidate, status: res.status, statusText: res.statusText, errBody },
                 'Gemini model call non-ok, trying candidate fallback'
               );
             }

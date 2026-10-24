@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Environment, useGLTF, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -62,6 +62,38 @@ const CanvasLoadingSpinner: React.FC = () => (
 );
 
 /**
+ * One-time camera auto-center & zoom fit component.
+ * Fits camera distance to maxDim * 1.6 and aligns controls target to (0, 0, 0).
+ */
+interface CameraFitProps {
+  maxDim: number;
+  controlsRef: React.RefObject<any>;
+}
+
+const CameraFit: React.FC<CameraFitProps> = ({ maxDim, controlsRef }) => {
+  const { camera } = useThree();
+  const hasFittedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasFittedRef.current || !maxDim || maxDim <= 0) return;
+    hasFittedRef.current = true;
+
+    // Fit camera distance to maxDim * 1.6 for large, clear inspection viewport
+    const distance = Math.max(maxDim * 1.6, 1.2);
+    camera.position.set(distance * 0.85, distance * 0.65, distance * 1.15);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+
+    if (controlsRef.current) {
+      controlsRef.current.target.set(0, 0, 0);
+      controlsRef.current.update();
+    }
+  }, [camera, maxDim, controlsRef]);
+
+  return null;
+};
+
+/**
  * Error boundary catching CORS, network, or malformed GLB asset errors
  */
 class CadErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -123,7 +155,8 @@ class CadErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundary
 }
 
 /**
- * Three.js model component that dynamically consumes useGLTF from @react-three/drei
+ * Three.js model component that dynamically consumes useGLTF from @react-three/drei.
+ * Centered statically once at (0, 0, 0) with zero bobbing, zero floating, and zero auto-play animation.
  */
 const DynamicModelPrimitive: React.FC<{
   url: string;
@@ -132,6 +165,7 @@ const DynamicModelPrimitive: React.FC<{
   onSelectComponent?: (componentId: string | null) => void;
   onModelStats?: (stats: { vertexCount: number; meshCount: number; dimensions: string }) => void;
   onComponentList?: (components: Array<{ id: string; name: string; vertexCount: number }>) => void;
+  onModelFitted?: (maxDim: number) => void;
 }> = ({
   url,
   wireframe,
@@ -139,79 +173,130 @@ const DynamicModelPrimitive: React.FC<{
   onSelectComponent,
   onModelStats,
   onComponentList,
+  onModelFitted,
 }) => {
   const { scene } = useGLTF(url);
-  const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
-  // Center model and compute statistics
-  useEffect(() => {
+  // Compute geometry, one-time centering, and component hierarchy strictly once per model URL
+  const { modelGroup, initialStats, initialComponents, maxDim } = useMemo(() => {
+    const cloned = scene.clone(true);
     let totalVertices = 0;
-    const components: Array<{ id: string; name: string; vertexCount: number }> = [];
+    const comps: Array<{ id: string; name: string; vertexCount: number }> = [];
 
-    clonedScene.traverse((child: any) => {
+    // Reset position to origin before computing bounding box
+    cloned.position.set(0, 0, 0);
+
+    cloned.traverse((child: any) => {
       if (child.isMesh) {
         child.castShadow = true;
         child.receiveShadow = true;
 
         const vCount = child.geometry?.attributes?.position?.count || 0;
         totalVertices += vCount;
-        const compId = child.name && child.name.trim() !== '' ? child.name : `component_${components.length + 1}`;
+        const compId = child.name && child.name.trim() !== '' ? child.name : `component_${comps.length + 1}`;
         child.name = compId;
-        components.push({ id: compId, name: compId, vertexCount: vCount });
+        comps.push({ id: compId, name: compId, vertexCount: vCount });
 
+        // Clone material so individual mesh highlighting does not contaminate shared materials
         if (child.material) {
           if (Array.isArray(child.material)) {
-            child.material.forEach((m: any) => {
-              if ('wireframe' in m) m.wireframe = !!wireframe;
-            });
-          } else if ('wireframe' in child.material) {
-            child.material.wireframe = !!wireframe;
+            child.material = child.material.map((m: any) => m.clone());
+          } else {
+            child.material = child.material.clone();
           }
         }
       }
+      if (child.isSkinnedMesh) {
+        child.pose?.(); // reset to stationary bind pose
+      }
     });
 
-    const box = new THREE.Box3().setFromObject(clonedScene);
+    // One-time bounding box calculation
+    const box = new THREE.Box3().setFromObject(cloned);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
+    const computedMaxDim = Math.max(size.x, size.y, size.z) || 1.0;
 
-    clonedScene.position.x = -center.x;
-    clonedScene.position.y = -center.y;
-    clonedScene.position.z = -center.z;
+    // Center model statically at (0, 0, 0)
+    cloned.position.set(-center.x, -center.y, -center.z);
 
-    onModelStats?.({
+    const stats = {
       vertexCount: totalVertices,
-      meshCount: components.length,
+      meshCount: comps.length,
       dimensions: `${size.x.toFixed(2)}m × ${size.y.toFixed(2)}m × ${size.z.toFixed(2)}m`,
-    });
-    onComponentList?.(components);
-  }, [clonedScene, wireframe, onModelStats, onComponentList]);
+    };
 
-  // Visual highlight for selected component
+    return {
+      modelGroup: cloned,
+      initialStats: stats,
+      initialComponents: comps,
+      maxDim: computedMaxDim,
+    };
+  }, [scene]);
+
+  // Report stats and component list once on load without triggering infinite re-render loops
+  const statsCbRef = useRef(onModelStats);
+  const compsCbRef = useRef(onComponentList);
+  const fittedCbRef = useRef(onModelFitted);
   useEffect(() => {
-    clonedScene.traverse((child: any) => {
-      if (child.isMesh) {
+    statsCbRef.current = onModelStats;
+    compsCbRef.current = onComponentList;
+    fittedCbRef.current = onModelFitted;
+  });
+
+  useEffect(() => {
+    statsCbRef.current?.(initialStats);
+    compsCbRef.current?.(initialComponents);
+    fittedCbRef.current?.(maxDim);
+  }, [initialStats, initialComponents, maxDim]);
+
+  // Static wireframe toggling
+  useEffect(() => {
+    modelGroup.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach((m: any) => {
+            if ('wireframe' in m) m.wireframe = !!wireframe;
+          });
+        } else if ('wireframe' in child.material) {
+          child.material.wireframe = !!wireframe;
+        }
+      }
+    });
+  }, [modelGroup, wireframe]);
+
+  // Rock-solid component highlighting without modifying transforms or positions
+  useEffect(() => {
+    modelGroup.traverse((child: any) => {
+      if (child.isMesh && child.material) {
         const isSelected =
           Boolean(selectedComponentId) &&
           (child.name === selectedComponentId || child.uuid === selectedComponentId);
 
-        if (child.material && !Array.isArray(child.material)) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        mats.forEach((mat: any) => {
           if (isSelected) {
-            child.material.emissive = new THREE.Color(0x2563eb);
-            child.material.emissiveIntensity = 0.55;
-          } else if (child.material.emissive) {
-            child.material.emissive.set(0x000000);
-            child.material.emissiveIntensity = 0;
+            if (!mat._origEmissive) {
+              mat._origEmissive = mat.emissive ? mat.emissive.clone() : new THREE.Color(0x000000);
+              mat._origEmissiveIntensity = mat.emissiveIntensity ?? 0;
+            }
+            if (mat.emissive) {
+              mat.emissive.set(0x2563eb);
+              mat.emissiveIntensity = 0.65;
+            }
+          } else if (mat._origEmissive && mat.emissive) {
+            mat.emissive.copy(mat._origEmissive);
+            mat.emissiveIntensity = mat._origEmissiveIntensity ?? 0;
           }
-        }
+        });
       }
     });
-  }, [clonedScene, selectedComponentId]);
+  }, [modelGroup, selectedComponentId]);
 
-  // CRITICAL MEMORY MANAGEMENT: Geometries, Materials, and useGLTF cache disposal
+  // Memory cleanup on unmount
   useEffect(() => {
     return () => {
-      clonedScene.traverse((child: any) => {
+      modelGroup.traverse((child: any) => {
         if (child.isMesh) {
           child.geometry?.dispose();
           if (Array.isArray(child.material)) {
@@ -221,14 +306,13 @@ const DynamicModelPrimitive: React.FC<{
           }
         }
       });
-      // Purge cached GLTF entry to free browser heap
       useGLTF.clear(url);
     };
-  }, [url, clonedScene]);
+  }, [url, modelGroup]);
 
   return (
     <primitive
-      object={clonedScene}
+      object={modelGroup}
       onClick={(e: any) => {
         e.stopPropagation();
         if (e.object?.name) {
@@ -254,6 +338,8 @@ export const ThreeDModelViewer: React.FC<ThreeDModelViewerProps> = ({
   onRetry,
 }) => {
   const [retryKey, setRetryKey] = useState(0);
+  const [modelMaxDim, setModelMaxDim] = useState<number>(0);
+  const controlsRef = useRef<any>(null);
 
   // Check if file is an unsupported raw STEP/STP format
   const isStepFormat = useMemo(() => {
@@ -296,7 +382,7 @@ export const ThreeDModelViewer: React.FC<ThreeDModelViewerProps> = ({
         }}
       >
         <Canvas
-          camera={{ position: [4, 3.5, 5], fov: 45 }}
+          camera={{ position: [5, 4, 6], fov: 45 }}
           shadows
           gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
           className="w-full h-full"
@@ -306,10 +392,10 @@ export const ThreeDModelViewer: React.FC<ThreeDModelViewerProps> = ({
 
           {/* Background and Scene Lighting */}
           <color attach="background" args={['#f1f5f9']} />
-          <ambientLight intensity={0.75} />
+          <ambientLight intensity={0.8} />
           <directionalLight position={[10, 15, 10]} intensity={1.2} castShadow />
           <directionalLight position={[-10, -5, -10]} intensity={0.5} />
-          <gridHelper args={[10, 20, 0x94a3b8, 0xe2e8f0]} position={[0, -1.2, 0]} />
+          <gridHelper args={[20, 40, 0x94a3b8, 0xe2e8f0]} position={[0, -1.2, 0]} />
 
           {/* Realistic City Environment preset */}
           <Environment preset="city" />
@@ -323,16 +409,22 @@ export const ThreeDModelViewer: React.FC<ThreeDModelViewerProps> = ({
               onSelectComponent={onSelectComponent}
               onModelStats={onModelStats}
               onComponentList={onComponentList}
+              onModelFitted={setModelMaxDim}
             />
           </Suspense>
 
-          {/* Orbit Controls for fluid panning, zooming, and rotation */}
+          {/* One-time camera auto-center & zoom fit to maxDim * 1.6 */}
+          <CameraFit maxDim={modelMaxDim} controlsRef={controlsRef} />
+
+          {/* Orbit Controls for stationary rock-solid CAD inspection */}
           <OrbitControls
+            ref={controlsRef}
             makeDefault
-            enableDamping
+            enableDamping={true}
             dampingFactor={0.05}
-            maxDistance={50}
-            minDistance={0.5}
+            autoRotate={false}
+            maxDistance={500}
+            minDistance={0.1}
           />
         </Canvas>
       </CadErrorBoundary>

@@ -12,6 +12,7 @@ import type {
 } from '@forgex/shared-types';
 import { SpecialistRoutingService } from '../services/specialistRouting.service.js';
 import { AutoRcaSynthesisService } from '../ai/autoRcaSynthesisService.js';
+import { isUuid } from '../utils/uuid.js';
 
 function getParam(param: string | string[] | undefined): string {
   return Array.isArray(param) ? (param[0] ?? '') : (param ?? '');
@@ -645,28 +646,37 @@ export function createTicketRouter(dataStore: IDataStore): Router {
 
       // Synchronize ticket into Maintenance Cases for Work Orders & Technician Queue
       try {
-        const caseSeverity =
-          String(severity).toUpperCase() === 'CRITICAL'
-            ? 'CRITICAL'
-            : String(severity).toUpperCase() === 'MEDIUM'
-            ? 'MEDIUM'
-            : 'HIGH';
+        let targetAssetId = machineId;
+        if ((!targetAssetId || !isUuid(targetAssetId)) && machineAssetTag) {
+          const allAssets = await dataStore.listAssets(organizationId);
+          const matchedAsset = allAssets.find((a: any) => a.assetTag === machineAssetTag || a.id === machineAssetTag);
+          if (matchedAsset) targetAssetId = matchedAsset.id;
+        }
 
-        await dataStore.createMaintenanceCase({
-          organizationId,
-          plantId: safePlantId,
-          assetId: machineAssetTag || 'ASSET-GEN',
-          caseNumber: ticket.ticketNumber,
-          title: `[${ticket.ticketNumber}] ${machineAssetTag || 'Asset'}: ${originalQuestion.slice(0, 80)}`,
-          description: diagnosticDetails || originalQuestion,
-          severity: caseSeverity,
-          status: 'ESCALATED_HUMAN',
-          reportedByUserId: req.auth!.user.id,
-          assignedTechnicianName: assignedSpecialistName || 'Specialist Lead',
-          symptomDescription: diagnosticDetails || originalQuestion,
-          isEscalated: true,
-          escalationReason: escalationReason || 'SPECIALIST_TICKET',
-        });
+        if (targetAssetId && isUuid(targetAssetId)) {
+          const caseSeverity =
+            String(severity).toUpperCase() === 'CRITICAL'
+              ? 'CRITICAL'
+              : String(severity).toUpperCase() === 'MEDIUM'
+              ? 'MEDIUM'
+              : 'HIGH';
+
+          await dataStore.createMaintenanceCase({
+            organizationId,
+            plantId: safePlantId,
+            assetId: targetAssetId,
+            caseNumber: ticket.ticketNumber,
+            title: `[${ticket.ticketNumber}] ${machineAssetTag || 'Asset'}: ${originalQuestion.slice(0, 80)}`,
+            description: diagnosticDetails || originalQuestion,
+            severity: caseSeverity,
+            status: 'ESCALATED_HUMAN',
+            reportedByUserId: req.auth!.user.id,
+            assignedTechnicianName: assignedSpecialistName || 'Specialist Lead',
+            symptomDescription: diagnosticDetails || originalQuestion,
+            isEscalated: true,
+            escalationReason: escalationReason || 'SPECIALIST_TICKET',
+          });
+        }
       } catch (caseErr) {
         logger.warn({ err: caseErr }, 'Non-fatal: could not create sync maintenance_case for ticket');
       }

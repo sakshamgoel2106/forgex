@@ -34,11 +34,7 @@ test.describe('ForgeX AI — Industrial Engineering Workspace Shell', () => {
     await page.click('button:has-text("AI Copilot")');
     await expect(page.locator('text=GROUNDED DIAGNOSTIC ENGINE')).toBeVisible();
 
-    // 5. Visual Intelligence
-    await page.click('button:has-text("Visual Intelligence")');
-    await expect(page.locator('text=VISUAL INTELLIGENCE & SCHEMATIC PARSER')).toBeVisible();
-
-    // 6. Troubleshooting
+    // 5. Troubleshooting
     await page.click('button:has-text("Troubleshooting")');
     await expect(page.locator('text=Diagnostic Troubleshooting & Root Cause Analysis')).toBeVisible();
 

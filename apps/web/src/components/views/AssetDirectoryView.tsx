@@ -4,7 +4,6 @@ import {
   Filter,
   Box,
   FileCode,
-  QrCode,
   Globe,
   Plus,
   ClipboardList,
@@ -21,7 +20,6 @@ import { useAuth } from '../../lib/AuthContext';
 import { StatusBadge } from '../ui/StatusBadge';
 import { RealThreeDViewerModal } from './RealThreeDViewerModal';
 import { PidEngineeringViewerModal } from './PidEngineeringViewerModal';
-import { MachinePosterModal } from './MachinePosterModal';
 import { RegisterMachineModal } from './RegisterMachineModal';
 import { PublicLookupModal } from './PublicLookupModal';
 import { TaskManagementModal } from './TaskManagementModal';
@@ -55,7 +53,6 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
   const [isThreeDOpen, setIsThreeDOpen] = useState(false);
   const [isPidOpen, setIsPidOpen] = useState(false);
   const [pidInitialTag, setPidInitialTag] = useState<string | undefined>(undefined);
-  const [isPosterOpen, setIsPosterOpen] = useState(false);
 
   // Machine deletion state
   const [selectedMachineIds, setSelectedMachineIds] = useState<string[]>([]);
@@ -130,11 +127,6 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
     if (selectedMachine?.id === updatedMachine.id) {
       setSelectedMachine((prev) => (prev ? { ...prev, ...updatedMachine } : updatedMachine));
     }
-  };
-
-  const handleOpenPoster = (machine: Machine) => {
-    setSelectedMachine(machine);
-    setIsPosterOpen(true);
   };
 
   const handleOpen3D = (machine: Machine) => {
@@ -533,18 +525,6 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
                             <FileCode className="w-3.5 h-3.5" />
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenPoster(m);
-                            }}
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#1A202C] border border-[#CBD5E1] transition cursor-pointer"
-                            title="Generate Printable Machine QR Poster"
-                          >
-                            <QrCode className="w-3.5 h-3.5" />
-                          </button>
-
                           {/* Row Edit Machine Button */}
                           <button
                             type="button"
@@ -637,25 +617,15 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
               </button>
             </div>
 
-            {/* QR Poster & Task Action */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => handleOpenPoster(selectedAsset)}
-                className="p-2 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] text-[#1A202C] flex items-center justify-center gap-1.5 transition"
-              >
-                <QrCode className="w-3.5 h-3.5 text-[#2563EB]" />
-                <span>Print QR Poster</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsTaskModalOpen(true)}
-                className="p-2 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] text-[#1A202C] flex items-center justify-center gap-1.5 transition"
-              >
-                <ClipboardList className="w-3.5 h-3.5 text-[#2563EB]" />
-                <span>Manage Tasks</span>
-              </button>
-            </div>
+            {/* Task Action */}
+            <button
+              type="button"
+              onClick={() => setIsTaskModalOpen(true)}
+              className="w-full p-2.5 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] text-[#1A202C] flex items-center justify-center gap-2 transition text-xs font-semibold"
+            >
+              <ClipboardList className="w-4 h-4 text-[#2563EB]" />
+              <span>Manage Tasks</span>
+            </button>
 
             {/* Edit Machine Record */}
             <button
@@ -787,13 +757,6 @@ export const AssetDirectoryView: React.FC<AssetDirectoryViewProps> = () => {
           handleOpen3D(selectedMachine!);
         }}
         onMachineUpdated={handleMachineUpdated}
-      />
-
-      {/* Machine QR Poster Modal */}
-      <MachinePosterModal
-        isOpen={isPosterOpen}
-        onClose={() => setIsPosterOpen(false)}
-        machine={selectedMachine}
       />
 
       {/* Register Machine Modal */}

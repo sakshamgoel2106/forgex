@@ -160,28 +160,6 @@ export class CopilotController {
         }
       );
 
-      await this.dataStore.recordAuditEvent({
-        organizationId,
-        actorUserId: userId,
-        action: 'COPILOT_QUERY_EXECUTED',
-        resourceType: 'CONVERSATION',
-        resourceId: result.conversationId,
-        metadata: {
-          plantId,
-          assetId,
-          machineId,
-          citationsCount: result.assistantMessage.citations.length,
-          confidence: result.assistantMessage.confidence,
-          isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
-          ticketNumber: result.assistantMessage.ticketNumber,
-          hasAcousticTelemetry: Boolean(acousticTelemetry),
-          acousticPattern: acousticTelemetry?.detectedPattern,
-          hasVisionDiagnostic: Boolean(visionDiagnostic),
-          visionSafetyStatus: visionDiagnostic?.safetyStatus,
-          hasImage: Boolean(effectiveImageUrl),
-        },
-      });
-
       // Sanitize client payload: Block all internal manual names, document IDs, citations, and excerpts
       const sanitizedAssistantMessage = {
         ...result.assistantMessage,
@@ -195,6 +173,7 @@ export class CopilotController {
         imageUrl: effectiveImageUrl || (result.userMessage as any).imageUrl,
       };
 
+      // Respond to client immediately without waiting for background audit event
       res.status(200).json({
         success: true,
         data: {
@@ -215,6 +194,31 @@ export class CopilotController {
           userMessage: userMessageWithTelemetry,
           assistantMessage: sanitizedAssistantMessage,
         },
+      });
+
+      // Asynchronous background audit recording (non-blocking)
+      this.dataStore.recordAuditEvent({
+        organizationId,
+        actorUserId: userId,
+        action: 'COPILOT_QUERY_EXECUTED',
+        resourceType: 'CONVERSATION',
+        resourceId: result.conversationId,
+        metadata: {
+          plantId,
+          assetId,
+          machineId,
+          citationsCount: result.assistantMessage.citations.length,
+          confidence: result.assistantMessage.confidence,
+          isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
+          ticketNumber: result.assistantMessage.ticketNumber,
+          hasAcousticTelemetry: Boolean(acousticTelemetry),
+          acousticPattern: acousticTelemetry?.detectedPattern,
+          hasVisionDiagnostic: Boolean(visionDiagnostic),
+          visionSafetyStatus: visionDiagnostic?.safetyStatus,
+          hasImage: Boolean(effectiveImageUrl),
+        },
+      }).catch((auditErr: any) => {
+        logger.warn({ error: auditErr?.message }, 'Non-blocking audit log background write failed');
       });
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to execute Copilot query');

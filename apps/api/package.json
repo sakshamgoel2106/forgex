@@ -10,6 +10,8 @@
     "dev": "tsx watch src/server.ts",
     "test": "vitest run",
     "db:migrate": "tsx src/db/runMigrationsCli.ts",
+    "db:reset-demo": "tsx src/db/resetAndSeedDemo.ts",
+    "test:e2e-demo": "tsx src/scripts/autonomousE2eVerification.ts",
     "seed:demo": "tsx src/db/seedDemoFactory.ts",
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },

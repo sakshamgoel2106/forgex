@@ -2004,13 +2004,22 @@ export const CopilotWorkspaceView: React.FC = () => {
             </div>
           ))}
 
-          {/* Real-time Query Progress Indicator */}
+          {/* Real-time ForgeX Thinking Indicator */}
           {isQuerying && (
-            <div className="p-4 rounded-xl bg-white border border-[#2563EB]/40 flex items-center gap-3 text-xs font-sans text-[#2563EB] animate-pulse max-w-md shadow-sm">
-              <RotateCw className="w-4 h-4 animate-spin text-[#2563EB]" />
-              <div className="space-y-0.5">
-                <span className="font-bold text-[#1A202C]">GROUNDED INFERENCE IN PROGRESS</span>
-                <p className="text-[11px] text-[#64748B] font-mono">{queryStep}</p>
+            <div className="p-4 rounded-xl bg-gradient-to-r from-blue-50/90 via-white to-blue-50/50 border border-[#2563EB]/40 flex items-center gap-3.5 text-xs font-sans max-w-lg shadow-xs">
+              <div className="relative flex items-center justify-center shrink-0">
+                <RotateCw className="w-4 h-4 text-[#2563EB] animate-spin" />
+                <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600"></span>
+                </span>
+              </div>
+              <div className="space-y-0.5 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-[#1A202C] text-xs">ForgeX Thinking...</span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">FAST RAG</span>
+                </div>
+                <p className="text-[11px] text-[#475569] font-mono truncate">{queryStep || 'Synthesizing verified engineering specs...'}</p>
               </div>
             </div>
           )}

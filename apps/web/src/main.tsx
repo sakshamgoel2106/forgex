@@ -3,6 +3,22 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 
+// Storage sanitization & invalidation drive
+const FORGEX_STORAGE_VERSION = 'v1.4.3-clean';
+if (typeof window !== 'undefined') {
+  try {
+    const currentVer = localStorage.getItem('FORGEX_STORAGE_VERSION');
+    if (currentVer !== FORGEX_STORAGE_VERSION) {
+      console.info(`[ForgeX] Storage version mismatch (found: ${currentVer}, target: ${FORGEX_STORAGE_VERSION}). Resetting browser local/session storage...`);
+      localStorage.clear();
+      sessionStorage.clear();
+      localStorage.setItem('FORGEX_STORAGE_VERSION', FORGEX_STORAGE_VERSION);
+    }
+  } catch (err) {
+    console.warn('[ForgeX] Storage sanitization check failed:', err);
+  }
+}
+
 interface ErrorBoundaryProps {
   children: React.ReactNode;
 }

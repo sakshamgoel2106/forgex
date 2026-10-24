@@ -4,7 +4,6 @@ import {
   Factory,
   FileText,
   MessageSquare,
-  ScanLine,
   HardHat,
   GraduationCap,
   Settings,
@@ -36,7 +35,6 @@ export type NavModule =
   | 'expert'
   | 'maintenance'
   | 'history'
-  | 'visual'
   | 'tech'
   | 'oem-escalations'
   | 'worker'
@@ -79,7 +77,6 @@ const NAV_ITEMS: NavItemDef[] = [
   { id: 'tech',               label: 'Technician Queue',     icon: Wrench,          group: 'execution' },
   { id: 'oem-escalations',    label: 'OEM Escalations',      icon: ShieldAlert,     group: 'execution' },
   { id: 'history',            label: 'Maintenance History',  icon: History,         group: 'execution' },
-  { id: 'visual',             label: 'Visual Intelligence',  icon: ScanLine,        group: 'execution' },
   { id: 'worker',             label: 'Worker Workspace',     icon: UserCheck,       group: 'execution' },
 
   // 4. GOVERNANCE

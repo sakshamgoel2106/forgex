@@ -4,6 +4,9 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  RotateCw,
+  ChevronLeft,
+  ChevronRight,
   Maximize2,
   Minimize2,
   Compass,
@@ -21,6 +24,10 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
+import {
+  STANDARD_PID_TAG_CATALOG,
+  STANDARD_PID_EQUIPMENT_TAGS,
+} from './pidConstants';
 
 const PidPdfViewer = React.lazy(() =>
   import('./PidPdfViewer').then((m) => ({ default: m.PidPdfViewer }))
@@ -73,6 +80,9 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   // Navigation & Zoom State
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [rotation, setRotation] = useState<number>(0);
+  const [pageNumber, setPageNumber] = useState<number>(1);
+  const [numPages, setNumPages] = useState<number>(1);
   const [isDragging, setIsDragging] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
@@ -388,13 +398,19 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   // --------------------------------------------------------------------------
   const handleZoomIn = () => setZoom((z) => Math.min(Number((z + 0.25).toFixed(2)), 4.0));
   const handleZoomOut = () => setZoom((z) => Math.max(Number((z - 0.25).toFixed(2)), 0.25));
-  const handleResetZoom = () => {
+  const handleResetZoom = useCallback(() => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
-  };
+    setRotation(0);
+  }, []);
 
   const handleFitToScreen = useCallback(() => {
-    setZoom(0.85);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const handleRotate90 = useCallback(() => {
+    setRotation((r) => ((r + 90) % 360));
     setPan({ x: 0, y: 0 });
   }, []);
 
@@ -514,6 +530,9 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     }
   };
 
+  const drawingTags = drawingRecord?.equipmentTags || [];
+  const effectiveTags = drawingTags.length > 0 ? drawingTags : STANDARD_PID_EQUIPMENT_TAGS;
+
   // --------------------------------------------------------------------------
   // 6. Interactive SVG Tag Click Handler
   // --------------------------------------------------------------------------
@@ -523,7 +542,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     const taggedElement = target.closest('[data-tag], [id]');
     if (taggedElement) {
       const tag = taggedElement.getAttribute('data-tag') || taggedElement.getAttribute('id');
-      if (tag && equipmentTags.includes(tag)) {
+      if (tag && effectiveTags.includes(tag)) {
         setSelectedTag(tag);
         onSelectTag?.(tag);
       }
@@ -597,14 +616,31 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
 
   if (!isOpen || (!machine && !drawingRecord && !initialDrawing && !initialDrawingId)) return null;
 
-  const equipmentTags = drawingRecord?.equipmentTags || [];
-  const filteredTags = equipmentTags.filter((tag) =>
-    tag.toLowerCase().includes(tagSearchQuery.trim().toLowerCase())
-  );
+  // Auto-select the first tag if none selected yet
+  useEffect(() => {
+    if (effectiveTags.length > 0 && !selectedTag) {
+      setSelectedTag(activeTag || effectiveTags[0]);
+    }
+  }, [effectiveTags, selectedTag, activeTag]);
+
+  const filteredTags = effectiveTags.filter((tag) => {
+    const q = tagSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    if (tag.toLowerCase().includes(q)) return true;
+    const detail = STANDARD_PID_TAG_CATALOG[tag];
+    if (detail) {
+      if (detail.name.toLowerCase().includes(q)) return true;
+      if (detail.type.toLowerCase().includes(q)) return true;
+      if (detail.description.toLowerCase().includes(q)) return true;
+      if (detail.category.toLowerCase().includes(q)) return true;
+    }
+    return false;
+  });
 
   const selectedMapping = mappings.find(
     (m) => m.pidTag === selectedTag || m.componentName.toLowerCase().includes(selectedTag?.toLowerCase() || '')
   );
+  const selectedTagDetail = selectedTag ? STANDARD_PID_TAG_CATALOG[selectedTag] : null;
 
   return (
     <div
@@ -816,7 +852,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
           <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-[#F5F6F7]">
             {/* Left: Interactive Canvas with Pan/Zoom & Controls */}
             <div className="relative flex-1 h-full overflow-hidden flex flex-col bg-[#F1F5F9]">
-              {/* Controls Bar */}
+              {/* Single Clean Controls Header Bar */}
               <div className="px-4 py-2 border-b border-[#E2E8F0] flex items-center justify-between z-10 bg-white/95 backdrop-blur-md">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-[#1A202C] font-mono">
@@ -831,11 +867,39 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                   <span className="text-[10px] text-slate-500 font-mono hidden lg:inline">
                     Discipline: {drawingRecord.discipline}
                   </span>
+
+                  {/* Multi-page Navigation for PDF drawings */}
+                  {numPages > 1 && (
+                    <div className="flex items-center gap-1 bg-slate-100 px-1 py-0.5 rounded-lg border border-slate-200 ml-2">
+                      <button
+                        type="button"
+                        disabled={pageNumber <= 1}
+                        onClick={() => setPageNumber((p) => Math.max(p - 1, 1))}
+                        className="p-0.5 text-slate-600 hover:text-slate-900 disabled:opacity-30 rounded transition"
+                        title="Previous Page"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-[10px] font-mono text-slate-700 font-semibold px-1">
+                        Page {pageNumber} of {numPages}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={pageNumber >= numPages}
+                        onClick={() => setPageNumber((p) => Math.min(p + 1, numPages))}
+                        className="p-0.5 text-slate-600 hover:text-slate-900 disabled:opacity-30 rounded transition"
+                        title="Next Page"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {/* Pan / Zoom Interactive Controls */}
+                {/* Single Unified Header Controls: Zoom, Scale, Fit, Rotate 90, Reset */}
                 <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-[#CBD5E1]">
                   <button
+                    type="button"
                     onClick={handleZoomOut}
                     className="p-1 text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
                     title="Zoom Out (-)"
@@ -847,6 +911,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     {Math.round(zoom * 100)}%
                   </span>
                   <button
+                    type="button"
                     onClick={handleZoomIn}
                     className="p-1 text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
                     title="Zoom In (+)"
@@ -855,13 +920,25 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     <ZoomIn className="w-3.5 h-3.5" />
                   </button>
                   <button
+                    type="button"
                     onClick={handleFitToScreen}
                     className="px-2 py-1 text-[10px] font-mono font-semibold text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
-                    title="Fit Diagram to Viewport"
+                    title="Fit Diagram to Viewport (Centered 100%)"
                   >
                     Fit
                   </button>
                   <button
+                    type="button"
+                    onClick={handleRotate90}
+                    className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-semibold text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
+                    title="Rotate 90° Clockwise"
+                    aria-label="Rotate 90°"
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Rotate 90°</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleResetZoom}
                     className="p-1 text-[#64748B] hover:text-[#1A202C] hover:bg-white rounded-lg transition"
                     title="Reset Zoom & Pan (0)"
@@ -881,8 +958,8 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                 onMouseLeave={!activePdfUrl ? handleMouseUp : undefined}
                 onWheel={!activePdfUrl ? handleWheel : undefined}
                 className={`flex-1 overflow-hidden flex items-center justify-center select-none ${
-                  !activePdfUrl ? 'p-4 cursor-grab active:cursor-grabbing' : 'p-0'
-                } bg-[#EAEEF4]`}
+                  !activePdfUrl ? 'p-6 cursor-grab active:cursor-grabbing' : 'p-0'
+                } bg-[#F1F5F9]`}
               >
                 {isLoadingContent && !activePdfUrl ? (
                   <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
@@ -928,7 +1005,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     </button>
                   </div>
                 ) : activePdfUrl ? (
-                  /* 3. Deep Zoom Pan Pinch PDF Rendering using react-pdf & react-zoom-pan-pinch */
+                  /* 3. Deep Zoom Pan Pinch PDF Rendering using react-pdf */
                   <React.Suspense
                     fallback={
                       <div className="flex flex-col items-center justify-center h-full text-slate-500">
@@ -940,7 +1017,17 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     <PidPdfViewer
                       fileUrl={activePdfUrl}
                       drawingTitle={drawingRecord?.drawingTitle || 'P&ID Schematic'}
+                      zoom={zoom}
+                      pan={pan}
+                      rotation={rotation}
+                      pageNumber={pageNumber}
                       activeTag={selectedTag}
+                      equipmentTags={effectiveTags}
+                      tagCatalog={STANDARD_PID_TAG_CATALOG}
+                      onPanChange={setPan}
+                      onZoomChange={setZoom}
+                      onPageChange={setPageNumber}
+                      onLoadSuccess={(pages) => setNumPages(pages)}
                       onTagClick={(tag) => {
                         setSelectedTag(tag);
                         onSelectTag?.(tag);
@@ -951,28 +1038,30 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                   /* Actual Diagram Rendering */
                   <div
                     style={{
-                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
                       transformOrigin: 'center center',
                     }}
-                    className="transition-transform duration-75 ease-out flex items-center justify-center"
+                    className="transition-transform duration-75 ease-out flex items-center justify-center relative"
                     onClick={handleSvgContainerClick}
                   >
                     {/* 1. Vector SVG Rendering */}
                     {svgContent && (
                       <div
-                        className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl overflow-hidden p-2 select-none [&_svg]:max-w-full [&_svg]:h-auto"
+                        className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl overflow-hidden p-2 select-none [&_svg]:max-w-full [&_svg]:h-auto relative"
                         dangerouslySetInnerHTML={{ __html: svgContent }}
                       />
                     )}
 
                     {/* 2. Raster Image Rendering (PNG, JPEG, WebP) */}
                     {imageBlobUrl && (
-                      <img
-                        src={imageBlobUrl}
-                        alt={drawingRecord?.drawingTitle || 'P&ID Drawing'}
-                        draggable={false}
-                        className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl max-w-none max-h-[75vh] object-contain select-none"
-                      />
+                      <div className="relative">
+                        <img
+                          src={imageBlobUrl}
+                          alt={drawingRecord?.drawingTitle || 'P&ID Drawing'}
+                          draggable={false}
+                          className="border border-[#CBD5E1] rounded-xl bg-white shadow-xl max-w-none max-h-[75vh] object-contain select-none"
+                        />
+                      </div>
                     )}
                   </div>
                 )}
@@ -1006,8 +1095,8 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                       P&ID Equipment Tags
                     </span>
                   </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold">
-                    {equipmentTags.length} Tags
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-bold">
+                    {effectiveTags.length} Tags
                   </span>
                 </div>
 
@@ -1017,7 +1106,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                     type="text"
                     value={tagSearchQuery}
                     onChange={(e) => setTagSearchQuery(e.target.value)}
-                    placeholder="Search equipment tags..."
+                    placeholder="Search tags, equipment, valves..."
                     className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-[#F8FAFC] border border-[#CBD5E1] text-xs text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
                   />
                 </div>
@@ -1027,12 +1116,13 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
               <div className="flex-1 overflow-y-auto p-2 space-y-1">
                 {filteredTags.length === 0 ? (
                   <div className="py-6 text-center text-xs text-slate-400">
-                    {equipmentTags.length === 0 ? 'No equipment tags declared in drawing.' : 'No matching tags found.'}
+                    {effectiveTags.length === 0 ? 'No equipment tags declared in drawing.' : 'No matching tags found.'}
                   </div>
                 ) : (
                   filteredTags.map((tag) => {
                     const isSelected = selectedTag === tag;
                     const mapping = mappings.find((m) => m.pidTag === tag);
+                    const tagDetail = STANDARD_PID_TAG_CATALOG[tag];
 
                     return (
                       <button
@@ -1041,16 +1131,30 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                           setSelectedTag(tag);
                           onSelectTag?.(tag);
                         }}
-                        className={`w-full text-left p-2.5 rounded-xl text-xs font-mono transition flex items-center justify-between ${
+                        className={`w-full text-left p-2.5 rounded-xl text-xs font-mono transition flex items-center justify-between group ${
                           isSelected
                             ? 'bg-blue-50 text-[#2563EB] border border-blue-200 shadow-xs'
                             : 'text-[#1A202C] hover:bg-slate-50 border border-transparent'
                         }`}
                       >
-                        <span className="font-bold">{tag}</span>
-                        {mapping && (
+                        <div className="flex flex-col min-w-0 pr-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold">{tag}</span>
+                            {tagDetail && (
+                              <span className="text-[10px] text-slate-500 font-sans truncate">
+                                • {tagDetail.name}
+                              </span>
+                            )}
+                          </div>
+                          {tagDetail && (
+                            <span className="text-[10px] text-slate-400 font-sans truncate">
+                              {tagDetail.type}
+                            </span>
+                          )}
+                        </div>
+                        {mapping ? (
                           <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 ${
                               mapping.status === 'VERIFIED'
                                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                 : 'bg-amber-50 text-amber-700 border border-amber-200'
@@ -1058,7 +1162,11 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                           >
                             {mapping.status}
                           </span>
-                        )}
+                        ) : tagDetail ? (
+                          <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 bg-slate-100 text-slate-600 border border-slate-200">
+                            {tagDetail.category}
+                          </span>
+                        ) : null}
                       </button>
                     );
                   })
@@ -1071,15 +1179,116 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-[#64748B]">Selected Tag</div>
-                        <div className="text-xs font-bold text-[#1A202C] font-mono mt-0.5">{selectedTag}</div>
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-[#64748B] flex items-center gap-1.5">
+                          <span>Selected Component</span>
+                          {selectedTagDetail && (
+                            <span className="px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 text-[9px] font-bold">
+                              {selectedTagDetail.category}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs font-bold text-[#1A202C] font-mono mt-0.5">
+                          {selectedTag} {selectedTagDetail ? `— ${selectedTagDetail.name}` : ''}
+                        </div>
                       </div>
                       <span className="text-[10px] font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-bold">
                         {currentMachine.assetTag}
                       </span>
                     </div>
 
-                    {selectedMapping ? (
+                    {/* Rich Tag Specs Card */}
+                    {selectedTagDetail && (
+                      <div className="bg-white border border-[#E2E8F0] rounded-xl p-3 space-y-2 text-xs shadow-xs">
+                        <div className="text-[11px] text-slate-700 leading-tight">
+                          <span className="font-semibold text-slate-900">Role: </span>
+                          {selectedTagDetail.type}
+                        </div>
+                        <p className="text-[10px] text-slate-500 leading-relaxed font-sans">
+                          {selectedTagDetail.description}
+                        </p>
+
+                        <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-100 text-[10px] font-mono">
+                          {selectedTagDetail.capacity && (
+                            <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                              <span className="text-slate-400 block text-[9px]">CAPACITY:</span>
+                              <span className="font-bold text-slate-800">{selectedTagDetail.capacity}</span>
+                            </div>
+                          )}
+                          {selectedTagDetail.powerRating && (
+                            <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                              <span className="text-slate-400 block text-[9px]">POWER:</span>
+                              <span className="font-bold text-slate-800">{selectedTagDetail.powerRating}</span>
+                            </div>
+                          )}
+                          {selectedTagDetail.operatingPressure && (
+                            <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                              <span className="text-slate-400 block text-[9px]">OPERATING PRESS:</span>
+                              <span className="font-bold text-slate-800">{selectedTagDetail.operatingPressure}</span>
+                            </div>
+                          )}
+                          {selectedTagDetail.designPressure && (
+                            <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                              <span className="text-slate-400 block text-[9px]">DESIGN PRESS:</span>
+                              <span className="font-bold text-slate-800">{selectedTagDetail.designPressure}</span>
+                            </div>
+                          )}
+                          {selectedTagDetail.setPressure && (
+                            <div className="bg-amber-50 p-1.5 rounded border border-amber-200">
+                              <span className="text-amber-600 block text-[9px]">SET PRESSURE:</span>
+                              <span className="font-bold text-amber-900">{selectedTagDetail.setPressure}</span>
+                            </div>
+                          )}
+                          {selectedTagDetail.range && (
+                            <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                              <span className="text-slate-400 block text-[9px]">GAUGE RANGE:</span>
+                              <span className="font-bold text-slate-800">{selectedTagDetail.range}</span>
+                            </div>
+                          )}
+                          {selectedTagDetail.designTemp && (
+                            <div className="bg-slate-50 p-1.5 rounded border border-slate-200 col-span-2">
+                              <span className="text-slate-400 block text-[9px]">THERMAL LIMIT:</span>
+                              <span className="font-bold text-slate-800">{selectedTagDetail.designTemp}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Direct Action Links */}
+                        <div className="pt-2 border-t border-[#E2E8F0] flex flex-col gap-1.5">
+                          {onOpen3dComponent && (
+                            <button
+                              onClick={() => onOpen3dComponent(selectedMapping?.componentId || selectedTagDetail.componentId || selectedTag.toLowerCase())}
+                              className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 text-[11px] font-medium transition"
+                            >
+                              <Layers className="w-3.5 h-3.5" />
+                              View Component in 3D CAD Viewer
+                            </button>
+                          )}
+
+                          {onOpenManual && (
+                            <button
+                              onClick={() => onOpenManual(selectedMapping?.manualPageNumber || selectedTagDetail.manualPage || 1)}
+                              className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 text-[11px] font-medium transition"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              Open OEM Manual Page {selectedMapping?.manualPageNumber || selectedTagDetail.manualPage || 1}
+                            </button>
+                          )}
+
+                          {isEngineer && selectedMapping && selectedMapping.status === 'SUGGESTED' && (
+                            <button
+                              disabled={verifyingMappingId === selectedMapping.id}
+                              onClick={() => handleVerifyCrossLink(selectedMapping.id)}
+                              className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-lg bg-[#151C24] text-white hover:bg-black text-[11px] font-bold transition shadow-sm"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              {verifyingMappingId === selectedMapping.id ? 'Verifying...' : 'Approve & Confirm Cross-Link'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {!selectedTagDetail && selectedMapping && (
                       <div className="bg-white border border-[#E2E8F0] rounded-xl p-3 space-y-2.5 text-xs shadow-sm">
                         <div className="flex items-center justify-between">
                           <span className="text-[#64748B] text-[11px]">3D Component:</span>
@@ -1100,12 +1309,6 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                             {selectedMapping.status}
                           </span>
                         </div>
-
-                        {selectedMapping.status === 'SUGGESTED' && (
-                          <div className="p-2 rounded bg-amber-50 border border-amber-200 text-[10px] text-amber-800 leading-tight">
-                            AI suggestions must not be marked confirmed without an authorized engineering review.
-                          </div>
-                        )}
 
                         {/* Action buttons */}
                         <div className="pt-2 border-t border-[#E2E8F0] flex flex-col gap-1.5">
@@ -1140,11 +1343,6 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                             </button>
                           )}
                         </div>
-                      </div>
-                    ) : (
-                      <div className="text-[11px] text-[#64748B] italic flex items-center gap-1.5 bg-white p-2.5 rounded-xl border border-[#E2E8F0] shadow-sm">
-                        <AlertCircle className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        No verified cross-link configured for tag {selectedTag}.
                       </div>
                     )}
                   </div>

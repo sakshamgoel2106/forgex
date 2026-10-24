@@ -91,6 +91,20 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   const [verifyingMappingId, setVerifyingMappingId] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
+  const handleModelStats = useCallback((stats: { vertexCount: number; meshCount: number; dimensions: string }) => {
+    setModelStats(stats);
+  }, []);
+
+  const handleComponentList = useCallback((extracted: Array<{ id: string; name: string; vertexCount: number }>) => {
+    setComponentList(
+      extracted.map((c) => ({
+        id: c.id,
+        name: c.name,
+        vertexCount: c.vertexCount,
+      }))
+    );
+  }, []);
+
   // 1. Fetch approved model record for this machine
   useEffect(() => {
     if (!isOpen) {
@@ -643,17 +657,9 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
                       fileFormat={modelRecord.fileFormat}
                       wireframe={wireframe}
                       selectedComponentId={selectedComponentId}
-                      onSelectComponent={(compId) => setSelectedComponentId(compId)}
-                      onModelStats={setModelStats}
-                      onComponentList={(extracted) => {
-                        setComponentList(
-                          extracted.map((c) => ({
-                            id: c.id,
-                            name: c.name,
-                            vertexCount: c.vertexCount,
-                          }))
-                        );
-                      }}
+                      onSelectComponent={setSelectedComponentId}
+                      onModelStats={handleModelStats}
+                      onComponentList={handleComponentList}
                       onRetry={fetchBlob}
                     />
                   </React.Suspense>

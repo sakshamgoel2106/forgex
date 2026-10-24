@@ -12,6 +12,8 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "npm run test:e2e --workspace=@forgex/web",
+    "test:e2e-demo": "npm run test:e2e-demo --workspace=@forgex/api",
+    "db:reset-demo": "npm run db:reset-demo --workspace=@forgex/api",
     "lint": "npm run lint --workspaces --if-present",
     "dev:api": "npm run dev --workspace=apps/api",
     "dev:web": "npm run dev --workspace=apps/web",

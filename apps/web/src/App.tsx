@@ -10,7 +10,6 @@ import { OverviewView } from './components/views/OverviewView';
 import { AssetDirectoryView } from './components/views/AssetDirectoryView';
 import { TechnicalManualsView } from './components/views/TechnicalManualsView';
 import { CopilotWorkspaceView } from './components/views/CopilotWorkspaceView';
-import { VisualIntelligenceView } from './components/views/VisualIntelligenceView';
 import { MaintenanceWorkspaceView } from './components/views/MaintenanceWorkspaceView';
 import { ExpertKnowledgeView } from './components/views/ExpertKnowledgeView';
 import { TeamManagementView } from './components/views/TeamManagementView';
@@ -134,6 +133,20 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  // Persistent client-side tab caching to eliminate re-fetch lag on tab switches
+  const [visitedTabs, setVisitedTabs] = useState<Set<NavModule>>(
+    () => new Set([activeModule, 'copilot', 'overview', 'assets'])
+  );
+
+  useEffect(() => {
+    setVisitedTabs((prev) => {
+      if (prev.has(activeModule)) return prev;
+      const next = new Set(prev);
+      next.add(activeModule);
+      return next;
+    });
+  }, [activeModule]);
+
   if (isLoading) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-[#0B0F17] text-[#E2E8F0]">
@@ -200,8 +213,6 @@ const AppContent: React.FC = () => {
             onNavigateToWorkOrder={(_ticket) => setActiveModule('maintenance')}
           />
         );
-      case 'visual':
-        return <VisualIntelligenceView />;
       case 'tech':
         return (
           <TechnicianWorkspaceView
@@ -249,9 +260,30 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const isCachedTab = (tab: NavModule) => ['overview', 'assets', 'copilot'].includes(tab);
+
   return (
     <AppShell activeModule={activeModule} onSelectModule={setActiveModule}>
-      {renderActiveView()}
+      {/* 1. Cached Persistent Core Views (Instant 0ms Tab Switching) */}
+      <div className={activeModule === 'overview' ? 'h-full w-full block' : 'h-full w-full hidden'}>
+        {visitedTabs.has('overview') &&
+          (role === 'WORKER' ? (
+            <RBACFallbackBanner moduleName="Plant Overview" role={role} onRedirect={setActiveModule} />
+          ) : (
+            <OverviewView onNavigate={(mod) => setActiveModule(mod as NavModule)} />
+          ))}
+      </div>
+
+      <div className={activeModule === 'assets' ? 'h-full w-full block' : 'h-full w-full hidden'}>
+        {visitedTabs.has('assets') && <AssetDirectoryView />}
+      </div>
+
+      <div className={activeModule === 'copilot' ? 'h-full w-full block' : 'h-full w-full hidden'}>
+        {visitedTabs.has('copilot') && <CopilotWorkspaceView />}
+      </div>
+
+      {/* 2. Dynamic Views */}
+      {!isCachedTab(activeModule) && renderActiveView()}
     </AppShell>
   );
 };

@@ -7,6 +7,7 @@ import { EmailOtpService } from '../auth/emailOtpService.js';
 import { GoogleAuthService } from '../auth/googleAuthService.js';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { appMemoryCache } from '../utils/memoryCache.js';
 
 export function createOrgRouter(dataStore: IDataStore): Router {
   const router = Router();
@@ -114,6 +115,13 @@ export function createOrgRouter(dataStore: IDataStore): Router {
 
       const orgId = req.auth.organization.id;
       const org = req.auth.organization;
+      const cacheKey = `overview:${orgId}`;
+
+      const cachedOverview = appMemoryCache.get(cacheKey);
+      if (cachedOverview) {
+        res.status(200).json({ success: true, data: cachedOverview });
+        return;
+      }
 
       // 1. Fetch tenant-isolated records strictly by validated orgId
       const [plants, machines, cases, members, documents, alertsResult] = await Promise.all([
@@ -267,10 +275,8 @@ export function createOrgRouter(dataStore: IDataStore): Router {
       const completedCount = onboardingSteps.filter((s) => s.completed).length;
       const setupProgressPercent = Math.round((completedCount / onboardingSteps.length) * 100);
 
-      res.status(200).json({
-        success: true,
-        data: {
-          organization: {
+      const overviewPayload = {
+        organization: {
             id: org.id,
             name: org.name,
             slug: org.slug,
@@ -308,7 +314,13 @@ export function createOrgRouter(dataStore: IDataStore): Router {
             setupProgressPercent,
             steps: onboardingSteps,
           },
-        },
+        };
+
+      appMemoryCache.set(cacheKey, overviewPayload, 60_000);
+
+      res.status(200).json({
+        success: true,
+        data: overviewPayload,
       });
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to fetch organization overview');
