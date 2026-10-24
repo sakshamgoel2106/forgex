@@ -96,6 +96,78 @@ export const TECHNICIAN_ROSTER: TechProfile[] = [
     tier: 'Certified Specialist',
     initialSolved: 19,
   },
+  {
+    id: 'tech-5',
+    name: 'Carlos Mendez',
+    discipline: 'Heavy Drives & Gearboxes',
+    role: 'Drivetrain Specialist',
+    rating: 4.8,
+    tier: 'Certified Specialist',
+    initialSolved: 22,
+  },
+  {
+    id: 'tech-6',
+    name: 'Priya Patel',
+    discipline: 'Robotics & Servo Actuation',
+    role: 'Robotics Automation Lead',
+    rating: 4.9,
+    tier: 'Top Rated',
+    initialSolved: 35,
+  },
+  {
+    id: 'tech-7',
+    name: 'David Kim',
+    discipline: 'High-Voltage Switchgear & VFD',
+    role: 'Power Electronics Tech',
+    rating: 4.8,
+    tier: 'High Performer',
+    initialSolved: 26,
+  },
+  {
+    id: 'tech-8',
+    name: 'Liam O\'Connor',
+    discipline: 'Pneumatics & Valve Rebuilds',
+    role: 'Fluid Power Specialist',
+    rating: 4.7,
+    tier: 'Senior Field Tech',
+    initialSolved: 21,
+  },
+  {
+    id: 'tech-9',
+    name: 'Sophia Taylor',
+    discipline: 'Lubrication & Tribology',
+    role: 'Certified Tribologist',
+    rating: 4.8,
+    tier: 'Certified Specialist',
+    initialSolved: 18,
+  },
+  {
+    id: 'tech-10',
+    name: 'Jackson Brooks',
+    discipline: 'Turbomachinery & Compressors',
+    role: 'Rotating Equipment Tech',
+    rating: 4.9,
+    tier: 'Top Rated',
+    initialSolved: 30,
+  },
+  {
+    id: 'tech-11',
+    name: 'Fatima Al-Mansoor',
+    discipline: 'Thermal Imaging & Heat Transfer',
+    role: 'Thermography Specialist',
+    rating: 4.8,
+    tier: 'High Performer',
+    initialSolved: 23,
+  },
+  {
+    id: 'tech-12',
+    name: 'Ryan Gallagher',
+    discipline: 'Instrumentation & Calibration',
+    role: 'Field Calibration Tech',
+    rating: 4.7,
+    tier: 'Senior Field Tech',
+    initialSolved: 20,
+  },
 ];
 
 export interface TechTask {
@@ -180,6 +252,8 @@ export const TechnicianWorkspaceView: React.FC<{
 
   // OEM Escalation Modal State
   const [isOemModalOpen, setIsOemModalOpen] = useState(false);
+  const [isWorkforceModalOpen, setIsWorkforceModalOpen] = useState(false);
+  const [workforceSearchTerm, setWorkforceSearchTerm] = useState('');
   const [oemTargetTask, setOemTargetTask] = useState<TechTask | null>(null);
   const [oemVendorName, setOemVendorName] = useState('Siemens Industry AG / DMG Mori');
   const [oemFaultCode, setOemFaultCode] = useState('');
@@ -931,10 +1005,10 @@ export const TechnicianWorkspaceView: React.FC<{
         if (t.id !== taskId) return t;
 
         const updatedSteps = t.steps.map((step, idx) => {
-          if (idx === 0 && step.status === 'PENDING') {
+          if (idx === 0) {
             return { ...step, status: 'IN_PROGRESS' as const };
           }
-          return step;
+          return { ...step, status: 'PENDING' as const };
         });
 
         saveStoredExecution(t, updatedSteps, true);
@@ -944,7 +1018,7 @@ export const TechnicianWorkspaceView: React.FC<{
           isStarted: true,
           status: 'In Progress',
           steps: updatedSteps,
-          completedSteps: updatedSteps.filter((s) => s.status === 'COMPLETED').length,
+          completedSteps: 0,
         };
 
         if (selectedTask?.id === taskId) {
@@ -956,19 +1030,26 @@ export const TechnicianWorkspaceView: React.FC<{
     );
   };
 
-  // Toggle step completion via checkbox (Strict Irreversible Locking - Requirement 5)
+  // Toggle step completion via checkbox (Strict Irreversible & Sequential Locking - Requirement 2)
   const handleToggleStep = async (taskId: string, stepId: string) => {
     const task = tasks.find((t) => t.id === taskId);
-    const existingStep = task?.steps.find((s) => s.id === stepId);
-    if (existingStep?.status === 'COMPLETED') {
+    if (!task) return;
+    const stepIdx = task.steps.findIndex((s) => s.id === stepId);
+    const completedCount = task.steps.filter((s) => s.status === 'COMPLETED').length;
+
+    if (stepIdx < completedCount) {
       toast.info('Step Locked', 'This verified step is permanently locked and cannot be reopened.');
+      return;
+    }
+    if (stepIdx > completedCount) {
+      toast.warning('Step Sequence Enforced', `Please complete Step 0${completedCount + 1} before proceeding to Step 0${stepIdx + 1}.`);
       return;
     }
     await handleCompleteAndNext(taskId, stepId);
   };
 
-  // Complete Step & Advance to next step (Strict Persistence & Live Cross-Module Sync)
-  const handleCompleteAndNext = async (taskId: string, stepId: string) => {
+  // Complete Step & Advance to next step (Strict 1-by-1 Sequential Progression)
+  const handleCompleteAndNext = async (taskId: string, stepId?: string) => {
     let targetTask: TechTask | undefined;
 
     setTasks((prevTasks) =>
@@ -976,21 +1057,19 @@ export const TechnicianWorkspaceView: React.FC<{
         if (t.id !== taskId) return t;
         targetTask = t;
 
-        let foundStep = false;
-        const updatedSteps = t.steps.map((step) => {
-          if (step.id === stepId) {
-            foundStep = true;
+        // Current count of completed steps
+        const currentCompleted = t.steps.filter((s) => s.status === 'COMPLETED').length;
+
+        // Advance: The step at currentCompleted is marked COMPLETED; ONLY the next step is IN_PROGRESS
+        const updatedSteps = t.steps.map((step, idx) => {
+          if (idx <= currentCompleted) {
             return { ...step, status: 'COMPLETED' as const };
           }
-          return step;
-        });
-
-        if (foundStep) {
-          const nextPending = updatedSteps.find((s) => s.status === 'PENDING');
-          if (nextPending) {
-            nextPending.status = 'IN_PROGRESS';
+          if (idx === currentCompleted + 1) {
+            return { ...step, status: 'IN_PROGRESS' as const };
           }
-        }
+          return { ...step, status: 'PENDING' as const };
+        });
 
         const completedCount = updatedSteps.filter((s) => s.status === 'COMPLETED').length;
         const allCompleted = completedCount === updatedSteps.length && updatedSteps.length > 0;
@@ -1064,7 +1143,7 @@ export const TechnicianWorkspaceView: React.FC<{
               }
               return current;
             });
-          }, 300);
+          }, 350);
         }
 
         return updatedTask;
@@ -1751,143 +1830,87 @@ export const TechnicianWorkspaceView: React.FC<{
         </div>
       </div>
 
-      {/* Technician Roster & Kundli Bar */}
-      <div className="bg-white border-b border-slate-200 px-4 py-2 shrink-0 shadow-2xs">
-        <div className="flex items-center justify-between gap-2 mb-1.5">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-slate-700 flex items-center gap-1.5">
-              <Award className="w-3.5 h-3.5 text-blue-600" />
-              Technician Roster & Kundli Register
+      {/* 👷 FIELD WORKFORCE & DISPATCH MATRIX (Single-Line Compact Workforce Bar) */}
+      <div className="bg-white border-b border-slate-200 px-4 py-2 shrink-0 shadow-2xs flex items-center justify-between gap-3">
+        {/* Left: Title + Live Summary Badges */}
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900 font-mono">
+            <Award className="w-3.5 h-3.5 text-blue-600" />
+            <span>Field Workforce Matrix</span>
+          </div>
+          <div className="flex items-center gap-1 text-[10px] font-mono">
+            <span className="px-1.5 py-0.5 rounded border bg-slate-100 text-slate-700 border-slate-200 font-semibold">
+              {technicianStats.filter((t) => t.liveStatus.shiftStatus === 'ON_SHIFT').length} On Shift
             </span>
-            <span className="text-[9px] font-mono bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.2 rounded font-semibold">
-              Live Workload & Skill Dispatch
+            <span className="px-1.5 py-0.5 rounded border bg-sky-50 text-sky-700 border-sky-200 font-semibold">
+              {technicianStats.filter((t) => t.liveStatus.shiftStatus === 'ON_SHIFT' && t.activeTickets.length === 0).length} Available
+            </span>
+            <span className="px-1.5 py-0.5 rounded border bg-amber-50 text-amber-800 border-amber-200 font-semibold">
+              {technicianStats.filter((t) => t.activeTickets.length > 0).length} Executing
             </span>
           </div>
-          {selectedTechnician !== 'ALL' && (
-            <button
-              onClick={() => setSelectedTechnician('ALL')}
-              className="text-[10px] font-mono text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center gap-1 cursor-pointer"
-            >
-              <span>Show All Queue ({tasks.length})</span>
-              <X className="w-3 h-3" />
-            </button>
-          )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+        {/* Middle: Compact scrollable chip strip */}
+        <div className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 min-w-0">
+          <button
+            type="button"
+            onClick={() => setSelectedTechnician('ALL')}
+            className={`px-2 py-1 rounded-md text-[11px] font-mono transition shrink-0 cursor-pointer ${
+              selectedTechnician === 'ALL'
+                ? 'bg-slate-900 text-white font-bold shadow-2xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 font-medium'
+            }`}
+          >
+            All Queue ({tasks.length})
+          </button>
+
           {technicianStats.map((tech) => {
             const isSelected = selectedTechnician === tech.name;
-            const live = tech.liveStatus;
-            const isOnShift = live.shiftStatus === 'ON_SHIFT';
-            const hasActiveWork = tech.activeTickets.length > 0;
-            const activeMachineTag = hasActiveWork
-              ? tech.activeTickets[0].assetTag || tech.activeTickets[0].assetName || 'Equipment'
-              : '';
+            const hasWork = tech.activeTickets.length > 0;
+            const isOnShift = tech.liveStatus.shiftStatus === 'ON_SHIFT';
 
             return (
-              <div
+              <button
                 key={tech.id}
+                type="button"
                 onClick={() => setSelectedTechnician(isSelected ? 'ALL' : tech.name)}
-                className={`p-2 rounded-lg border transition-all cursor-pointer relative ${
+                className={`px-2 py-1 rounded-md text-[11px] font-mono transition shrink-0 cursor-pointer flex items-center gap-1.5 border ${
                   isSelected
-                    ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
-                    : 'bg-slate-50/60 hover:bg-slate-100/70 border-slate-200 hover:border-slate-300 shadow-2xs'
+                    ? 'bg-blue-600 text-white border-blue-700 font-bold shadow-xs'
+                    : hasWork
+                    ? 'bg-amber-50 text-amber-900 border-amber-200 hover:border-amber-300'
+                    : isOnShift
+                    ? 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                    : 'bg-slate-100/60 text-slate-400 border-slate-200/60 hover:bg-slate-100'
                 }`}
-                title={`Click to filter queue for ${tech.name}`}
+                title={`${tech.name} (${tech.discipline}) • ⭐ ${tech.rating.toFixed(1)} • ${hasWork ? 'Executing' : isOnShift ? 'Available' : 'On Break'}`}
               >
-                {/* Header: Name + Discipline + Rating */}
-                <div className="flex items-start justify-between gap-1.5">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[11px] font-bold text-slate-900 truncate">
-                        {tech.name}
-                      </span>
-                      {isSelected && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0" />
-                      )}
-                    </div>
-                    <p className="text-[9px] text-slate-500 truncate leading-tight">
-                      {tech.discipline}
-                    </p>
-                  </div>
-                  <span className="text-[9px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200 px-1 py-0.2 rounded shrink-0">
-                    ⭐ {tech.rating.toFixed(1)}
+                <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white' : hasWork ? 'bg-amber-500' : isOnShift ? 'bg-sky-500' : 'bg-slate-300'}`} />
+                <span className="font-semibold">{tech.name.split(' ')[0]} {tech.name.split(' ')[1]?.[0]}.</span>
+                <span className={`text-[10px] ${isSelected ? 'text-blue-100' : 'text-slate-500 font-medium'}`}>★{tech.rating.toFixed(1)}</span>
+                {hasWork && (
+                  <span className={`text-[9px] px-1 py-0.2 rounded font-bold ${isSelected ? 'bg-blue-800 text-white' : 'bg-amber-100 text-amber-800'}`}>
+                    {tech.activeTickets.length}
                   </span>
-                </div>
-
-                {/* Two Distinct Badges:
-                    1) Left Badge: Live Machine Status (Read-Only)
-                    2) Right Button: Shift Status (Automatic + Manual Toggle) */}
-                <div className="mt-1.5 pt-1 border-t border-slate-200/60 flex items-center justify-between gap-1 text-[9px] font-mono">
-                  {/* Left Badge: Live Machine Status (Read-Only) */}
-                  {!isOnShift ? (
-                    <span className="font-semibold px-1.5 py-0.2 rounded border bg-slate-100 text-slate-600 border-slate-200 truncate shrink-0">
-                      ⚪ Paused
-                    </span>
-                  ) : hasActiveWork ? (
-                    <span
-                      className="font-semibold px-1.5 py-0.2 rounded border bg-amber-50 text-amber-800 border-amber-200 truncate max-w-[120px]"
-                      title={`Busy on ${activeMachineTag}`}
-                    >
-                      🟡 Busy on {activeMachineTag}
-                    </span>
-                  ) : (
-                    <span className="font-semibold px-1.5 py-0.2 rounded border bg-emerald-50 text-emerald-800 border-emerald-200 truncate shrink-0">
-                      🟢 Available / Idle
-                    </span>
-                  )}
-
-                  {/* Right Button: Shift Status (Manual 1-Click Toggle: On Shift <-> On Break) */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const next = isOnShift ? 'ON_BREAK' : 'ON_SHIFT';
-                      setTechnicianShiftStatus(tech.name, next);
-                    }}
-                    className={`px-1.5 py-0.2 rounded border font-bold transition shrink-0 cursor-pointer text-[9px] ${
-                      isOnShift
-                        ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border-emerald-300'
-                        : 'bg-rose-100 text-rose-800 hover:bg-rose-200 border-rose-300'
-                    }`}
-                    title="Click to toggle shift availability"
-                  >
-                    {isOnShift ? '🟢 On Shift' : '☕ On Break'}
-                  </button>
-                </div>
-
-                {/* Workload Counts: Active Work & 🏆 Solved */}
-                <div className="mt-1 flex items-center justify-between text-[10px] font-mono">
-                  <span className="text-slate-600">
-                    Active: <strong className="text-slate-900">{tech.assignedCount}</strong>
-                  </span>
-                  <span className="text-emerald-700 font-semibold">
-                    🏆 {tech.solvedCount} Solved
-                  </span>
-                </div>
-
-                {/* Live Step Progress Bar (Strictly 0% when Active: 0) */}
-                <div className="mt-1">
-                  <div className="flex items-center justify-between text-[9px] font-mono text-slate-500 mb-0.5">
-                    <span>Live Progress</span>
-                    <span className="font-bold text-slate-700">{tech.progressPct}%</span>
-                  </div>
-                  <div className="w-full h-1 bg-slate-200 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-300 ${
-                        tech.progressPct === 100
-                          ? 'bg-emerald-500'
-                          : tech.progressPct > 0
-                          ? 'bg-blue-600'
-                          : 'bg-slate-300'
-                      }`}
-                      style={{ width: `${tech.progressPct}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
+                )}
+              </button>
             );
           })}
+        </div>
+
+        {/* Right: View All Technicians (Modal / Popover button) */}
+        <div className="shrink-0 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setIsWorkforceModalOpen(true)}
+            className="px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 hover:border-slate-300 text-slate-700 hover:text-slate-900 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition shadow-2xs cursor-pointer"
+            title="Open Full Field Workforce Directory & Roster Matrix"
+          >
+            <Users className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden sm:inline">View All Technicians</span>
+            <span className="text-[10px] font-mono text-slate-500">({technicianStats.length})</span>
+          </button>
         </div>
       </div>
 
@@ -2214,46 +2237,53 @@ export const TechnicianWorkspaceView: React.FC<{
                     </div>
                   </button>
 
-                  {showDiagnostics && (
-                    <div className="p-4 border-t border-slate-200 bg-white space-y-3 text-xs">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 space-y-1">
-                          <span className="text-[10px] font-mono text-slate-400 uppercase font-semibold block">
-                            Field Symptom
-                          </span>
-                          <p className="text-slate-800 leading-relaxed font-medium">
-                            {selectedTask.symptomDescription}
-                          </p>
-                        </div>
-                        {selectedTask.topRootCause && (
-                          <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-100 space-y-1">
-                            <span className="text-[10px] font-mono text-blue-600 uppercase font-semibold block">
-                              Suspected Root Cause
+                  {showDiagnostics && (() => {
+                    const symptom = selectedTask.symptomDescription || selectedTask.title;
+                    const rcaHypothesis = selectedTask.topRootCause || 'Dynamic seal degradation & fluid cavitation';
+                    const probability = selectedTask.probability || 94;
+                    const fixSummary = selectedTask.recommendedFix || 'Replace dynamic seal cartridge, flush Plan 53A barrier, torque gland to 45 Nm';
+
+                    return (
+                      <div className="p-2.5 border-t border-slate-200 bg-white">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 p-2.5 bg-slate-50 rounded-lg border border-slate-200 text-xs">
+                          {/* Col 1: Field Symptom */}
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block tracking-wider">
+                              ⚠️ FIELD SYMPTOM
                             </span>
-                            <p className="text-blue-900 font-bold leading-relaxed">
-                              {selectedTask.topRootCause}
-                              {selectedTask.probability && (
-                                <span className="ml-1 text-xs font-mono font-semibold text-blue-700">
-                                  ({selectedTask.probability}% probability)
-                                </span>
-                              )}
+                            <p className="text-slate-800 font-medium line-clamp-2 leading-relaxed" title={symptom}>
+                              {symptom}
                             </p>
                           </div>
-                        )}
-                      </div>
 
-                      {selectedTask.recommendedFix && (
-                        <div className="bg-emerald-50/50 p-3 rounded-lg border border-emerald-100 text-xs space-y-1">
-                          <span className="text-[10px] font-mono text-emerald-700 uppercase font-semibold block">
-                            Recommended Corrective Action
-                          </span>
-                          <p className="text-slate-800 font-medium">
-                            {selectedTask.recommendedFix}
-                          </p>
+                          {/* Col 2: RCA Root Cause Hypothesis + Confidence % */}
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="text-[10px] font-mono text-indigo-700 uppercase font-bold block tracking-wider">
+                                🔍 RCA ROOT CAUSE
+                              </span>
+                              <span className="text-[9px] font-mono font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 px-1.5 py-0.2 rounded shrink-0">
+                                {probability}% CONF
+                              </span>
+                            </div>
+                            <p className="text-indigo-950 font-bold line-clamp-2 leading-relaxed" title={rcaHypothesis}>
+                              {rcaHypothesis}
+                            </p>
+                          </div>
+
+                          {/* Col 3: Corrective Summary */}
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-mono text-blue-700 uppercase font-bold block tracking-wider">
+                              🛠️ CORRECTIVE SUMMARY
+                            </span>
+                            <p className="text-slate-700 font-medium line-clamp-2 leading-relaxed" title={fixSummary}>
+                              {fixSummary}
+                            </p>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* 3. Task Execution Board */}
@@ -2417,34 +2447,35 @@ export const TechnicianWorkspaceView: React.FC<{
                       </div>
                     )}
 
-                    {/* 2x2 Grid of Execution Steps with Auto-Slim Completed Steps (Requirement 2) */}
+                    {/* 2x2 Grid of Execution Steps with Strict 1-by-1 Sequential Progression & Slate/Blue/Indigo Styling */}
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
-                      {selectedTask.steps.map((step) => {
-                        const isCompleted = step.status === 'COMPLETED';
-                        const isActive = step.status === 'IN_PROGRESS';
+                      {selectedTask.steps.map((step, idx) => {
+                        const completedStepsCount = selectedTask.steps.filter((s) => s.status === 'COMPLETED').length;
+                        const isCompleted = idx < completedStepsCount;
+                        const isActive = idx === completedStepsCount;
 
                         if (isCompleted) {
                           return (
                             <div
                               key={step.id}
-                              className="p-3 rounded-lg border transition bg-emerald-50/40 border-emerald-200/80 space-y-1.5"
+                              className="p-3 rounded-lg border transition bg-slate-50/90 border-slate-200/90 shadow-2xs space-y-1.5"
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                                  <CheckSquare className="w-4 h-4 text-emerald-600 fill-emerald-50 shrink-0" />
-                                  <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-100/90 border border-emerald-200 px-1.5 py-0.5 rounded shrink-0">
+                                  <CheckSquare className="w-4 h-4 text-blue-600 shrink-0" />
+                                  <span className="font-mono text-[10px] font-bold text-white bg-blue-600 px-1.5 py-0.5 rounded shadow-2xs shrink-0">
                                     STEP {step.stepNumber.toString().padStart(2, '0')}
                                   </span>
                                   <h4 className="text-xs font-semibold text-slate-700 truncate line-through">
                                     {step.title}
                                   </h4>
                                 </div>
-                                <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded shadow-2xs shrink-0">
-                                  <Lock className="w-2.5 h-2.5 text-emerald-700" />
-                                  <span>Completed</span>
+                                <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded shadow-2xs shrink-0">
+                                  <Check className="w-2.5 h-2.5 stroke-[3] text-blue-600" />
+                                  <span>Verified</span>
                                 </span>
                               </div>
-                              <p className="line-clamp-1 text-xs text-slate-400 pl-6" title={step.instruction}>
+                              <p className="line-clamp-1 text-xs text-slate-500 pl-6" title={step.instruction}>
                                 {step.instruction}
                               </p>
                             </div>
@@ -2455,21 +2486,21 @@ export const TechnicianWorkspaceView: React.FC<{
                           return (
                             <div
                               key={step.id}
-                              className="p-3 rounded-lg border transition bg-blue-50/30 border-blue-400 ring-2 ring-blue-400/20 shadow-xs space-y-2.5"
+                              className="p-3 rounded-lg border-2 border-indigo-600 bg-white shadow-sm space-y-2.5 transition"
                             >
                               <div className="flex items-start justify-between gap-2">
                                 <div className="flex items-start gap-2 flex-1 min-w-0">
                                   <button
                                     type="button"
                                     onClick={() => handleToggleStep(selectedTask.id, step.id)}
-                                    className="mt-0.5 text-slate-400 hover:text-blue-600 cursor-pointer shrink-0"
+                                    className="mt-0.5 text-indigo-600 hover:text-indigo-800 cursor-pointer shrink-0"
                                     title="Click to confirm step"
                                   >
-                                    <Square className="w-4 h-4 text-slate-400 hover:text-blue-600" />
+                                    <Square className="w-4 h-4 text-indigo-500 hover:text-indigo-700" />
                                   </button>
                                   <div className="space-y-1 flex-1 min-w-0">
                                     <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">
+                                      <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
                                         STEP {step.stepNumber.toString().padStart(2, '0')}
                                       </span>
                                       <h4 className="text-xs font-bold text-slate-900 leading-tight">
@@ -2481,7 +2512,7 @@ export const TechnicianWorkspaceView: React.FC<{
                                         </span>
                                       )}
                                     </div>
-                                    <p className="text-xs text-slate-700 leading-relaxed">
+                                    <p className="text-xs text-slate-700 leading-relaxed font-sans">
                                       {step.instruction}
                                     </p>
                                     {buddyAssistance && (
@@ -2492,18 +2523,18 @@ export const TechnicianWorkspaceView: React.FC<{
                                     )}
                                   </div>
                                 </div>
-                                <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-100 border border-blue-200 px-2 py-0.5 rounded shrink-0">
+                                <span className="text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded shrink-0">
                                   ACTIVE STEP
                                 </span>
                               </div>
 
                               {/* Active Step Dedicated Actions */}
-                              <div className="pt-2 border-t border-blue-200/80 flex flex-wrap items-center justify-between gap-2">
+                              <div className="pt-2 border-t border-indigo-100 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <button
                                     type="button"
                                     onClick={() => handleCompleteAndNext(selectedTask.id, step.id)}
-                                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap"
+                                    className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap"
                                   >
                                     <Check className="w-3.5 h-3.5" />
                                     <span>Confirm Step & Next</span>
@@ -2513,7 +2544,7 @@ export const TechnicianWorkspaceView: React.FC<{
                                   <button
                                     type="button"
                                     onClick={() => handleMarkTaskSolved(selectedTask, step)}
-                                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap active:scale-95"
+                                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap active:scale-95"
                                     title="Fault resolved at this procedure step — complete ticket and log to Maintenance History"
                                   >
                                     <CheckCircle2 className="w-3.5 h-3.5" />
@@ -2531,7 +2562,6 @@ export const TechnicianWorkspaceView: React.FC<{
                                     <span>Copilot</span>
                                   </button>
 
-                                  {/* 3. 1-Click SOS Buddy Assist Button */}
                                   <button
                                     type="button"
                                     onClick={() => setIsBuddyModalOpen(true)}
@@ -2557,43 +2587,43 @@ export const TechnicianWorkspaceView: React.FC<{
                           );
                         }
 
-                        /* PENDING STATE */
+                        /* STRICTLY LOCKED / PENDING STATE */
                         return (
                           <div
                             key={step.id}
-                            className="p-3 rounded-lg border transition bg-white border-slate-200 space-y-1.5"
+                            className="p-3 rounded-lg border transition bg-white border-slate-200/80 space-y-1.5 opacity-75"
                           >
                             <div className="flex items-start justify-between gap-2">
                               <div className="flex items-start gap-2 flex-1 min-w-0">
                                 <button
                                   type="button"
-                                  onClick={() => handleToggleStep(selectedTask.id, step.id)}
-                                  className="mt-0.5 text-slate-300 hover:text-slate-500 cursor-pointer shrink-0"
-                                  title="Click to confirm step"
+                                  disabled
+                                  className="mt-0.5 text-slate-300 cursor-not-allowed shrink-0"
+                                  title="Step locked — complete preceding steps first"
                                 >
-                                  <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                                  <Lock className="w-3.5 h-3.5 text-slate-300" />
                                 </button>
                                 <div className="space-y-1 flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="font-mono text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                    <span className="font-mono text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
                                       STEP {step.stepNumber.toString().padStart(2, '0')}
                                     </span>
-                                    <h4 className="text-xs font-semibold text-slate-800 leading-tight">
+                                    <h4 className="text-xs font-semibold text-slate-500 leading-tight">
                                       {step.title}
                                     </h4>
                                     {step.requiresLoto && (
-                                      <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-red-500 bg-red-50/60 border border-red-200/60 px-1.5 py-0.5 rounded">
                                         <ShieldAlert className="w-2.5 h-2.5" /> LOTO
                                       </span>
                                     )}
                                   </div>
-                                  <p className="line-clamp-2 text-xs text-slate-500 leading-relaxed">
+                                  <p className="line-clamp-2 text-xs text-slate-400 leading-relaxed font-sans">
                                     {step.instruction}
                                   </p>
                                 </div>
                               </div>
                               <span className="text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded shrink-0">
-                                PENDING
+                                🔒 LOCKED
                               </span>
                             </div>
                           </div>
@@ -2621,38 +2651,38 @@ export const TechnicianWorkspaceView: React.FC<{
                       </div>
                     )}
 
-                    {/* Completion Banner when all steps are done (Requirement 3: direct Archive & Expert Knowledge actions) */}
+                    {/* Completion Banner when all steps are done (Deep Slate-Indigo Enterprise Banner) */}
                     {selectedTask.completedSteps === selectedTask.stepsCount &&
                       selectedTask.stepsCount > 0 && (
-                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-xl shadow-xs">
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white border border-indigo-500/30 rounded-xl shadow-md">
                           {/* Left side: Clean completion message and status text */}
-                          <div className="flex items-center gap-2.5 text-emerald-900 min-w-0">
-                            <div className="w-8 h-8 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center shrink-0">
-                              <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                          <div className="flex items-center gap-2.5 text-white min-w-0">
+                            <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0">
+                              <CheckCircle2 className="w-4 h-4 text-indigo-300" />
                             </div>
                             <div className="space-y-0.5 min-w-0">
-                              <div className="font-bold text-xs sm:text-sm text-emerald-950 flex items-center gap-2 flex-wrap">
+                              <div className="font-bold text-xs sm:text-sm text-white flex items-center gap-2 flex-wrap">
                                 <span>All {selectedTask.stepsCount}/{selectedTask.stepsCount} Execution Steps Completed</span>
-                                <span className="font-mono text-[10px] font-bold bg-emerald-200/80 text-emerald-900 border border-emerald-300 px-1.5 py-0.2 rounded">
+                                <span className="font-mono text-[10px] font-bold bg-indigo-500/30 text-indigo-200 border border-indigo-400/40 px-2 py-0.5 rounded">
                                   100% VERIFIED
                                 </span>
                               </div>
-                              <p className="text-emerald-700 text-xs">
+                              <p className="text-slate-300 text-xs">
                                 Field maintenance verified &amp; baseline operational clearance restored.
                               </p>
                             </div>
                           </div>
 
-                          {/* Right side: Properly spaced, non-overlapping button group */}
+                          {/* Right side: High-contrast button group */}
                           <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
                             {/* Action: Export Job Sheet */}
                             <button
                               type="button"
                               onClick={() => handleExportJobSheet(selectedTask)}
-                              className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
                               title="Print or export compliance job summary"
                             >
-                              <Printer className="w-3.5 h-3.5 text-slate-600" />
+                              <Printer className="w-3.5 h-3.5 text-white" />
                               <span>Export Job Sheet</span>
                             </button>
 
@@ -2660,10 +2690,10 @@ export const TechnicianWorkspaceView: React.FC<{
                             <button
                               type="button"
                               onClick={() => handleAddTipToExpertKnowledge(selectedTask)}
-                              className="px-3 py-1.5 bg-white hover:bg-emerald-100/70 border border-emerald-300 text-emerald-800 font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
                               title="Capture field insights and tricks directly into Expert Knowledge"
                             >
-                              <Lightbulb className="w-3.5 h-3.5 text-amber-500 fill-amber-100" />
+                              <Lightbulb className="w-3.5 h-3.5 text-amber-300 fill-amber-300/30" />
                               <span>Add Tip to Knowledge</span>
                             </button>
 
@@ -2671,7 +2701,7 @@ export const TechnicianWorkspaceView: React.FC<{
                             <button
                               type="button"
                               onClick={() => handleArchiveTaskToHistory(selectedTask)}
-                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
+                              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
                               title="Archive verified repair record to Maintenance History and clear from active queue"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5 text-white" />
@@ -3007,6 +3037,164 @@ export const TechnicianWorkspaceView: React.FC<{
                 Micro-assist logs directly to step notes; the core ticket remains assigned to{' '}
                 <strong>{selectedTask.assignedTechnicianName}</strong>.
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Field Workforce & Dispatch Matrix Modal (12+ Technicians Popover/Modal) */}
+      {isWorkforceModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center shadow-2xs">
+                  <Award className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 font-mono uppercase tracking-wide">
+                    Field Workforce & Dispatch Matrix ({technicianStats.length} Specialists)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Live plant technician bench, skill disciplines, active workloads, and operational availability.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsWorkforceModalOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search toolbar */}
+            <div className="p-3 border-b border-slate-100 bg-white flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search technician by name, discipline, or specialty..."
+                  value={workforceSearchTerm}
+                  onChange={(e) => setWorkforceSearchTerm(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono placeholder:text-slate-400 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Cards Grid */}
+            <div className="p-4 overflow-y-auto flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-slate-50/50">
+              {technicianStats
+                .filter((t) => {
+                  if (!workforceSearchTerm.trim()) return true;
+                  const q = workforceSearchTerm.toLowerCase();
+                  return (
+                    t.name.toLowerCase().includes(q) ||
+                    t.discipline.toLowerCase().includes(q) ||
+                    t.role.toLowerCase().includes(q)
+                  );
+                })
+                .map((tech) => {
+                  const isSelected = selectedTechnician === tech.name;
+                  const live = tech.liveStatus;
+                  const isOnShift = live.shiftStatus === 'ON_SHIFT';
+                  const hasActiveWork = tech.activeTickets.length > 0;
+                  const activeMachineTag = hasActiveWork
+                    ? tech.activeTickets[0].assetTag || tech.activeTickets[0].assetName || 'Equipment'
+                    : '';
+
+                  return (
+                    <div
+                      key={tech.id}
+                      className={`p-3 rounded-xl border bg-white shadow-2xs space-y-2 transition ${
+                        isSelected
+                          ? 'ring-2 ring-blue-500 border-blue-400'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-1.5">
+                        <div className="min-w-0">
+                          <h4 className="text-xs font-bold text-slate-900 truncate">{tech.name}</h4>
+                          <p className="text-[10px] text-slate-500 truncate">{tech.discipline}</p>
+                        </div>
+                        <span className="text-[10px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded shrink-0">
+                          ⭐ {tech.rating.toFixed(1)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-1 text-[10px] font-mono pt-1 border-t border-slate-100">
+                        {hasActiveWork ? (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold truncate max-w-[140px]">
+                            🟡 {activeMachineTag}
+                          </span>
+                        ) : isOnShift ? (
+                          <span className="px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-semibold">
+                            🟢 Available
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200 font-semibold">
+                            ⚪ On Break
+                          </span>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = isOnShift ? 'ON_BREAK' : 'ON_SHIFT';
+                            setTechnicianShiftStatus(tech.name, next);
+                          }}
+                          className={`px-2 py-0.5 rounded border text-[10px] font-bold cursor-pointer transition ${
+                            isOnShift
+                              ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
+                              : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border-emerald-300'
+                          }`}
+                        >
+                          {isOnShift ? 'Mark Break' : 'Set On Shift'}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-600 pt-1">
+                        <span>Workload: <strong>{tech.assignedCount}</strong> active</span>
+                        <span>🏆 <strong>{tech.solvedCount}</strong> solved</span>
+                      </div>
+
+                      {hasActiveWork && (
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                          <div className="bg-blue-600 h-full transition-all" style={{ width: `${tech.progressPct}%` }} />
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTechnician(isSelected ? 'ALL' : tech.name);
+                          setIsWorkforceModalOpen(false);
+                        }}
+                        className={`w-full py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition ${
+                          isSelected
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                        }`}
+                      >
+                        {isSelected ? 'Clear Filter' : 'Filter This Queue'}
+                      </button>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs font-mono text-slate-500 shrink-0">
+              <span>Plant Field Bench: {organization?.name || 'Plant'}</span>
+              <button
+                type="button"
+                onClick={() => setIsWorkforceModalOpen(false)}
+                className="px-4 py-1.5 bg-slate-900 hover:bg-black text-white rounded-lg font-semibold text-xs cursor-pointer"
+              >
+                Close Directory
+              </button>
             </div>
           </div>
         </div>
