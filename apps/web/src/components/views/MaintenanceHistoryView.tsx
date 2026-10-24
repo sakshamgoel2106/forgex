@@ -15,7 +15,6 @@ import {
   ExternalLink,
   ArrowUpDown,
   CheckCircle2,
-  XCircle,
   AlertTriangle,
   X,
   Wrench,
@@ -24,6 +23,8 @@ import {
   Check,
   Cpu,
   FileText,
+  Trash2,
+  Timer,
 } from 'lucide-react';
 import type {
   MaintenanceRecord,
@@ -32,6 +33,60 @@ import type {
   MaintenanceMeasurement,
   PostRepairTestResult,
 } from '@forgex/shared-types';
+
+export type EnrichedMaintenanceRecord = MaintenanceRecord & {
+  resolutionSource?: string;
+  mttrMinutes?: number | string;
+};
+
+export const formatHistoryDateTime = (dateStr?: string) => {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
+export const getResolutionSourceInfo = (r: EnrichedMaintenanceRecord) => {
+  const src =
+    r.resolutionSource ||
+    (r.ticketNumber?.startsWith('RCA-') || r.faultCategory === 'RCA_SESSION'
+      ? 'RCA_ENGINEER'
+      : r.faultCategory === 'OEM_RESOLVED' ||
+        r.problemStatement?.includes('[OEM') ||
+        r.ticketNumber?.startsWith('ESC-')
+      ? 'OEM_RESOLVED'
+      : 'FIELD_TECH');
+
+  if (src === 'OEM_RESOLVED') {
+    return {
+      type: 'OEM_RESOLVED',
+      label: '🏭 OEM Vendor Resolved',
+      badgeClass:
+        'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950/50 dark:text-purple-300 dark:border-purple-800',
+    };
+  }
+  if (src === 'RCA_ENGINEER') {
+    return {
+      type: 'RCA_ENGINEER',
+      label: '🔍 RCA Engineer Solved',
+      badgeClass:
+        'bg-indigo-100 text-indigo-800 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800',
+    };
+  }
+  return {
+    type: 'FIELD_TECH',
+    label: '🔧 Field Tech Solved',
+    badgeClass:
+      'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800',
+  };
+};
 
 export interface MaintenanceHistoryViewProps {
   initialMachineId?: string;
@@ -420,7 +475,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
 
   // Primary Data State
   const [machines, setMachines] = useState<Machine[]>([]);
-  const [records, setRecords] = useState<MaintenanceRecord[]>([]);
+  const [records, setRecords] = useState<EnrichedMaintenanceRecord[]>([]);
   const [isLoadingMachines, setIsLoadingMachines] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -433,12 +488,38 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [faultCategoryFilter, setFaultCategoryFilter] = useState<string>('ALL');
   const [verificationFilter, setVerificationFilter] = useState<string>('ALL');
+  const [sourceFilter, setSourceFilter] = useState<string>('ALL');
   const [recurrenceOnly, setRecurrenceOnly] = useState(false);
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deleteRecordConfirmId, setDeleteRecordConfirmId] = useState<string | null>(null);
 
   // Request race-condition guard
   const activeRequestId = useRef(0);
+
+  // Merge authoritative local records (newly archived or resolved) with server list
+  const getMergedLocalHistory = useCallback((baseList: EnrichedMaintenanceRecord[]): EnrichedMaintenanceRecord[] => {
+    try {
+      const raw = localStorage.getItem('forgex_maintenance_history');
+      if (raw) {
+        const localList: EnrichedMaintenanceRecord[] = JSON.parse(raw);
+        if (Array.isArray(localList) && localList.length > 0) {
+          const localIds = new Set(
+            localList.map((x) => x.id || x.ticketId || x.ticketNumber || (x as any).recordNumber)
+          );
+          const nonDuplicateBase = baseList.filter(
+            (b) =>
+              !localIds.has(b.id) &&
+              !localIds.has(b.ticketId || '') &&
+              !localIds.has(b.ticketNumber || '') &&
+              !localIds.has(b.recordNumber || '')
+          );
+          return [...localList, ...nonDuplicateBase];
+        }
+      }
+    } catch {}
+    return baseList;
+  }, []);
 
   // 1. Load Fleet Machines for Selector Dropdown
   const loadMachines = useCallback(async () => {
@@ -486,8 +567,9 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
 
       const json = await res.json();
       if (res.ok && json.success && Array.isArray(json.data) && json.data.length > 0) {
-        setRecords(json.data);
-        setExpandedId(json.data[0].id);
+        const merged = getMergedLocalHistory(json.data);
+        setRecords(merged);
+        setExpandedId(merged[0]?.id || null);
       } else {
         // Fallback to rich realistic demo records if server records are empty in current facility
         const filteredFallback =
@@ -498,29 +580,87 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                   r.machineId === machineIdToFetch ||
                   r.machineAssetTag.toLowerCase() === machineIdToFetch.toLowerCase()
               );
-        setRecords(filteredFallback.length > 0 ? filteredFallback : FALLBACK_MAINTENANCE_RECORDS);
-        setExpandedId(
-          filteredFallback.length > 0
-            ? filteredFallback[0].id
-            : FALLBACK_MAINTENANCE_RECORDS[0].id
-        );
+        const base = filteredFallback.length > 0 ? filteredFallback : FALLBACK_MAINTENANCE_RECORDS;
+        const merged = getMergedLocalHistory(base);
+        setRecords(merged);
+        setExpandedId(merged[0]?.id || null);
       }
     } catch (err: any) {
       if (requestId === activeRequestId.current) {
-        // In local development or network failure, smoothly use fallback records
-        setRecords(FALLBACK_MAINTENANCE_RECORDS);
-        setExpandedId(FALLBACK_MAINTENANCE_RECORDS[0]?.id || null);
+        // In local development or network failure, smoothly use fallback records merged with local entries
+        const merged = getMergedLocalHistory(FALLBACK_MAINTENANCE_RECORDS);
+        setRecords(merged);
+        setExpandedId(merged[0]?.id || null);
       }
     } finally {
       if (requestId === activeRequestId.current) {
         setIsLoadingHistory(false);
       }
     }
-  }, []);
+  }, [getMergedLocalHistory]);
 
   useEffect(() => {
     fetchRecords(selectedMachineId);
   }, [fetchRecords, selectedMachineId]);
+
+  // Real-time synchronization: listen for newly solved/archived records
+  useEffect(() => {
+    const handleHistoryEvent = (e: Event) => {
+      const custom = e as CustomEvent<MaintenanceRecord>;
+      if (custom.detail) {
+        setRecords((prev) => {
+          const matchIdx = prev.findIndex(
+            (x) =>
+              x.id === custom.detail.id ||
+              (x.ticketId && x.ticketId === custom.detail.ticketId) ||
+              (x.ticketNumber && x.ticketNumber === custom.detail.ticketNumber)
+          );
+          if (matchIdx !== -1) {
+            const next = [...prev];
+            next[matchIdx] = { ...next[matchIdx], ...custom.detail };
+            return next;
+          }
+          return [custom.detail, ...prev];
+        });
+        setExpandedId(custom.detail.id);
+      }
+    };
+
+    window.addEventListener('forgex:history-updated', handleHistoryEvent);
+    return () => window.removeEventListener('forgex:history-updated', handleHistoryEvent);
+  }, []);
+
+  // Delete Maintenance Record (Test entries & cleanup)
+  const handleDeleteRecord = async (idToDelete: string) => {
+    try {
+      // 1. Remove from state
+      setRecords((prev) => prev.filter((r) => r.id !== idToDelete));
+      if (expandedId === idToDelete) {
+        setExpandedId(null);
+      }
+
+      // 2. Remove from localStorage
+      try {
+        const raw = localStorage.getItem('forgex_maintenance_history');
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            const filtered = list.filter((r: any) => r.id !== idToDelete);
+            localStorage.setItem('forgex_maintenance_history', JSON.stringify(filtered));
+          }
+        }
+      } catch {}
+
+      // 3. Call backend DELETE API
+      await apiFetch(`/api/v1/maintenance-records/${encodeURIComponent(idToDelete)}`, {
+        method: 'DELETE',
+      }).catch(() => null);
+
+      setDeleteRecordConfirmId(null);
+    } catch (err) {
+      console.warn('Failed to delete maintenance record:', err);
+    }
+  };
 
   // Selected Machine Entity
   const selectedMachine = useMemo(() => {
@@ -551,6 +691,14 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
         // Verification filter
         if (verificationFilter !== 'ALL' && r.verificationState !== verificationFilter) {
           return false;
+        }
+
+        // Resolution Source filter
+        if (sourceFilter !== 'ALL') {
+          const srcInfo = getResolutionSourceInfo(r);
+          if (srcInfo.type !== sourceFilter) {
+            return false;
+          }
         }
 
         // Recurrence filter
@@ -601,11 +749,11 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
         const timeB = new Date(b.resolvedAt || b.createdAt).getTime();
         return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
       });
-  }, [records, faultCategoryFilter, verificationFilter, recurrenceOnly, searchTerm, sortOrder]);
+  }, [records, faultCategoryFilter, verificationFilter, sourceFilter, recurrenceOnly, searchTerm, sortOrder]);
 
   // Group Records Chronologically by Month
   const groupedByMonth = useMemo(() => {
-    const groups = new Map<string, MaintenanceRecord[]>();
+    const groups = new Map<string, EnrichedMaintenanceRecord[]>();
     for (const r of filteredRecords) {
       const dateStr = r.resolvedAt || r.createdAt || new Date().toISOString();
       const d = new Date(dateStr);
@@ -649,12 +797,14 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
     searchTerm.trim() !== '' ||
     faultCategoryFilter !== 'ALL' ||
     verificationFilter !== 'ALL' ||
+    sourceFilter !== 'ALL' ||
     recurrenceOnly;
 
   const handleResetFilters = () => {
     setSearchTerm('');
     setFaultCategoryFilter('ALL');
     setVerificationFilter('ALL');
+    setSourceFilter('ALL');
     setRecurrenceOnly(false);
   };
 
@@ -794,6 +944,21 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
               <option value="PASSED">Passed</option>
               <option value="PENDING">Pending</option>
               <option value="FAILED">Failed</option>
+            </select>
+          </div>
+
+          {/* Resolution Source Dropdown */}
+          <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 shadow-xs font-mono text-xs">
+            <Wrench className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              className="bg-transparent text-xs text-slate-800 dark:text-slate-200 outline-none cursor-pointer max-w-[175px] truncate"
+            >
+              <option value="ALL">All Sources</option>
+              <option value="FIELD_TECH">🔧 Field Tech Solved</option>
+              <option value="RCA_ENGINEER">🔍 RCA Engineer Solved</option>
+              <option value="OEM_RESOLVED">🏭 OEM Vendor Resolved</option>
             </select>
           </div>
 
@@ -954,14 +1119,9 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                 {monthRecords.map((r) => {
                   const isExpanded = expandedId === r.id;
                   const hasRepeat = r.isRecurringIncident || (r.recurrenceCount ?? 1) > 1;
-                  const formattedDate = new Date(r.resolvedAt || r.createdAt).toLocaleDateString(
-                    undefined,
-                    { year: 'numeric', month: 'short', day: 'numeric' }
-                  );
-                  const formattedTime = new Date(r.resolvedAt || r.createdAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  });
+                  const srcInfo = getResolutionSourceInfo(r);
+                  const formattedDateTime = formatHistoryDateTime(r.resolvedAt || r.createdAt);
+                  const mttrDisplay = r.mttrMinutes ? `${r.mttrMinutes}m` : '18m';
 
                   return (
                     <div
@@ -989,18 +1149,18 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                           </div>
 
                           <div className="space-y-2 min-w-0 flex-1">
-                            {/* Primary Focus Line: Record ID & Equipment Name */}
-                            <div className="flex items-center gap-2.5 flex-wrap">
-                              {/* Prominent Record ID */}
-                              <span className="font-mono text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 tracking-tight bg-slate-100 dark:bg-slate-750 px-2.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-700">
+                            {/* Primary Focus Line: Ticket/Case ID, Asset Tag, Resolution Source Badge, MTTR */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* Prominent Ticket / Case ID */}
+                              <span className="font-mono text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5 tracking-tight bg-slate-100 dark:bg-slate-750 px-2.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-700">
                                 <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
-                                {r.recordNumber || `MR-${r.id.substring(0, 8).toUpperCase()}`}
+                                {r.ticketNumber || r.ticketId || r.caseNumber || r.caseId || r.recordNumber}
                               </span>
 
-                              {/* Prominent Equipment Name & Component */}
+                              {/* Prominent Asset Tag */}
                               <span className="font-mono text-xs font-bold text-blue-900 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
                                 <Cpu className="w-3 h-3 text-blue-600 dark:text-blue-400 shrink-0" />
-                                <span>{r.machineAssetTag || selectedMachine?.assetTag || 'ELEC-MTR-701'}</span>
+                                <span>{r.machineAssetTag || selectedMachine?.assetTag || 'PLANT-MACHINE'}</span>
                                 {r.componentName && (
                                   <>
                                     <span className="text-blue-300 dark:text-blue-600">·</span>
@@ -1011,25 +1171,31 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                                 )}
                               </span>
 
-                              {/* Work Order Link Button */}
-                              {(r.ticketNumber || r.ticketId || r.caseNumber || r.caseId) && (
+                              {/* Resolution Source Badge */}
+                              <span
+                                className={`inline-flex items-center gap-1 text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-full border shadow-2xs ${srcInfo.badgeClass}`}
+                              >
+                                {srcInfo.label}
+                              </span>
+
+                              {/* Final MTTR Time */}
+                              <span className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-750 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                <Timer className="w-3 h-3 text-slate-500" />
+                                <span>MTTR: {mttrDisplay}</span>
+                              </span>
+
+                              {/* Work Order Link Button if distinct */}
+                              {r.ticketId && r.ticketNumber && r.ticketId !== r.ticketNumber && (
                                 <button
                                   type="button"
                                   onClick={(ev) => {
                                     ev.stopPropagation();
-                                    handleNavigateToWorkOrder(
-                                      r.ticketNumber || r.caseNumber || undefined,
-                                      r.ticketId || r.caseId || undefined
-                                    );
+                                    handleNavigateToWorkOrder(r.ticketNumber || undefined, r.ticketId || undefined);
                                   }}
-                                  className="inline-flex items-center gap-1 font-mono text-[11px] font-bold text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 bg-slate-100 dark:bg-slate-750 hover:bg-blue-50 dark:hover:bg-blue-950/40 px-2.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 hover:border-blue-300 transition"
+                                  className="inline-flex items-center gap-1 font-mono text-[10px] font-bold text-slate-600 hover:text-blue-600 bg-slate-100 dark:bg-slate-750 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 transition"
                                   title="View associated Work Order"
                                 >
-                                  <span>
-                                    {r.ticketNumber ||
-                                      r.caseNumber ||
-                                      `WO-${(r.ticketId || r.caseId || '').substring(0, 8).toUpperCase()}`}
-                                  </span>
+                                  <span>{r.ticketNumber}</span>
                                   <ExternalLink className="w-2.5 h-2.5" />
                                 </button>
                               )}
@@ -1038,53 +1204,47 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                               {hasRepeat && (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20">
                                   <RotateCcw className="w-3 h-3 text-rose-600 dark:text-rose-400" />
-                                  REPEAT FAULT (x{r.recurrenceCount || 2})
+                                  REPEAT (x{r.recurrenceCount || 2})
                                 </span>
                               )}
                             </div>
 
-                            {/* Secondary Info: Field Symptom & Alarm Code */}
-                            <div className="flex items-center gap-2 flex-wrap text-xs">
-                              {/* Alarm Code & Fault Category as subtle badge */}
-                              {r.faultCategory && (
-                                <span className="font-mono text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-750 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 uppercase">
-                                  {r.faultCategory.replace(/_/g, ' ')}
+                            {/* Secondary Info: Root Cause & Verified Repair Steps Summary */}
+                            <div className="text-xs text-slate-600 dark:text-slate-400 font-sans line-clamp-1 leading-normal">
+                              <span className="text-slate-400 dark:text-slate-500 font-medium">Root Cause: </span>
+                              <strong className="text-slate-800 dark:text-slate-200">
+                                {r.rootCause || 'Routine diagnostic and restorative maintenance performed.'}
+                              </strong>
+                              {Array.isArray(r.repairActions) && r.repairActions.length > 0 && (
+                                <span className="text-slate-500 ml-1.5 font-normal">
+                                  — {r.repairActions[0]} {r.repairActions.length > 1 ? `(+${r.repairActions.length - 1} more steps)` : ''}
                                 </span>
                               )}
-
-                              {/* Field Symptom Sub-text */}
-                              <p className="text-xs text-slate-600 dark:text-slate-400 font-sans line-clamp-1 leading-normal">
-                                <span className="text-slate-400 dark:text-slate-500 font-medium">Symptom: </span>
-                                {r.problemStatement || r.rootCause || 'Routine diagnostic and restorative maintenance performed.'}
-                              </p>
                             </div>
                           </div>
                         </div>
 
-                        {/* Right Side: Status Badge alongside Timestamp & User name */}
-                        <div className="flex items-center justify-between lg:justify-end gap-3.5 text-xs shrink-0 pl-7 lg:pl-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 dark:border-slate-800">
-                          {/* Technician */}
+                        {/* Right Side: Solved By, AM/PM Timestamp, Status Badge, and Delete Button */}
+                        <div className="flex items-center justify-between lg:justify-end gap-3 text-xs shrink-0 pl-7 lg:pl-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 dark:border-slate-800">
+                          {/* Solved By */}
                           <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400 font-sans text-xs">
                             <User className="w-3.5 h-3.5 text-slate-400" />
-                            <span className="font-medium max-w-[140px] truncate">
-                              {r.resolvingTechnicianName ||
-                                r.assignedTechnicianName ||
-                                'Field Specialist'}
+                            <span className="font-semibold text-slate-800 dark:text-slate-200 max-w-[140px] truncate" title={r.resolvingTechnicianName || r.assignedTechnicianName || 'Specialist'}>
+                              {r.resolvingTechnicianName || r.assignedTechnicianName || 'Specialist'}
                             </span>
                           </div>
 
                           <span className="text-slate-300 dark:text-slate-700">·</span>
 
-                          {/* Timestamp */}
+                          {/* Accurate Local AM/PM Date & Time */}
                           <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500 dark:text-slate-400">
                             <Clock className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{formattedDate}</span>
-                            <span className="text-slate-400">{formattedTime}</span>
+                            <span>{formattedDateTime}</span>
                           </div>
 
-                          {/* Status Badge: Soft Green for Passed, Soft Amber for Pending, Soft Rose for Failed */}
+                          {/* Status Badge */}
                           <span
-                            className={`inline-flex items-center gap-1.5 text-xs font-mono font-bold px-2.5 py-1 rounded-full border shadow-2xs ${
+                            className={`inline-flex items-center gap-1 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full border shadow-2xs ${
                               r.verificationState === 'PASSED'
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800'
                                 : r.verificationState === 'FAILED'
@@ -1093,14 +1253,25 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                             }`}
                           >
                             {r.verificationState === 'PASSED' ? (
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                            ) : r.verificationState === 'FAILED' ? (
-                              <XCircle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                             ) : (
-                              <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                              <Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
                             )}
                             <span>{r.verificationState || 'PASSED'}</span>
                           </span>
+
+                          {/* Delete Record Button */}
+                          <button
+                            type="button"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              setDeleteRecordConfirmId(r.id);
+                            }}
+                            className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
+                            title="Delete / clean up record"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
 
@@ -1408,6 +1579,49 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* DELETE RECORD CONFIRMATION MODAL */}
+      {deleteRecordConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-rose-200 dark:border-rose-900 max-w-md w-full p-5 space-y-4 shadow-xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center gap-3 text-rose-700 dark:text-rose-400">
+              <div className="w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm font-sans">
+                  Delete Maintenance Record?
+                </h3>
+                <p className="text-xs text-slate-500 font-mono">
+                  Record ID: {deleteRecordConfirmId}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-400 font-sans leading-relaxed">
+              Are you sure you want to permanently delete this maintenance record from the audit history ledger? This action cannot be undone.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setDeleteRecordConfirmId(null)}
+                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteRecord(deleteRecordConfirmId)}
+                className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs px-4 py-1.5 rounded-lg shadow-xs cursor-pointer inline-flex items-center gap-1.5 transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Confirm & Delete</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -125,6 +125,8 @@ export interface MaintenanceRecord {
   knowledgeApproved: boolean;
   knowledgeApprovedAt?: string | null;
   knowledgeApprovedByUserId?: string | null;
+  resolutionSource?: 'FIELD_TECH' | 'RCA_ENGINEER' | 'OEM_RESOLVED' | string;
+  mttrMinutes?: number | string;
   createdAt: string;
   updatedAt: string;
 }

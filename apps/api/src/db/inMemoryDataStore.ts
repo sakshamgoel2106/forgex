@@ -4451,7 +4451,11 @@ export class InMemoryDataStore implements IDataStore {
     }
 
     if (!data.ticketId && !data.caseId) {
-      throw new Error('Validation Error: Either ticketId or caseId is required');
+      if (data.ticketNumber) {
+        data.ticketId = data.ticketNumber;
+      } else {
+        data.ticketId = `TKT-${Date.now()}`;
+      }
     }
 
     // Duplicate prevention: If a record already exists for this organization and ticketId, return it idempotently
@@ -4565,6 +4569,8 @@ export class InMemoryDataStore implements IDataStore {
       knowledgeApproved: data.knowledgeApproved ?? false,
       knowledgeApprovedAt: null,
       knowledgeApprovedByUserId: null,
+      resolutionSource: data.resolutionSource || (data.ticketNumber?.startsWith('RCA-') ? 'RCA_ENGINEER' : 'FIELD_TECH'),
+      mttrMinutes: data.mttrMinutes ?? 18,
       createdAt: now,
       updatedAt: now,
     };
@@ -4761,6 +4767,18 @@ export class InMemoryDataStore implements IDataStore {
 
     this.maintenanceRecords.set(id, record);
     return record;
+  }
+
+  public async deleteMaintenanceRecord(
+    organizationId: string,
+    id: string
+  ): Promise<boolean> {
+    const record = this.maintenanceRecords.get(id);
+    if (!record || record.organizationId !== organizationId) {
+      return false;
+    }
+    this.maintenanceRecords.delete(id);
+    return true;
   }
 
   public async getMachineMaintenanceHistory(

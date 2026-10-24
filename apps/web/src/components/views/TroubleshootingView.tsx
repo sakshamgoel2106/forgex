@@ -790,29 +790,59 @@ export const TroubleshootingView: React.FC<{
       }).catch(() => null);
     } catch {}
 
-    // 3. Post authoritative record directly to /api/v1/maintenance-records
+    // 3. Post authoritative record directly to /api/v1/maintenance-records & sync to localStorage
     const ticketId = (activeSession as any).ticketNumber || `RCA-${Date.now().toString().slice(-4)}`;
+    const rcaRepairActions = [
+      solvedStep
+        ? `Fault resolved at step #${solvedStep.stepNumber} (${solvedStep.name}): ${solvedStep.instruction}`
+        : `All ${activeSession.investigationSteps.length} root cause investigation steps passed with 100% verification. Issue resolved in-house.`,
+    ];
+
+    const rcaHistoryRecord = {
+      id: `rec-mr-rca-${Date.now().toString().slice(-6)}`,
+      recordNumber: `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+      organizationId: 'org-demo',
+      plantId: 'plant-01',
+      machineId: targetTag,
+      machineAssetTag: targetTag,
+      ticketNumber: ticketId,
+      ticketId,
+      caseId: ticketId,
+      caseNumber: ticketId,
+      problemStatement: currentSymptom,
+      observedSymptoms: [currentSymptom],
+      rootCause: topHyp?.title || 'Verified condition cleared during RCA investigation',
+      rootCauseStatus: 'CONFIRMED' as const,
+      faultCategory: 'RCA_SESSION',
+      repairActions: rcaRepairActions,
+      verificationState: 'PASSED' as const,
+      approvalStatus: 'APPROVED' as const,
+      resolvedAt: nowIso,
+      resolvingTechnicianName: engineerName,
+      resolutionSource: 'RCA_ENGINEER',
+      mttrMinutes: 24,
+    };
+
+    try {
+      const rawHistory = localStorage.getItem('forgex_maintenance_history');
+      const historyList = rawHistory ? JSON.parse(rawHistory) : [];
+      const existingIdx = historyList.findIndex(
+        (h: any) => h.ticketId === ticketId || h.ticketNumber === ticketId
+      );
+      if (existingIdx !== -1) {
+        historyList[existingIdx] = { ...historyList[existingIdx], ...rcaHistoryRecord };
+      } else {
+        historyList.unshift(rcaHistoryRecord);
+      }
+      localStorage.setItem('forgex_maintenance_history', JSON.stringify(historyList));
+      window.dispatchEvent(new CustomEvent('forgex:history-updated', { detail: rcaHistoryRecord }));
+    } catch {}
+
     try {
       await apiFetch('/api/v1/maintenance-records', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          machineAssetTag: targetTag,
-          ticketNumber: ticketId,
-          problemStatement: currentSymptom,
-          observedSymptoms: [currentSymptom],
-          rootCause: topHyp?.title || 'Verified condition cleared during RCA',
-          faultCategory: 'MECHANICAL',
-          repairActions: [
-            solvedStep
-              ? `Fault resolved at step #${solvedStep.stepNumber} (${solvedStep.name}): ${solvedStep.instruction}`
-              : `All ${activeSession.investigationSteps.length} root cause investigation steps passed with 100% verification. Issue resolved in-house.`,
-          ],
-          verificationState: 'PASSED',
-          approvalStatus: 'APPROVED',
-          resolvedAt: nowIso,
-          source: 'RCA',
-        }),
+        body: JSON.stringify(rcaHistoryRecord),
       }).catch(() => null);
     } catch (mrErr) {
       console.warn('Failed to post direct maintenance record:', mrErr);
@@ -2986,15 +3016,15 @@ Investigation Progress: ${progressStr}`;
                 onChange={(e) => setEscalateDiscipline(e.target.value)}
                 className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#0F172A] focus:outline-none focus:border-[#2563EB]"
               >
-                <option value="">-- Select Specialist --</option>
-                <option value="Mechanical / Rotating Equipment Lead">
+                <option value="" className="text-slate-500 font-normal bg-white">-- Select Specialist --</option>
+                <option value="Mechanical / Rotating Equipment Lead" className="text-slate-900 font-medium bg-white">
                   Mechanical / Rotating Equipment Lead
                 </option>
-                <option value="Electrical & Instrumentation Specialist">
+                <option value="Electrical & Instrumentation Specialist" className="text-slate-900 font-medium bg-white">
                   Electrical & Instrumentation Specialist
                 </option>
-                <option value="OEM Technical Authority">OEM Technical Authority</option>
-                <option value="Process / Reliability Engineer">
+                <option value="OEM Technical Authority" className="text-slate-900 font-medium bg-white">OEM Technical Authority</option>
+                <option value="Process / Reliability Engineer" className="text-slate-900 font-medium bg-white">
                   Process / Reliability Engineer
                 </option>
               </select>
@@ -3009,10 +3039,10 @@ Investigation Progress: ${progressStr}`;
                 onChange={(e) => setEscalateSeverity(e.target.value as any)}
                 className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#0F172A] focus:outline-none focus:border-[#2563EB]"
               >
-                <option value="">-- Select Priority --</option>
-                <option value="CRITICAL">Critical - Plant / Line Down</option>
-                <option value="HIGH">High - Immediate Dispatch</option>
-                <option value="MEDIUM">Medium - Non-Urgent Inspection</option>
+                <option value="" className="text-slate-500 font-normal bg-white">-- Select Priority --</option>
+                <option value="CRITICAL" className="text-slate-900 font-medium bg-white">Critical - Plant / Line Down</option>
+                <option value="HIGH" className="text-slate-900 font-medium bg-white">High - Immediate Dispatch</option>
+                <option value="MEDIUM" className="text-slate-900 font-medium bg-white">Medium - Non-Urgent Inspection</option>
               </select>
             </div>
           </div>

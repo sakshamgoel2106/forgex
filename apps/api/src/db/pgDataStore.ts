@@ -8072,6 +8072,17 @@ export class PgDataStore implements IDataStore {
     return this.mapRowToMaintenanceRecord(res.rows[0]);
   }
 
+  public async deleteMaintenanceRecord(
+    organizationId: string,
+    id: string
+  ): Promise<boolean> {
+    const res = await this.pool.query(
+      `DELETE FROM maintenance_records WHERE organization_id = $1 AND id = $2 RETURNING id`,
+      [organizationId, id]
+    );
+    return res.rows.length > 0;
+  }
+
   public async getMachineMaintenanceHistory(
     organizationId: string,
     machineId: string

@@ -20,7 +20,6 @@ import { MachineRecoveryView } from './components/views/MachineRecoveryView';
 import { TroubleshootingView } from './components/views/TroubleshootingView';
 import { MaintenanceHistoryView } from './components/views/MaintenanceHistoryView';
 import { TechnicianWorkspaceView } from './components/views/TechnicianWorkspaceView';
-import { WorkerWorkspaceView } from './components/views/WorkerWorkspaceView';
 import { ReportsAnalyticsView } from './components/views/ReportsAnalyticsView';
 import { NotificationsFeedView } from './components/views/NotificationsFeedView';
 import { OemEscalationsView } from './components/views/OemEscalationsView';
@@ -32,9 +31,8 @@ export function getDefaultModuleForRole(role?: string): NavModule {
     case 'PLANT_MANAGER':
       return 'overview';
     case 'TECHNICIAN':
-      return 'tech';
     case 'WORKER':
-      return 'worker';
+      return 'tech';
     case 'ENGINEER':
     case 'ENGINEER_TECHNICIAN':
       return 'overview';
@@ -232,7 +230,8 @@ const AppContent: React.FC = () => {
         );
       case 'worker':
         return (
-          <WorkerWorkspaceView
+          <TechnicianWorkspaceView
+            initialTicketId={navTargetId}
             onLaunchSop={() => setActiveModule('maintenance')}
             onNavigateToCopilot={(_tag) => setActiveModule('copilot')}
           />

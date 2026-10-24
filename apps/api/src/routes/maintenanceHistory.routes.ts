@@ -240,11 +240,25 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
         return;
       }
 
+      const ticketId = data.ticketId || data.caseId || data.ticketNumber || `TKT-${Date.now()}`;
+      const caseId = data.caseId || data.ticketId || null;
+      const ticketNumber = data.ticketNumber || data.ticketId || data.caseId || `MR-${Date.now()}`;
+      const resolutionSource =
+        data.resolutionSource ||
+        (ticketNumber.startsWith('RCA-') || data.faultCategory === 'RCA_SESSION'
+          ? 'RCA_ENGINEER'
+          : data.faultCategory === 'OEM_RESOLVED' || data.source === 'OEM'
+          ? 'OEM_RESOLVED'
+          : 'FIELD_TECH');
+
       const record = await dataStore.createMaintenanceRecord(organizationId, {
         plantId,
         machineId: data.machineId || data.assetId || 'machine-default',
         machineAssetTag: data.machineAssetTag || data.assetTag || 'PLANT-MACHINE',
-        ticketNumber: data.ticketNumber || `MR-${Date.now()}`,
+        ticketNumber,
+        ticketId,
+        caseId,
+        caseNumber: data.caseNumber || caseId,
         problemStatement: data.problemStatement || 'Operational maintenance procedure',
         rootCause: data.rootCause || 'Verified condition cleared',
         faultCategory: data.faultCategory || 'MAINTENANCE',
@@ -252,11 +266,13 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
         reportingUserId: req.auth!.user.id,
         reportingUserName: req.auth!.user.fullName,
         resolvingTechnicianUserId: req.auth!.user.id,
-        resolvingTechnicianName: req.auth!.user.fullName || 'Technician',
+        resolvingTechnicianName: data.resolvingTechnicianName || req.auth!.user.fullName || 'Technician',
         verificationState: data.verificationState || 'PASSED',
         approvalStatus: data.approvalStatus || 'APPROVED',
         resolvedAt: data.resolvedAt || new Date().toISOString(),
         observedSymptoms: Array.isArray(data.observedSymptoms) ? data.observedSymptoms : [],
+        resolutionSource,
+        mttrMinutes: data.mttrMinutes ?? 18,
       });
 
       res.status(201).json({
@@ -332,6 +348,28 @@ export function createMaintenanceRecordRouter(dataStore: IDataStore): Router {
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to get maintenance record');
       res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * DELETE /api/v1/maintenance-records/:id
+   * Delete maintenance record (for removing test entries or obsolete audits)
+   */
+  router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const id = getParam(req.params.id);
+
+      const deleted = await dataStore.deleteMaintenanceRecord(organizationId, id);
+      if (!deleted) {
+        res.status(404).json({ success: false, error: 'Maintenance record not found or already deleted' });
+        return;
+      }
+
+      res.status(200).json({ success: true, message: 'Maintenance record deleted successfully', id });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'Failed to delete maintenance record');
+      res.status(500).json({ success: false, error: err?.message || 'Failed to delete record' });
     }
   });
 

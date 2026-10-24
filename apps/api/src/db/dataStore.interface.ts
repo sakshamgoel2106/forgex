@@ -598,6 +598,7 @@ export interface IDataStore {
   listMaintenanceRecords(organizationId: string, filters?: MaintenanceRecordFilterOptions): Promise<MaintenanceRecord[]>;
   countMaintenanceRecords(organizationId: string, filters?: MaintenanceRecordFilterOptions): Promise<number>;
   updateMaintenanceRecord(organizationId: string, id: string, updates: UpdateMaintenanceRecordDTO): Promise<MaintenanceRecord | null>;
+  deleteMaintenanceRecord(organizationId: string, id: string): Promise<boolean>;
   getMachineMaintenanceHistory(organizationId: string, machineId: string): Promise<MaintenanceRecord[]>;
 
   // Recurring Fault Intelligence & Safety Limits
@@ -1137,6 +1138,8 @@ export interface CreateMaintenanceRecordDTO {
   attachments?: MaintenanceAttachment[];
   knowledgeApproved?: boolean;
   resolvedAt?: string | null;
+  resolutionSource?: string;
+  mttrMinutes?: number | string;
 }
 
 export interface UpdateMaintenanceRecordDTO {
