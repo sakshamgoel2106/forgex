@@ -376,7 +376,7 @@ export function formatLocalizedLotoAlert(
   lotoProcedure?: string | null
 ): string {
   const hazardsStr = hazards.length > 0 ? hazards.join(', ') : 'INDUSTRIAL_ENERGY';
-  let alert = `[${langConfig.lotoProtocolPrefix} ${hazardsStr}] ${langConfig.lotoZeroEnergyRequirement}`;
+  let alert = `${langConfig.lotoProtocolPrefix} ${hazardsStr}. ${langConfig.lotoZeroEnergyRequirement}`;
   if (lotoProcedure) {
     alert += ` ${langConfig.lotoProcedurePrefix} "${lotoProcedure}".`;
   } else {

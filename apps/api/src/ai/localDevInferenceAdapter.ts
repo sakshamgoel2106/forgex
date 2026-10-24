@@ -242,9 +242,17 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       const cleanLines = topEvidence.content
         .split('\n')
         .map((l) => l.trim())
-        .filter((l) => l.length > 10 && !l.startsWith('--') && !/^page\s+\d+/i.test(l));
+        .filter((l) => {
+          if (l.length <= 10) return false;
+          if (l.startsWith('--')) return false;
+          if (/^page\s+\d+/i.test(l)) return false;
+          if (/\b\d+\s+e-sv\s+series\b/i.test(l)) return false;
+          if (/^en\s*-\s*original/i.test(l)) return false;
+          if (/^table of contents/i.test(l)) return false;
+          return true;
+        });
       if (cleanLines.length > 0) {
-        answerBody += cleanLines.slice(0, 4).join('\n') + '\n';
+        answerBody += cleanLines.slice(0, 4).map((l) => `- ${l}`).join('\n') + '\n';
       } else {
         answerBody += `${topEvidence.content.trim()}\n`;
       }
@@ -254,9 +262,16 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       const cleanLines2 = sanitizedEvidence[1].content
         .split('\n')
         .map((l) => l.trim())
-        .filter((l) => l.length > 10 && !l.startsWith('--') && !/^page\s+\d+/i.test(l));
+        .filter((l) => {
+          if (l.length <= 10) return false;
+          if (l.startsWith('--')) return false;
+          if (/^page\s+\d+/i.test(l)) return false;
+          if (/\b\d+\s+e-sv\s+series\b/i.test(l)) return false;
+          if (/^en\s*-\s*original/i.test(l)) return false;
+          return true;
+        });
       if (cleanLines2.length > 0) {
-        answerBody += `\n${cleanLines2.slice(0, 2).join('\n')}\n`;
+        answerBody += `\n${cleanLines2.slice(0, 2).map((l) => `- ${l}`).join('\n')}\n`;
       }
     }
 

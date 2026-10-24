@@ -171,13 +171,15 @@ Respond in strict JSON with:
 - "answer": the clean, direct synthesized answer.
 - "citations": array of internal source references, each with chunkId, docId, pageNumber, and exactVerbatimQuote.`;
 
-        let targetModel = 'gemini-3.8-flash';
-        if (this.modelName && !this.modelName.includes('2.5') && !this.modelName.includes('1.5')) {
+        let targetModel = 'gemini-2.5-flash';
+        if (this.modelName && !this.modelName.includes('3.8') && !this.modelName.includes('3.5')) {
           targetModel = this.modelName;
         }
 
-        const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${this._apiKey}`;
-        
+        const candidateModels = Array.from(
+          new Set([targetModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'])
+        );
+
         // Prepare multimodal parts: Text prompt + inline audio/image data if present
         const parts: any[] = [{ text: prompt }];
 
@@ -219,65 +221,86 @@ Respond in strict JSON with:
           });
         }
 
-        const res = await fetch(geminiEndpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: 'OBJECT',
-                properties: {
-                  answer: { type: 'STRING' },
-                  citations: {
-                    type: 'ARRAY',
-                    items: {
-                      type: 'OBJECT',
-                      properties: {
-                        chunkId: { type: 'STRING' },
-                        docId: { type: 'STRING' },
-                        pageNumber: { type: 'INTEGER' },
-                        exactVerbatimQuote: { type: 'STRING' },
+        let parsedResult: any = null;
+        let successfulModel = targetModel;
+
+        for (const candidate of candidateModels) {
+          const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent?key=${this._apiKey}`;
+          try {
+            const res = await fetch(geminiEndpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts }],
+                generationConfig: {
+                  temperature: 0.1,
+                  responseMimeType: 'application/json',
+                  responseSchema: {
+                    type: 'OBJECT',
+                    properties: {
+                      answer: { type: 'STRING' },
+                      citations: {
+                        type: 'ARRAY',
+                        items: {
+                          type: 'OBJECT',
+                          properties: {
+                            chunkId: { type: 'STRING' },
+                            docId: { type: 'STRING' },
+                            pageNumber: { type: 'INTEGER' },
+                            exactVerbatimQuote: { type: 'STRING' },
+                          },
+                          required: ['chunkId', 'docId', 'pageNumber', 'exactVerbatimQuote'],
+                        },
                       },
-                      required: ['chunkId', 'docId', 'pageNumber', 'exactVerbatimQuote'],
                     },
+                    required: ['answer', 'citations'],
                   },
                 },
-                required: ['answer', 'citations'],
-              },
-            },
-          }),
-          signal: AbortSignal.timeout(6000),
-        });
+              }),
+              signal: AbortSignal.timeout(7000),
+            });
 
-        if (res.ok) {
-          const json: any = await res.json();
-          const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (rawText) {
-            const parsed = JSON.parse(rawText);
-            const rawCitations: RawCitationOutput[] = Array.isArray(parsed.citations)
-              ? parsed.citations.map((c: any) => ({
-                  chunkId: String(c.chunkId),
-                  docId: String(c.docId),
-                  pageNumber: Number(c.pageNumber) || 1,
-                  exactVerbatimQuote: String(c.exactVerbatimQuote || ''),
-                }))
-              : [];
-
-            return {
-              answerText: parsed.answer || 'No response generated',
-              confidence: 'HIGH',
-              isInsufficientEvidence: false,
-              conflictDetected: false,
-              usedEvidenceChunkIds: rawCitations.map((c) => c.chunkId),
-              rawCitations,
-              modelUsed: targetModel,
-            };
+            if (res.ok) {
+              const json: any = await res.json();
+              const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (rawText) {
+                parsedResult = JSON.parse(rawText);
+                successfulModel = candidate;
+                break;
+              }
+            } else {
+              logger.warn(
+                { model: candidate, status: res.status, statusText: res.statusText },
+                'Gemini model call non-ok, trying candidate fallback'
+              );
+            }
+          } catch (mErr: any) {
+            logger.warn(
+              { model: candidate, error: mErr?.message },
+              'Gemini model call error, trying candidate fallback'
+            );
           }
-        } else {
-          logger.warn({ status: res.status, statusText: res.statusText }, 'Gemini API call non-ok, falling back to grounded evidence synthesis');
+        }
+
+        if (parsedResult) {
+          const rawCitations: RawCitationOutput[] = Array.isArray(parsedResult.citations)
+            ? parsedResult.citations.map((c: any) => ({
+                chunkId: String(c.chunkId),
+                docId: String(c.docId),
+                pageNumber: Number(c.pageNumber) || 1,
+                exactVerbatimQuote: String(c.exactVerbatimQuote || ''),
+              }))
+            : [];
+
+          return {
+            answerText: parsedResult.answer || 'No response generated',
+            confidence: 'HIGH',
+            isInsufficientEvidence: false,
+            conflictDetected: false,
+            usedEvidenceChunkIds: rawCitations.map((c) => c.chunkId),
+            rawCitations,
+            modelUsed: successfulModel,
+          };
         }
       }
     } catch (err: any) {
@@ -317,18 +340,38 @@ Respond in strict JSON with:
           if (l.length < 15) return false;
           if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(l)) return false;
           if (/^page\s+\d+/i.test(l)) return false;
+          if (/\b\d+\s+e-sv\s+series\b/i.test(l)) return false;
           if (/^en\s*-\s*original/i.test(l)) return false;
           if (/^\d+(\.\d+)*\s*$/i.test(l)) return false;
           if (/^table of contents/i.test(l)) return false;
+          if (/^it - istruzioni/i.test(l)) return false;
           return true;
         });
       candidateLines.push(...lines);
     }
 
-    const uniqueLines = Array.from(new Set(candidateLines)).slice(0, 5);
+    // Rank candidate lines by domain query token relevance
+    const scoredLines = candidateLines.map((line) => {
+      const lower = line.toLowerCase();
+      let matchCount = 0;
+      for (const tok of domainTokens) {
+        if (lower.includes(tok)) matchCount += 2;
+      }
+      return { line, matchCount };
+    });
+
+    scoredLines.sort((a, b) => b.matchCount - a.matchCount);
+
+    const relevantLines = scoredLines
+      .filter((s) => s.matchCount > 0 || scoredLines[0]?.matchCount === 0)
+      .map((s) => s.line)
+      .slice(0, 5);
+
+    const uniqueLines = Array.from(new Set(relevantLines));
     let answerText = '';
     if (uniqueLines.length > 0) {
-      answerText = uniqueLines.join('\n\n');
+      answerText = `### Verified Equipment Specifications & Operational Guidance\n\n` +
+        uniqueLines.map((l) => `- ${l}`).join('\n\n');
     } else {
       answerText = langConfig.missingRecordsMessage;
     }

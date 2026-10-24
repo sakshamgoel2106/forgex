@@ -282,6 +282,7 @@ export const CopilotWorkspaceView: React.FC = () => {
   // Conversations & Messages State
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [messages, setMessages] = useState<CopilotMessage[]>([]);
+  const [isNewThreadDraft, setIsNewThreadDraft] = useState<boolean>(false);
 
   // Input & Query State
   const [queryInput, setQueryInput] = useState('');
@@ -597,10 +598,11 @@ export const CopilotWorkspaceView: React.FC = () => {
         : 'Validating factory context and equipment access...'
     );
 
+    const effectiveConvId = isNewThreadDraft ? undefined : activeConversationId || undefined;
     const userMessageId = `user-${Date.now()}`;
     const newUserMsg: CopilotMessage = {
       id: userMessageId,
-      conversationId: activeConversationId || 'conv-new',
+      conversationId: effectiveConvId || 'conv-new',
       senderType: 'USER',
       content: text,
       confidence: 'HIGH',
@@ -611,7 +613,8 @@ export const CopilotWorkspaceView: React.FC = () => {
       createdAt: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...prev, newUserMsg]);
+    setMessages((prev) => (isNewThreadDraft ? [newUserMsg] : [...prev, newUserMsg]));
+    setIsNewThreadDraft(false);
     setQueryInput('');
 
     try {
@@ -649,7 +652,7 @@ export const CopilotWorkspaceView: React.FC = () => {
           machineId: selectedMachine?.id || undefined,
           assetId: selectedMachine?.id || undefined,
           assetTag: selectedMachine?.assetTag || undefined,
-          conversationId: activeConversationId || undefined,
+          conversationId: effectiveConvId,
           language: speechLanguage,
           acousticTelemetry: acousticTelemetry || undefined,
           imageBase64: imageBase64 || undefined,
@@ -667,8 +670,9 @@ export const CopilotWorkspaceView: React.FC = () => {
 
         setMessages((prev) => [...prev, asstMsg]);
 
-        if (data.conversationId && data.conversationId !== activeConversationId) {
+        if (data.conversationId) {
           setActiveConversationId(data.conversationId);
+          setIsNewThreadDraft(false);
           setConversations((prev) => [
             {
               id: data.conversationId,
@@ -754,6 +758,19 @@ export const CopilotWorkspaceView: React.FC = () => {
           handleSendQuery(promptText);
         }, 350);
       }
+
+      // Immediately scrub URL search parameters to prevent sticky re-execution on refresh/remount
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('prompt');
+        url.searchParams.delete('assetTag');
+        url.searchParams.delete('caseId');
+        url.searchParams.delete('faultCode');
+        url.searchParams.delete('issueSummary');
+        url.searchParams.delete('activeStepTitle');
+        url.searchParams.delete('activeStepDescription');
+        window.history.replaceState({}, '', url.pathname + (url.hash || ''));
+      } catch {}
     };
 
     const timer = setTimeout(processHandoff, 250);
@@ -781,10 +798,30 @@ export const CopilotWorkspaceView: React.FC = () => {
     setActiveConversationId(null);
     setMessages([]);
     setQueryError(null);
+    setIsNewThreadDraft(true);
+
+    try {
+      sessionStorage.removeItem('forgex_copilot_handoff');
+      sessionStorage.removeItem('forgex_copilot_active_thread');
+      sessionStorage.removeItem('forgex_copilot_messages');
+      localStorage.removeItem('forgex_copilot_active_thread');
+      localStorage.removeItem('forgex_copilot_messages');
+
+      const url = new URL(window.location.href);
+      url.searchParams.delete('prompt');
+      url.searchParams.delete('assetTag');
+      url.searchParams.delete('caseId');
+      url.searchParams.delete('faultCode');
+      url.searchParams.delete('issueSummary');
+      url.searchParams.delete('activeStepTitle');
+      url.searchParams.delete('activeStepDescription');
+      window.history.replaceState({}, '', url.pathname + (url.hash || ''));
+    } catch {}
   };
 
   const handleSelectConversation = async (convId: string) => {
     stopSpeech();
+    setIsNewThreadDraft(false);
     setActiveConversationId(convId);
     try {
       const res = await apiFetch(`/api/v1/copilot/conversations/${convId}`);
@@ -1240,7 +1277,7 @@ export const CopilotWorkspaceView: React.FC = () => {
             </div>
           ) : (
             conversations.map((c) => {
-              const isActive = activeConversationId === c.id;
+              const isActive = !isNewThreadDraft && activeConversationId === c.id;
               return (
                 <div
                   key={c.id}
@@ -1832,11 +1869,17 @@ export const CopilotWorkspaceView: React.FC = () => {
                         <span>{currentLangConfig.lotoHeader}</span>
                       </div>
                       <ul className="list-disc list-inside space-y-1 text-[11px] text-amber-950 font-medium">
-                        {msg.safetyAlerts.map((alert, aIdx) => (
-                          <li key={aIdx} className="leading-relaxed">
-                            {alert}
-                          </li>
-                        ))}
+                        {msg.safetyAlerts.map((alert, aIdx) => {
+                          const cleanAlert = alert
+                            .replace(/^\[.*?PROTOCOL[^\]]*\]\s*/i, '')
+                            .replace(/^\[.*?HAZARD[^\]]*\]\s*/i, '')
+                            .replace(/^\[.*?\]\s*/, '');
+                          return (
+                            <li key={aIdx} className="leading-relaxed">
+                              {cleanAlert || alert}
+                            </li>
+                          );
+                        })}
                       </ul>
                     </div>
                   )}
