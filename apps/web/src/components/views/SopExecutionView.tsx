@@ -18,7 +18,6 @@ import {
   Copy,
   Check,
   Play,
-  ClipboardList,
   Kanban,
   LayoutGrid,
   Layers,
@@ -1343,6 +1342,8 @@ export const SopExecutionView: React.FC<{
   });
 
   // Edit Ticket Modal State (Requirement 2)
+  const [dismissedBusyPrompt, setDismissedBusyPrompt] = useState<Record<string, boolean>>({});
+
   const [editModalState, setEditModalState] = useState<{
     isOpen: boolean;
     caseId: string;
@@ -2568,7 +2569,6 @@ export const SopExecutionView: React.FC<{
     // Live step progress sync
     const cardProgress = getCaseExecutionProgress(c);
     const isCardFullySolved = cardProgress.isSolved;
-    const slaInfo = computeSlaCountdown(c, isCardFullySolved, currentTick);
 
     // Priority Border Color
     const priorityBorderClass =
@@ -2603,88 +2603,47 @@ export const SopExecutionView: React.FC<{
       <div
         key={c.id}
         onClick={() => setActiveCaseId((prev) => (prev === c.id ? null : c.id))}
-        className={`bg-white rounded-xl border border-l-4 p-3 cursor-pointer transition-all duration-150 space-y-2.5 shadow-xs hover:shadow-md hover:border-slate-300 ${priorityBorderClass} ${
+        className={`bg-white rounded-xl border border-l-4 p-2.5 cursor-pointer transition-all duration-150 space-y-2 shadow-xs hover:shadow-md hover:border-slate-300 ${priorityBorderClass} ${
           isSelected
-            ? 'ring-2 ring-blue-600 border-blue-500 bg-blue-50/20'
+            ? 'ring-2 ring-indigo-600 border-indigo-500 bg-indigo-50/20'
             : ''
         }`}
       >
-        {/* Row 1: Ticket ID + Asset Tag + RCA Badge on Left; Priority + Status Pill on Right */}
-        <div className="flex items-center justify-between gap-2">
+        {/* 1. What the Problem Is: Top row with Ticket ID, Asset Tag, Priority Badge */}
+        <div className="flex items-center justify-between gap-1.5">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="font-mono font-bold text-blue-700 text-xs truncate">
+            <span className="font-mono font-bold text-indigo-700 text-xs truncate">
               {c.caseNumber}
             </span>
-            <span className="font-mono font-semibold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] shrink-0 truncate max-w-[130px]">
+            <span className="font-mono font-semibold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded text-[10px] shrink-0 truncate max-w-[120px]">
               {displayTag}
             </span>
             {isRcaSource && (
-              <span className="bg-purple-50 text-purple-700 border border-purple-200 px-1 py-0.5 rounded text-[9px] font-mono font-bold shrink-0">
+              <span className="bg-purple-50 text-purple-700 border border-purple-200 px-1 py-0.2 rounded text-[9px] font-mono font-bold shrink-0">
                 RCA
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0 font-mono text-[9px]">
-            <span
-              className={`font-bold px-1.5 py-0.5 rounded border ${
-                c.severity === 'CRITICAL'
-                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                  : c.severity === 'HIGH'
-                  ? 'bg-amber-50 text-amber-700 border-amber-200'
-                  : 'bg-blue-50 text-blue-700 border-blue-200'
-              }`}
-            >
-              {c.severity}
-            </span>
-            {isCardFullySolved ? (
-              <span className="font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-300">
-                🔒 SOLVED
-              </span>
-            ) : cardProgress.progressPct > 0 ? (
-              <span className="font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
-                ⚡ IN EXEC
-              </span>
-            ) : (
-              <span className="font-medium text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                QUEUED
-              </span>
-            )}
-          </div>
+          <span
+            className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+              c.severity === 'CRITICAL'
+                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                : c.severity === 'HIGH'
+                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                : 'bg-blue-50 text-blue-700 border-blue-200'
+            }`}
+          >
+            {c.severity}
+          </span>
         </div>
 
-        {/* Row 2: Actionable Title */}
-        <p className="text-xs font-semibold text-slate-900 line-clamp-1" title={cleanSummary}>
+        {/* 1-Line Clean Problem Title */}
+        <p className="text-xs font-semibold text-slate-900 truncate" title={cleanSummary}>
           {cleanSummary}
         </p>
 
-        {/* Row 3: Asset Details & Accurate Local Time */}
-        <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono border-t border-slate-100 pt-1.5">
-          <span className="truncate max-w-[160px]">{formatAssetDisplay(c.assetId).label || 'Industrial Asset'}</span>
-          <span>{formatLocalDateTime(c.createdAt || (c as any).rawCreatedAt)}</span>
-        </div>
-
-        {/* Row 3.5: Dynamic SLA Breach Warning & Countdown Timer (Requirement 1) */}
-        <div className="flex items-center justify-between text-[10px] font-mono">
-          <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] ${slaInfo.badgeClass}`}
-            title={`SLA Target: ${slaInfo.targetMinutes}m (Elapsed: ${slaInfo.elapsedMinutes}m)`}
-          >
-            {slaInfo.badgeText}
-          </span>
-          {slaInfo.status === 'BREACHED' && (
-            <span className="text-[9px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1 py-0.2 rounded uppercase">
-              Escalated
-            </span>
-          )}
-          {slaInfo.status === 'AT_RISK' && (
-            <span className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded uppercase">
-              Urgent
-            </span>
-          )}
-        </div>
-
-        {/* Row 4: Assigned Technician Pill & Live Status */}
+        {/* 2. Who It Is Assigned To: Compact technician row */}
         <div className="flex items-center justify-between gap-1.5 bg-slate-50 border border-slate-200/80 rounded-lg px-2 py-1 text-[11px]">
           <div className="flex items-center gap-1.5 min-w-0">
             <span
@@ -2697,7 +2656,7 @@ export const SopExecutionView: React.FC<{
               }`}
             />
             <span className="font-semibold text-slate-800 truncate" title={techName}>
-              {techName}
+              👤 {techName}
             </span>
             <span className="text-amber-700 font-bold font-mono text-[10px]">
               ⭐{c.assignedTechnicianRating ? Number(c.assignedTechnicianRating).toFixed(1) : '4.9'}
@@ -2719,80 +2678,36 @@ export const SopExecutionView: React.FC<{
           </div>
         </div>
 
-        {/* Row 5: 4-Step Segmented Progress Bar */}
+        {/* 3. Live Progress: Sleek gradient progress bar with X/5 Steps • Y% */}
         <div className="space-y-1 pt-0.5">
           <div className="flex items-center justify-between text-[10px] font-mono">
-            {isCardFullySolved ? (
-              <span className="text-emerald-700 font-bold">✅ 100% Solved & Verified</span>
-            ) : cardProgress.progressPct > 0 ? (
-              <span className="text-blue-700 font-bold">
-                Step {cardProgress.doneSteps}/{cardProgress.totalSteps} ({cardProgress.progressPct}%)
-              </span>
-            ) : (
-              <span className="text-slate-500 font-medium">Awaiting Execution</span>
-            )}
-            <span className="text-slate-400 font-medium">4 Steps</span>
-          </div>
-          <div className="grid grid-cols-4 gap-1 h-1.5">
-            {[0, 1, 2, 3].map((stepIdx) => {
-              const isStepDone = isCardFullySolved || stepIdx < cardProgress.doneSteps;
-              const isStepCurrent =
-                !isCardFullySolved && stepIdx === cardProgress.doneSteps && cardProgress.progressPct > 0;
-              return (
-                <div
-                  key={stepIdx}
-                  className={`rounded-full transition-colors ${
-                    isStepDone
-                      ? 'bg-emerald-500'
-                      : isStepCurrent
-                      ? 'bg-blue-600 animate-pulse'
-                      : 'bg-slate-200'
-                  }`}
-                />
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Row 6: Card Actions & Safety-Guarded Delete (Requirement 1) */}
-        <div className="flex items-center justify-between pt-1.5 border-t border-slate-100 text-[10px]">
-          <span className="text-slate-400 font-mono">
-            {isCardFullySolved
-              ? 'Complete'
-              : isTechLocked || cardProgress.doneSteps > 0
-              ? 'Active in Field'
-              : 'Awaiting Pickup'}
-          </span>
-
-          {isTicketExecutionUnderway(c) ? (
-            <span
-              className="inline-flex items-center gap-1 text-slate-400 font-mono text-[10px] cursor-not-allowed select-none px-1.5 py-0.5 rounded bg-slate-100/80 border border-slate-200"
-              title="🔒 Cannot delete: Field execution already underway. Use OEM Escalation or Archive instead."
-              onClick={(e) => {
-                e.stopPropagation();
-                toast.warning(
-                  'Deletion Blocked',
-                  '🔒 Cannot delete: Field execution already underway. Use OEM Escalation or Archive instead.'
-                );
-              }}
-            >
-              <Lock className="w-2.5 h-2.5 text-slate-400" />
-              <span>Locked</span>
+            <span className={isCardFullySolved ? 'text-emerald-700 font-bold' : cardProgress.progressPct > 0 ? 'text-indigo-700 font-bold' : 'text-slate-500 font-medium'}>
+              {isCardFullySolved
+                ? '5/5 Steps • 100% Solved'
+                : cardProgress.progressPct > 0
+                ? `${cardProgress.doneSteps}/5 Steps • ${cardProgress.progressPct}%`
+                : '0/5 Steps • Awaiting Start'}
             </span>
-          ) : (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDeleteModalState({ isOpen: true, targetCase: c });
+            <span className="text-slate-400 font-medium">5 Steps</span>
+          </div>
+          <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${
+                isCardFullySolved
+                  ? 'bg-gradient-to-r from-emerald-600 to-teal-500 w-full'
+                  : cardProgress.progressPct > 0
+                  ? 'bg-gradient-to-r from-indigo-600 to-blue-500'
+                  : 'bg-slate-200 w-1'
+              }`}
+              style={{
+                width: isCardFullySolved
+                  ? '100%'
+                  : cardProgress.progressPct > 0
+                  ? `${Math.max(cardProgress.progressPct, 8)}%`
+                  : '0%',
               }}
-              className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-1.5 py-0.5 rounded transition cursor-pointer font-semibold font-sans border border-transparent hover:border-rose-200"
-              title="Delete unstarted ticket from dispatch queue"
-            >
-              <Trash2 className="w-3 h-3 text-rose-500" />
-              <span>Delete Ticket</span>
-            </button>
-          )}
+            />
+          </div>
         </div>
       </div>
     );
@@ -2843,7 +2758,7 @@ export const SopExecutionView: React.FC<{
           <Button
             size="sm"
             onClick={handleOpenNewCaseModal}
-            className="bg-slate-900 hover:bg-black text-white font-semibold text-xs h-8 shadow-xs px-3 rounded-lg border-0 transition cursor-pointer"
+            className="bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold text-xs h-8 shadow-xs px-3 rounded-lg border-0 transition cursor-pointer"
           >
             <span>+ Raise Manual Ticket</span>
           </Button>
@@ -3075,7 +2990,7 @@ export const SopExecutionView: React.FC<{
               <Button
                 size="sm"
                 onClick={handleOpenNewCaseModal}
-                className="bg-slate-900 hover:bg-black text-white text-xs"
+                className="bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-xs shadow-xs"
               >
                 + Raise Ticket
               </Button>
@@ -3394,7 +3309,7 @@ export const SopExecutionView: React.FC<{
                         <button
                           type="button"
                           onClick={() => handleOpenInTechQueue(activeCase)}
-                          className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3 py-1 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer whitespace-nowrap"
+                          className="inline-flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white px-3.5 py-1 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer whitespace-nowrap"
                           title="Open this ticket directly in Tech Execution Desk"
                         >
                           <Play className="w-3 h-3 fill-current" />
@@ -3558,6 +3473,107 @@ export const SopExecutionView: React.FC<{
                   </div>
                 </div>
 
+                {/* Busy Technician Admin Confirmation Banner (Requirement 2) */}
+                {(() => {
+                  const activeTechStatus = computeTechnicianLiveStatus(
+                    {
+                      fullName: activeCase.assignedTechnicianName || '',
+                      id: activeCase.assignedTechnicianUserId || '',
+                    },
+                    cases
+                  );
+                  if (activeTechStatus.statusType !== 'BUSY' || dismissedBusyPrompt[activeCase.id]) {
+                    return null;
+                  }
+                  const nextAvailable = DISPATCH_TECHNICIAN_ROSTER.find((t) => {
+                    const st = computeTechnicianLiveStatus(
+                      { fullName: t.fullName, id: t.id, userId: t.userId },
+                      cases
+                    );
+                    return (
+                      st.statusType === 'AVAILABLE' &&
+                      t.id !== activeCase.assignedTechnicianUserId &&
+                      t.userId !== activeCase.assignedTechnicianUserId
+                    );
+                  });
+                  const nextTechName = nextAvailable?.fullName || 'Available Specialist';
+
+                  return (
+                    <div className="p-3 rounded-xl bg-amber-50/90 border border-amber-300 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs shadow-xs animate-in fade-in duration-200">
+                      <div className="flex items-start gap-2 min-w-0">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-amber-950">
+                            ⚠️ <strong>{activeCase.assignedTechnicianName}</strong> is currently busy on another task.
+                          </p>
+                          <p className="text-[11px] text-amber-800 mt-0.5">
+                            Assign anyway (Queue) or switch to available specialist <strong>{nextTechName}</strong>?
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center font-sans">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDismissedBusyPrompt((prev) => ({ ...prev, [activeCase.id]: true }));
+                            toast.info('Technician Confirmed', `Ticket queued for ${activeCase.assignedTechnicianName}.`);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs shadow-2xs transition cursor-pointer"
+                        >
+                          Keep Assigned
+                        </button>
+                        {nextAvailable && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setIsSubmitting(true);
+                              try {
+                                const res = await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/assign`, {
+                                  method: 'POST',
+                                  headers: activeCase.updatedAt ? { 'If-Match': activeCase.updatedAt } : undefined,
+                                  body: JSON.stringify({
+                                    technicianUserId: nextAvailable.id,
+                                    technicianName: nextAvailable.fullName,
+                                    expectedUpdatedAt: activeCase.updatedAt,
+                                  }),
+                                });
+                                const json = await res.json();
+                                if (!res.ok || !json.success) throw new Error(json?.error?.message || 'Assignment failed');
+                                setCases((prev) =>
+                                  prev.map((c) =>
+                                    c.id === activeCase.id
+                                      ? {
+                                          ...c,
+                                          ...json.data,
+                                          assignedTechnicianUserId: nextAvailable.id,
+                                          assignedTechnicianName: nextAvailable.fullName,
+                                          assignedTechnicianRating: nextAvailable.rating,
+                                          isAiAutoAssigned: false,
+                                        }
+                                      : c
+                                  )
+                                );
+                                setDismissedBusyPrompt((prev) => ({ ...prev, [activeCase.id]: true }));
+                                toast.success(
+                                  'Switched to Available Tech',
+                                  `Reassigned ticket to available specialist ${nextAvailable.fullName}.`
+                                );
+                              } catch (err: any) {
+                                toast.error('Switch Failed', err.message);
+                              } finally {
+                                setIsSubmitting(false);
+                              }
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-2xs transition cursor-pointer"
+                          >
+                            Switch to Available Tech
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Row 2: Ticket Title */}
                 <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight font-sans">
                   {cleanFaultTitle(
@@ -3569,11 +3585,6 @@ export const SopExecutionView: React.FC<{
 
                 {/* Row 3: Single Sleek 1-Line Horizontal Metadata Strip (Replaces Section B) */}
                 <div className="flex items-center gap-3 py-1.5 px-3 bg-slate-50 border border-slate-200/80 rounded-lg text-[11px] font-mono text-slate-600 flex-wrap">
-                  <div className="flex items-center gap-1">
-                    <span className="text-slate-400 uppercase font-bold text-[10px]">ASSET TAG:</span>
-                    <span className="font-bold text-slate-900">{activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label || 'PUMP-CENTRIFUGAL-402'}</span>
-                  </div>
-                  <span className="text-slate-300">•</span>
                   <div className="flex items-center gap-1">
                     <span className="text-slate-400 uppercase font-bold text-[10px]">CREATED:</span>
                     <span className="text-slate-800">
@@ -3588,25 +3599,25 @@ export const SopExecutionView: React.FC<{
                 </div>
               </div>
 
-              {/* LIVE 4-STEP CONNECTED PROGRESS STEPPER (Requirement 3) */}
-              <div className="py-3 px-4 border-t border-b bg-blue-50/50 border-blue-200/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              {/* LIVE 5-STEP CONNECTED PROGRESS STEPPER (Deep Navy-Indigo Gradient Theme) */}
+              <div className="py-2.5 px-4 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white border-y border-indigo-900/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
                 {/* Left: Status Badge & Steps Verified */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border ${
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border ${
                     isTicketFullySolved
-                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                      : 'bg-blue-100 text-blue-800 border-blue-300'
+                      ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                      : 'bg-indigo-900/60 text-indigo-200 border-indigo-700'
                   }`}>
                     {isTicketFullySolved ? '✅ COMPLETED' : '⚡ IN PROGRESS'}
                   </span>
-                  <span className="text-xs font-mono font-semibold text-slate-700 whitespace-nowrap">
-                    <strong className="text-slate-900">{activeProgress.doneSteps} of {activeProgress.totalSteps}</strong> Steps Verified
+                  <span className="text-xs font-mono font-medium text-slate-300 whitespace-nowrap">
+                    <strong className="text-white font-bold">{activeProgress.doneSteps} of {activeProgress.totalSteps}</strong> Steps
                   </span>
                 </div>
 
-                {/* Center: 4 Connected Segmented Pill Bars */}
-                <div className="flex-1 w-full sm:max-w-xs md:max-w-sm lg:max-w-md flex items-center gap-1.5">
-                  {Array.from({ length: Math.max(activeProgress.totalSteps, 4) }, (_, idx) => {
+                {/* Center: Sleek Single-Line Step Pills (Step 1 to Step 5) */}
+                <div className="flex items-center gap-1.5 overflow-x-auto max-w-full py-0.5">
+                  {Array.from({ length: Math.max(activeProgress.totalSteps, 5) }, (_, idx) => {
                     const stepNum = idx + 1;
                     const isCompleted = stepNum <= activeProgress.doneSteps || isTicketFullySolved;
                     const isActive = stepNum === activeProgress.doneSteps + 1 && !isTicketFullySolved;
@@ -3614,21 +3625,19 @@ export const SopExecutionView: React.FC<{
                     return (
                       <div
                         key={stepNum}
-                        className={`flex-1 h-7 rounded-md flex items-center justify-center gap-1 text-[10px] font-mono font-bold transition-all ${
+                        className={`whitespace-nowrap px-2.5 py-1 text-xs font-semibold rounded-md flex items-center justify-center gap-1 transition-all ${
                           isCompleted
-                            ? 'bg-blue-600 text-white shadow-2xs'
+                            ? 'bg-indigo-600 text-white shadow-2xs font-bold'
                             : isActive
-                            ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-1 animate-pulse shadow-2xs'
-                            : 'bg-white/90 text-blue-900/60 border border-blue-200/60'
+                            ? 'bg-indigo-500 text-white ring-2 ring-indigo-300 ring-offset-1 ring-offset-slate-950 animate-pulse font-bold'
+                            : 'bg-slate-800/80 text-slate-400 border border-slate-700/80'
                         }`}
                         title={`Step ${stepNum}: ${activeProgress.steps[idx]?.title || 'Pending'}`}
                       >
                         {isCompleted ? (
-                          <Check className="w-3 h-3 stroke-[3]" />
-                        ) : (
-                          <span>{stepNum}</span>
-                        )}
-                        <span className="hidden sm:inline">Step {stepNum}</span>
+                          <Check className="w-3 h-3 stroke-[3] text-white shrink-0" />
+                        ) : null}
+                        <span>Step {stepNum}</span>
                       </div>
                     );
                   })}
@@ -3636,7 +3645,7 @@ export const SopExecutionView: React.FC<{
 
                 {/* Right: Bold Percentage Pill */}
                 <div className="shrink-0 self-end sm:self-auto">
-                  <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 font-mono text-xs font-bold px-3 py-1 rounded-full shadow-2xs whitespace-nowrap">
+                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono text-xs font-bold px-2.5 py-1 rounded-full shadow-2xs whitespace-nowrap">
                     {isTicketFullySolved ? '100% Solved' : `${activeProgress.progressPct}% Solved`}
                   </span>
                 </div>
@@ -3682,31 +3691,31 @@ export const SopExecutionView: React.FC<{
                 })()}
 
                 {/* Side-by-Side Symptom & RCA Cards (Click to View Full Explained Details) */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 items-stretch">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
                   {/* Left Card: Reported Symptom & Alarm Code */}
                   <div
                     onClick={() => setDiagnosticModal({ isOpen: true, type: 'SYMPTOM' })}
-                    className="p-3.5 rounded-xl border border-amber-300/80 bg-gradient-to-br from-amber-50/40 via-white to-amber-50/20 shadow-2xs flex flex-col justify-between h-full min-h-[148px] cursor-pointer hover:border-amber-400 hover:shadow-md transition group"
+                    className="p-3 rounded-xl border border-amber-300/80 bg-gradient-to-br from-amber-50/40 via-white to-amber-50/20 shadow-2xs flex flex-col justify-between cursor-pointer hover:border-amber-400 hover:shadow-sm transition group"
                     title="Click to view full untruncated symptoms, AI sensor telemetry & 5-Why causal trace"
                   >
                     <div>
-                      <div className="flex items-center justify-between gap-2 border-b border-amber-100 pb-2 mb-2 min-h-[28px]">
+                      <div className="flex items-center justify-between gap-2 border-b border-amber-100 pb-1.5 mb-1.5">
                         <div className="flex items-center gap-1.5 min-w-0">
-                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                           <span className="text-[11px] font-bold text-slate-900 uppercase font-mono tracking-wide truncate">
-                            Reported Symptom & Alarm Code
+                            Reported Symptom & Alarm
                           </span>
                         </div>
-                        <span className="font-mono text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded shadow-2xs shrink-0 whitespace-nowrap">
+                        <span className="font-mono text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.2 rounded shadow-2xs shrink-0 whitespace-nowrap">
                           {activeCase.errorCode || activeCase.faultCode || 'ALM-AUTO-DETECT'}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-800 font-medium font-sans leading-relaxed line-clamp-3 min-h-[48px]">
+                      <p className="text-xs text-slate-800 font-medium font-sans leading-snug line-clamp-2">
                         {activeCase.symptomDescription || activeCase.description || activeCase.title}
                       </p>
                     </div>
-                    <div className="mt-auto pt-2.5 border-t border-amber-100/70 flex items-center justify-between text-[10px] font-mono text-amber-800">
-                      <span>Telemetry & 5-Why Analysis</span>
+                    <div className="mt-2 pt-1.5 border-t border-amber-100/70 flex items-center justify-between text-[10px] font-mono text-amber-800">
+                      <span>Telemetry & 5-Why</span>
                       <span className="group-hover:translate-x-0.5 transition-transform font-bold text-amber-900">
                         Click to expand details ↗
                       </span>
@@ -3716,29 +3725,29 @@ export const SopExecutionView: React.FC<{
                   {/* Right Card: Confirmed Root Cause (from RCA) */}
                   <div
                     onClick={() => setDiagnosticModal({ isOpen: true, type: 'RCA' })}
-                    className="p-3.5 rounded-xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/50 via-white to-purple-50/30 shadow-2xs flex flex-col justify-between h-full min-h-[148px] cursor-pointer hover:border-indigo-400 hover:shadow-md transition group"
+                    className="p-3 rounded-xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/50 via-white to-purple-50/30 shadow-2xs flex flex-col justify-between cursor-pointer hover:border-indigo-400 hover:shadow-sm transition group"
                     title="Click to view full causal analysis, failure mechanism explanation & risk matrix"
                   >
                     <div>
-                      <div className="flex items-center justify-between gap-2 border-b border-indigo-100 pb-2 mb-2 min-h-[28px]">
+                      <div className="flex items-center justify-between gap-2 border-b border-indigo-100 pb-1.5 mb-1.5">
                         <div className="flex items-center gap-1.5 min-w-0">
-                          <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                           <span className="text-[11px] font-bold text-indigo-950 uppercase font-mono tracking-wide truncate">
-                            Confirmed Root Cause (from RCA)
+                            Confirmed Root Cause
                           </span>
                         </div>
-                        <span className="font-mono text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300 px-2 py-0.5 rounded shadow-2xs shrink-0 whitespace-nowrap">
+                        <span className="font-mono text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300 px-2 py-0.2 rounded shadow-2xs shrink-0 whitespace-nowrap">
                           {activeCase.probability || 94}% Confidence
                         </span>
                       </div>
-                      <p className="text-xs text-slate-900 font-semibold font-sans leading-relaxed line-clamp-3 min-h-[48px]">
+                      <p className="text-xs text-slate-900 font-semibold font-sans leading-snug line-clamp-2">
                         {activeCase.diagnosticHypothesis?.primaryHypothesis ||
                           activeCase.topRootCause ||
                           'Mechanical wear or operational deviation identified during diagnostic root-cause inspection.'}
                       </p>
                     </div>
-                    <div className="mt-auto pt-2.5 border-t border-indigo-100/70 flex items-center justify-between text-[10px] font-mono text-indigo-800">
-                      <span>Causal Verification & Risk</span>
+                    <div className="mt-2 pt-1.5 border-t border-indigo-100/70 flex items-center justify-between text-[10px] font-mono text-indigo-800">
+                      <span>Causal Verification</span>
                       <span className="group-hover:translate-x-0.5 transition-transform font-bold text-indigo-950">
                         Click to expand details ↗
                       </span>
@@ -3746,148 +3755,43 @@ export const SopExecutionView: React.FC<{
                   </div>
                 </div>
 
-                {/* AI Required Spares, Tools & SLA Tracker Strip */}
+                {/* Compact Single-Row "Spares & Tools" + Vision LOTO Strip (Requirement 3) */}
                 {(() => {
                   const sparesAndSla = getAiSparesAndSla(activeCase.assetTag, activeCase.title, activeCase.symptomDescription);
-                  const drawerSla = computeSlaCountdown(activeCase, isTicketFullySolved, currentTick);
                   return (
                     <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs shadow-2xs">
-                      {/* Left: AI Auto-Detected Kit */}
+                      {/* Left: AI Auto-Detected Kit & MTTR (No duplicate SLA badge) */}
                       <div className="flex items-center gap-2 flex-wrap min-w-0">
                         <div className="flex items-center gap-1.5 text-slate-800">
                           <span className="text-sm">🧰</span>
                           <span className="text-slate-500 font-mono text-[10px] uppercase font-bold">Spares & Tools:</span>
-                          <span className="text-slate-800 font-medium font-sans">{sparesAndSla.parts}</span>
+                          <span className="text-slate-900 font-semibold font-sans">{sparesAndSla.parts}</span>
                         </div>
                         <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded shadow-2xs shrink-0">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
                           <span>In Stock</span>
                         </span>
+                        <span className="text-slate-300 hidden sm:inline">•</span>
+                        <span className="text-[11px] font-mono text-slate-600">
+                          MTTR: <strong className="text-slate-900 font-bold">{sparesAndSla.mttr}</strong>
+                        </span>
                       </div>
 
-                      {/* Right: SLA & MTTR Metric with Live Status & Countdown */}
-                      <div className="flex items-center gap-2 shrink-0 font-mono text-[11px] self-end sm:self-auto">
-                        <div className={`flex items-center gap-2 border px-2.5 py-1 rounded-lg shadow-2xs ${drawerSla.badgeClass}`}>
-                          <span>{drawerSla.badgeText}</span>
-                          <span className="opacity-40">|</span>
-                          <span>MTTR: <strong className="font-bold">{sparesAndSla.mttr}</strong></span>
-                        </div>
+                      {/* Right: OSHA Vision-Locked LOTO Action */}
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                        <Button
+                          size="sm"
+                          onClick={() => setIsLotoModalOpen(true)}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-7 px-3 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                          title="OSHA 1910.147 Vision-Locked Lockout/Tagout Gate"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>Run Vision LOTO</span>
+                        </Button>
                       </div>
                     </div>
                   );
                 })()}
-
-                {/* Vision-Locked LOTO Safety Gate Banner */}
-                <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between gap-3 shadow-2xs">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                      <ShieldCheck className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="font-bold text-xs text-emerald-950 flex items-center gap-1.5">
-                        <span>OSHA 1910.147 Vision-Locked LOTO Gate</span>
-                        <span className="text-[9px] font-mono bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded border border-emerald-300 font-bold uppercase">
-                          Safety-Critical
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-emerald-800 mt-0.5">
-                        Zero-energy state must be visually verified via gauge camera snapshot prior to casing disassembly.
-                      </p>
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    onClick={() => setIsLotoModalOpen(true)}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shrink-0 flex items-center gap-1.5"
-                  >
-                    <Camera className="w-3.5 h-3.5" />
-                    <span>Run Vision LOTO</span>
-                  </Button>
-                </div>
-
-                {/* Card 3: Recommended Repair Procedure Steps (2-Column Grid) */}
-                <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-3">
-                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
-                    <div className="flex items-center gap-2">
-                      <ClipboardList className="w-4 h-4 text-blue-600 shrink-0" />
-                      <span className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
-                        Recommended Repair Procedure Steps
-                      </span>
-                    </div>
-                    <span className="font-mono text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded shadow-2xs">
-                      {activeProgress.doneSteps} of {activeProgress.totalSteps} Steps Complete
-                    </span>
-                  </div>
-
-                  {/* 2-Column Grid (grid-cols-1 md:grid-cols-2 gap-3, with 5th step spanning cleanly) */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
-                    {activeProgress.steps.map((st, idx) => {
-                      const isDone = st.status === 'COMPLETED' || isTicketFullySolved;
-                      const stepPadded = String(st.stepNumber).padStart(2, '0');
-                      const isLastOdd = idx === activeProgress.steps.length - 1 && activeProgress.steps.length % 2 !== 0;
-                      const spec = getStepEngineeringSpec(st.stepNumber);
-
-                      return (
-                        <div
-                          key={st.stepNumber}
-                          onClick={() =>
-                            setStepDetailModal({
-                              isOpen: true,
-                              step: {
-                                stepNumber: st.stepNumber,
-                                title: st.title,
-                                instruction: st.instruction,
-                                status: isDone ? 'COMPLETED' : st.status,
-                              },
-                            })
-                          }
-                          className={`p-3.5 rounded-xl border border-slate-200 bg-white hover:border-blue-400 shadow-2xs hover:shadow-md transition text-xs flex flex-col justify-between h-full min-h-[110px] cursor-pointer group ${
-                            isLastOdd ? 'md:col-span-2' : ''
-                          }`}
-                          title="Click to expand step execution specifications, required tools & tolerances"
-                        >
-                          <div>
-                            <div className="flex items-center justify-between gap-2 mb-1.5">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="w-5 h-5 rounded-md font-mono text-[10px] font-bold flex items-center justify-center shrink-0 bg-blue-600 text-white shadow-2xs">
-                                  {stepPadded}
-                                </span>
-                                <span className="font-bold font-sans truncate text-xs text-slate-900 group-hover:text-blue-700 transition-colors">
-                                  {st.title}
-                                </span>
-                              </div>
-                              {isDone ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded shrink-0">
-                                  <Check className="w-2.5 h-2.5 stroke-[3]" />
-                                  <span>Verified</span>
-                                </span>
-                              ) : (
-                                <span className="text-[10px] font-mono font-medium text-slate-400 shrink-0">
-                                  PENDING
-                                </span>
-                              )}
-                            </div>
-
-                            {st.instruction ? (
-                              <p className="text-[11px] text-slate-600 font-sans line-clamp-2 leading-relaxed">
-                                {st.instruction}
-                              </p>
-                            ) : null}
-                          </div>
-
-                          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-mono text-slate-400 group-hover:text-blue-600 transition-colors">
-                            <span className="truncate max-w-[200px] sm:max-w-[260px] text-slate-500 font-sans">
-                              {spec.toleranceSummary}
-                            </span>
-                            <span className="group-hover:translate-x-0.5 transition-transform font-bold whitespace-nowrap text-blue-600">
-                              Click to expand ↗
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
               </div>
 
               {/* SECTION D — SUPERVISOR SIGN-OFF (Only visible when Technician marks work complete) */}
@@ -4343,6 +4247,7 @@ export const SopExecutionView: React.FC<{
             ? `Asset ${similarRecordModal.record.assetTag} · Record ${similarRecordModal.record.recordNumber}`
             : 'Historical Repair Record'
         }
+        maxWidth="xl"
         footer={
           <div className="flex items-center justify-between gap-2 w-full">
             <span className="text-[10px] font-mono text-slate-500">
@@ -4372,7 +4277,7 @@ export const SopExecutionView: React.FC<{
                     );
                   }
                 }}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs"
+                className="bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs shadow-xs"
               >
                 <span>Open in Maintenance History ↗</span>
               </Button>
@@ -4382,40 +4287,40 @@ export const SopExecutionView: React.FC<{
       >
         {similarRecordModal.record && (
           <div className="space-y-3.5 text-xs">
-            <div className="p-3 rounded-xl bg-indigo-50/80 border border-indigo-200 text-indigo-950 flex items-center justify-between">
+            <div className="p-3 rounded-xl bg-gradient-to-r from-indigo-50/90 via-purple-50/50 to-indigo-50/30 border border-indigo-200 text-indigo-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
               <div>
-                <span className="font-mono text-[10px] font-bold text-indigo-700 uppercase block">
+                <span className="font-mono text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">
                   Equipment Occurrence Match
                 </span>
                 <span className="font-bold text-sm text-indigo-950 font-sans">
                   {similarRecordModal.record.summaryText}
                 </span>
               </div>
-              <span className="bg-indigo-200 text-indigo-900 border border-indigo-300 font-mono text-xs font-bold px-2.5 py-1 rounded-lg">
+              <span className="bg-indigo-100 text-indigo-900 border border-indigo-300 font-mono text-xs font-bold px-2.5 py-1 rounded-lg shrink-0">
                 MTTR: {similarRecordModal.record.mttr}
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 font-mono text-[11px]">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-[11px]">
               <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 text-[10px] block font-bold">RECORD NUMBER:</span>
-                <span className="font-bold text-blue-700">{similarRecordModal.record.recordNumber}</span>
+                <span className="text-slate-400 text-[10px] block font-bold">DATE:</span>
+                <span className="font-bold text-slate-800 truncate block">{similarRecordModal.record.dateStr}</span>
               </div>
               <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 text-[10px] block font-bold">RESOLVED ON:</span>
-                <span className="font-bold text-slate-800">{similarRecordModal.record.dateStr}</span>
+                <span className="text-slate-400 text-[10px] block font-bold">TICKET ID:</span>
+                <span className="font-bold text-blue-700 truncate block">{similarRecordModal.record.ticketId}</span>
               </div>
               <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 text-[10px] block font-bold">RESOLVING TECHNICIAN:</span>
-                <span className="font-bold text-slate-800">{similarRecordModal.record.technicianName}</span>
+                <span className="text-slate-400 text-[10px] block font-bold">TECHNICIAN:</span>
+                <span className="font-bold text-slate-800 truncate block">{similarRecordModal.record.technicianName}</span>
               </div>
               <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 text-[10px] block font-bold">TICKET REF:</span>
-                <span className="font-bold text-slate-800">{similarRecordModal.record.ticketId}</span>
+                <span className="text-slate-400 text-[10px] block font-bold">RECORD REF:</span>
+                <span className="font-bold text-indigo-700 truncate block">{similarRecordModal.record.recordNumber}</span>
               </div>
             </div>
 
-            <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl space-y-1">
+            <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1">
               <span className="font-mono text-[10px] uppercase font-bold text-amber-800 block">
                 Confirmed Root Cause in Past Occurrence
               </span>
@@ -4424,9 +4329,9 @@ export const SopExecutionView: React.FC<{
               </p>
             </div>
 
-            <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-xl space-y-1">
+            <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-1">
               <span className="font-mono text-[10px] uppercase font-bold text-emerald-800 block">
-                Verified Remediation Applied
+                Verified Remediation / Resolution Action Applied
               </span>
               <p className="text-slate-800 font-sans font-medium leading-relaxed">
                 {similarRecordModal.record.pastResolution}
@@ -4487,7 +4392,7 @@ export const SopExecutionView: React.FC<{
               size="sm"
               onClick={handleCreateNewCase}
               disabled={isSubmitting}
-              className="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs shadow-sm px-5 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition whitespace-nowrap cursor-pointer shrink-0"
+              className="bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold text-xs shadow-sm px-5 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition whitespace-nowrap cursor-pointer shrink-0"
             >
               {isSubmitting ? (
                 <>
@@ -4503,7 +4408,7 @@ export const SopExecutionView: React.FC<{
           </div>
         }
       >
-        <div className="space-y-4 font-sans text-xs">
+        <div className="space-y-3 font-sans text-xs">
           {/* Row 1 (Full Width): Ticket Title */}
           <div className="space-y-1">
             <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
@@ -4638,24 +4543,24 @@ export const SopExecutionView: React.FC<{
                 <button
                   type="button"
                   onClick={() => setNewMachineStatus('HALTED')}
-                  className={`flex-1 h-full rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer ${
+                  className={`flex-1 h-full rounded-md text-[11px] font-semibold whitespace-nowrap px-2.5 py-1 flex items-center justify-center gap-1.5 transition cursor-pointer ${
                     newMachineStatus === 'HALTED'
                       ? 'bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs font-bold'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <span>🔴 Machine Down / Halted</span>
+                  <span>🔴 Down / Halted</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setNewMachineStatus('DEGRADED')}
-                  className={`flex-1 h-full rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer ${
+                  className={`flex-1 h-full rounded-md text-[11px] font-semibold whitespace-nowrap px-2.5 py-1 flex items-center justify-center gap-1.5 transition cursor-pointer ${
                     newMachineStatus === 'DEGRADED'
                       ? 'bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs font-bold'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <span>🟡 Running with Anomaly</span>
+                  <span>🟡 Running Anomaly</span>
                 </button>
               </div>
             </div>
