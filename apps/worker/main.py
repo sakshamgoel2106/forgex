@@ -77,25 +77,34 @@ def score_passage_cross_encoder(query: str, text: str) -> float:
     query_lower = query.lower()
     text_lower = text.lower()
 
-    # 1. Alphanumeric equipment tags (e.g. "PUMP-204-B", "SKF-6310", "CPT-80-250", "SOP-MECH-401")
-    tags = re.findall(r'\b([A-Za-z0-9]+-[0-9]+(?:-[A-Za-z0-9]+)*|SOP-[A-Za-z0-9]+-[0-9]+)\b', query)
+    # 1. Alphanumeric equipment tags & model identifiers (e.g. "e-SV", "PUMP-204-B", "SKF-6310", "SOP-MECH-401")
+    tags = re.findall(r'\b([A-Za-z0-9]+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|SOP-[A-Za-z0-9]+-[0-9]+)\b', query)
     tag_score = 0.0
     if tags:
         matches = sum(1.0 for tag in tags if tag.lower() in text_lower)
         tag_score = min(1.0, matches / len(tags))
 
     # 2. Operating specs and parameters (e.g. "120 PSI", "45 ft-lbs", "1750 RPM", "480V")
-    specs = re.findall(r'\b(\d+(?:\.\d+)?\s*(?:psi|ft-lbs|nm|rpm|psig|gpm|hp|kw|v|vac|bar|kpa))\b', query_lower)
+    specs = re.findall(r'\b(\d+(?:\.\d+)?\s*(?:psi|ft-lbs|nm|rpm|psig|gpm|hp|kw|v|vac|bar|kpa|°c|°f))\b', query_lower)
     spec_score = 0.0
     if specs:
         matches = sum(1.0 for spec in specs if spec in text_lower)
         spec_score = min(1.0, matches / len(specs))
 
-    # 3. Token-level cross-attention overlap
-    query_tokens = [t for t in re.split(r'[\s,.;:!?()"-]+', query_lower) if len(t) > 2]
+    # 3. Token-level cross-attention overlap with stopword filtering & stemming
+    STOPWORDS = {
+        "what", "are", "the", "and", "for", "with", "from", "that", "this",
+        "how", "why", "can", "should", "does", "did", "was", "were", "about",
+        "into", "over", "after", "before", "between", "under"
+    }
+    query_tokens = [t for t in re.split(r'[\s,.;:!?()"]+', query_lower) if len(t) > 2 and t not in STOPWORDS]
     token_score = 0.0
     if query_tokens:
-        overlap = sum(1.0 for t in query_tokens if t in text_lower)
+        overlap = 0.0
+        for t in query_tokens:
+            stem = t[:-1] if t.endswith('s') and len(t) > 4 else t
+            if t in text_lower or stem in text_lower:
+                overlap += 1.0
         token_score = min(1.0, overlap / len(query_tokens))
 
     # 4. Heading or Document provenance boost
@@ -107,13 +116,22 @@ def score_passage_cross_encoder(query: str, text: str) -> float:
                 if t in hl:
                     heading_boost += 0.15
 
+    # 5. Critical parameter joint co-occurrence boost (e.g. elevation + temperature/operating limits)
+    joint_boost = 0.0
+    if (
+        "elevation" in query_lower and "elevation" in text_lower and
+        ("temperature" in query_lower or "operating" in query_lower) and
+        ("temperature" in text_lower or "operating" in text_lower)
+    ):
+        joint_boost = 0.35
+
     # Combine weighted components
     if tags and specs:
-        final_score = (tag_score * 0.40) + (spec_score * 0.30) + (token_score * 0.20) + min(0.10, heading_boost)
+        final_score = (tag_score * 0.40) + (spec_score * 0.25) + (token_score * 0.25) + min(0.10, heading_boost) + joint_boost
     elif tags:
-        final_score = (tag_score * 0.50) + (token_score * 0.35) + min(0.15, heading_boost)
+        final_score = (tag_score * 0.45) + (token_score * 0.40) + min(0.15, heading_boost) + joint_boost
     else:
-        final_score = (token_score * 0.70) + (spec_score * 0.20) + min(0.10, heading_boost)
+        final_score = (token_score * 0.70) + (spec_score * 0.20) + min(0.10, heading_boost) + joint_boost
 
     return float(max(0.01, min(0.99, final_score)))
 

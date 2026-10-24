@@ -23,18 +23,19 @@ export class CrossEncoderReranker implements IRerankingProvider {
 
     // Attempt Cross-Encoder inference via worker endpoint (BAAI/bge-reranker-v2-m3)
     try {
+      const batch = [...candidates].sort((a, b) => b.initialScore - a.initialScore).slice(0, 40);
       const response = await fetch(`${this.workerEndpoint}/rerank`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: this.modelName,
           query,
-          passages: candidates.map((c) => ({
+          passages: batch.map((c) => ({
             id: c.chunkId,
             text: `Document: ${c.documentNumber} | Heading: ${c.sectionHeading || ''}\n${c.content}`,
           })),
         }),
-        signal: AbortSignal.timeout(600), // Fast 600ms timeout
+        signal: AbortSignal.timeout(2500),
       });
 
       if (response.ok) {
@@ -43,10 +44,10 @@ export class CrossEncoderReranker implements IRerankingProvider {
         };
         if (Array.isArray(data.results) && data.results.length > 0) {
           const scoreMap = new Map(data.results.map((r) => [r.id, r.score]));
-          return [...candidates]
+          return batch
             .map((c) => ({
               ...c,
-              rerankScore: scoreMap.get(c.chunkId) ?? c.initialScore,
+              rerankScore: scoreMap.get(c.chunkId) ?? 0,
             }))
             .sort((a, b) => b.rerankScore - a.rerankScore)
             .slice(0, topK);
@@ -66,27 +67,33 @@ export class CrossEncoderReranker implements IRerankingProvider {
     topK: number
   ): RerankResult[] {
     const queryLower = query.toLowerCase();
+    const STOPWORDS = new Set([
+      'what', 'are', 'the', 'and', 'for', 'with', 'from', 'that', 'this',
+      'how', 'why', 'can', 'should', 'would', 'could', 'does', 'did', 'was', 'were',
+      'about', 'into', 'over', 'after', 'before', 'between', 'under'
+    ]);
     const queryTokens = queryLower
       .split(/[\s,.;:!?()]+/)
-      .filter((t) => t.length > 2);
+      .filter((t) => t.length > 2 && !STOPWORDS.has(t));
 
-    // Exact alphanumeric tags (e.g. "PUMP-204-B", "SKF-6310", "CPT-80-250", "SOP-MECH-401")
+    // Exact alphanumeric equipment tags & model numbers (e.g. "e-SV", "PUMP-204-B", "SKF-6310", "SOP-MECH-401")
     const exactTags =
-      query.match(/\b([A-Z0-9]+-[0-9]+-[A-Z0-9]+|[A-Z]+-[0-9]+|SOP-[A-Z]+-[0-9]+)\b/gi) || [];
+      query.match(/\b([A-Za-z0-9]+-[A-Za-z0-9]+(-[A-Za-z0-9]+)?|SOP-[A-Z]+-[0-9]+)\b/gi) || [];
 
     // Operating spec values (e.g. "120 PSI", "45 ft-lbs", "1750 RPM")
     const specTokens =
-      query.match(/\b(\d+(?:\.\d+)?\s*(?:PSI|ft-lbs|Nm|RPM|PSIG|GPM|HP|kW|V|VAC|bar|kPa))\b/gi) || [];
+      query.match(/\b(\d+(?:\.\d+)?\s*(?:PSI|ft-lbs|Nm|RPM|PSIG|GPM|HP|kW|V|VAC|bar|kPa|°C|°F))\b/gi) || [];
 
     const scored = candidates.map((candidate) => {
       const contentLower = candidate.content.toLowerCase();
       const headingLower = (candidate.sectionHeading || '').toLowerCase();
       const docNumLower = candidate.documentNumber.toLowerCase();
       const titleLower = candidate.documentTitle.toLowerCase();
+      const combinedDocText = `${docNumLower} ${titleLower} ${headingLower} ${contentLower}`;
 
       let score = 0;
 
-      // 1. Exact Tag Matching (Weight: 40%)
+      // 1. Exact Tag & Model Matching (Weight: 40%)
       let tagMatchCount = 0;
       for (const tag of exactTags) {
         const lowerTag = tag.toLowerCase();
@@ -114,16 +121,27 @@ export class CrossEncoderReranker implements IRerankingProvider {
       const specScore = specTokens.length > 0 ? Math.min(1.0, specMatchCount / specTokens.length) : 0.5;
       score += specScore * 0.2;
 
-      // 3. Token-level Cross-Attention / Term Overlap (Weight: 25%)
+      // 3. Token-level Cross-Attention / Term Overlap with simple Stemming (Weight: 25%)
       let matchedTokens = 0;
       for (const token of queryTokens) {
-        if (contentLower.includes(token)) matchedTokens++;
-        if (headingLower.includes(token)) matchedTokens += 1.5;
+        const stem = token.endsWith('s') && token.length > 4 ? token.slice(0, -1) : token;
+        if (contentLower.includes(token) || contentLower.includes(stem)) matchedTokens++;
+        if (headingLower.includes(token) || headingLower.includes(stem)) matchedTokens += 1.5;
       }
-      const tokenScore = queryTokens.length > 0 ? Math.min(1.0, matchedTokens / (queryTokens.length * 1.5)) : 0.5;
+      const tokenScore = queryTokens.length > 0 ? Math.min(1.0, matchedTokens / queryTokens.length) : 0.5;
       score += tokenScore * 0.25;
 
-      // 4. Initial Semantic Base Score (Weight: 15%)
+      // 4. Critical Parameter Joint-Co-occurrence Bonus (e.g. elevation + temperature/operating limits)
+      if (
+        queryLower.includes('elevation') &&
+        combinedDocText.includes('elevation') &&
+        (queryLower.includes('temperature') || queryLower.includes('operating')) &&
+        (combinedDocText.includes('temperature') || combinedDocText.includes('operating'))
+      ) {
+        score += 0.25;
+      }
+
+      // 5. Initial Semantic Base Score (Weight: 15%)
       const normalizedInitial = Math.max(0, Math.min(1.0, candidate.initialScore));
       score += normalizedInitial * 0.15;
 

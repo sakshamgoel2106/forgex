@@ -14,3 +14,4 @@ export * from './securityEvents.js';
 export * from './recovery.js';
 export * from './guidance.js';
 export * from './analytics.js';
+export * from './i18n.js';

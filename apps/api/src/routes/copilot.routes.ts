@@ -61,7 +61,16 @@ export function createCopilotRouter(
 
   router.delete(
     '/conversations/:id',
-    requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER', 'ENGINEER_TECHNICIAN']),
+    requireRole([
+      'ORGANIZATION_ADMIN',
+      'ORGANIZATION_OWNER',
+      'PLANT_MANAGER',
+      'ENGINEER',
+      'TECHNICIAN',
+      'WORKER',
+      'ENGINEER_TECHNICIAN',
+      'VIEWER',
+    ]),
     controller.deleteConversation
   );
 

@@ -61,6 +61,8 @@ export interface GenerationRequest {
   conversationHistory?: Array<{ sender: 'USER' | 'ASSISTANT'; text: string }>;
   assetContext?: { assetTag: string; name: string; area: string } | null;
   plantContext?: { code: string; name: string } | null;
+  targetLanguage?: string;
+  retrievalQuery?: string;
 }
 
 export interface RawCitationOutput {

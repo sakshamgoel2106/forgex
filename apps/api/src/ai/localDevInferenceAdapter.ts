@@ -5,6 +5,7 @@ import type {
   MultimodalGenerationRequest,
   InferenceMode,
 } from './ai.interface.js';
+import { getLanguageConfig } from '@forgex/shared-types';
 
 export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
   private shouldFailNext = false;
@@ -29,6 +30,8 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
     }
 
     const { query, authorizedEvidence } = request;
+    const targetLang = request.targetLanguage || 'en-US';
+    const langConfig = getLanguageConfig(targetLang);
 
     // 1. Check for Insufficient Evidence
     const genericWords = new Set([
@@ -37,11 +40,28 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       'notes', 'vendor', 'appendix', 'pump', 'boiler', 'reactor', 'tank', 'compressor', 'turbine', 'motor'
     ]);
 
-    const assetTagLower = request.assetContext?.assetTag?.toLowerCase();
-    const domainTokens = query
+    const assetTokens = new Set([
+      ...(request.assetContext?.assetTag?.toLowerCase().split(/[\s,.;:!?()"-]+/) || []),
+      ...(request.assetContext?.name?.toLowerCase().split(/[\s,.;:!?()"-]+/) || []),
+    ]);
+
+    const queryForTokens = `${query} ${request.retrievalQuery || ''}`;
+    const domainTokens = queryForTokens
       .toLowerCase()
       .split(/[\s,.;:!?()"-]+/)
-      .filter((t) => t.length > 2 && !genericWords.has(t) && !/^\d+$/.test(t) && t !== assetTagLower && !t.startsWith('pump-') && !t.startsWith('p-') && !t.startsWith('reactor-') && !t.startsWith('boiler-'));
+      .filter(
+        (t) =>
+          t.length > 2 &&
+          !genericWords.has(t) &&
+          !/^\d+$/.test(t) &&
+          !assetTokens.has(t) &&
+          !t.startsWith('pump-') &&
+          !t.startsWith('p-') &&
+          !t.startsWith('reactor-') &&
+          !t.startsWith('boiler-') &&
+          !t.startsWith('turbine-') &&
+          !t.startsWith('comp-')
+      );
 
     const hasRelevantEvidence =
       authorizedEvidence &&
@@ -99,8 +119,7 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       }
 
       return {
-        answerText:
-          'Insufficient evidence in authorized plant documentation to answer this question safely. Please consult senior engineering or verify documentation access for your plant.',
+        answerText: langConfig.insufficientEvidenceMessage,
         confidence: 'INSUFFICIENT_EVIDENCE',
         isInsufficientEvidence: true,
         conflictDetected: false,
@@ -172,33 +191,47 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       citationsUsed.push(sanitizedEvidence[1].chunkId);
     }
 
-    let answerBody = `### Verified Response for: "${query}"\n\n`;
+    let answerBody = '';
 
     if (conflictDetected) {
       answerBody += `WARNING: DOCUMENTATION CONFLICT DETECTED\n${conflictDetails}\nEscalation required: Do not proceed without supervisor sign-off on revision precedence.\n\n`;
     }
 
     if (injectionDetected) {
-      answerBody += `[Security Alert: Untrusted document text attempted prompt injection / instruction override; neutralized per system security policy.]\n\n`;
+      answerBody += `[Security Alert: Untrusted document text attempted prompt injection / instruction override; neutralized per system security policy. Mandatory Lockout/Tagout safety protocols remain active and cannot be overridden.]\n\n`;
     }
 
-    // Structure facts vs operational explanations
-    answerBody += `### Sourced Operational Facts (Verified from ${topEvidence.documentNumber}, Page ${topEvidence.pageNumber})\n`;
-    answerBody += `[VERIFIED MACHINE-SPECIFIC FACTS]\n`;
     if (
       topEvidence.content.includes('Authorized Maintenance History') ||
       topEvidence.content.includes('Historical Maintenance') ||
       topEvidence.content.includes('Maintenance Ledger') ||
       topEvidence.content.includes('Governed Machine Knowledge Base')
     ) {
-      const histLines = topEvidence.content.split('\n').filter((l) => l.trim().length > 0);
+      const histLines = topEvidence.content
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith('--'));
       answerBody += histLines.map((l) => `- ${l}`).join('\n') + '\n';
     } else {
-      answerBody += `- ${topEvidence.content.split('\n')[0] || topEvidence.content}\n`;
+      const cleanLines = topEvidence.content
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 10 && !l.startsWith('--') && !/^page\s+\d+/i.test(l));
+      if (cleanLines.length > 0) {
+        answerBody += cleanLines.slice(0, 4).join('\n') + '\n';
+      } else {
+        answerBody += `${topEvidence.content.trim()}\n`;
+      }
     }
 
     if (sanitizedEvidence[1]) {
-      answerBody += `- Supplementary Reference (${sanitizedEvidence[1].documentNumber}, Page ${sanitizedEvidence[1].pageNumber}): ${sanitizedEvidence[1].content.split('\n')[0]}\n`;
+      const cleanLines2 = sanitizedEvidence[1].content
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 10 && !l.startsWith('--') && !/^page\s+\d+/i.test(l));
+      if (cleanLines2.length > 0) {
+        answerBody += `\n${cleanLines2.slice(0, 2).join('\n')}\n`;
+      }
     }
 
     if (
@@ -209,7 +242,6 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       topEvidence.content.includes('Historical Maintenance') ||
       topEvidence.content.includes('Maintenance Ledger')
     ) {
-      answerBody += `\n### [HISTORICAL TECHNICIAN OBSERVATIONS & HYPOTHESES]\n`;
       const obsLines = topEvidence.content
         .split('\n')
         .filter(
@@ -220,32 +252,36 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
             l.includes('POSSIBLE SIMILARITIES')
         );
       if (obsLines.length > 0) {
-        answerBody += obsLines.map((l) => `- ${l}`).join('\n') + '\n';
-      } else {
-        answerBody += `- Historical field logs indicate observed symptoms subject to unconfirmed technician hypotheses.\n`;
+        answerBody += '\n' + obsLines.map((l) => `- ${l}`).join('\n') + '\n';
       }
     }
 
     if (conflictDetected || topEvidence.content.includes('UNKNOWNS')) {
-      answerBody += `\n### [UNKNOWN OR CONFLICTING DETAILS]\n`;
       if (conflictDetected) {
-        answerBody += `- ${conflictDetails}\n`;
+        answerBody += `\n- ${conflictDetails}\n`;
       }
       if (topEvidence.content.includes('UNKNOWNS')) {
-        answerBody += `- Unresolved historical anomalies remain pending root cause confirmation.\n`;
+        answerBody += `\n- Unresolved historical anomalies remain pending root cause confirmation.\n`;
       }
     }
-
-    answerBody += `\n### Operational Guidance\n`;
-    answerBody += `### [APPROVED OPERATIONAL GUIDANCE]\n`;
-    answerBody += `Follow exact Lockout/Tagout and calibration sequence as approved in active revision. Verify calibrated instruments before advancing steps.`;
 
     const confidence = conflictDetected ? 'UNCERTAIN' : 'HIGH';
 
     const rawCitations: import('./ai.interface.js').RawCitationOutput[] = [];
     for (const ev of sanitizedEvidence.slice(0, 2)) {
-      const line = ev.content.split('\n')[0] || ev.content;
-      const quote = line.slice(0, Math.min(line.length, 120)).trim();
+      const contentLines = ev.content
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 5 && !l.startsWith('[Asset:') && !l.startsWith('--') && !l.startsWith('#'));
+      const specLine = contentLines.find(
+        (l) => domainTokens.some((t) => l.toLowerCase().includes(t)) && /\d+/.test(l)
+      );
+      const matchedLine =
+        specLine ||
+        contentLines.find((l) => domainTokens.some((t) => l.toLowerCase().includes(t))) ||
+        contentLines[0] ||
+        ev.content;
+      const quote = matchedLine.slice(0, Math.min(matchedLine.length, 120)).trim();
       if (quote.length > 0) {
         rawCitations.push({
           chunkId: ev.chunkId,

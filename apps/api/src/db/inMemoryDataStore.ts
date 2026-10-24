@@ -1127,6 +1127,18 @@ export class InMemoryDataStore implements IDataStore {
         const matchesNum = doc.documentNumber.toLowerCase().includes(query);
         if (!matchesTitle && !matchesNum) continue;
       }
+      if (filter?.machineId || filter?.assetId) {
+        const targetId = filter.machineId || filter.assetId;
+        const linkedIds = doc.assetIds || [];
+        const assetObj = targetId ? (this.assets.get(targetId) || this.machines.get(targetId)) : null;
+        const targetTag = assetObj?.assetTag || targetId;
+        const isMatch =
+          doc.machineId === targetId ||
+          linkedIds.includes(targetId!) ||
+          (doc.assetTags && (doc.assetTags.includes(targetId!) || (targetTag && doc.assetTags.includes(targetTag)))) ||
+          (await this.isDocumentLinkedToAsset(organizationId, doc.id, targetId!));
+        if (!isMatch) continue;
+      }
       results.push(this.enrichDocument(doc));
     }
     // Return sorted newest first
@@ -1209,6 +1221,18 @@ export class InMemoryDataStore implements IDataStore {
       doc.assetIds.forEach((id) => ids.add(id));
     }
     return Array.from(ids);
+  }
+
+  public async isDocumentLinkedToAsset(
+    organizationId: string,
+    documentId: string,
+    assetId: string
+  ): Promise<boolean> {
+    const doc = this.documents.get(documentId);
+    if (!doc || doc.organizationId !== organizationId) return false;
+    if (doc.machineId === assetId) return true;
+    if (doc.assetIds && doc.assetIds.includes(assetId)) return true;
+    return false;
   }
 
   public async withTransaction<T>(fn: (client: any) => Promise<T>): Promise<T> {

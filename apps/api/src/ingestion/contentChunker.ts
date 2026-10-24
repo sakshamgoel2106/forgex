@@ -19,7 +19,7 @@ export class ContentChunker {
   private targetChunkSizeChars: number;
   private chunkOverlapChars: number;
 
-  constructor(targetChunkSizeChars = 600, chunkOverlapChars = 100) {
+  constructor(targetChunkSizeChars = 800, chunkOverlapChars = 120) {
     this.targetChunkSizeChars = targetChunkSizeChars;
     this.chunkOverlapChars = chunkOverlapChars;
   }
@@ -96,7 +96,31 @@ export class ContentChunker {
     }
 
     // Split on paragraphs or section boundaries first
-    const paragraphs = text.split(/\n\s*\n/);
+    const rawParagraphs = text.split(/\n\s*\n/);
+    const paragraphs: string[] = [];
+    for (const p of rawParagraphs) {
+      const trimmedP = p.trim();
+      if (!trimmedP) continue;
+      // If a single paragraph exceeds targetChunkSizeChars and is not a table, split at sentence boundaries
+      if (trimmedP.length > this.targetChunkSizeChars && !trimmedP.includes('|')) {
+        const sentences = trimmedP.split(/(?<=[.!?])\s+/);
+        let sBuffer = '';
+        for (const s of sentences) {
+          if (sBuffer.length + s.length + 1 > this.targetChunkSizeChars && sBuffer.length > 0) {
+            paragraphs.push(sBuffer.trim());
+            sBuffer = s;
+          } else {
+            sBuffer = sBuffer ? sBuffer + ' ' + s : s;
+          }
+        }
+        if (sBuffer.trim()) {
+          paragraphs.push(sBuffer.trim());
+        }
+      } else {
+        paragraphs.push(trimmedP);
+      }
+    }
+
     let currentBuffer = '';
     let currentHeading = page.sectionHeadings[0] ?? null;
     let localIndex = startIndex;
@@ -179,9 +203,21 @@ export class ContentChunker {
         });
         localIndex++;
 
-        // Carry over overlap
-        const overlap = currentBuffer.slice(-this.chunkOverlapChars);
-        currentBuffer = overlap + '\n\n' + trimmedPara;
+        // Carry over overlap cleanly at word boundaries to avoid slicing mid-word
+        let overlap = '';
+        if (currentBuffer.length > this.chunkOverlapChars) {
+          const rawSlice = currentBuffer.slice(-this.chunkOverlapChars);
+          const firstWhitespace = rawSlice.search(/\s/);
+          if (firstWhitespace !== -1 && firstWhitespace < rawSlice.length - 1) {
+            overlap = rawSlice.slice(firstWhitespace + 1).trim();
+          } else {
+            overlap = rawSlice.trim();
+          }
+        } else {
+          overlap = currentBuffer.trim();
+        }
+
+        currentBuffer = overlap ? overlap + '\n\n' + trimmedPara : trimmedPara;
       } else {
         currentBuffer = currentBuffer ? currentBuffer + '\n\n' + trimmedPara : trimmedPara;
       }

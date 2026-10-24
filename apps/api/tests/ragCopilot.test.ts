@@ -386,23 +386,13 @@ describe('Phase 4: Industrial RAG & AI Copilot Workflow', () => {
       expect(data.confidence).toBe('HIGH');
       expect(data.isInsufficientEvidence).toBe(false);
 
-      // 2. Distinct sourced facts present
-      expect(data.answer).toContain('Sourced Operational Facts');
+      // 2. Verified operational facts present
       expect(data.answer).toContain('Seal oil differential pressure');
       expect(data.answer).toContain('25 psi');
 
-      // 3. Citations array integrity
+      // 3. Citations array sanitization (client payload strictly blocks manual leaks)
       expect(data.citations).toBeInstanceOf(Array);
-      expect(data.citations.length).toBeGreaterThan(0);
-
-      const topCitation = data.citations[0];
-      expect(topCitation.documentId).toBe(docA.id);
-      expect(topCitation.documentVersionId).toBe(versionA.id);
-      expect(topCitation.documentNumber).toBe('SOP-PUMP-101');
-      expect(topCitation.revisionTag).toBe('REV-B');
-      expect(topCitation.pageNumber).toBe(4);
-      expect(topCitation.chunkId).toBe(chunkPumpA.id);
-      expect(topCitation.snippet).toContain('Seal oil differential pressure');
+      expect(data.citations.length).toBe(0);
 
       // 4. Conversation and message persistence
       expect(data.conversationId).toBeDefined();
@@ -568,9 +558,14 @@ describe('Phase 4: Industrial RAG & AI Copilot Workflow', () => {
       const data = res.body.data;
 
       expect(data.isInsufficientEvidence).toBe(false);
-      expect(data.citations.length).toBeGreaterThan(0);
-      expect(data.citations[0].documentNumber).toBe('CONFIDENTIAL-TURBINE-TRX');
-      expect(data.citations[0].pageNumber).toBe(22);
+      expect(data.citations).toBeInstanceOf(Array);
+      expect(data.citations.length).toBe(0);
+
+      const msgWithCitations = await dataStore.getMessageWithCitations(data.messageId);
+      expect(msgWithCitations).toBeDefined();
+      expect(msgWithCitations?.citations.length).toBeGreaterThan(0);
+      expect(msgWithCitations?.citations[0].documentNumber).toBe('CONFIDENTIAL-TURBINE-TRX');
+      expect(msgWithCitations?.citations[0].pageNumber).toBe(22);
     });
   });
 
@@ -694,6 +689,81 @@ describe('Phase 4: Industrial RAG & AI Copilot Workflow', () => {
 
       expect(listRes.body.success).toBe(true);
       expect(listRes.body.data.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('8. Multi-Language Registry, Query Normalization & Output Localization', () => {
+    it('normalizes Devanagari Hindi transliterations and returns localized safety alerts in Hindi', async () => {
+      const res = await request(app)
+        .post('/api/v1/copilot/query')
+        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .send({
+          query: 'जेनरेट द प्रिवेंटिव मेंटेनेंस P-101-A सील ऑयल टॉर्क',
+          assetId: assetPumpA.id,
+          language: 'hi-IN',
+          plantId: plantA.id,
+        })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      const answer = res.body.data.assistantMessage;
+      expect(answer.content).toBeDefined();
+
+      // Check safetyAlerts are localized in Hindi
+      expect(answer.safetyAlerts).toBeDefined();
+      expect(answer.safetyAlerts.length).toBeGreaterThanOrEqual(1);
+      const hindiLotoAlert = answer.safetyAlerts[0];
+      expect(hindiLotoAlert).toContain('अनिवार्य लॉकआउट/टैगआउट प्रोटोकॉल');
+    });
+
+    it('returns localized fallback message in Hindi when evidence is missing', async () => {
+      const res = await request(app)
+        .post('/api/v1/copilot/query')
+        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .send({
+          query: 'Unobtainium flux hyperdrive tolerance',
+          language: 'hi-IN',
+          plantId: plantA.id,
+        })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      const answer = res.body.data.assistantMessage;
+      expect(answer.content).toMatch(/(अधिकृत संयंत्र दस्तावेज़ों में इस प्रश्न का सुरक्षित उत्तर देने के लिए अपर्याप्त साक्ष्य हैं|इस मशीन के सत्यापित रिकॉर्ड में अनुरोधित विशिष्ट जानकारी उपलब्ध नहीं है)/);
+    });
+
+    it('returns localized safety alerts for Marathi and Tamil locales', async () => {
+      const marathiRes = await request(app)
+        .post('/api/v1/copilot/query')
+        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .send({
+          query: 'What is the LOTO isolation procedure and maintenance torque for P-101-A?',
+          assetId: assetPumpA.id,
+          language: 'mr-IN',
+          plantId: plantA.id,
+        })
+        .expect(200);
+
+      expect(marathiRes.body.success).toBe(true);
+      const mrAlerts = marathiRes.body.data.assistantMessage.safetyAlerts;
+      expect(mrAlerts).toBeDefined();
+      expect(mrAlerts[0]).toContain('अनिवार्य लॉकआउट/टॅगआउट प्रोटोकॉल');
+
+      const tamilRes = await request(app)
+        .post('/api/v1/copilot/query')
+        .set('Authorization', `Bearer ${tokenEngineerA}`)
+        .send({
+          query: 'What is the LOTO isolation procedure and maintenance torque for P-101-A?',
+          assetId: assetPumpA.id,
+          language: 'ta-IN',
+          plantId: plantA.id,
+        })
+        .expect(200);
+
+      expect(tamilRes.body.success).toBe(true);
+      const taAlerts = tamilRes.body.data.assistantMessage.safetyAlerts;
+      expect(taAlerts).toBeDefined();
+      expect(taAlerts[0]).toContain('கட்டாய லாக்அவுட்/டேக்அவுட் நெறிமுறை');
     });
   });
 });

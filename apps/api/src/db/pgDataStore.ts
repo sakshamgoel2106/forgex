@@ -145,7 +145,7 @@ import type {
   OutboxEvent,
   CreateOutboxEventDTO,
 } from './dataStore.interface.js';
-import { sanitizeMachineOrAssetId, toSafeUuidParam } from '../utils/uuid.js';
+import { isUuid, sanitizeMachineOrAssetId, toSafeUuidParam } from '../utils/uuid.js';
 import { computeMachineVerification } from '../services/machineVerification.service.js';
 
 
@@ -1935,6 +1935,43 @@ export class PgDataStore implements IDataStore {
       conditions.push(`(d.title ILIKE $${params.length} OR d.document_number ILIKE $${params.length})`);
     }
 
+    const targetAssetId = filter?.machineId || filter?.assetId;
+    if (targetAssetId) {
+      let resolvedUuid = toSafeUuidParam(targetAssetId);
+      let resolvedTag = targetAssetId;
+
+      if (!resolvedUuid) {
+        const m = await this.getMachineById(organizationId, targetAssetId);
+        if (m) {
+          resolvedUuid = toSafeUuidParam(m.id);
+          resolvedTag = m.assetTag;
+        }
+      }
+
+      params.push(resolvedUuid || null);
+      const uuidIdx = params.length;
+      params.push(resolvedTag);
+      const tagIdx = params.length;
+
+      conditions.push(
+        `(
+          ($${uuidIdx}::text IS NOT NULL AND $${uuidIdx}::text != '' AND (
+            d.machine_id::text = $${uuidIdx} OR
+            $${uuidIdx}::text = ANY(d.asset_ids) OR
+            EXISTS (SELECT 1 FROM asset_documents ad WHERE ad.document_id = d.id AND ad.asset_id::text = $${uuidIdx})
+          )) OR
+          $${tagIdx}::text = ANY(d.asset_tags) OR
+          $${tagIdx}::text = ANY(d.asset_ids) OR
+          d.machine_id::text = $${tagIdx} OR
+          EXISTS (
+            SELECT 1 FROM asset_documents ad
+            JOIN assets a ON a.id = ad.asset_id
+            WHERE ad.document_id = d.id AND (ad.asset_id::text = $${tagIdx} OR a.asset_tag = $${tagIdx})
+          )
+        )`
+      );
+    }
+
     const res = await this.pool.query(
       `SELECT d.id, d.organization_id, d.plant_id, d.document_number, d.title,
               d.category, d.asset_tags, d.asset_ids, d.machine_id, d.created_by_user_id, d.created_at, d.updated_at,
@@ -2037,6 +2074,46 @@ export class PgDataStore implements IDataStore {
       return res.rows.map((r) => r.machine_id).filter(Boolean);
     } catch {
       return [];
+    }
+  }
+
+  public async isDocumentLinkedToAsset(
+    organizationId: string,
+    documentId: string,
+    assetId: string
+  ): Promise<boolean> {
+    try {
+      let resolvedUuid = toSafeUuidParam(assetId);
+      let resolvedTag = assetId;
+
+      if (!resolvedUuid) {
+        const m = await this.getMachineById(organizationId, assetId);
+        if (m) {
+          resolvedUuid = toSafeUuidParam(m.id);
+          resolvedTag = m.assetTag;
+        }
+      }
+
+      const res = await this.pool.query(
+        `SELECT 1 FROM documents d
+         LEFT JOIN asset_documents ad ON ad.document_id = d.id AND (
+           ad.asset_id::text = $3 OR
+           ad.asset_id::text = $4
+         )
+         WHERE d.organization_id::text = $1 AND d.id::text = $2 AND (
+           d.machine_id::text = $3 OR
+           d.machine_id::text = $4 OR
+           $3 = ANY(d.asset_ids) OR
+           $4 = ANY(d.asset_ids) OR
+           $4 = ANY(d.asset_tags) OR
+           ad.asset_id::text = $3 OR
+           ad.asset_id::text = $4
+         ) LIMIT 1`,
+        [organizationId, documentId, resolvedUuid || '', resolvedTag]
+      );
+      return res.rows.length > 0;
+    } catch {
+      return false;
     }
   }
 
@@ -2946,11 +3023,19 @@ export class PgDataStore implements IDataStore {
   // Phase 4: Conversations & AI Copilot
   // --------------------------------------------------------------------------
   public async createConversation(dto: CreateConversationDTO): Promise<Conversation> {
+    let safeAssetId = dto.assetId && isUuid(dto.assetId) ? dto.assetId : toSafeUuidParam(dto.assetId);
+    if (!safeAssetId && dto.assetId) {
+      const m = await this.getMachineById(dto.organizationId, dto.assetId);
+      if (m?.id && isUuid(m.id)) {
+        safeAssetId = m.id;
+      }
+    }
+
     const res = await this.pool.query(
       `INSERT INTO conversations (organization_id, plant_id, asset_id, user_id, title)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, organization_id, plant_id, asset_id, user_id, title, created_at, updated_at`,
-      [dto.organizationId, dto.plantId, dto.assetId ?? null, dto.userId, dto.title]
+      [dto.organizationId, dto.plantId, safeAssetId || null, dto.userId, dto.title]
     );
     const row = res.rows[0];
     return {
@@ -2970,11 +3055,15 @@ export class PgDataStore implements IDataStore {
     organizationId: string,
     conversationId: string
   ): Promise<Conversation | null> {
+    if (!conversationId || (!isUuid(conversationId) && !toSafeUuidParam(conversationId))) {
+      return null;
+    }
+    const safeConvId = toSafeUuidParam(conversationId) || conversationId;
     const res = await this.pool.query(
       `SELECT id, organization_id, plant_id, asset_id, user_id, title, created_at, updated_at
        FROM conversations
-       WHERE id = $1 AND organization_id = $2`,
-      [conversationId, organizationId]
+       WHERE id::text = $1 AND organization_id::text = $2`,
+      [safeConvId, organizationId]
     );
     if (res.rows.length === 0) return null;
     const row = res.rows[0];
@@ -4007,7 +4096,11 @@ export class PgDataStore implements IDataStore {
     const cleanId = sanitizeMachineOrAssetId(machineId);
     const res = await this.pool.query(
       `SELECT * FROM assets
-       WHERE (id::text = $1 OR id::text = $3 OR asset_tag = $1 OR asset_tag = $3) AND organization_id = $2`,
+       WHERE organization_id::text = $2 AND (
+         id::text = $1 OR id::text = $3 OR
+         UPPER(asset_tag) = UPPER($1) OR UPPER(asset_tag) = UPPER($3) OR
+         UPPER(name) = UPPER($1) OR UPPER(name) = UPPER($3)
+       )`,
       [cleanId, organizationId, machineId]
     );
     if (res.rows.length === 0) return null;
@@ -4015,10 +4108,15 @@ export class PgDataStore implements IDataStore {
   }
 
   public async getMachineByAssetTag(organizationId: string, assetTag: string): Promise<Machine | null> {
+    const cleanTag = sanitizeMachineOrAssetId(assetTag);
     const res = await this.pool.query(
       `SELECT * FROM assets
-       WHERE LOWER(asset_tag) = LOWER($1) AND organization_id = $2`,
-      [assetTag, organizationId]
+       WHERE organization_id::text = $2 AND (
+         UPPER(asset_tag) = UPPER($1) OR UPPER(asset_tag) = UPPER($3) OR
+         id::text = $1 OR id::text = $3 OR
+         UPPER(name) = UPPER($1) OR UPPER(name) = UPPER($3)
+       )`,
+      [cleanTag, organizationId, assetTag]
     );
     if (res.rows.length === 0) return null;
     return this.mapMachineRow(res.rows[0]);
@@ -6549,6 +6647,8 @@ export class PgDataStore implements IDataStore {
       _richPayload: richPayload,
     };
 
+    const safeMachineUuid = dto.machineId && isUuid(dto.machineId) ? dto.machineId : toSafeUuidParam(dto.machineId);
+
     const id = crypto.randomUUID();
     try {
       const res = await this.pool.query(
@@ -6565,7 +6665,7 @@ export class PgDataStore implements IDataStore {
           ticketNumber,
           organizationId,
           dto.plantId,
-          dto.machineId || null,
+          safeMachineUuid || null,
           dto.machineAssetTag || null,
           dto.reportedByUserId,
           dto.originalQuestion,
@@ -9064,13 +9164,8 @@ export class PgDataStore implements IDataStore {
     if (filters?.machineId) {
       const cleanMachineId = sanitizeMachineOrAssetId(filters.machineId);
       const safeUuid = toSafeUuidParam(cleanMachineId);
-      if (safeUuid) {
-        params.push(safeUuid);
-        conditions.push(`machine_id = $${params.length}`);
-      } else {
-        params.push(cleanMachineId);
-        conditions.push(`(machine_asset_tag = $${params.length} OR machine_id::text = $${params.length})`);
-      }
+      params.push(safeUuid || cleanMachineId);
+      conditions.push(`(machine_id::text = $${params.length} OR machine_asset_tag = $${params.length})`);
     }
     if (filters?.plantId) {
       params.push(filters.plantId);

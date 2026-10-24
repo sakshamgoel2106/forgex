@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Send,
   AlertTriangle,
   FileCheck2,
-  ExternalLink,
   ThumbsUp,
   ThumbsDown,
   RotateCw,
@@ -14,20 +13,23 @@ import {
   Filter,
   Layers,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   X,
-  FileText,
-  Download,
   Mic,
-  MicOff,
   Volume2,
   VolumeX,
+  Languages,
+  Search,
+  Trash2,
+  Wrench,
+  Gauge,
+  ShieldCheck,
   Square,
   Play,
-  Languages,
   Radio,
-  Check,
-  ShieldCheck,
+  Building2,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Modal } from '../ui/Modal';
@@ -35,57 +37,721 @@ import { Button } from '../ui/button';
 import { apiFetch } from '../../lib/api';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
-import { createWakeWordProvider, type IWakeWordProvider, type WakeWordStatus } from '../../lib/voice/wakeWordProvider';
-import { releaseAllAudioTracks } from '../../lib/voice/audioCapture';
-import { VADService } from '../../lib/voice/vadService';
-import { VoiceStateMachine } from '../../lib/voice/voiceStateMachine';
-import type {
-  Citation,
-  CopilotMessage,
-  Conversation,
-  AnswerConfidence,
-  QuestionHandlingMode,
-  VoiceTranscriptionResponse,
-  VoiceAssistantState,
+import { usePlant } from '../../lib/PlantContext';
+import {
+  type CopilotMessage,
+  type Conversation,
+  type AnswerConfidence,
+  type QuestionHandlingMode,
+  type Machine,
+  type SupportedLanguageCode,
+  SUPPORTED_LANGUAGES,
+  getLanguageConfig,
 } from '@forgex/shared-types';
 
-interface PresetPrompt {
-  label: string;
-  query: string;
-  modeLabel: string;
-  assetId?: string;
-}
+/**
+ * Clean, safe Markdown renderer for assistant messages:
+ * Parses headings, bullet/numbered lists, inline code, bold text, and tables
+ * without letting raw symbols (###, **, etc.) bleed into the UI.
+ */
+const CopilotMarkdown: React.FC<{ content: string }> = ({ content }) => {
+  const blocks = useMemo(() => {
+    if (!content) return [];
+    const rawParagraphs = content.split(/\n\s*\n/);
+    const parsedBlocks: Array<{
+      type: 'h1' | 'h2' | 'h3' | 'table' | 'ul' | 'ol' | 'p';
+      content: string;
+      rows?: string[][];
+      headers?: string[];
+      items?: string[];
+    }> = [];
 
-const PRESET_QUERIES: PresetPrompt[] = [
-  {
-    label: 'General Engineering Fundamentals',
-    query: "Explain Bernoulli's principle and fluid flow conservation equations.",
-    modeLabel: 'General Educational',
-  },
-  {
-    label: 'Plant Safety & PPE Protocols',
-    query: 'What are the required personal protective equipment and plant safety standards?',
-    modeLabel: 'Company-Specific',
-  },
-  {
-    label: 'LOTO Isolation Protocols',
-    query: 'What is the required procedure to verify a Zero Energy State before mechanical overhaul?',
-    modeLabel: 'Safety-Critical',
-  },
-  {
-    label: 'Vibration & Anomaly Analysis',
-    query: 'How do I perform diagnostic root cause analysis on abnormal equipment vibration?',
-    modeLabel: 'Diagnostic',
-  },
-];
+    for (const para of rawParagraphs) {
+      const trimmed = para.trim();
+      if (!trimmed) continue;
+
+      // Check for Markdown Table
+      if (trimmed.includes('|') && trimmed.split('\n').filter((l) => l.trim().startsWith('|')).length >= 2) {
+        const lines = trimmed.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|'));
+        const parseRow = (line: string) => line.split('|').slice(1, -1).map((c) => c.trim());
+        const headers = parseRow(lines[0]);
+        const dataRows = lines.slice(lines[1].includes('---') ? 2 : 1).map(parseRow);
+        parsedBlocks.push({ type: 'table', content: trimmed, headers, rows: dataRows });
+        continue;
+      }
+
+      // Check for Headings
+      if (trimmed.startsWith('### ')) {
+        parsedBlocks.push({ type: 'h3', content: trimmed.replace(/^###\s+/, '') });
+        continue;
+      }
+      if (trimmed.startsWith('## ')) {
+        parsedBlocks.push({ type: 'h2', content: trimmed.replace(/^##\s+/, '') });
+        continue;
+      }
+      if (trimmed.startsWith('# ')) {
+        parsedBlocks.push({ type: 'h1', content: trimmed.replace(/^#\s+/, '') });
+        continue;
+      }
+
+      // Check for Bullet List
+      const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
+      const isBulletList = lines.every((l) => l.startsWith('- ') || l.startsWith('* ') || l.startsWith('• '));
+      if (isBulletList && lines.length > 0) {
+        const items = lines.map((l) => l.replace(/^[-*•]\s+/, ''));
+        parsedBlocks.push({ type: 'ul', content: trimmed, items });
+        continue;
+      }
+
+      // Check for Numbered List
+      const isNumberedList = lines.every((l) => /^\d+\.\s+/.test(l));
+      if (isNumberedList && lines.length > 0) {
+        const items = lines.map((l) => l.replace(/^\d+\.\s+/, ''));
+        parsedBlocks.push({ type: 'ol', content: trimmed, items });
+        continue;
+      }
+
+      // Default to Paragraph
+      parsedBlocks.push({ type: 'p', content: trimmed });
+    }
+
+    return parsedBlocks;
+  }, [content]);
+
+  const renderInline = (text: string) => {
+    const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={i} className="font-semibold text-[#1A202C]">{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return (
+          <code key={i} className="px-1.5 py-0.5 rounded bg-slate-100 text-blue-700 font-mono text-[11px] border border-slate-200">
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      return part;
+    });
+  };
+
+  return (
+    <div className="text-xs leading-relaxed text-[#1A202C] font-sans space-y-2.5">
+      {blocks.map((block, idx) => {
+        switch (block.type) {
+          case 'h1':
+            return (
+              <h1 key={idx} className="text-base font-bold text-[#1A202C] mt-3 mb-1 border-b border-slate-200 pb-1">
+                {renderInline(block.content)}
+              </h1>
+            );
+          case 'h2':
+            return (
+              <h2 key={idx} className="text-sm font-bold text-[#1A202C] mt-2.5 mb-1 text-blue-900">
+                {renderInline(block.content)}
+              </h2>
+            );
+          case 'h3':
+            return (
+              <h3 key={idx} className="text-xs font-bold text-[#1A202C] mt-2 mb-0.5 uppercase tracking-wide text-slate-800">
+                {renderInline(block.content)}
+              </h3>
+            );
+          case 'table':
+            return (
+              <div key={idx} className="my-2.5 overflow-x-auto rounded-lg border border-slate-200 shadow-2xs">
+                <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                  {block.headers && block.headers.length > 0 && (
+                    <thead className="bg-slate-50 font-semibold text-[#1A202C]">
+                      <tr>
+                        {block.headers.map((h, hIdx) => (
+                          <th key={hIdx} className="px-3 py-2 border-r border-slate-200 last:border-r-0">
+                            {renderInline(h)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                  )}
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    {block.rows?.map((row, rIdx) => (
+                      <tr key={rIdx} className="hover:bg-slate-50/80 transition">
+                        {row.map((cell, cIdx) => (
+                          <td key={cIdx} className="px-3 py-1.5 border-r border-slate-100 last:border-r-0 text-slate-700">
+                            {renderInline(cell)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          case 'ul':
+            return (
+              <ul key={idx} className="space-y-1.5 my-1.5 pl-1">
+                {block.items?.map((item, iIdx) => (
+                  <li key={iIdx} className="flex items-start gap-2">
+                    <span className="text-[#2563EB] font-bold mt-1 text-[8px] select-none">•</span>
+                    <span className="flex-1 text-slate-800 leading-relaxed">{renderInline(item)}</span>
+                  </li>
+                ))}
+              </ul>
+            );
+          case 'ol':
+            return (
+              <ol key={idx} className="space-y-1.5 my-1.5 pl-1">
+                {block.items?.map((item, iIdx) => (
+                  <li key={iIdx} className="flex items-start gap-2">
+                    <span className="font-mono font-semibold text-[#2563EB] text-[11px] shrink-0 select-none">{iIdx + 1}.</span>
+                    <span className="flex-1 text-slate-800 leading-relaxed">{renderInline(item)}</span>
+                  </li>
+                ))}
+              </ol>
+            );
+          case 'p':
+          default:
+            return (
+              <p key={idx} className="leading-relaxed text-slate-800">
+                {renderInline(block.content)}
+              </p>
+            );
+        }
+      })}
+    </div>
+  );
+};
 
 export const CopilotWorkspaceView: React.FC = () => {
   const { user, organization } = useAuth();
   const { toast } = useToast();
+  const { activePlant, plants } = usePlant();
+
+  // Active Plant Resolution
+  const activePlantObj = useMemo(() => {
+    return plants.find((p) => p.code === activePlant || p.id === activePlant) || plants[0] || null;
+  }, [plants, activePlant]);
+
+  // Session & Equipment Context State
+  const [selectedMachineId, setSelectedMachineId] = useState<string>('');
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+
+  // Machine Ledger State
+  const [machines, setMachines] = useState<Machine[]>([]);
+  const [isLoadingMachines, setIsLoadingMachines] = useState(false);
+  const [machineSearchQuery, setMachineSearchQuery] = useState('');
+  const [isEquipmentSelectorOpen, setIsEquipmentSelectorOpen] = useState(false);
+  const [collapsedAreas, setCollapsedAreas] = useState<Record<string, boolean>>({});
+  const [isHeaderMachinePickerOpen, setIsHeaderMachinePickerOpen] = useState(false);
+  const headerPickerRef = useRef<HTMLDivElement>(null);
+
+
+
+  // Real Push-to-Talk via Web Speech API
+  const [isListening, setIsListening] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [speechLanguage, setSpeechLanguage] = useState<SupportedLanguageCode>('en-US');
+  const recognitionRef = useRef<any>(null);
+
+  // Active Language Configuration
+  const currentLangConfig = useMemo(() => getLanguageConfig(speechLanguage), [speechLanguage]);
+
+  // Real Browser Text-to-Speech (window.speechSynthesis)
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [autoSpeakEnabled, setAutoSpeakEnabled] = useState(false);
+
+  // Conversations & Messages State
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [messages, setMessages] = useState<CopilotMessage[]>([]);
+
+  // Input & Query State
+  const [queryInput, setQueryInput] = useState('');
+  const [isQuerying, setIsQuerying] = useState(false);
+  const [queryStep, setQueryStep] = useState<string>('');
+  const [queryError, setQueryError] = useState<string | null>(null);
+
+  // Feedback Modal State
+  const [feedbackMessageId, setFeedbackMessageId] = useState<string | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState<'HELPFUL' | 'UNHELPFUL'>('HELPFUL');
+  const [feedbackNotes, setFeedbackNotes] = useState('');
+  const [feedbackSubmittedMsg, setFeedbackSubmittedMsg] = useState<string | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Selected Machine Details
+  const selectedMachine = useMemo(() => {
+    if (!selectedMachineId) return null;
+    return machines.find((m) => m.id === selectedMachineId || m.assetTag === selectedMachineId) || null;
+  }, [machines, selectedMachineId]);
+
+  // Filtered Machines for Sidebar
+  const filteredMachines = useMemo(() => {
+    if (!machineSearchQuery.trim()) return machines;
+    const q = machineSearchQuery.toLowerCase();
+    return machines.filter(
+      (m) =>
+        m.assetTag.toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q) ||
+        (m.area && m.area.toLowerCase().includes(q)) ||
+        (m.manufacturer && m.manufacturer.toLowerCase().includes(q))
+    );
+  }, [machines, machineSearchQuery]);
+
+  // Group Filtered Machines by Area for Collapsible Enterprise Density
+  const machinesByArea = useMemo(() => {
+    const groups: Record<string, Machine[]> = {};
+    for (const m of filteredMachines) {
+      const areaName = m.area?.trim() || 'General / Unassigned Area';
+      if (!groups[areaName]) {
+        groups[areaName] = [];
+      }
+      groups[areaName].push(m);
+    }
+    return groups;
+  }, [filteredMachines]);
+
+  const toggleAreaCollapse = (areaName: string) => {
+    setCollapsedAreas((prev) => ({
+      ...prev,
+      [areaName]: !prev[areaName],
+    }));
+  };
+
+  // Close header machine picker popover on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (headerPickerRef.current && !headerPickerRef.current.contains(e.target as Node)) {
+        setIsHeaderMachinePickerOpen(false);
+      }
+    };
+    if (isHeaderMachinePickerOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isHeaderMachinePickerOpen]);
+
+  // Load Machines
+  const loadMachines = useCallback(async () => {
+    setIsLoadingMachines(true);
+    try {
+      const res = await apiFetch('/api/v1/machines');
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setMachines(json.data);
+      }
+    } catch (err) {
+      console.error('Failed to load registered machines:', err);
+    } finally {
+      setIsLoadingMachines(false);
+    }
+  }, []);
+
+  // Load Conversations
+  const loadConversations = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/v1/copilot/conversations');
+      const json = await res.json();
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setConversations(json.data);
+      }
+    } catch (err) {
+      console.error('Failed to load consultations:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMachines();
+    loadConversations();
+  }, [loadMachines, loadConversations]);
+
+  // Auto-scroll to latest message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isQuerying]);
+
+
+
+  // Stop Browser Text-to-Speech
+  const stopSpeech = useCallback(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setSpeakingMessageId(null);
+  }, []);
+
+  // Preload and cache available speech synthesis voices
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      const handleVoicesChanged = () => {
+        window.speechSynthesis.getVoices();
+      };
+      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+      handleVoicesChanged();
+      return () => {
+        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
+      };
+    }
+  }, []);
+
+  // Browser Text-to-Speech using window.speechSynthesis
+  const speakText = useCallback(
+    (rawText: string, messageId: string) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        toast.warning('TTS Unsupported', 'Browser speech synthesis is not supported on this device.');
+        return;
+      }
+
+      if (speakingMessageId === messageId) {
+        stopSpeech();
+        return;
+      }
+
+      stopSpeech();
+
+      // Clean markdown symbols & formatting for natural industrial speech reading
+      const cleanText = rawText
+        .replace(/```[\s\S]*?```/g, '') // remove code blocks
+        .replace(/\|.*?\|/g, ' ') // remove table columns
+        .replace(/[-=]{3,}/g, ' ') // remove table divider rows
+        .replace(/[*#_`~>]/g, '') // strip markdown symbols
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // unwrap links
+        .replace(/\[.*?\]/g, '') // remove bracketed tags
+        .replace(/^#{1,6}\s+/gm, '') // strip heading tags
+        .replace(/^\s*[-*•]\s+/gm, '') // strip list bullets
+        .replace(/^\s*\d+\.\s+/gm, '') // strip numbered list prefixes
+        .replace(/\n{2,}/g, '. ')
+        .replace(/\n/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+      if (!cleanText) return;
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = speechLanguage;
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+
+      // Intelligently select highest-quality voice for the target locale
+      const allVoices = window.speechSynthesis.getVoices();
+      const langPrefix = speechLanguage.split('-')[0].toLowerCase();
+      const targetLang = speechLanguage.toLowerCase();
+
+      const matchingVoices = allVoices.filter((v) => {
+        const vLang = v.lang.toLowerCase().replace('_', '-');
+        return vLang === targetLang || vLang.startsWith(langPrefix);
+      });
+
+      if (matchingVoices.length > 0) {
+        const scoreVoice = (v: SpeechSynthesisVoice) => {
+          let score = 0;
+          const vLang = v.lang.toLowerCase().replace('_', '-');
+          if (vLang === targetLang) score += 40;
+          else if (vLang.startsWith(langPrefix)) score += 20;
+
+          const vName = v.name.toLowerCase();
+          for (const hint of currentLangConfig.voiceHints) {
+            if (vName.includes(hint.toLowerCase())) score += 30;
+          }
+          if (vName.includes('natural') || vName.includes('neural') || vName.includes('online')) score += 20;
+          if (vName.includes('google')) score += 15;
+          if (vName.includes('microsoft')) score += 12;
+          return score;
+        };
+
+        matchingVoices.sort((a, b) => scoreVoice(b) - scoreVoice(a));
+        utterance.voice = matchingVoices[0];
+      }
+
+      utterance.onstart = () => {
+        setSpeakingMessageId(messageId);
+      };
+      utterance.onend = () => {
+        setSpeakingMessageId(null);
+      };
+      utterance.onerror = () => {
+        setSpeakingMessageId(null);
+      };
+
+      window.speechSynthesis.speak(utterance);
+    },
+    [speakingMessageId, speechLanguage, currentLangConfig, stopSpeech, toast]
+  );
+
+  // Push-to-talk Web Speech API recognition dynamically bound to selected language
+  const handleTogglePushToTalk = () => {
+    stopSpeech();
+    setVoiceError(null);
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognitionAPI =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionAPI) {
+      setVoiceError(
+        'Speech recognition is not supported in this browser. Please use Google Chrome, Microsoft Edge, or type your question below.'
+      );
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionAPI();
+      recognitionRef.current = recognition;
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = speechLanguage;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        let liveTranscript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          liveTranscript += event.results[i][0].transcript;
+        }
+        setQueryInput(liveTranscript);
+      };
+
+      recognition.onerror = (event: any) => {
+        setIsListening(false);
+        if (event.error === 'not-allowed') {
+          setVoiceError('Microphone permission was denied. Please allow microphone access in your browser settings.');
+        } else if (event.error !== 'no-speech') {
+          setVoiceError(`Voice input error: ${event.error}`);
+        }
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.start();
+    } catch (err: any) {
+      setIsListening(false);
+      setVoiceError(`Could not access microphone: ${err?.message || 'Device unavailable'}`);
+    }
+  };
+
+  // Execute Grounded RAG Query
+  const handleSendQuery = async (queryText?: string) => {
+    stopSpeech();
+
+    const text = (queryText || queryInput).trim();
+    if (!text || isQuerying) return;
+
+    setQueryError(null);
+    setIsQuerying(true);
+    setQueryStep('Validating factory context and equipment access...');
+
+    const userMessageId = `user-${Date.now()}`;
+    const newUserMsg: CopilotMessage = {
+      id: userMessageId,
+      conversationId: activeConversationId || 'conv-new',
+      senderType: 'USER',
+      content: text,
+      confidence: 'HIGH',
+      citations: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, newUserMsg]);
+    setQueryInput('');
+
+    try {
+      setTimeout(() => setQueryStep('Reviewing authorized technical manuals & engineering specs...'), 350);
+      setTimeout(() => setQueryStep('Correlating relational asset documentation and safety limits...'), 700);
+      setTimeout(() => setQueryStep('Synthesizing operational guidance and verified specifications...'), 1100);
+
+      const resolvedPlant = activePlantObj?.code || activePlant || undefined;
+
+      const res = await apiFetch('/api/v1/copilot/query', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: text,
+          plantId: resolvedPlant,
+          machineId: selectedMachine?.id || undefined,
+          assetId: selectedMachine?.id || undefined,
+          assetTag: selectedMachine?.assetTag || undefined,
+          conversationId: activeConversationId || undefined,
+          language: speechLanguage,
+        }),
+      });
+
+      const json = await res.json();
+
+      if (res.ok && json.success) {
+        const data = json.data;
+        const asstMsg = data.assistantMessage;
+
+        setMessages((prev) => [...prev, asstMsg]);
+
+        if (data.conversationId && data.conversationId !== activeConversationId) {
+          setActiveConversationId(data.conversationId);
+          setConversations((prev) => [
+            {
+              id: data.conversationId,
+              organizationId: organization?.id || '',
+              plantId: resolvedPlant || 'FACTORY-DEFAULT',
+              assetId: selectedMachine?.assetTag || selectedMachine?.id || null,
+              userId: user?.id || '',
+              title: text.length > 40 ? `${text.slice(0, 37)}...` : text,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+            ...prev.filter((c) => c.id !== data.conversationId),
+          ]);
+        }
+
+        if (autoSpeakEnabled) {
+          speakText(asstMsg.content, asstMsg.id);
+        }
+      } else {
+        setQueryError(json?.error?.message || json?.error || `Inference error: HTTP ${res.status}`);
+      }
+    } catch (err: any) {
+      setQueryError(err?.message || 'Inference engine timeout or network error');
+    } finally {
+      setIsQuerying(false);
+      setQueryStep('');
+    }
+  };
+
+  // Handle RCA 5-Why, Technician Queue Technical Specs, and External Handoffs
+  useEffect(() => {
+    const processHandoff = () => {
+      let promptText = '';
+      let assetTag = '';
+
+      const handoffRaw = sessionStorage.getItem('forgex_copilot_handoff');
+      if (handoffRaw) {
+        try {
+          const handoff = JSON.parse(handoffRaw);
+          sessionStorage.removeItem('forgex_copilot_handoff');
+          if (handoff.assetTag) {
+            assetTag = handoff.assetTag;
+          }
+          if (handoff.prompt) {
+            promptText = handoff.prompt;
+          } else if (handoff.assetTag) {
+            const summary = handoff.issueSummary || '';
+            const stepTitle = handoff.activeStepTitle || '';
+            const stepDesc = handoff.activeStepDescription || '';
+            promptText = stepDesc || (stepTitle ? `${stepTitle}: ${summary}` : summary) || `Maintenance guidance for ${handoff.assetTag}`;
+          }
+        } catch (e) {
+          console.warn('Failed to parse copilot handoff from sessionStorage:', e);
+        }
+      } else {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const p = params.get('prompt');
+          const tag = params.get('assetTag');
+          const issue = params.get('issueSummary');
+          const stepTitle = params.get('activeStepTitle');
+          const stepDesc = params.get('activeStepDescription');
+
+          if (p) {
+            promptText = p;
+          } else if (tag && (issue || stepTitle)) {
+            promptText = stepDesc || (stepTitle ? `${stepTitle}: ${issue || ''}` : issue) || `Maintenance guidance for ${tag}`;
+          }
+          if (tag) {
+            assetTag = tag;
+          }
+        } catch (e) {
+          console.warn('Failed to read copilot URL params:', e);
+        }
+      }
+
+      if (assetTag) {
+        setSelectedMachineId(assetTag);
+      }
+      if (promptText) {
+        setQueryInput(promptText);
+        setTimeout(() => {
+          handleSendQuery(promptText);
+        }, 350);
+      }
+    };
+
+    const timer = setTimeout(processHandoff, 250);
+    window.addEventListener('forgex:copilot-handoff', processHandoff);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('forgex:copilot-handoff', processHandoff);
+    };
+  }, []);
+
+  // Cleanup speech synthesis and speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      stopSpeech();
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, [stopSpeech]);
+
+  const handleStartNewConversation = () => {
+    stopSpeech();
+    setActiveConversationId(null);
+    setMessages([]);
+    setQueryError(null);
+  };
+
+  const handleSelectConversation = async (convId: string) => {
+    stopSpeech();
+    setActiveConversationId(convId);
+    try {
+      const res = await apiFetch(`/api/v1/copilot/conversations/${convId}`);
+      const json = await res.json();
+      if (res.ok && json.success && json.data) {
+        if (json.data.assetId) {
+          setSelectedMachineId(json.data.assetId);
+        }
+        if (Array.isArray(json.data.messages)) {
+          setMessages(json.data.messages);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load conversation details', err);
+    }
+  };
+
+  const handleDeleteConversation = async (e: React.MouseEvent, convId: string) => {
+    e.stopPropagation();
+    try {
+      const res = await apiFetch(`/api/v1/copilot/conversations/${convId}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        toast.success('Consultation Removed', 'Consultation thread deleted successfully.');
+        setConversations((prev) => prev.filter((c) => c.id !== convId));
+        if (activeConversationId === convId) {
+          handleStartNewConversation();
+        }
+      } else {
+        toast.error('Deletion Failed', json?.error?.message || 'Could not delete conversation.');
+      }
+    } catch (err: any) {
+      toast.error('Deletion Error', err?.message || 'Network error deleting conversation.');
+    }
+  };
 
   const handleRaiseTicketForRca = (msg: CopilotMessage) => {
     const userInquiry = messages.slice().reverse().find((m) => m.senderType === 'USER')?.content || queryInput || 'Abnormal Machinery Condition';
-    const activeAsset = selectedAssetId || (assets.length > 0 ? (assets[0].assetTag || assets[0].id) : 'PUMP-CENTRIFUGAL-402');
+    const activeAsset = selectedMachine?.assetTag || (machines.length > 0 ? machines[0].assetTag : 'PUMP-001');
 
     const rcaTicketPayload = {
       assetTag: activeAsset,
@@ -111,568 +777,6 @@ export const CopilotWorkspaceView: React.FC = () => {
     );
   };
 
-  // Session & Context State
-  const [plantId, setPlantId] = useState('');
-  const [selectedAssetId, setSelectedAssetId] = useState<string>('');
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-
-  // Dynamic Metadata State
-  const [plants, setPlants] = useState<any[]>([]);
-  const [assets, setAssets] = useState<any[]>([]);
-  const [inspectedPageContent, setInspectedPageContent] = useState<string | null>(null);
-  const [isLoadingPage, setIsLoadingPage] = useState(false);
-  const [inspectedCitation, setInspectedCitation] = useState<Citation | null>(null);
-
-  // Production Voice & Wake-Word State Machine (Prompt Section 3)
-  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
-  const [wakeWordStatus, setWakeWordStatus] = useState<WakeWordStatus>('DISABLED');
-  const [voiceState, setVoiceState] = useState<VoiceAssistantState>('DISABLED');
-  const [voiceStatusText, setVoiceStatusText] = useState<string>('Wake-word mode off');
-  const [volumeLevel, setVolumeLevel] = useState<number>(0);
-
-  // Voice Interaction State
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [recordingError, setRecordingError] = useState<string | null>(null);
-  const [speechLanguage, setSpeechLanguage] = useState<'en-US' | 'hi-IN' | 'hi-Latn'>('en-US');
-  const [pendingTranscriptReview, setPendingTranscriptReview] = useState<VoiceTranscriptionResponse | null>(null);
-  const [editedTranscript, setEditedTranscript] = useState('');
-  const [isTranscribing, setIsTranscribing] = useState(false);
-
-  // Voice Output / TTS State
-  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-  const [isTextOnlyMode, setIsTextOnlyMode] = useState(false);
-  const [ttsNotice, setTtsNotice] = useState<string | null>(null);
-
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const recordingTimerRef = useRef<any>(null);
-  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
-  const stateMachineRef = useRef<VoiceStateMachine | null>(null);
-  const wakeWordProviderRef = useRef<IWakeWordProvider | null>(null);
-  const vadServiceRef = useRef<VADService | null>(null);
-
-  // Load plants and assets on mount
-  useEffect(() => {
-    apiFetch('/api/v1/plants')
-      .then((r) => r.json())
-      .then((json) => {
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setPlants(json.data);
-          setPlantId(json.data[0].code || json.data[0].id);
-        }
-      })
-      .catch((err) => console.error('Failed to load plants', err));
-
-    apiFetch('/api/v1/assets')
-      .then((r) => r.json())
-      .then((json) => {
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setAssets(json.data);
-          setSelectedAssetId(json.data[0].assetTag);
-        }
-      })
-      .catch((err) => console.error('Failed to load assets', err));
-  }, []);
-
-  // Fetch full page evidence when citation is clicked
-  useEffect(() => {
-    if (!inspectedCitation) {
-      setInspectedPageContent(null);
-      return;
-    }
-    setIsLoadingPage(true);
-    apiFetch(`/api/v1/documents/${inspectedCitation.documentId}/pages`)
-      .then((r) => r.json())
-      .then((json) => {
-        if (json.success && Array.isArray(json.data)) {
-          const match = json.data.find(
-            (p: any) => p.pageNumber === inspectedCitation.pageNumber
-          );
-          setInspectedPageContent(
-            match ? match.rawText : json.data[0]?.rawText || inspectedCitation.snippet
-          );
-        } else {
-          setInspectedPageContent(inspectedCitation.snippet);
-        }
-      })
-      .catch(() => {
-        setInspectedPageContent(inspectedCitation.snippet);
-      })
-      .finally(() => {
-        setIsLoadingPage(false);
-      });
-  }, [inspectedCitation]);
-
-
-  // Conversations & Messages State (Live multi-tenant state - no mock data)
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [messages, setMessages] = useState<CopilotMessage[]>([]);
-
-  // Input & Query State
-  const [queryInput, setQueryInput] = useState('');
-  const [isQuerying, setIsQuerying] = useState(false);
-  const [queryStep, setQueryStep] = useState<string>('');
-  const [queryError, setQueryError] = useState<string | null>(null);
-
-
-
-  // Feedback Modal State
-  const [feedbackMessageId, setFeedbackMessageId] = useState<string | null>(null);
-  const [feedbackRating, setFeedbackRating] = useState<'HELPFUL' | 'UNHELPFUL'>('HELPFUL');
-  const [feedbackNotes, setFeedbackNotes] = useState('');
-  const [feedbackSubmittedMsg, setFeedbackSubmittedMsg] = useState<string | null>(null);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isQuerying]);
-
-  // Interruption helper: stops audio immediately when speaking or querying
-  const interruptPlayback = () => {
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current.currentTime = 0;
-      audioPlayerRef.current = null;
-    }
-    setIsPlayingAudio(false);
-    setPlayingMessageId(null);
-  };
-
-  // Convert audio blob to base64 and call /api/v1/copilot/voice/transcribe
-  const handleProcessAudioTranscription = async (blob: Blob, autoSubmit = false) => {
-    setIsTranscribing(true);
-    setRecordingError(null);
-    stateMachineRef.current?.transition('TRANSCRIBING', 'Transcribing spoken utterance and normalizing equipment tags...');
-
-    try {
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = async () => {
-        const base64Data = (reader.result as string).split(',')[1] || '';
-
-        const res = await apiFetch('/api/v1/copilot/voice/transcribe', {
-          method: 'POST',
-          body: JSON.stringify({
-            audioBase64: base64Data,
-            language: speechLanguage,
-            plantId,
-            assetId: selectedAssetId || undefined,
-          }),
-        });
-
-        const json = await res.json();
-        if (res.ok && json.success && json.data) {
-          const finalQuery = json.data.correctedTranscript || json.data.transcript;
-          if (autoSubmit && finalQuery) {
-            stateMachineRef.current?.transition('PROCESSING_COPILOT', 'Executing grounded RAG query...');
-            await handleSendQuery(finalQuery, true); // true for auto-speak
-          } else {
-            setPendingTranscriptReview(json.data);
-            setEditedTranscript(finalQuery);
-            stateMachineRef.current?.transition('IDLE', 'Transcript ready for review');
-          }
-        } else {
-          setRecordingError(json?.error?.message || 'Speech recognition service temporarily unavailable. Falling back to text input.');
-          stateMachineRef.current?.transition('ERROR', 'Transcription failed');
-        }
-        setIsTranscribing(false);
-      };
-    } catch {
-      setRecordingError('Voice transmission error. Please enter inquiry via keyboard.');
-      setIsTranscribing(false);
-      stateMachineRef.current?.transition('ERROR', 'Voice transmission error');
-    }
-  };
-
-  // Start microphone recording with permission handling (Push-to-talk manual trigger)
-  const handleStartRecording = async () => {
-    interruptPlayback();
-    setRecordingError(null);
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setRecordingError('Voice capture not supported in this browser. Please use text input below.');
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      audioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        await handleProcessAudioTranscription(audioBlob, false);
-      };
-
-      recorder.start(100);
-      setIsRecording(true);
-      setRecordingSeconds(0);
-      stateMachineRef.current?.transition('CAPTURING_UTTERANCE', 'Recording push-to-talk inquiry...');
-
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
-      }, 1000);
-    } catch (err: any) {
-      console.warn('Microphone permission blocked:', err);
-      releaseAllAudioTracks();
-      setRecordingError('Microphone permission denied or device unavailable. Please use text input below.');
-      setIsRecording(false);
-      stateMachineRef.current?.transition('ERROR', 'Microphone permission denied');
-    }
-  };
-
-  // Stop recording and send audio to STT service
-  const handleStopRecording = () => {
-    if (recordingTimerRef.current) {
-      clearInterval(recordingTimerRef.current);
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-  };
-
-  // Play audio TTS for an assistant message
-  const handlePlayAudio = async (msg: CopilotMessage, isVoiceSession = false) => {
-    if (playingMessageId === msg.id && isPlayingAudio) {
-      interruptPlayback();
-      return;
-    }
-
-    interruptPlayback();
-
-    if (isTextOnlyMode) {
-      setTtsNotice('Audio muted: Text-only mode active.');
-      setTimeout(() => setTtsNotice(null), 3000);
-      return;
-    }
-
-    setPlayingMessageId(msg.id);
-    setIsPlayingAudio(true);
-
-    try {
-      const res = await apiFetch('/api/v1/copilot/voice/synthesize', {
-        method: 'POST',
-        body: JSON.stringify({
-          text: msg.content,
-          messageId: msg.id,
-          language: speechLanguage,
-        }),
-      });
-
-      const json = await res.json();
-      if (res.ok && json.success && json.data && json.data.audioBase64) {
-        if (json.data.isSanitizedForConfidentiality) {
-          setTtsNotice(json.data.confidentialNotice || 'Audio sanitized for shared plant environment.');
-          setTimeout(() => setTtsNotice(null), 4000);
-        }
-        const audio = new Audio(`data:audio/wav;base64,${json.data.audioBase64}`);
-        audioPlayerRef.current = audio;
-        audio.onended = () => {
-          setIsPlayingAudio(false);
-          setPlayingMessageId(null);
-          if (isVoiceSession && wakeWordEnabled) {
-            stateMachineRef.current?.transition('WAITING_FOR_FOLLOW_UP', 'Follow-up active (30s). Ask another question or say "Hello ForgeX"...');
-          }
-        };
-        audio.onerror = () => {
-          setIsPlayingAudio(false);
-          setPlayingMessageId(null);
-          if (isVoiceSession) {
-            stateMachineRef.current?.transition('IDLE');
-          }
-        };
-        await audio.play();
-      } else {
-        setIsPlayingAudio(false);
-        setPlayingMessageId(null);
-      }
-    } catch {
-      setIsPlayingAudio(false);
-      setPlayingMessageId(null);
-    }
-  };
-
-  // Execute RAG Query
-  const handleSendQuery = async (queryText?: string, autoSpeak = false) => {
-    interruptPlayback();
-    setPendingTranscriptReview(null);
-
-    const text = (queryText || queryInput).trim();
-    if (!text || isQuerying) return;
-
-    setQueryError(null);
-    setIsQuerying(true);
-    setQueryStep('Validating plant context and role authorization...');
-
-    const userMessageId = `user-${Date.now()}`;
-    const newUserMsg: CopilotMessage = {
-      id: userMessageId,
-      conversationId: activeConversationId || 'conv-new',
-      senderType: 'USER',
-      content: text,
-      confidence: 'HIGH',
-      citations: [],
-      createdAt: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, newUserMsg]);
-    setQueryInput('');
-
-    try {
-      // Worker-friendly status steps (No vector DB, embeddings, or tokens exposed)
-      setTimeout(() => setQueryStep('Reviewing authorized plant manuals and equipment specifications...'), 300);
-      setTimeout(() => setQueryStep('Validating approved engineering revisions and operating tolerances...'), 600);
-      setTimeout(() => setQueryStep('Synthesizing grounded facts and verifying procedure citations...'), 900);
-
-      const res = await apiFetch('/api/v1/copilot/query', {
-        method: 'POST',
-        body: JSON.stringify({
-          query: text,
-          plantId,
-          assetId: selectedAssetId || undefined,
-          conversationId: activeConversationId || undefined,
-        }),
-      });
-
-      const json = await res.json();
-
-      if (res.ok && json.success) {
-        const data = json.data;
-        const asstMsg = data.assistantMessage;
-
-        setMessages((prev) => [...prev, asstMsg]);
-
-        if (data.conversationId && data.conversationId !== activeConversationId) {
-          setActiveConversationId(data.conversationId);
-          setConversations((prev) => [
-            {
-              id: data.conversationId,
-              organizationId: organization?.id || '',
-              plantId,
-              assetId: selectedAssetId,
-              userId: user?.id || '',
-              title: text.length > 40 ? `${text.slice(0, 37)}...` : text,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-            ...prev,
-          ]);
-        }
-
-        if (autoSpeak && !isTextOnlyMode) {
-          stateMachineRef.current?.transition('SPEAKING_RESPONSE', 'Speaking verified engineering answer...');
-          await handlePlayAudio(asstMsg, true);
-        } else {
-          stateMachineRef.current?.transition('WAITING_FOR_FOLLOW_UP', 'Answer verified. Follow-up active (30s)...');
-        }
-      } else {
-        setQueryError(json?.error?.message || json?.error || `Inference error: HTTP ${res.status}`);
-        stateMachineRef.current?.transition('ERROR', 'Inference query error');
-      }
-    } catch (err: any) {
-      setQueryError(err?.message || 'Inference engine timeout or network error');
-      stateMachineRef.current?.transition('ERROR', 'Query failed');
-    } finally {
-      setIsQuerying(false);
-      setQueryStep('');
-    }
-  };
-
-  // Handle RCA 5-Why, Technician Queue Technical Specs, and External Handoffs
-  useEffect(() => {
-    const processHandoff = () => {
-      let promptText = '';
-      let assetTag = '';
-
-      const handoffRaw = sessionStorage.getItem('forgex_copilot_handoff');
-      if (handoffRaw) {
-        try {
-          const handoff = JSON.parse(handoffRaw);
-          sessionStorage.removeItem('forgex_copilot_handoff');
-          if (handoff.assetTag) {
-            assetTag = handoff.assetTag;
-          }
-          if (handoff.prompt) {
-            promptText = handoff.prompt;
-          } else if (handoff.assetTag) {
-            const summary = handoff.issueSummary || 'Equipment Alert';
-            const stepTitle = handoff.activeStepTitle || 'Step Execution';
-            const stepDesc = handoff.activeStepDescription || 'Follow OEM maintenance procedures.';
-            promptText = `Provide exact OEM technical specifications, torque values, clearance tolerances, and safety parameters for ${handoff.assetTag} regarding ${summary} — specifically for executing [${stepTitle}: ${stepDesc}].`;
-          }
-        } catch (e) {
-          console.warn('Failed to parse copilot handoff from sessionStorage:', e);
-        }
-      } else {
-        // Fallback: Read incoming context from URL query params
-        try {
-          const params = new URLSearchParams(window.location.search);
-          const p = params.get('prompt');
-          const tag = params.get('assetTag');
-          const issue = params.get('issueSummary');
-          const stepTitle = params.get('activeStepTitle');
-          const stepDesc = params.get('activeStepDescription');
-
-          if (p) {
-            promptText = p;
-          } else if (tag && (issue || stepTitle)) {
-            promptText = `Provide exact OEM technical specifications, torque values, clearance tolerances, and safety parameters for ${tag} regarding ${issue || 'Equipment Alert'} — specifically for executing [${stepTitle || 'Step Execution'}: ${stepDesc || 'Standard maintenance procedure'}].`;
-          }
-          if (tag) {
-            assetTag = tag;
-          }
-        } catch (e) {
-          console.warn('Failed to read copilot URL params:', e);
-        }
-      }
-
-      if (assetTag) {
-        setSelectedAssetId(assetTag);
-      }
-      if (promptText) {
-        setQueryInput(promptText);
-        setTimeout(() => {
-          handleSendQuery(promptText);
-        }, 350);
-      }
-    };
-
-    const timer = setTimeout(processHandoff, 250);
-    window.addEventListener('forgex:copilot-handoff', processHandoff);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('forgex:copilot-handoff', processHandoff);
-    };
-  }, []);
-
-  // Manage Wake-Word & VAD Lifecycle
-  useEffect(() => {
-    if (!stateMachineRef.current) {
-      stateMachineRef.current = new VoiceStateMachine({
-        onStateChange: (state, message) => {
-          setVoiceState(state);
-          if (message) setVoiceStatusText(message);
-        },
-      });
-    }
-
-    if (wakeWordEnabled) {
-      try {
-        const provider = createWakeWordProvider();
-        wakeWordProviderRef.current = provider;
-
-        provider
-          .init({
-            onDetected: () => {
-              interruptPlayback();
-              stateMachineRef.current?.transition('ACTIVATED', 'Wake-word "Hello ForgeX" recognized!');
-              provider.stop().catch(() => {});
-
-              // Launch VAD Service with Silero VAD, 1000ms silence timeout, and 300ms pre-roll buffer
-              const vad = new VADService({ silenceTimeoutMs: 1000, maxDurationSeconds: 120, preRollBufferMs: 300 });
-              vadServiceRef.current = vad;
-              setIsRecording(true);
-
-              stateMachineRef.current?.transition('CAPTURING_UTTERANCE', 'Listening to inquiry...');
-              vad.start({
-                onSpeechStart: () => {},
-                onVolumeChange: (vol) => setVolumeLevel(vol),
-                onSilenceTimeout: (blob) => {
-                  setIsRecording(false);
-                  setVolumeLevel(0);
-                  handleProcessAudioTranscription(blob, true);
-                },
-                onMaxDurationReached: (blob) => {
-                  setIsRecording(false);
-                  setVolumeLevel(0);
-                  handleProcessAudioTranscription(blob, true);
-                },
-                onError: (err) => {
-                  setIsRecording(false);
-                  setVolumeLevel(0);
-                  setRecordingError(`Microphone error: ${err.message}`);
-                  stateMachineRef.current?.transition('ERROR', err.message);
-                },
-              });
-            },
-            onStatusChange: (status, message) => {
-              setWakeWordStatus(status);
-              if (message) setVoiceStatusText(message);
-            },
-            onError: (err) => {
-              setWakeWordStatus('ERROR');
-              setRecordingError(`Wake-word engine error: ${err.message}`);
-            },
-          })
-          .then(() => {
-            provider.start();
-            stateMachineRef.current?.transition('WAKE_WORD_LISTENING', 'Listening for "Hello ForgeX"...');
-          })
-          .catch((e) => {
-            setWakeWordStatus('ENGINE_UNAVAILABLE');
-            setVoiceStatusText(`Wake-word engine unavailable: ${e.message}`);
-          });
-      } catch (e: any) {
-        setWakeWordStatus('ENGINE_UNAVAILABLE');
-        setVoiceStatusText(`Wake-word configuration error: ${e.message}`);
-        setRecordingError(e.message);
-      }
-    } else {
-      if (wakeWordProviderRef.current) {
-        wakeWordProviderRef.current.stop();
-        wakeWordProviderRef.current.release();
-        wakeWordProviderRef.current = null;
-      }
-      if (vadServiceRef.current) {
-        vadServiceRef.current.cancel();
-        vadServiceRef.current = null;
-      }
-      stateMachineRef.current?.transition('DISABLED', 'Wake-word mode off');
-      setWakeWordStatus('DISABLED');
-      setIsRecording(false);
-      setVolumeLevel(0);
-    }
-
-    return () => {
-      if (wakeWordProviderRef.current) {
-        wakeWordProviderRef.current.release();
-        wakeWordProviderRef.current = null;
-      }
-      if (vadServiceRef.current) {
-        vadServiceRef.current.cancel();
-        vadServiceRef.current = null;
-      }
-      interruptPlayback();
-      releaseAllAudioTracks();
-    };
-  }, [wakeWordEnabled, speechLanguage, plantId, selectedAssetId]);
-
-  const handleStartNewConversation = () => {
-    interruptPlayback();
-    const newId = `conv-${Date.now()}`;
-    setActiveConversationId(newId);
-    setMessages([]);
-    setQueryError(null);
-  };
-
   const handleSubmitFeedback = async () => {
     if (!feedbackMessageId) return;
 
@@ -693,7 +797,7 @@ export const CopilotWorkspaceView: React.FC = () => {
                 feedback: {
                   id: `fb-${Date.now()}`,
                   messageId: feedbackMessageId,
-                  userId: 'user-eng-1',
+                  userId: user?.id || 'user-eng-1',
                   rating: feedbackRating,
                   comment: feedbackNotes,
                   createdAt: new Date().toISOString(),
@@ -739,7 +843,7 @@ export const CopilotWorkspaceView: React.FC = () => {
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-blue-950/70 text-blue-300 border border-blue-800">
             <BookOpen className="w-3 h-3 text-blue-400" />
-            GENERAL KNOWLEDGE (NON-MACHINE SPECIFIC)
+            GENERAL KNOWLEDGE
           </span>
         );
       case 'COMPANY_SPECIFIC':
@@ -768,134 +872,352 @@ export const CopilotWorkspaceView: React.FC = () => {
     }
   };
 
+  // Dynamic 2x2 Smart Prompts for Empty State
+  const smartPrompts = useMemo(() => {
+    const tag = selectedMachine ? selectedMachine.assetTag : 'Plant Machinery';
+    return [
+      {
+        id: 'loto',
+        icon: ShieldCheck,
+        title: 'LOTO & Safety Isolation',
+        subtitle: 'Zero Energy State Verification',
+        prompt: `What is the step-by-step LOTO and energy isolation procedure for ${tag}?`,
+        category: 'OSHA 1910.147 Compliance',
+        categoryColor: 'text-amber-700 bg-amber-50 border-amber-200',
+      },
+      {
+        id: 'limits',
+        icon: Gauge,
+        title: 'Operating Limits & Torque Specs',
+        subtitle: 'MAWP, Temperatures & Torques',
+        prompt: `Show verified MAWP, operating temperature, voltage, and critical fastener torque limits for ${tag}.`,
+        category: 'Operating Tolerances',
+        categoryColor: 'text-blue-700 bg-blue-50 border-blue-200',
+      },
+      {
+        id: 'rca',
+        icon: AlertTriangle,
+        title: 'Fault Diagnosis & 5-Why RCA',
+        subtitle: 'Vibration, Abnormal Pressure & RCA',
+        prompt: `What are the primary failure modes, abnormal vibration/pressure causes, and troubleshooting steps for ${tag}?`,
+        category: 'Diagnostic RCA',
+        categoryColor: 'text-rose-700 bg-rose-50 border-rose-200',
+      },
+      {
+        id: 'pm',
+        icon: Wrench,
+        title: 'PM Checklist & Spare Parts',
+        subtitle: 'OEM Schedule & Spares',
+        prompt: `Generate the preventive maintenance checklist and recommended OEM spare parts for ${tag}.`,
+        category: 'OEM Maintenance',
+        categoryColor: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+      },
+    ];
+  }, [selectedMachine]);
+
   return (
     <div className="flex-1 flex h-full overflow-hidden bg-[#F5F6F7] font-sans">
       {/* Left Column: Asset Context & Conversation History */}
-      <div className="w-80 border-r border-[#E2E8F0] bg-white flex flex-col justify-between overflow-hidden shadow-sm">
-        {/* Top Scope Selector */}
-        <div className="p-4 border-b border-[#E2E8F0] space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-sans font-bold tracking-wider text-[#1A202C] uppercase flex items-center gap-1.5">
-              <Filter className="w-3.5 h-3.5 text-[#2563EB]" />
-              AUTHORIZATION SCOPE
-            </span>
-            <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-semibold">
-              RBAC ENFORCED
-            </span>
-          </div>
-
-          <div className="space-y-2">
-            <div>
-              <label className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">Operating Plant:</label>
-              <select
-                value={plantId}
-                onChange={(e) => setPlantId(e.target.value)}
-                className="w-full mt-1 bg-white border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
-              >
-                {plants.length > 0 ? (
-                  plants.map((p) => (
-                    <option key={p.id} value={p.code || p.id}>
-                      {p.code} ({p.name})
-                    </option>
-                  ))
-                ) : (
-                  <option value="PLANT-TX-04">
-                    PLANT-TX-04 (Texas Hydrocarbon Unit)
-                  </option>
-                )}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-[10px] font-sans text-[#64748B] font-semibold uppercase">Target Asset Context:</label>
-              <select
-                value={selectedAssetId}
-                onChange={(e) => setSelectedAssetId(e.target.value)}
-                className="w-full mt-1 bg-white border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs font-sans text-[#2563EB] font-medium focus:outline-none focus:border-[#2563EB] transition shadow-sm"
-              >
-                <option value="">
-                  All Authorized Plant Equipment
-                </option>
-                {assets.length > 0 ? (
-                  assets.map((a) => (
-                    <option key={a.id} value={a.assetTag}>
-                      {a.assetTag} ({a.name})
-                    </option>
-                  ))
-                ) : (
-                  <>
-                    <option value="PUMP-204-B">
-                      PUMP-204-B (Slurry Crude Charge Pump)
-                    </option>
-                    <option value="COMP-101-A">
-                      COMP-101-A (Wet Gas Rotary Compressor)
-                    </option>
-                    <option value="HEX-302-C">
-                      HEX-302-C (Shell & Tube Exchanger)
-                    </option>
-                  </>
-                )}
-              </select>
-            </div>
-          </div>
-
+      <div className="w-80 h-full border-r border-[#E2E8F0] bg-white flex flex-col overflow-hidden shadow-sm shrink-0">
+        {/* Top Pinned Action: New Consultation Thread */}
+        <div className="p-3 border-b border-[#E2E8F0] bg-white shrink-0">
           <button
             onClick={handleStartNewConversation}
-            className="w-full py-2 bg-[#151C24] hover:bg-black text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-sm"
+            className="w-full py-2 px-3 bg-[#151C24] hover:bg-black text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs hover:shadow-sm cursor-pointer"
           >
             <PlusCircle className="w-3.5 h-3.5 text-white" />
-            New Consultation Thread
+            <span>New Consultation Thread</span>
           </button>
         </div>
 
-        {/* Conversation List */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-          <div className="px-2 py-1 text-[10px] font-sans font-semibold text-[#64748B] uppercase flex items-center gap-1.5">
-            <Clock className="w-3 h-3 text-[#64748B]" />
-            Active Consultations
-          </div>
-          {conversations.length === 0 ? (
-            <div className="p-4 text-center text-xs text-[#94A3B8] border border-dashed border-[#E2E8F0] rounded-lg mt-2">
-              No previous consultations. Enter an inquiry or select a preset prompt to begin.
+        {/* Equipment Scope Header & Active Scope Selector */}
+        <div className="p-3 border-b border-[#E2E8F0] bg-[#FAFAFA] space-y-2.5 shrink-0">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-sans font-bold tracking-wider text-[#1A202C] uppercase flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5 text-[#2563EB]" />
+              EQUIPMENT SCOPE
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                {machines.length} Units
+              </span>
+              <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold uppercase tracking-wider flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+                Single Factory
+              </span>
             </div>
-          ) : (
-            conversations.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => setActiveConversationId(c.id)}
-                className={`w-full text-left p-3 rounded-lg text-xs transition border flex flex-col gap-1 ${
-                  activeConversationId === c.id
-                    ? 'bg-blue-50/70 border-blue-200 text-[#1A202C] shadow-sm'
-                    : 'bg-white border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#64748B]'
-                }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="font-mono text-[10px] text-[#2563EB] truncate font-bold">
-                    {c.assetId || 'PLANT-WIDE'}
-                  </span>
-                  <span className="text-[10px] font-mono text-[#64748B]">
-                    {new Date(c.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
+          </div>
+
+          {/* Interactive Active Scope Card (Click to toggle machine selector) */}
+          <button
+            type="button"
+            onClick={() => setIsEquipmentSelectorOpen(!isEquipmentSelectorOpen)}
+            className={`w-full text-left p-2.5 rounded-lg border text-xs transition shadow-2xs hover:shadow-xs cursor-pointer ${
+              selectedMachine
+                ? 'bg-blue-50/70 border-blue-300 text-blue-900'
+                : 'bg-white border-[#CBD5E1] hover:border-blue-400 text-[#1A202C]'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div
+                  className={`w-7 h-7 rounded-md flex items-center justify-center font-mono font-bold text-[10px] shrink-0 border ${
+                    selectedMachine
+                      ? 'bg-blue-600 text-white border-blue-700'
+                      : 'bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  {selectedMachine ? selectedMachine.assetTag.slice(0, 4) : <Layers className="w-3.5 h-3.5 text-[#2563EB]" />}
                 </div>
-                <span className="font-medium truncate text-xs text-[#1A202C]">{c.title}</span>
-              </button>
-            ))
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono font-bold text-xs text-[#2563EB] truncate">
+                      {selectedMachine ? selectedMachine.assetTag : 'All Factory Equipment'}
+                    </span>
+                    {selectedMachine && (
+                      <span
+                        className={`text-[9px] font-mono px-1 py-0.2 rounded font-bold uppercase border ${
+                          selectedMachine.documentationReadiness === 'READY'
+                            ? 'bg-emerald-100/80 text-emerald-800 border-emerald-300'
+                            : selectedMachine.documentationReadiness === 'PROCESSING' || selectedMachine.documentationReadiness === 'PENDING_INSPECTION'
+                            ? 'bg-blue-100/80 text-blue-800 border-blue-300'
+                            : 'bg-amber-100/80 text-amber-800 border-amber-300'
+                        }`}
+                      >
+                        {selectedMachine.documentationReadiness || 'INDEXED'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-[#64748B] truncate font-medium">
+                    {selectedMachine ? selectedMachine.name : 'Factory-Wide Scope & All Authorized Equipment'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0 text-[#64748B]">
+                <span className="text-[10px] font-semibold hidden sm:inline">
+                  {isEquipmentSelectorOpen ? 'Close' : 'Change'}
+                </span>
+                <ChevronDown
+                  className={`w-4 h-4 transition-transform duration-200 ${
+                    isEquipmentSelectorOpen ? 'rotate-180 text-[#2563EB]' : 'text-slate-400'
+                  }`}
+                />
+              </div>
+            </div>
+          </button>
+
+          {/* Collapsible / Expandable Search & Machine Command List (Capped to max-h-[250px]) */}
+          {isEquipmentSelectorOpen && (
+            <div className="space-y-2 pt-1 border-t border-[#E2E8F0] animate-fadeIn">
+              {/* Instant Search Bar */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-[#94A3B8] absolute left-2.5 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search tag, name, OEM, or area..."
+                  value={machineSearchQuery}
+                  onChange={(e) => setMachineSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-7 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] shadow-2xs"
+                  autoFocus
+                />
+                {machineSearchQuery && (
+                  <button
+                    onClick={() => setMachineSearchQuery('')}
+                    className="absolute right-2 top-2 text-[#94A3B8] hover:text-[#1A202C]"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Scrollable Capped Container (max-h-[240px] with smooth scrolling) */}
+              <div className="max-h-[240px] overflow-y-auto space-y-1.5 pr-1 border border-[#E2E8F0] rounded-lg p-1.5 bg-white shadow-inner">
+                {/* Option 1: Factory-Wide Scope */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedMachineId('');
+                    setIsEquipmentSelectorOpen(false);
+                  }}
+                  className={`w-full text-left p-2 rounded-md text-xs transition border flex items-center justify-between cursor-pointer ${
+                    !selectedMachineId && !selectedMachine
+                      ? 'bg-blue-50 border-blue-300 text-blue-900 font-semibold shadow-2xs'
+                      : 'bg-[#F8FAFC] border-[#E2E8F0] hover:bg-slate-100 text-[#475569]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <Layers className="w-3.5 h-3.5 text-[#2563EB] shrink-0" />
+                    <span className="truncate font-medium">All Factory Equipment</span>
+                  </div>
+                  <span className="text-[9px] font-mono font-bold text-[#64748B] bg-slate-200/60 px-1.5 py-0.5 rounded uppercase">
+                    FACTORY-WIDE
+                  </span>
+                </button>
+
+                {/* Machines List by Area */}
+                {isLoadingMachines ? (
+                  <div className="p-3 text-center text-xs text-[#94A3B8] flex items-center justify-center gap-2">
+                    <RotateCw className="w-3 h-3 animate-spin text-[#2563EB]" />
+                    <span>Loading equipment ledger...</span>
+                  </div>
+                ) : filteredMachines.length === 0 ? (
+                  <div className="p-3 text-center text-[11px] text-[#94A3B8]">
+                    No machines matching &ldquo;{machineSearchQuery}&rdquo;.
+                  </div>
+                ) : (
+                  Object.entries(machinesByArea).map(([areaName, areaMachines]) => {
+                    const isCollapsed = Boolean(collapsedAreas[areaName]);
+                    return (
+                      <div key={areaName} className="space-y-1 pt-1">
+                        {/* Collapsible Area Header */}
+                        <button
+                          type="button"
+                          onClick={() => toggleAreaCollapse(areaName)}
+                          className="w-full flex items-center justify-between px-2 py-1 bg-slate-100/80 hover:bg-slate-200/80 rounded text-[10px] font-bold text-slate-700 uppercase tracking-wide transition cursor-pointer"
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <Building2 className="w-3 h-3 text-slate-500 shrink-0" />
+                            <span className="truncate">{areaName}</span>
+                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-800 font-semibold">
+                              {areaMachines.length}
+                            </span>
+                          </div>
+                          {isCollapsed ? (
+                            <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+                          ) : (
+                            <ChevronUp className="w-3 h-3 text-slate-400 shrink-0" />
+                          )}
+                        </button>
+
+                        {/* Area Machines */}
+                        {!isCollapsed &&
+                          areaMachines.map((m) => {
+                            const isSelected = selectedMachine?.id === m.id || selectedMachineId === m.id;
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedMachineId(m.id);
+                                  setIsEquipmentSelectorOpen(false);
+                                }}
+                                className={`w-full text-left p-2 rounded-md text-xs transition border flex flex-col gap-0.5 cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-blue-50 border-blue-300 text-blue-900 font-semibold shadow-2xs ring-1 ring-blue-300'
+                                    : 'bg-white border-[#E2E8F0] hover:bg-blue-50/40 hover:border-blue-200 text-[#64748B]'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between w-full">
+                                  <span className="font-mono text-xs font-bold text-[#2563EB] truncate">
+                                    {m.assetTag}
+                                  </span>
+                                  <span
+                                    className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-bold uppercase border ${
+                                      m.documentationReadiness === 'READY'
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                        : m.documentationReadiness === 'PROCESSING' || m.documentationReadiness === 'PENDING_INSPECTION'
+                                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                                    }`}
+                                  >
+                                    {m.documentationReadiness || 'INDEXED'}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-[#1A202C] truncate font-medium">
+                                  {m.name}
+                                </div>
+                                <div className="text-[10px] text-[#64748B] truncate flex items-center gap-1">
+                                  {m.manufacturer && <span>OEM: {m.manufacturer}</span>}
+                                  {m.modelNumber && <span>· Mod: {m.modelNumber}</span>}
+                                </div>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
           )}
         </div>
 
-        {/* Security & Deployment Footer */}
-        <div className="p-3 border-t border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-sans space-y-1 text-[#64748B]">
+        {/* Dedicated Scrollable Container: Recent Consultations */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1.5">
+          <div className="px-1 py-1 text-[10px] font-sans font-bold text-[#64748B] uppercase tracking-wider flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Clock className="w-3 h-3 text-[#2563EB]" />
+              <span>Recent Consultations</span>
+            </div>
+            {conversations.length > 0 && (
+              <span className="font-mono text-[9px] text-[#94A3B8]">
+                {conversations.length} Threads
+              </span>
+            )}
+          </div>
+
+          {conversations.length === 0 ? (
+            <div className="p-4 text-center text-xs text-[#94A3B8] border border-dashed border-[#E2E8F0] rounded-lg mt-2 space-y-1">
+              <Sparkles className="w-4 h-4 mx-auto text-slate-300" />
+              <p className="font-medium text-slate-600">No Previous Consultations</p>
+              <p className="text-[11px] text-slate-400 leading-normal">
+                Ask an engineering inquiry or click a quick prompt to begin.
+              </p>
+            </div>
+          ) : (
+            conversations.map((c) => {
+              const isActive = activeConversationId === c.id;
+              return (
+                <div
+                  key={c.id}
+                  onClick={() => handleSelectConversation(c.id)}
+                  className={`w-full text-left p-2.5 rounded-lg text-xs transition border flex items-center justify-between group cursor-pointer ${
+                    isActive
+                      ? 'bg-blue-50/90 border-blue-300 text-[#1A202C] shadow-2xs ring-1 ring-blue-300'
+                      : 'bg-white border-[#E2E8F0] hover:bg-[#F8FAFC] hover:border-slate-300 text-[#64748B]'
+                  }`}
+                >
+                  <div className="flex-1 min-w-0 pr-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-[10px] px-1.5 py-0.2 rounded font-bold bg-blue-100/70 text-[#1E40AF] border border-blue-200 truncate">
+                        {c.assetId || 'FACTORY-WIDE'}
+                      </span>
+                      <span className="text-[10px] text-slate-400">·</span>
+                      <span className="text-[10px] font-mono text-[#94A3B8]">
+                        {new Date(c.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <span className="font-medium truncate text-xs text-[#1A202C] block mt-1">
+                      {c.title}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDeleteConversation(e, c.id)}
+                    className="opacity-0 group-hover:opacity-100 p-1.5 rounded-md hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition shrink-0"
+                    title="Delete consultation thread"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Security & Sovereign Footer */}
+        <div className="p-3 border-t border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-sans space-y-1 text-[#64748B] shrink-0">
           <div className="flex justify-between">
             <span>INFERENCE:</span>
-            <span className="text-[#0F766E] font-bold">Local Sovereign Engine</span>
+            <span className="text-[#0F766E] font-bold">Gemini Cloud SaaS + RAG</span>
           </div>
           <div className="flex justify-between">
-            <span>FALLBACK POLICY:</span>
-            <span className="text-[#0F766E] font-bold">Never Silent Cloud</span>
+            <span>TENANT ISOLATION:</span>
+            <span className="text-[#0F766E] font-bold">PostgreSQL Strict RLS</span>
           </div>
           <div className="flex justify-between">
-            <span>SPEECH SECURITY:</span>
-            <span className="text-[#2563EB] font-bold">Zero Audio Retained</span>
+            <span>EVIDENCE TRACE:</span>
+            <span className="text-[#2563EB] font-bold">100% Page Verified</span>
           </div>
         </div>
       </div>
@@ -903,164 +1225,281 @@ export const CopilotWorkspaceView: React.FC = () => {
       {/* Center Column: Chat Stream Workspace */}
       <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7] relative text-[#1A202C] font-sans">
         {/* Workspace Top Bar */}
-        <div className="p-3.5 border-b border-[#E2E8F0] bg-white flex items-center justify-between text-xs font-sans shadow-sm">
+        <div className="p-3 border-b border-[#E2E8F0] bg-white flex items-center justify-between text-xs font-sans shadow-sm shrink-0">
           <div className="flex items-center gap-2.5">
             <Sparkles className="w-4 h-4 text-[#2563EB]" />
-            <span className="font-bold text-[#1A202C] tracking-wide">UNIVERSAL INDUSTRIAL COPILOT</span>
+            <span className="font-bold text-[#1A202C] tracking-wide">AI INDUSTRIAL COPILOT</span>
             <span className="text-slate-300">|</span>
-            <span className="text-[#64748B]">
-              Plant: <span className="text-[#1A202C] font-medium">{plantId}</span>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              Single-Factory Mode
             </span>
-            {selectedAssetId && (
-              <>
-                <span className="text-slate-300">|</span>
-                <span className="text-[#2563EB] font-mono font-bold">Asset: {selectedAssetId}</span>
-              </>
-            )}
           </div>
 
-          {/* Voice Toolbar: Language Selection & Mute Toggle */}
+          {/* Voice Toolbar: Language Selection & Auto-Speak Toggle */}
           <div className="flex items-center gap-3">
-            {/* Wake Word Mode Toggle */}
-            <button
-              onClick={() => {
-                interruptPlayback();
-                setWakeWordEnabled(!wakeWordEnabled);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-[11px] font-sans transition ${
-                wakeWordEnabled
-                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800 shadow-sm'
-                  : 'bg-white border-[#CBD5E1] hover:border-slate-400 text-[#64748B]'
-              }`}
-              title='Enable hands-free wake word ("Hello ForgeX")'
-            >
-              <Mic className={`w-3.5 h-3.5 ${wakeWordEnabled ? 'text-emerald-600 animate-pulse' : 'text-[#64748B]'}`} />
-              <span className="font-semibold">
-                {wakeWordEnabled ? 'WAKE-WORD ON' : 'WAKE-WORD OFF'}
-              </span>
-            </button>
-
             {/* Language Selector */}
             <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] px-2.5 py-1 rounded-lg text-[11px] font-sans shadow-sm">
               <Languages className="w-3.5 h-3.5 text-[#2563EB]" />
               <select
                 value={speechLanguage}
-                onChange={(e) => setSpeechLanguage(e.target.value as any)}
+                onChange={(e) => setSpeechLanguage(e.target.value as SupportedLanguageCode)}
                 className="bg-transparent text-[#1A202C] focus:outline-none cursor-pointer"
               >
-                <option value="en-US">English (Technical)</option>
-                <option value="hi-IN">Hindi (हिंदी)</option>
-                <option value="hi-Latn">Hinglish (Mix)</option>
+                {SUPPORTED_LANGUAGES.map((lang) => (
+                  <option key={lang.code} value={lang.code}>
+                    {lang.label}
+                  </option>
+                ))}
               </select>
             </div>
 
-            {/* Global TTS Mute Button */}
+            {/* Auto-Speak Toggle Button */}
             <button
               onClick={() => {
-                interruptPlayback();
-                setIsTextOnlyMode(!isTextOnlyMode);
+                stopSpeech();
+                setAutoSpeakEnabled(!autoSpeakEnabled);
               }}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-sans transition shadow-sm ${
-                isTextOnlyMode
-                  ? 'bg-amber-50 border-amber-300 text-amber-800'
-                  : 'bg-white border-[#CBD5E1] hover:border-slate-400 text-[#1A202C]'
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-[11px] font-sans transition shadow-sm ${
+                autoSpeakEnabled
+                  ? 'bg-blue-50 border-blue-300 text-blue-800 font-bold'
+                  : 'bg-white border-[#CBD5E1] hover:border-slate-400 text-[#64748B]'
               }`}
-              title={isTextOnlyMode ? 'Text-Only Mode active (Audio Muted)' : 'Voice Playback Enabled'}
+              title={
+                autoSpeakEnabled
+                  ? 'Auto-Speak active: Copilot answers will be spoken automatically'
+                  : 'Auto-Speak off: Use LISTEN button on answers'
+              }
             >
-              {isTextOnlyMode ? <VolumeX className="w-3.5 h-3.5 text-amber-600" /> : <Volume2 className="w-3.5 h-3.5 text-[#2563EB]" />}
-              <span>{isTextOnlyMode ? 'TEXT-ONLY' : 'VOICE ON'}</span>
+              {autoSpeakEnabled ? (
+                <Volume2 className="w-3.5 h-3.5 text-[#2563EB]" />
+              ) : (
+                <VolumeX className="w-3.5 h-3.5 text-[#64748B]" />
+              )}
+              <span>{autoSpeakEnabled ? 'AUTO-SPEAK ON' : 'AUTO-SPEAK OFF'}</span>
             </button>
           </div>
         </div>
 
-        {/* Live Voice State Indicator Banner */}
-        {wakeWordEnabled && (
-          <div className="px-4 py-2 bg-[#EFF6FF] border-b border-[#BFDBFE] flex items-center justify-between text-xs font-sans animate-fadeIn text-[#1E3A8A]">
-            <div className="flex items-center gap-2.5">
-              <span
-                className={`w-2.5 h-2.5 rounded-full ${
-                  voiceState === 'WAKE_WORD_LISTENING'
-                    ? 'bg-emerald-500 animate-ping'
-                    : voiceState === 'ACTIVATED' || voiceState === 'CAPTURING_UTTERANCE'
-                    ? 'bg-cyan-500 animate-pulse'
-                    : voiceState === 'SPEAKING_RESPONSE'
-                    ? 'bg-blue-500 animate-pulse'
-                    : 'bg-slate-400'
-                }`}
-              />
-              <span className="font-bold uppercase tracking-wider">
-                VOICE ASSISTANT · <span className="text-[#0F766E]">{voiceState}</span> <span className="text-[10px] text-[#64748B] font-normal">[{wakeWordStatus}]</span>
-              </span>
-              <span className="text-slate-300">|</span>
-              <span className="text-[#1A202C]">{voiceStatusText}</span>
-            </div>
+        {/* Live Machine Context Banner (High-contrast, industrial context banner) */}
+        {selectedMachine ? (
+          <div className="px-4 py-2.5 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between text-xs shadow-xs shrink-0 animate-fadeIn relative">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-blue-600/30 border border-blue-400/40 flex items-center justify-center text-blue-300 font-mono font-bold text-xs shrink-0">
+                {selectedMachine.assetTag.slice(0, 4)}
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono font-bold text-blue-300 text-sm">
+                    {selectedMachine.assetTag}
+                  </span>
+                  <span className="text-slate-400 text-xs">·</span>
+                  <span className="font-semibold text-slate-100">{selectedMachine.name}</span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase border ${
+                      selectedMachine.documentationReadiness === 'READY'
+                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600'
+                        : selectedMachine.documentationReadiness === 'PROCESSING' || selectedMachine.documentationReadiness === 'PENDING_INSPECTION'
+                        ? 'bg-blue-950/80 text-blue-300 border-blue-600 animate-pulse'
+                        : 'bg-amber-950/80 text-amber-300 border-amber-600'
+                    }`}
+                  >
+                    {selectedMachine.documentationReadiness || 'INDEXED'}
+                  </span>
 
-            {isPlayingAudio && (
-              <button
-                onClick={interruptPlayback}
-                className="px-2.5 py-0.5 rounded bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-700 text-[11px] flex items-center gap-1.5 transition"
-              >
-                <Square className="w-3 h-3 fill-current" />
-                <span>Barge-in / Stop Voice</span>
-              </button>
-            )}
-          </div>
-        )}
+                  {/* Switch Machine Quick Trigger & Floating Popover */}
+                  <div className="relative inline-block" ref={headerPickerRef}>
+                    <button
+                      type="button"
+                      onClick={() => setIsHeaderMachinePickerOpen(!isHeaderMachinePickerOpen)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-blue-600/30 hover:bg-blue-600/50 active:bg-blue-600/70 text-blue-200 border border-blue-400/40 text-[11px] font-semibold transition cursor-pointer shadow-2xs"
+                      title="Switch active machine context directly from header"
+                    >
+                      <span>Switch Machine</span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 transition-transform ${
+                          isHeaderMachinePickerOpen ? 'rotate-180 text-white' : 'text-blue-300'
+                        }`}
+                      />
+                    </button>
 
-        {/* TTS Privacy Toast Notification */}
-        {ttsNotice && (
-          <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-sans flex items-center justify-between animate-fadeIn">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-amber-600" />
-              <span>{ttsNotice}</span>
+                    {/* Quick Floating Machine Switcher Popover */}
+                    {isHeaderMachinePickerOpen && (
+                      <div className="absolute left-0 top-full mt-2 w-80 bg-white text-[#1A202C] rounded-xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-fadeIn space-y-2">
+                        <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 px-1">
+                          <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                            <Filter className="w-3.5 h-3.5 text-blue-600" />
+                            Quick Switch Equipment
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500 font-semibold bg-slate-100 px-1.5 py-0.5 rounded">
+                            {machines.length} Total
+                          </span>
+                        </div>
+
+                        {/* Search Input in Popover */}
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                          <input
+                            type="text"
+                            placeholder="Search tag, name, or area..."
+                            value={machineSearchQuery}
+                            onChange={(e) => setMachineSearchQuery(e.target.value)}
+                            className="w-full pl-8 pr-7 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                            autoFocus
+                          />
+                          {machineSearchQuery && (
+                            <button
+                              onClick={() => setMachineSearchQuery('')}
+                              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Scrollable List */}
+                        <div className="max-h-60 overflow-y-auto space-y-1 pr-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedMachineId('');
+                              setIsHeaderMachinePickerOpen(false);
+                            }}
+                            className="w-full text-left p-2 rounded-lg hover:bg-slate-100 text-xs flex items-center justify-between transition cursor-pointer"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <Layers className="w-3.5 h-3.5 text-blue-600" />
+                              <span className="font-semibold text-slate-800">All Factory Equipment</span>
+                            </div>
+                            <span className="text-[9px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded uppercase font-bold">
+                              FACTORY-WIDE
+                            </span>
+                          </button>
+
+                          {filteredMachines.map((m) => (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedMachineId(m.id);
+                                setIsHeaderMachinePickerOpen(false);
+                              }}
+                              className={`w-full text-left p-2 rounded-lg text-xs transition flex flex-col gap-0.5 cursor-pointer border ${
+                                m.id === selectedMachine.id
+                                  ? 'bg-blue-50 border-blue-300 text-blue-900 font-semibold'
+                                  : 'hover:bg-slate-50 border-transparent text-slate-700'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono font-bold text-blue-600">{m.assetTag}</span>
+                                <span className="text-[9px] font-mono text-slate-500 font-semibold">{m.area || 'General Area'}</span>
+                              </div>
+                              <span className="truncate text-slate-800 font-medium">{m.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5 flex-wrap">
+                  <span>Area: <strong className="text-slate-200">{selectedMachine.area || 'General Factory'}</strong></span>
+                  <span>·</span>
+                  <span>OEM: <strong className="text-slate-200">{[selectedMachine.manufacturer, selectedMachine.modelNumber].filter(Boolean).join(' · ') || 'OEM Specification Standard'}</strong></span>
+                  <span>·</span>
+                  <span>Type: <strong className="text-slate-200">{selectedMachine.machineType || 'Industrial Equipment'}</strong></span>
+                </div>
+              </div>
             </div>
-            <button onClick={() => setTtsNotice(null)} className="text-amber-700 hover:text-amber-900">
+            <button
+              onClick={() => setSelectedMachineId('')}
+              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs flex items-center gap-1.5 transition shrink-0 ml-3 cursor-pointer"
+              title="Clear machine context and search factory-wide"
+            >
               <X className="w-3.5 h-3.5" />
+              <span>Clear Machine Filter (Ask Factory-Wide)</span>
+            </button>
+          </div>
+        ) : (
+          <div className="px-4 py-2 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#64748B] text-[11px] flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <Layers className="w-3.5 h-3.5 text-[#2563EB]" />
+              <span>Context Scope: <strong className="text-[#1A202C]">Factory-Wide SOPs &amp; All Authorized Equipment</strong></span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsEquipmentSelectorOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-700 text-[11px] font-semibold text-slate-700 transition shadow-2xs cursor-pointer"
+            >
+              <Filter className="w-3 h-3 text-blue-600" />
+              <span>Filter by Specific Machine ▾</span>
             </button>
           </div>
         )}
 
+
         {/* Chat Message Scrollable Container */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Dynamic 2x2 Smart Prompt Grid (Empty State) */}
           {messages.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-center p-8 space-y-4 max-w-lg mx-auto">
+            <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-6 max-w-2xl mx-auto">
               <div className="w-12 h-12 rounded-2xl bg-white border border-[#E2E8F0] shadow-sm flex items-center justify-center text-[#2563EB]">
-                <BookOpen className="w-6 h-6" />
+                <Sparkles className="w-6 h-6" />
               </div>
-              <div>
-                <h3 className="text-sm font-sans font-bold text-[#1A202C]">
-                  Universal Industrial Copilot & Voice Assistant
+              <div className="space-y-1">
+                <h3 className="text-base font-sans font-bold text-[#1A202C]">
+                  Industrial RAG Copilot · Grounded Engineering Assistant
                 </h3>
-                <p className="text-xs text-[#64748B] mt-1 leading-relaxed">
-                  Accessible through keyboard or microphone. Supports English, Hindi, and Hinglish with machine tag autocorrection.
-                  Strictly grounded in authorized evidence with verified page-level citations.
+                <p className="text-xs text-[#64748B] max-w-md mx-auto leading-relaxed">
+                  Strictly grounded in certified OEM manuals, LOTO isolation procedures, and technical specifications.
+                  {selectedMachine ? (
+                    <span className="block mt-1 font-semibold text-[#2563EB]">
+                      Filtered on {selectedMachine.assetTag} ({selectedMachine.name})
+                    </span>
+                  ) : (
+                    <span className="block mt-1 text-[#64748B]">
+                      Select an equipment asset or ask general plant-wide procedures below.
+                    </span>
+                  )}
                 </p>
               </div>
 
-              {/* Preset Query Chips with Mode Labels */}
-              <div className="w-full pt-4 space-y-2 text-left">
-                <div className="text-[11px] font-sans text-[#64748B] uppercase font-semibold">
-                  Sample Industrial Inquiries:
-                </div>
-                <div className="grid grid-cols-1 gap-2">
-                  {PRESET_QUERIES.map((preset, idx) => (
+              {/* 2x2 Clean Industrial Smart Prompt Grid */}
+              <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-3 text-left">
+                {smartPrompts.map((card) => {
+                  const IconComponent = card.icon;
+                  return (
                     <button
-                      key={idx}
-                      onClick={() => handleSendQuery(preset.query)}
-                      className="p-3 rounded-xl bg-white hover:bg-[#F8FAFC] border border-[#E2E8F0] hover:border-[#CBD5E1] text-left text-xs font-sans text-[#1A202C] flex items-center justify-between group transition shadow-sm"
+                      key={card.id}
+                      onClick={() => handleSendQuery(card.prompt)}
+                      className="p-4 rounded-xl bg-white hover:bg-blue-50/50 border border-[#CBD5E1] hover:border-[#2563EB] text-left transition shadow-xs hover:shadow-sm group flex flex-col justify-between space-y-3 cursor-pointer"
                     >
-                      <div className="space-y-0.5">
-                        <span className="text-[#1A202C] font-semibold block">{preset.label}</span>
-                        <span className="text-[10px] font-mono text-[#2563EB]">{preset.modeLabel}</span>
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${card.categoryColor}`}>
+                            {card.category}
+                          </span>
+                          <IconComponent className="w-4 h-4 text-[#64748B] group-hover:text-[#2563EB] transition" />
+                        </div>
+                        <h4 className="text-xs font-bold text-[#1A202C] group-hover:text-[#2563EB] transition">
+                          {card.title}
+                        </h4>
+                        <p className="text-[11px] text-[#64748B] leading-relaxed">
+                          &ldquo;{card.prompt}&rdquo;
+                        </p>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-[#64748B] group-hover:text-[#2563EB] transition" />
+                      <div className="flex items-center justify-between pt-2 border-t border-[#F1F5F9] text-[10px] text-[#2563EB] font-semibold">
+                        <span>Click to execute grounded query &rarr;</span>
+                        <ChevronRight className="w-3.5 h-3.5 text-[#2563EB] group-hover:translate-x-0.5 transition" />
+                      </div>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             </div>
           )}
 
+          {/* Render Active Conversation Messages */}
           {messages.map((msg) => (
             <div
               key={msg.id}
@@ -1068,9 +1507,9 @@ export const CopilotWorkspaceView: React.FC = () => {
                 msg.senderType === 'USER' ? 'items-end' : 'items-start'
               }`}
             >
-              {/* User Message Bubble */}
+              {/* User Inquiry Bubble */}
               {msg.senderType === 'USER' ? (
-                <div className="max-w-2xl bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-4 shadow-sm space-y-1">
+                <div className="max-w-2xl bg-[#EFF6FF] border border-[#BFDBFE] rounded-xl p-4 shadow-2xs space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-sans text-[#1E40AF] pb-1 border-b border-[#DBEAFE]">
                     <span className="font-bold">TECHNICIAN INQUIRY</span>
                     <span className="text-blue-600">{new Date(msg.createdAt).toLocaleTimeString()}</span>
@@ -1084,27 +1523,27 @@ export const CopilotWorkspaceView: React.FC = () => {
                 <div className="w-full max-w-4xl bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm space-y-4">
                   {/* Status & Grounding Header */}
                   <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <FileCheck2 className="w-4 h-4 text-[#2563EB]" />
                       <span className="text-xs font-sans font-bold text-[#1A202C] tracking-wide">
-                        VERIFIED INDUSTRIAL RESPONSE
+                        GROUNDED ENGINEERING RESPONSE
                       </span>
                       {renderQuestionModeBadge(msg.questionMode)}
                     </div>
                     <div className="flex items-center gap-2">
                       {renderConfidenceBadge(msg.confidence)}
 
-                      {/* TTS Play / Stop Button */}
+                      {/* TTS Play / Stop Button (Real Browser Text-to-Speech) */}
                       <button
-                        onClick={() => handlePlayAudio(msg)}
-                        className={`p-1.5 rounded-lg border text-xs font-sans flex items-center gap-1.5 transition ${
-                          playingMessageId === msg.id && isPlayingAudio
-                            ? 'bg-[#151C24] text-white border-transparent font-bold animate-pulse'
+                        onClick={() => speakText(msg.content, msg.id)}
+                        className={`px-2.5 py-1 rounded-lg border text-xs font-sans flex items-center gap-1.5 transition ${
+                          speakingMessageId === msg.id
+                            ? 'bg-rose-600 text-white border-transparent font-bold animate-pulse'
                             : 'bg-[#F8FAFC] border-[#CBD5E1] hover:bg-[#F1F5F9] text-[#1A202C]'
                         }`}
-                        title={playingMessageId === msg.id && isPlayingAudio ? 'Stop Voice Output' : 'Play Audio Answer'}
+                        title={speakingMessageId === msg.id ? 'Stop Voice Output' : 'Listen to Answer'}
                       >
-                        {playingMessageId === msg.id && isPlayingAudio ? (
+                        {speakingMessageId === msg.id ? (
                           <>
                             <Square className="w-3.5 h-3.5 fill-current" />
                             <span>STOP</span>
@@ -1119,16 +1558,32 @@ export const CopilotWorkspaceView: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* OSHA / LOTO Safety Directives Callout Box (Prominent amber/red alert) */}
+                  {msg.safetyAlerts && msg.safetyAlerts.length > 0 && (
+                    <div className="p-4 rounded-xl bg-amber-50 border-2 border-amber-400 text-amber-900 text-xs space-y-2 shadow-2xs">
+                      <div className="flex items-center gap-2 font-bold tracking-wide text-amber-900 uppercase">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>{currentLangConfig.lotoHeader}</span>
+                      </div>
+                      <ul className="list-disc list-inside space-y-1 text-[11px] text-amber-950 font-medium">
+                        {msg.safetyAlerts.map((alert, aIdx) => (
+                          <li key={aIdx} className="leading-relaxed">
+                            {alert}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                   {/* Conflict Alert Banner */}
                   {msg.conflictDetected && (
                     <div className="p-3.5 rounded-lg bg-amber-50 border-l-4 border-amber-500 text-xs space-y-1">
                       <div className="flex items-center gap-1.5 text-amber-800 font-bold uppercase">
                         <AlertTriangle className="w-4 h-4 text-amber-600" />
-                        <span>DOCUMENTATION DISCREPANCY / CONFLICT IDENTIFIED</span>
+                        <span>{currentLangConfig.conflictHeader}</span>
                       </div>
                       <p className="text-amber-800 text-[11px] leading-relaxed">
-                        Contradictory specifications or outdated service bulletins detected between indexed sources.
-                        Do not execute field adjustments without active engineering revision sign-off.
+                        {currentLangConfig.conflictMessage}
                       </p>
                     </div>
                   )}
@@ -1138,69 +1593,16 @@ export const CopilotWorkspaceView: React.FC = () => {
                     <div className="p-4 rounded-lg bg-rose-50 border border-rose-200 text-xs space-y-2">
                       <div className="flex items-center gap-2 text-rose-800 font-bold">
                         <AlertTriangle className="w-4 h-4 text-rose-600" />
-                        <span>INSUFFICIENT PLANT DOCUMENTATION EVIDENCE</span>
+                        <span>{currentLangConfig.insufficientDocHeader}</span>
                       </div>
                       <p className="text-rose-700 text-xs leading-relaxed">
-                        ForgeX safety policy strictly forbids hallucinating operational limits or assuming equipment telemetry.
-                        The active plant index does not contain certified engineering evidence supporting this inquiry.
+                        {currentLangConfig.insufficientDocMessage}
                       </p>
                     </div>
                   )}
 
-                  {/* Structured Body Content */}
-                  <div className="text-xs leading-relaxed text-[#1A202C] font-sans space-y-3 whitespace-pre-wrap">
-                    {msg.content}
-                  </div>
-
-                  {/* Verified Citations Rail */}
-                  {msg.citations && msg.citations.length > 0 && (
-                    <div className="pt-4 border-t border-[#E2E8F0] space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-sans font-bold text-[#64748B] uppercase flex items-center gap-1.5">
-                          <Layers className="w-3.5 h-3.5 text-[#2563EB]" />
-                          Auditable Source Evidence ({msg.citations.length} Verified References)
-                        </span>
-                        <span className="text-[10px] font-sans text-[#0F766E] font-bold">100% Traceable</span>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                        {msg.citations.map((cit, idx) => (
-                          <div
-                            key={cit.id || idx}
-                            className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] hover:border-[#2563EB] transition flex flex-col justify-between space-y-2 group shadow-sm"
-                          >
-                            <div className="space-y-1">
-                              <div className="flex items-center justify-between text-xs font-mono">
-                                <span className="font-bold text-[#2563EB] flex items-center gap-1">
-                                  <FileText className="w-3.5 h-3.5 text-[#64748B]" />
-                                  {cit.documentNumber}
-                                </span>
-                                <span className="text-[10px] bg-white border border-[#CBD5E1] px-1.5 py-0.5 rounded text-[#1A202C] font-semibold">
-                                  {cit.revisionTag || 'REV-A'} | Page {cit.pageNumber}
-                                </span>
-                              </div>
-
-                              <div className="text-[11px] font-semibold text-[#1A202C] line-clamp-1 font-sans">
-                                {cit.sectionHeading || cit.documentTitle}
-                              </div>
-
-                              <p className="text-[11px] text-[#64748B] italic line-clamp-3 bg-white p-2 rounded border border-[#E2E8F0]">
-                                &ldquo;{cit.snippet}&rdquo;
-                              </p>
-                            </div>
-
-                            <button
-                              onClick={() => setInspectedCitation(cit)}
-                              className="w-full py-1.5 bg-white hover:bg-slate-50 border border-[#CBD5E1] hover:border-[#2563EB] rounded text-[11px] font-sans font-semibold text-[#2563EB] flex items-center justify-center gap-1.5 transition shadow-sm"
-                            >
-                              <ExternalLink className="w-3 h-3" />
-                              Open Source Page {cit.pageNumber}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {/* Structured Markdown Body Content */}
+                  <CopilotMarkdown content={msg.content} />
 
                   {/* Specialist Ticket Banner if Dispatched */}
                   {msg.ticketNumber && (
@@ -1215,7 +1617,7 @@ export const CopilotWorkspaceView: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Operational Feedback Controls */}
+                  {/* Operational Feedback Controls & RCA Escalation */}
                   <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between text-xs font-sans">
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] text-[#64748B]">Engineer Evaluation:</span>
@@ -1282,17 +1684,6 @@ export const CopilotWorkspaceView: React.FC = () => {
             </div>
           )}
 
-          {/* Transcribing Voice Progress Indicator */}
-          {isTranscribing && (
-            <div className="p-4 rounded-xl bg-white border border-cyan-500/40 flex items-center gap-3 text-xs font-sans text-cyan-800 animate-pulse max-w-md shadow-sm">
-              <RotateCw className="w-4 h-4 animate-spin text-cyan-600" />
-              <div className="space-y-0.5">
-                <span className="font-bold text-[#1A202C]">TRANSCRIBING AUDIO & NORMALIZING TAGS...</span>
-                <p className="text-[11px] text-[#64748B] font-mono">Analyzing phonetics and resolving machinery tag identifiers...</p>
-              </div>
-            </div>
-          )}
-
           {/* Query Error Notification */}
           {queryError && (
             <div className="p-3.5 rounded-lg bg-rose-50 border border-rose-200 text-xs font-sans text-rose-800 flex items-center justify-between">
@@ -1306,256 +1697,89 @@ export const CopilotWorkspaceView: React.FC = () => {
             </div>
           )}
 
-          {/* Recording Microphone Error Banner */}
-          {recordingError && (
-            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs font-sans text-amber-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <MicOff className="w-4 h-4 text-amber-600" />
-                <span>{recordingError}</span>
-              </div>
-              <button onClick={() => setRecordingError(null)} className="text-[#64748B] hover:text-[#1A202C]">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Pre-submission Transcript Review Modal / Banner (Prompt 03 Section 2) */}
-        {pendingTranscriptReview && (
-          <div className="p-4 border-t border-[#BFDBFE] bg-[#EFF6FF] space-y-3 animate-fadeIn text-[#1E3A8A]">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-sans font-bold text-[#1E40AF]">
-                <Radio className="w-4 h-4 text-[#2563EB] animate-pulse" />
-                <span>REVIEW SPOKEN TRANSCRIPT BEFORE SUBMITTING</span>
-                <span className="text-[10px] font-normal text-[#64748B]">
-                  (Language: {pendingTranscriptReview.detectedLanguage})
-                </span>
-              </div>
-              <button
-                onClick={() => setPendingTranscriptReview(null)}
-                className="text-[#64748B] hover:text-[#1A202C] text-xs font-semibold"
-              >
-                Discard
-              </button>
+        {/* Real Push-to-Talk Voice Error Notification */}
+        {voiceError && (
+          <div className="px-4 py-2.5 bg-amber-50 border-t border-amber-200 text-amber-800 text-xs flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>{voiceError}</span>
             </div>
-
-            {/* Editable Transcript Text Area */}
-            <div className="space-y-1">
-              <textarea
-                value={editedTranscript}
-                onChange={(e) => setEditedTranscript(e.target.value)}
-                rows={2}
-                className="w-full px-3 py-2 bg-white border border-[#CBD5E1] rounded-lg text-xs font-sans text-[#1A202C] focus:outline-none focus:border-[#2563EB] shadow-sm"
-                placeholder="Edit transcript before submitting..."
-              />
-            </div>
-
-            {/* Quick Tag Correction Chips */}
-            {pendingTranscriptReview.correctionsApplied && pendingTranscriptReview.correctionsApplied.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 text-[11px] font-sans">
-                <span className="text-[#64748B]">Applied Tag Normalizations:</span>
-                {pendingTranscriptReview.correctionsApplied.map((c, i) => (
-                  <span
-                    key={i}
-                    className="px-2 py-0.5 bg-white border border-[#BFDBFE] text-[#1E40AF] rounded text-[10px] font-bold flex items-center gap-1 shadow-sm"
-                  >
-                    <Check className="w-3 h-3 text-[#0F766E]" />
-                    {c.spokenPhrase} &rarr; {c.correctedTag}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Verification Notice */}
-            <div className="flex items-center justify-between text-[11px] text-[#64748B] pt-1">
-              <span>{pendingTranscriptReview.evaluation.verificationNotice}</span>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setPendingTranscriptReview(null)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => handleSendQuery(editedTranscript)}
-                  className="bg-[#151C24] hover:bg-black text-white"
-                >
-                  <Send className="w-3.5 h-3.5 mr-1" />
-                  Submit Verified Inquiry
-                </Button>
-              </div>
-            </div>
+            <button
+              onClick={() => setVoiceError(null)}
+              className="text-amber-700 hover:text-amber-900 font-bold text-xs ml-3"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 
         {/* Bottom Query Input Box & Microphone Controls */}
-        <div className="p-4 border-t border-[#E2E8F0] bg-white">
-          {/* Active Recording State Bar with Live Audio Amplitude Meter */}
-          {isRecording ? (
-            <div className="flex items-center justify-between max-w-5xl mx-auto p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-sans text-red-900 shadow-sm">
-              <div className="flex items-center gap-3 text-red-700 font-bold">
-                <span className="w-3 h-3 rounded-full bg-red-600 animate-ping inline-block" />
-                <span>MICROPHONE ACTIVE — CAPTURING UTTERANCE</span>
-                
-                {/* Visualizer Amplitude Bars */}
-                <div className="flex items-end gap-1 h-4 px-2">
-                  <span
-                    className="w-1 bg-red-600 rounded transition-all duration-75"
-                    style={{ height: `${Math.max(4, volumeLevel * 16)}px` }}
-                  />
-                  <span
-                    className="w-1 bg-red-500 rounded transition-all duration-75"
-                    style={{ height: `${Math.max(6, volumeLevel * 20)}px` }}
-                  />
-                  <span
-                    className="w-1 bg-red-400 rounded transition-all duration-75"
-                    style={{ height: `${Math.max(4, volumeLevel * 14)}px` }}
-                  />
-                </div>
+        <div className="p-4 border-t border-[#E2E8F0] bg-white shrink-0">
+          <div className="flex items-center gap-2 max-w-5xl mx-auto">
+            {/* Real Web Speech Push-To-Talk Mic Button */}
+            <button
+              onClick={handleTogglePushToTalk}
+              className={`p-2.5 rounded-xl border transition shrink-0 flex items-center gap-1.5 shadow-sm ${
+                isListening
+                  ? 'bg-rose-50 border-rose-300 text-rose-600 animate-pulse ring-2 ring-rose-400'
+                  : 'bg-[#F8FAFC] hover:bg-[#F1F5F9] border-[#CBD5E1] text-[#1A202C]'
+              }`}
+              title={
+                isListening
+                  ? 'Listening... Click to stop voice capture'
+                  : "Click to speak your inquiry (e.g. 'What is the torque for casing bolts?')"
+              }
+            >
+              {isListening ? (
+                <>
+                  <Mic className="w-4 h-4 text-rose-600 animate-bounce" />
+                  <span className="text-[10px] font-sans text-rose-600 font-bold hidden sm:inline">
+                    Listening... (Stop)
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Mic className="w-4 h-4 text-emerald-600" />
+                  <span className="text-[10px] font-sans text-[#64748B] hidden sm:inline">
+                    Push-to-Talk
+                  </span>
+                </>
+              )}
+            </button>
 
-                <span className="text-white bg-red-600 px-2 py-0.5 rounded font-mono">
-                  {Math.floor(recordingSeconds / 60)
-                    .toString()
-                    .padStart(2, '0')}
-                  :{(recordingSeconds % 60).toString().padStart(2, '0')}
-                </span>
-                <span className="text-[#64748B] font-normal">Auto-detects 1000ms pause or click Stop...</span>
-              </div>
+            {/* Text Input Field */}
+            <input
+              type="text"
+              value={queryInput}
+              onChange={(e) => setQueryInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSendQuery()}
+              placeholder={
+                isListening
+                  ? 'Listening to microphone... speak now...'
+                  : selectedMachine
+                  ? `Ask about ${selectedMachine.assetTag} (e.g. 'What is torque for casing bolts?' or 'Show LOTO steps')...`
+                  : "Ask an industrial question (e.g. 'What is standard pump LOTO procedure?')..."
+              }
+              className="flex-1 px-4 py-2.5 bg-white border border-[#CBD5E1] rounded-xl text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
+            />
 
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleStopRecording}
-                  className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 transition shadow"
-                >
-                  <Square className="w-3.5 h-3.5 fill-current" />
-                  <span>Stop &amp; Submit</span>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 max-w-5xl mx-auto">
-              {/* Mic Push-To-Talk Button */}
-              <button
-                onClick={handleStartRecording}
-                className="p-2.5 rounded-xl bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#CBD5E1] text-[#1A202C] transition shrink-0 flex items-center gap-1.5 shadow-sm"
-                title="Click to speak question (Auto tag correction for PUMP-204-B, HP-204, E-2041)"
-              >
-                <Mic className="w-4 h-4 text-emerald-600" />
-                <span className="text-[10px] font-sans text-[#64748B] hidden sm:inline">Push-to-Talk</span>
-              </button>
-
-              {/* Text Input Field */}
-              <input
-                type="text"
-                value={queryInput}
-                onChange={(e) => setQueryInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendQuery()}
-                placeholder="Ask an operational question or say 'Hello ForgeX' (e.g. 'What is gland bolt torque on PUMP-204-B?')..."
-                className="flex-1 px-4 py-2.5 bg-white border border-[#CBD5E1] rounded-xl text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
-              />
-
-              {/* Query Submit Button */}
-              <button
-                onClick={() => handleSendQuery()}
-                disabled={isQuerying || !queryInput.trim()}
-                className="px-5 py-2.5 bg-[#151C24] hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl flex items-center gap-2 transition shadow-sm shrink-0"
-              >
-                <Send className="w-3.5 h-3.5" />
-                Query Copilot
-              </button>
-            </div>
-          )}
+            {/* Query Submit Button */}
+            <button
+              onClick={() => handleSendQuery()}
+              disabled={isQuerying || !queryInput.trim()}
+              className="px-5 py-2.5 bg-[#151C24] hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl flex items-center gap-2 transition shadow-sm shrink-0"
+            >
+              <Send className="w-3.5 h-3.5" />
+              Query Copilot
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Inspect Source Page Modal */}
-      <Modal
-        isOpen={!!inspectedCitation}
-        onClose={() => setInspectedCitation(null)}
-        title={inspectedCitation ? `${inspectedCitation.documentNumber} (${inspectedCitation.revisionTag || 'REV-A'})` : 'Source Viewer'}
-        subtitle={inspectedCitation ? `Page ${inspectedCitation.pageNumber} — ${inspectedCitation.documentTitle}` : ''}
-        maxWidth="2xl"
-        footer={
-          <div className="flex items-center justify-between w-full">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={async () => {
-                if (!inspectedCitation) return;
-                try {
-                  const res = await apiFetch(`/api/v1/documents/${inspectedCitation.documentId}/download`);
-                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  const blob = await res.blob();
-                  const url = window.URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `${inspectedCitation.documentNumber || 'manual'}_Page-${inspectedCitation.pageNumber}.pdf`;
-                  document.body.appendChild(a);
-                  a.click();
-                  window.URL.revokeObjectURL(url);
-                  document.body.removeChild(a);
-                } catch (err: any) {
-                  alert(`Could not download manual payload: ${err?.message}`);
-                }
-              }}
-            >
-              <Download className="w-3.5 h-3.5 mr-1.5 text-[#2563EB]" />
-              Download Source PDF
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => setInspectedCitation(null)}>
-              Close Page Inspector
-            </Button>
-          </div>
-        }
-      >
-        {inspectedCitation && (
-          <div className="space-y-4 font-sans text-xs">
-            <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl font-mono text-xs space-y-1.5">
-              <div className="flex justify-between text-[#64748B] text-[10px] uppercase">
-                <span>Section Heading:</span>
-                <span className="text-[#2563EB] font-bold">{inspectedCitation.sectionHeading || 'Standard Operational Section'}</span>
-              </div>
-              <div className="flex justify-between text-[#64748B] text-[10px]">
-                <span>Document Reference:</span>
-                <span className="text-[#1A202C] font-mono">{inspectedCitation.documentNumber} (ID: {inspectedCitation.documentId})</span>
-              </div>
-            </div>
 
-            {/* Document Page Preview Box */}
-            <div className="p-4 bg-white border border-[#E2E8F0] rounded-xl font-mono text-xs leading-relaxed space-y-3">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2 text-[#64748B] text-[10px] uppercase">
-                <span>Extracted Document Page Text (Page {inspectedCitation.pageNumber})</span>
-                <span className="text-emerald-600 font-semibold">VERIFIED CITATION PROVENANCE</span>
-              </div>
-
-              {isLoadingPage ? (
-                <div className="p-6 text-center text-[#64748B] flex items-center justify-center gap-2">
-                  <RotateCw className="w-4 h-4 animate-spin text-[#2563EB]" />
-                  <span>Loading full page text from authorized document store...</span>
-                </div>
-              ) : inspectedPageContent ? (
-                <div className="p-3 bg-[#F8FAFC] rounded-lg border-l-4 border-[#2563EB] text-[#1A202C] whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
-                  {inspectedPageContent}
-                </div>
-              ) : (
-                <div className="p-3 bg-[#F8FAFC] rounded-lg border-l-4 border-amber-500 text-[#1A202C]">
-                  {inspectedCitation.snippet}
-                </div>
-              )}
-
-              <div className="flex items-center justify-between text-[#64748B] text-[11px] pt-1 border-t border-[#E2E8F0]">
-                <span>Active Revision: <strong className="text-[#1A202C] font-mono">{inspectedCitation.revisionTag || 'REV-A'}</strong></span>
-                <span className="text-[#2563EB]">Semantic Relevance Score: {(inspectedCitation.confidenceScore * 100).toFixed(1)}%</span>
-              </div>
-            </div>
-          </div>
-        )}
-      </Modal>
 
       {/* Message Feedback Modal */}
       <Modal
@@ -1618,7 +1842,7 @@ export const CopilotWorkspaceView: React.FC = () => {
                 <textarea
                   value={feedbackNotes}
                   onChange={(e) => setFeedbackNotes(e.target.value)}
-                  placeholder="Record observations, field readings, or citation discrepancies..."
+                  placeholder="Record observations, field readings, or operational feedback..."
                   rows={3}
                   className="w-full mt-1.5 px-3 py-2 bg-white border border-[#CBD5E1] rounded-xl text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB]"
                 />

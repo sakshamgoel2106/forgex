@@ -11,6 +11,7 @@ import { SUPPORTED_SPEECH_LANGUAGES } from '../speech/speech.interface.js';
 import { VectorStoreUnavailableError } from '../vector/vectorStore.interface.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config/env.js';
+import { isUuid } from '../utils/uuid.js';
 
 const getSpeechDeploymentMode = (): 'SAAS_CLOUD' | 'ENTERPRISE_OLLAMA' | 'LOCAL_DEV' =>
   config.DEPLOYMENT_MODE === 'enterprise'
@@ -44,7 +45,8 @@ export class CopilotController {
         return;
       }
 
-      const { query, plantId, assetId, machineId, conversationId, imageUrl, topK } = req.body;
+      let { query, plantId, assetId, machineId, conversationId, imageUrl, topK } = req.body;
+      const rawAssetTag = req.body.assetTag;
 
       if (!query) {
         res.status(400).json({
@@ -54,16 +56,58 @@ export class CopilotController {
         return;
       }
 
+      // Defensive Machine Resolution:
+      // If machineId or assetId is an asset tag (e.g. "PUMP-001") rather than a valid UUID,
+      // or if assetTag is provided, resolve the real machine record first.
+      const candidateTagOrId = machineId || assetId || rawAssetTag;
+      let resolvedMachine = null;
+      if (candidateTagOrId) {
+        resolvedMachine = await this.dataStore.getMachineById(organizationId, candidateTagOrId);
+        if (!resolvedMachine && rawAssetTag) {
+          resolvedMachine = await this.dataStore.getMachineByAssetTag(organizationId, rawAssetTag);
+        }
+      }
+
+      let effectiveAssetTag = rawAssetTag;
+      if (resolvedMachine) {
+        machineId = resolvedMachine.id;
+        assetId = resolvedMachine.id;
+        effectiveAssetTag = resolvedMachine.assetTag;
+        if (!plantId || plantId === 'GENERAL') {
+          plantId = resolvedMachine.plantId;
+        }
+      } else {
+        // If it's a UUID, keep it, otherwise avoid passing non-UUID strings to UUID columns
+        if (machineId && !isUuid(machineId)) machineId = undefined;
+        if (assetId && !isUuid(assetId)) assetId = undefined;
+      }
+
+      if (conversationId && !isUuid(conversationId)) {
+        conversationId = undefined;
+      }
+
+      // Auto-Resolve Single-Plant Context if plantId is still not explicitly provided
+      if (!plantId || plantId === 'GENERAL') {
+        const orgPlants = await this.dataStore.listPlants(organizationId);
+        if (orgPlants.length > 0) {
+          plantId = orgPlants[0].id || orgPlants[0].code;
+        }
+      }
+
+      const language = (req.body?.language || req.body?.locale || 'en-US') as string;
+
       const result = await this.ragEngine.query(
         {
           query,
+          language,
           plantId: plantId || 'GENERAL',
           assetId,
           machineId,
+          assetTag: effectiveAssetTag,
           conversationId,
           imageUrl,
           topK,
-        },
+        } as any,
         {
           organizationId,
           userId,
@@ -90,6 +134,12 @@ export class CopilotController {
         },
       });
 
+      // Sanitize client payload: Block all internal manual names, document IDs, citations, and excerpts
+      const sanitizedAssistantMessage = {
+        ...result.assistantMessage,
+        citations: [],
+      };
+
       res.status(200).json({
         success: true,
         data: {
@@ -98,7 +148,7 @@ export class CopilotController {
           answer: result.assistantMessage.content,
           confidence: result.assistantMessage.confidence,
           questionMode: result.questionMode,
-          citations: result.assistantMessage.citations,
+          citations: [],
           safetyAlerts: result.safetyAlerts || result.assistantMessage.safetyAlerts || [],
           isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
           conflictDetected: result.assistantMessage.conflictDetected,
@@ -108,7 +158,7 @@ export class CopilotController {
           ticketNumber: result.assistantMessage.ticketNumber,
           missingInfoTask: (result as any).missingInfoTask || null,
           userMessage: result.userMessage,
-          assistantMessage: result.assistantMessage,
+          assistantMessage: sanitizedAssistantMessage,
         },
       });
     } catch (err: any) {
@@ -124,44 +174,15 @@ export class CopilotController {
         err?.message?.includes('vector database is currently unreachable');
 
       if (isVectorStoreUnavailable) {
-        const organizationId = req.auth?.organization.id;
         const machineId = (req.body?.machineId || req.body?.assetId) as string | undefined;
-        const plantId = req.body?.plantId as string | undefined;
-
-        let certifiedManuals: Array<{
-          id: string;
-          documentNumber: string;
-          title: string;
-          category: string;
-          downloadUrl: string;
-        }> = [];
-
-        if (organizationId) {
-          try {
-            const docs = await this.dataStore.listDocuments(organizationId, {
-              plantId: plantId && plantId !== 'GENERAL' ? plantId : undefined,
-              machineId: machineId,
-            });
-            certifiedManuals = docs.map((d) => ({
-              id: d.id,
-              documentNumber: d.documentNumber,
-              title: d.title,
-              category: d.category,
-              downloadUrl: `/api/v1/documents/${d.id}/download`,
-            }));
-          } catch (dbErr: any) {
-            logger.warn({ err: dbErr?.message }, 'Failed to fetch certified fallback manuals from PostgreSQL');
-          }
-        }
 
         res.status(503).json({
           success: false,
           error: {
             code: 'VECTOR_STORE_UNAVAILABLE',
-            message: 'Vector search service (Qdrant) is temporarily unavailable. Direct certified manuals available.',
+            message: 'Knowledge retrieval service is temporarily unavailable. Please retry in a few moments.',
             serviceStatus: 'DEGRADED',
             machineId: machineId || null,
-            certifiedManuals,
           },
         });
         return;
@@ -264,17 +285,10 @@ export class CopilotController {
         return;
       }
 
-      // Sanitize citation snippets for non-admin viewers to prevent confidential manual leakage
-      if (!isSupervisory && conversation.messages) {
+      // Strip citations from messages to prevent manual leakage
+      if (conversation.messages) {
         for (const msg of conversation.messages) {
-          if (msg.citations) {
-            msg.citations = msg.citations.map((c) => ({
-              ...c,
-              snippet: c.snippet.startsWith('Reference:')
-                ? c.snippet
-                : `Reference: ${c.sectionHeading || 'Approved Technical Documentation'} (Page ${c.pageNumber})`,
-            }));
-          }
+          msg.citations = [];
         }
       }
 

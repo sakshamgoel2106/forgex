@@ -15,6 +15,8 @@ export function createGenerationProvider(): IMultimodalGenerationProvider {
   if (defaultGenerationProvider) return defaultGenerationProvider;
 
   const mode = process.env.INFERENCE_PROVIDER || config.INFERENCE_PROVIDER || 'local';
+  const cloudApiKey = process.env.GEMINI_API_KEY || config.CLOUD_AI_API_KEY || process.env.CLOUD_AI_API_KEY || '';
+  const cloudModel = process.env.CLOUD_AI_MODEL || config.CLOUD_AI_MODEL || 'gemini-2.5-flash';
 
   // Strict Enterprise Air-Gap Guarantee
   if (config.DEPLOYMENT_MODE === 'enterprise' || config.AIR_GAPPED_MODE) {
@@ -31,13 +33,18 @@ export function createGenerationProvider(): IMultimodalGenerationProvider {
     return defaultGenerationProvider;
   }
 
+  // Prioritize CloudSaasAdapter whenever Gemini API key or Cloud AI key is available
+  if (cloudApiKey && cloudApiKey.length > 10 && cloudApiKey !== 'saas_mock_key') {
+    defaultGenerationProvider = new CloudSaasAdapter(cloudApiKey, cloudModel);
+    return defaultGenerationProvider;
+  }
+
   // SaaS Cloud Mode: Cloud provider enabled ONLY through explicit configuration
   if (config.DEPLOYMENT_MODE === 'saas') {
     if (mode === 'saas' || mode === 'cloud' || mode === 'openai' || mode === 'azure' || mode === 'gemini') {
       defaultGenerationProvider = new CloudSaasAdapter(config.CLOUD_AI_API_KEY, config.CLOUD_AI_MODEL);
       return defaultGenerationProvider;
     }
-    // If not explicitly configured, use local dev deterministic provider without leaking data
     defaultGenerationProvider = new LocalDevInferenceAdapter();
     return defaultGenerationProvider;
   }

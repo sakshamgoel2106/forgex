@@ -414,6 +414,11 @@ export interface IDataStore {
     organizationId: string,
     documentId: string
   ): Promise<string[]>;
+  isDocumentLinkedToAsset(
+    organizationId: string,
+    documentId: string,
+    assetId: string
+  ): Promise<boolean>;
   createDocumentWithOutbox(
     docDto: CreateDocumentDTO,
     versionDto: CreateDocumentVersionDTO,

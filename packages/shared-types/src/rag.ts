@@ -79,6 +79,7 @@ export interface RAGQueryRequest {
   imageUrl?: string;
   disclosurePolicy?: string | null;
   questionMode?: QuestionHandlingMode;
+  language?: string;
 }
 
 export interface RAGQueryResponse {

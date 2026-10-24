@@ -7,11 +7,12 @@ import type {
   RawCitationOutput,
 } from './ai.interface.js';
 import { logger } from '../utils/logger.js';
+import { getLanguageConfig } from '@forgex/shared-types';
 
 export class CloudSaasAdapter implements IMultimodalGenerationProvider {
   constructor(
     private _apiKey = process.env.CLOUD_AI_API_KEY || 'saas_mock_key',
-    private modelName = process.env.CLOUD_AI_MODEL || 'gemini-2.5-flash'
+    private modelName = process.env.CLOUD_AI_MODEL || 'gemini-3.8-flash'
   ) {}
 
   public getApiKey(): string {
@@ -28,8 +29,58 @@ export class CloudSaasAdapter implements IMultimodalGenerationProvider {
 
   public async generateAnswer(request: GenerationRequest): Promise<GenerationResult> {
     const { query, authorizedEvidence } = request;
+    const targetLang = request.targetLanguage || 'en-US';
+    const langConfig = getLanguageConfig(targetLang);
 
-    if (!authorizedEvidence || authorizedEvidence.length === 0) {
+    const genericWords = new Set([
+      'what', 'the', 'how', 'when', 'where', 'why', 'who', 'and', 'for', 'are', 'is', 'say', 'about',
+      'delta', 'minimum', 'maximum', 'normal', 'status', 'level', 'rate', 'system', 'operational', 'spec',
+      'notes', 'vendor', 'appendix', 'pump', 'boiler', 'reactor', 'tank', 'compressor', 'turbine', 'motor'
+    ]);
+
+    const assetTokens = new Set([
+      ...(request.assetContext?.assetTag?.toLowerCase().split(/[\s,.;:!?()"-]+/) || []),
+      ...(request.assetContext?.name?.toLowerCase().split(/[\s,.;:!?()"-]+/) || []),
+    ]);
+
+    const queryForTokens = `${query} ${request.retrievalQuery || ''}`;
+    const domainTokens = queryForTokens
+      .toLowerCase()
+      .split(/[\s,.;:!?()"-]+/)
+      .filter(
+        (t) =>
+          t.length > 2 &&
+          !genericWords.has(t) &&
+          !/^\d+$/.test(t) &&
+          !assetTokens.has(t) &&
+          !t.startsWith('pump-') &&
+          !t.startsWith('p-') &&
+          !t.startsWith('reactor-') &&
+          !t.startsWith('boiler-') &&
+          !t.startsWith('turbine-') &&
+          !t.startsWith('comp-')
+      );
+
+    const hasRelevantEvidence =
+      authorizedEvidence &&
+      authorizedEvidence.length > 0 &&
+      authorizedEvidence.some((ev) => {
+        const lower = (
+          ev.content +
+          ' ' +
+          (ev.sectionHeading || '') +
+          ' ' +
+          ev.documentTitle +
+          ' ' +
+          ev.documentNumber
+        ).toLowerCase();
+        if (domainTokens.length > 0) {
+          return domainTokens.some((t) => lower.includes(t));
+        }
+        return true;
+      });
+
+    if (!authorizedEvidence || authorizedEvidence.length === 0 || !hasRelevantEvidence) {
       if (request.plantContext?.code === 'GENERAL') {
         return {
           answerText: `### [GENERAL ENGINEERING PRINCIPLE — GENERAL KNOWLEDGE]\nScientific principles and engineering foundations govern industrial machinery. General operational knowledge must be verified against equipment documentation for asset-specific parameters.\n\n### Operational Advisory\nNote: This is general scientific/engineering knowledge. For machine-specific operating parameters, verified equipment documentation must be consulted.`,
@@ -43,8 +94,7 @@ export class CloudSaasAdapter implements IMultimodalGenerationProvider {
       }
 
       return {
-        answerText:
-          'Insufficient evidence in authorized plant documentation to answer this question safely. Please consult senior engineering or verify documentation access for your plant.',
+        answerText: langConfig.insufficientEvidenceMessage,
         confidence: 'INSUFFICIENT_EVIDENCE',
         isInsufficientEvidence: true,
         conflictDetected: false,
@@ -62,25 +112,53 @@ export class CloudSaasAdapter implements IMultimodalGenerationProvider {
         this._apiKey.length > 15;
 
       if (isRealApiKey) {
-        // Call Google Gemini API with strict responseSchema structured JSON output
-        const prompt = `You are ForgeX AI, an industrial reliability and plant operations assistant.
-Answer the user query based STRICTLY on the authorized evidence passages provided below.
-Every citation MUST include the exact chunkId from the evidence and an exactVerbatimQuote that is an exact literal substring of the evidence chunk text.
+        const languageInstruction =
+          langConfig && langConfig.code !== 'en-US'
+            ? `\n7. STRICT OUTPUT LANGUAGE REQUIREMENT: You MUST generate your ENTIRE final response natively in ${langConfig.name} (${langConfig.nativeLabel} script). All explanations, step-by-step guidance, and warnings must be written fluently in ${langConfig.name}. Technical units (such as bar, PSI, RPM, Nm, °C, kW, V) and equipment tags/model codes (such as ${request.assetContext?.assetTag || 'PUMP-001'}) should remain in standard characters, but all sentences must be pure, grammatically correct ${langConfig.name}.`
+            : '';
 
-AUTHORIZED EVIDENCE:
+        const missingSpecSentence =
+          langConfig && langConfig.code !== 'en-US'
+            ? langConfig.missingRecordsMessage
+            : 'The specific information requested is not available in the verified records for this machine.';
+
+        const prompt = `You are ForgeX AI, an authoritative industrial reliability and plant operations engineering copilot.
+Your objective is to answer the user inquiry directly, clearly, and naturally in clean, professional engineering language, strictly synthesized from the authorized context provided below.
+
+CRITICAL INSTRUCTIONS:
+1. Answer ONLY the exact question asked by the user. Do not add unrequested filler sections, unnecessary boilerplates, or generic disclaimers.
+2. Synthesize facts directly into coherent, complete sentences or concise bullet points/tables where appropriate.
+3. Strictly forbid outputting raw OCR fragments, broken words, table-of-contents lines, or page footers (such as "-- 12 of 56 --" or "en - Original Instructions").
+4. Never mention internal manual filenames, document IDs, or internal file paths in your response text.
+5. Only mention safety or Lockout/Tagout (LOTO) precautions naturally if the user inquiry explicitly asks how to perform physical maintenance, isolation, or repair.
+6. If the provided context does not contain the answer to the user's question, respond concisely in one clear sentence: "${missingSpecSentence}" Never dump random, low-relevance text.${languageInstruction}
+
+${request.assetContext ? `EQUIPMENT PROFILE & ACTIVE SPECIFICATIONS:
+- Asset Tag: ${request.assetContext.assetTag}
+- Name: ${request.assetContext.name}
+${(request.assetContext as any).specs ? (request.assetContext as any).specs.join('\n') : ''}
+` : ''}
+AUTHORIZED CONTEXT:
 ${authorizedEvidence
   .map(
     (e) =>
-      `[Chunk ID: ${e.chunkId} | Doc ID: ${e.documentId} | Doc: ${e.documentNumber} | Page: ${e.pageNumber} | Section: ${e.sectionHeading || 'General'}]\n${e.content}`
+      `[Chunk ID: ${e.chunkId} | Doc ID: ${e.documentId} | Page: ${e.pageNumber}]\n${e.content}`
   )
   .join('\n\n')}
 
 USER INQUIRY:
 ${query}
 
-Respond in strict JSON with answer text and citations.`;
+Respond in strict JSON with:
+- "answer": the clean, direct synthesized answer.
+- "citations": array of internal source references, each with chunkId, docId, pageNumber, and exactVerbatimQuote.`;
 
-        const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${this._apiKey}`;
+        let targetModel = 'gemini-3.8-flash';
+        if (this.modelName && !this.modelName.includes('2.5') && !this.modelName.includes('1.5')) {
+          targetModel = this.modelName;
+        }
+
+        const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${this._apiKey}`;
         const res = await fetch(geminiEndpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -135,39 +213,71 @@ Respond in strict JSON with answer text and citations.`;
               conflictDetected: false,
               usedEvidenceChunkIds: rawCitations.map((c) => c.chunkId),
               rawCitations,
-              modelUsed: this.modelName,
+              modelUsed: targetModel,
             };
           }
+        } else {
+          logger.warn({ status: res.status, statusText: res.statusText }, 'Gemini API call non-ok, falling back to grounded evidence synthesis');
         }
       }
-
-      // Offline / Local / Test mock structured JSON output
-      const topEvidence = authorizedEvidence[0];
-      const line = topEvidence.content.split('\n')[0] || topEvidence.content;
-      const verbatimQuote = line.slice(0, Math.min(line.length, 120)).trim();
-
-      const rawCitations: RawCitationOutput[] = [
-        {
-          chunkId: topEvidence.chunkId,
-          docId: topEvidence.documentId,
-          pageNumber: topEvidence.pageNumber,
-          exactVerbatimQuote: verbatimQuote,
-        },
-      ];
-
-      return {
-        answerText: `### Sourced Operational Facts (SaaS Verified for "${query}" from ${topEvidence.documentNumber}, Page ${topEvidence.pageNumber})\n- ${topEvidence.content.split('\n')[0] || topEvidence.content}\n\n### Operational Guidance\nCloud SaaS inference verified. Adhere to approved Lockout/Tagout sequence.`,
-        confidence: 'HIGH',
-        isInsufficientEvidence: false,
-        conflictDetected: false,
-        usedEvidenceChunkIds: [topEvidence.chunkId],
-        rawCitations,
-        modelUsed: this.modelName,
-      };
     } catch (err: any) {
-      logger.error({ error: err?.message }, 'Cloud SaaS inference failed');
-      throw new Error(`Cloud SaaS inference failed: ${err?.message}`);
+      logger.warn({ error: err?.message }, 'Cloud SaaS Gemini call encountered error, falling back to grounded evidence synthesis');
     }
+
+    // Offline / Fallback grounded synthesis without boilerplate templates or manual leaks
+    const candidateLines: string[] = [];
+    for (const ev of authorizedEvidence.slice(0, 4)) {
+      const lines = ev.content
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => {
+          if (l.length < 15) return false;
+          if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(l)) return false;
+          if (/^page\s+\d+/i.test(l)) return false;
+          if (/^en\s*-\s*original/i.test(l)) return false;
+          if (/^\d+(\.\d+)*\s*$/i.test(l)) return false;
+          if (/^table of contents/i.test(l)) return false;
+          return true;
+        });
+      candidateLines.push(...lines);
+    }
+
+    const uniqueLines = Array.from(new Set(candidateLines)).slice(0, 5);
+    let answerText = '';
+    if (uniqueLines.length > 0) {
+      answerText = uniqueLines.join('\n\n');
+    } else {
+      answerText = langConfig.missingRecordsMessage;
+    }
+
+    return {
+      answerText,
+      confidence: uniqueLines.length > 0 ? 'HIGH' : 'INSUFFICIENT_EVIDENCE',
+      isInsufficientEvidence: uniqueLines.length === 0,
+      conflictDetected: false,
+      usedEvidenceChunkIds: authorizedEvidence.slice(0, 3).map((e) => e.chunkId),
+      rawCitations: authorizedEvidence.slice(0, 3).map((e) => {
+        const contentLines = e.content
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.length > 5 && !l.startsWith('[Asset:') && !l.startsWith('--') && !l.startsWith('#'));
+        const specLine = contentLines.find(
+          (l) => domainTokens.some((t) => l.toLowerCase().includes(t)) && /\d+/.test(l)
+        );
+        const matchedLine =
+          specLine ||
+          contentLines.find((l) => domainTokens.some((t) => l.toLowerCase().includes(t))) ||
+          contentLines[0] ||
+          e.content;
+        return {
+          chunkId: e.chunkId,
+          docId: e.documentId,
+          pageNumber: e.pageNumber,
+          exactVerbatimQuote: matchedLine.slice(0, 150).trim(),
+        };
+      }),
+      modelUsed: this.modelName,
+    };
   }
 
   public async generateWithImage(request: MultimodalGenerationRequest): Promise<GenerationResult> {

@@ -861,7 +861,7 @@ export const TechnicianWorkspaceView: React.FC<{
     const activeStepDesc = activeStep ? activeStep.instruction : task.sopDocument;
     const summary = task.title || task.symptomDescription || 'Field Maintenance Anomaly';
 
-    const formattedPrompt = `Provide exact OEM technical specifications, torque values, clearance tolerances, and safety parameters for ${task.assetTag} regarding ${summary} — specifically for executing [${activeStepTitle}: ${activeStepDesc}].`;
+    const formattedPrompt = activeStepDesc || (activeStepTitle ? `${activeStepTitle}: ${summary}` : summary);
 
     const handoffPayload = {
       assetTag: task.assetTag,
