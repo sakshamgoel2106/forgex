@@ -557,36 +557,45 @@ export const TechnicianWorkspaceView: React.FC<{
                         {
                           id: 'step-1',
                           stepNumber: 1,
-                          title: 'Verify Zero-Energy LOTO & Area Safety',
+                          title: 'Vision LOTO & Zero-Energy Isolation',
                           instruction:
-                            'Isolate power source, apply lockout padlocks, tag isolation points, and verify zero electrical/mechanical energy.',
+                            'Lock out main breaker, bleed line pressure to 0 PSI, and tag out per OSHA 1910.147.',
                           requiresLoto: hasLoto,
                           status: 'PENDING',
                         },
                         {
                           id: 'step-2',
                           stepNumber: 2,
-                          title: 'Component Disassembly & Inspection',
+                          title: 'Access Cover & Guard Disassembly',
                           instruction:
-                            'Remove protective housings and inspect seals, bearings, couplings, and electrical terminations for wear.',
+                            'Remove safety shroud and unbolt casing cover; check flange gap uniformity.',
                           requiresLoto: false,
                           status: 'PENDING',
                         },
                         {
                           id: 'step-3',
                           stepNumber: 3,
-                          title: 'Corrective Repair & Replacement Procedure',
+                          title: 'Internal Component & Seal Inspection',
                           instruction:
-                            'Install replacement parts, renew lubricants, and torque all fasteners to OEM specifications in star pattern.',
+                            'Inspect seal faces, bearings, and shaft runout for wear or pitting under 3 helium light bands.',
                           requiresLoto: false,
                           status: 'PENDING',
                         },
                         {
                           id: 'step-4',
                           stepNumber: 4,
-                          title: 'Recommissioning & Functional Run Test',
+                          title: 'Precision Reassembly & Torque',
                           instruction:
-                            'Remove LOTO locks, clear equipment perimeter, restore power, and conduct 15-minute diagnostic baseline verification.',
+                            'Install new seals/bearings and torque M12 studs in star-pattern to 45 Nm ± 2 Nm.',
+                          requiresLoto: false,
+                          status: 'PENDING',
+                        },
+                        {
+                          id: 'step-5',
+                          stepNumber: 5,
+                          title: 'Recommissioning & Baseline Run Test',
+                          instruction:
+                            'Clear work zone, re-energize equipment, and run a 15-minute vibration & thermal baseline check.',
                           requiresLoto: false,
                           status: 'PENDING',
                         },
@@ -687,36 +696,45 @@ export const TechnicianWorkspaceView: React.FC<{
                   {
                     id: 'step-1',
                     stepNumber: 1,
-                    title: 'Verify Zero-Energy LOTO & Area Safety',
+                    title: 'Vision LOTO & Zero-Energy Isolation',
                     instruction:
-                      'Isolate power source, apply lockout padlocks, tag isolation points, and verify zero electrical/mechanical energy.',
+                      'Lock out main breaker, bleed line pressure to 0 PSI, and tag out per OSHA 1910.147.',
                     requiresLoto: hasLoto,
                     status: 'PENDING',
                   },
                   {
                     id: 'step-2',
                     stepNumber: 2,
-                    title: 'Specialist Disassembly & Diagnostics',
+                    title: 'Access Cover & Guard Disassembly',
                     instruction:
-                      'Remove access covers and inspect internal components per specialist escalation brief.',
+                      'Remove safety shroud and unbolt casing cover; check flange gap uniformity.',
                     requiresLoto: false,
                     status: 'PENDING',
                   },
                   {
                     id: 'step-3',
                     stepNumber: 3,
-                    title: 'Component Replacement & Alignment',
+                    title: 'Internal Component & Seal Inspection',
                     instruction:
-                      'Replace defective sub-assemblies and verify shaft/coupling alignment using precision indicators.',
+                      'Inspect seal faces, bearings, and shaft runout for wear or pitting under 3 helium light bands.',
                     requiresLoto: false,
                     status: 'PENDING',
                   },
                   {
                     id: 'step-4',
                     stepNumber: 4,
-                    title: 'Operational Baseline Verification',
+                    title: 'Precision Reassembly & Torque',
                     instruction:
-                      'Restore system power, perform operational spin test, and record vibration & thermal baseline.',
+                      'Install new seals/bearings and torque M12 studs in star-pattern to 45 Nm ± 2 Nm.',
+                    requiresLoto: false,
+                    status: 'PENDING',
+                  },
+                  {
+                    id: 'step-5',
+                    stepNumber: 5,
+                    title: 'Recommissioning & Baseline Run Test',
+                    instruction:
+                      'Clear work zone, re-energize equipment, and run a 15-minute vibration & thermal baseline check.',
                     requiresLoto: false,
                     status: 'PENDING',
                   },

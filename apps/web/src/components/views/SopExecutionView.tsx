@@ -616,10 +616,148 @@ export function cleanFaultTitle(rawTitle?: string, caseNumber?: string, assetTag
   return clean;
 }
 
+export interface StepEngineeringSpec {
+  stepNumber: number;
+  title: string;
+  tools: string[];
+  tolerances: Array<{ label: string; value: string }>;
+  toleranceSummary: string;
+  safetyProtocol: string;
+}
+
+export const STANDARD_5_STEPS = [
+  {
+    stepNumber: 1,
+    title: 'Vision LOTO & Zero-Energy Isolation',
+    instruction: 'Lock out main breaker, bleed line pressure to 0 PSI, and tag out per OSHA 1910.147.',
+  },
+  {
+    stepNumber: 2,
+    title: 'Access Cover & Guard Disassembly',
+    instruction: 'Remove safety shroud and unbolt casing cover; check flange gap uniformity.',
+  },
+  {
+    stepNumber: 3,
+    title: 'Internal Component & Seal Inspection',
+    instruction: 'Inspect seal faces, bearings, and shaft runout for wear or pitting under 3 helium light bands.',
+  },
+  {
+    stepNumber: 4,
+    title: 'Precision Reassembly & Torque',
+    instruction: 'Install new seals/bearings and torque M12 studs in star-pattern to 45 Nm ± 2 Nm.',
+  },
+  {
+    stepNumber: 5,
+    title: 'Recommissioning & Baseline Run Test',
+    instruction: 'Clear work zone, re-energize equipment, and run a 15-minute vibration & thermal baseline check.',
+  },
+];
+
+export const getStepEngineeringSpec = (stepNumber: number): StepEngineeringSpec => {
+  switch (stepNumber) {
+    case 1:
+      return {
+        stepNumber: 1,
+        title: 'Vision LOTO & Zero-Energy Isolation',
+        tools: [
+          'Fluke 87V Calibrated Multimeter (CAT IV 600V)',
+          'Digital Pressure Gauge (0 - 300 PSI, ±0.1% accuracy)',
+          'OSHA 1910.147 Heavy-Duty Red Padlock & Danger Tag #402',
+          'Non-Conductive Dielectric Voltage Probe (1000V rated)',
+        ],
+        tolerances: [
+          { label: 'ELECTRICAL POTENTIAL:', value: '0.00 V AC/DC (Zero Live)' },
+          { label: 'RESIDUAL HYDRAULIC PRESSURE:', value: '0.0 PSI (Bleed Valve Open)' },
+          { label: 'PNEUMATIC LINE PRESSURE:', value: '0.0 bar (Line Depressurized)' },
+          { label: 'LOTO ISOLATION VERIFICATION:', value: 'OSHA 1910.147 Certified' },
+        ],
+        toleranceSummary: '0V Electrical Potential • 0 PSI Residual Pressure • Padlock & Tag Verified (OSHA 1910.147)',
+        safetyProtocol: 'Zero electrical, hydraulic, and kinetic energy verified. Suction & discharge isolation valves locked closed; bleed line vented to atmosphere.',
+      };
+    case 2:
+      return {
+        stepNumber: 2,
+        title: 'Access Cover & Guard Disassembly',
+        tools: [
+          'Pneumatic Fastener Impact Wrench (1/2" Drive)',
+          'Hardened Precision Steel Scraper & Brass Shims',
+          'Digital Vernier Caliper (0 - 150 mm, 0.01 mm resolution)',
+          'Metric Feeler Gauge Set (0.05 - 1.00 mm)',
+        ],
+        tolerances: [
+          { label: 'FASTENER BREAKAWAY CHECK:', value: 'Nominal Spec (No Galling)' },
+          { label: 'FLANGE GAP UNIFORMITY:', value: '≤ 0.10 mm Perimeter Gap' },
+          { label: 'CASING SCORE MARKS:', value: 'Zero Scratches / Zero Gouges' },
+          { label: 'MATING SURFACE FLATNESS:', value: '≤ 0.08 mm across face' },
+        ],
+        toleranceSummary: 'Housing Fastener Breakaway Check • Flange Gap Uniformity ≤ 0.10 mm • Zero Casing Score Marks',
+        safetyProtocol: 'Verify area clear of debris before casing removal. Support casing weight with rated rigging sling to avoid flange nicking.',
+      };
+    case 3:
+      return {
+        stepNumber: 3,
+        title: 'Internal Component & Seal Inspection',
+        tools: [
+          'Monochromatic Helium Light Source & Optical Flat',
+          'Mitutoyo Magnetic-Base Dial Indicator (0.001 mm / 0.0005 in)',
+          'Digital Shore A Durometer Tester (ASTM D2240)',
+          '10x Illuminated Optical Inspection Loupe',
+        ],
+        tolerances: [
+          { label: 'SEAL FACE FLATNESS:', value: '≤ 0.0005 in (3 Helium Light Bands)' },
+          { label: 'SHAFT RUNOUT (TIR):', value: '≤ 0.03 mm Total Indicated Runout' },
+          { label: 'ELASTOMER HARDNESS:', value: '75 ± 5 Shore A (Viton / FKM)' },
+          { label: 'BEARING RADIAL PLAY:', value: '0.015 - 0.025 mm C3 Clearance' },
+        ],
+        toleranceSummary: 'Seal Face Flatness ≤ 0.0005 in (3 Helium Light Bands) • Shaft Runout ≤ 0.03 mm TIR • Elastomer Durometer 75 ± 5 Shore A',
+        safetyProtocol: 'Avoid touching carbon or silicon carbide seal faces with bare skin. Clean exclusively with laboratory-grade anhydrous isopropyl alcohol.',
+      };
+    case 4:
+      return {
+        stepNumber: 4,
+        title: 'Precision Reassembly & Torque',
+        tools: [
+          '1/2" Calibrated Click Torque Wrench (40 - 200 Nm, ISO 6789)',
+          'Prüftechnik Laser Shaft Coupling Alignment System',
+          'Precision Thread Lubricant / Loctite 243 Medium Threadlocker',
+          'Star-Pattern Fastener Torque Sequence Guide',
+        ],
+        tolerances: [
+          { label: 'M12 STUD FASTENER TORQUE:', value: '45 Nm ± 2 Nm (Star Pattern)' },
+          { label: 'COUPLING ANGULAR ALIGNMENT:', value: '≤ 0.05 mm (Laser Calibrated)' },
+          { label: 'COUPLING PARALLEL OFFSET:', value: '≤ 0.05 mm (Laser Calibrated)' },
+          { label: 'GLAND DRAW GAP EQUALITY:', value: '≤ 0.05 mm around perimeter' },
+        ],
+        toleranceSummary: 'M12 Stud Star-Pattern Torque = 45 Nm ± 2 Nm • Laser Shaft Coupling Alignment ≤ 0.05 mm Angular/Parallel',
+        safetyProtocol: 'Tighten all M12 studs in 3 progressive passes (30%, 70%, 100% torque). Never exceed 47 Nm to prevent casing thread stress fracture.',
+      };
+    case 5:
+    default:
+      return {
+        stepNumber: 5,
+        title: 'Recommissioning & Baseline Run Test',
+        tools: [
+          'SKF Microlog Tri-Axial Vibration Analyzer (ISO 10816)',
+          'FLIR Infrared Thermal Imager (±1°C Calibration)',
+          'Calibrated Acoustic Stethoscope Probe',
+          'Optical Non-Contact Laser Tachometer (RPM)',
+        ],
+        tolerances: [
+          { label: 'RMS OVERALL VIBRATION:', value: '≤ 1.8 mm/s (ISO 10816 Class I)' },
+          { label: 'BEARING HOUSING ΔT:', value: '≤ 15°C Ambient Rise (Max 65°C)' },
+          { label: 'FLUID WEEPAGE / LEAKAGE:', value: 'Zero Weepage (0 drops/min for 15 min)' },
+          { label: 'SUCTION / DISCHARGE ΔP:', value: 'Within ±2% of OEM Baseline' },
+        ],
+        toleranceSummary: 'RMS Vibration ≤ 1.8 mm/s (ISO 10816 Class I) • Bearing Housing ΔT ≤ 15°C • Zero Fluid Weepage (0 drops/min for 15 min)',
+        safetyProtocol: 'Inspect coupling guard securely bolted in place before power restore. Keep emergency stop switch within reach during baseline run test.',
+      };
+  }
+};
+
 export function getCaseExecutionProgress(c: WorkOrderCase | null | undefined): ExecutionProgressInfo {
   if (!c) {
     return {
-      totalSteps: 4,
+      totalSteps: 5,
       doneSteps: 0,
       progressPct: 0,
       isSolved: false,
@@ -628,19 +766,8 @@ export function getCaseExecutionProgress(c: WorkOrderCase | null | undefined): E
     };
   }
 
-  let totalSteps = c.checklist?.length || 4;
-  let doneSteps = c.checklist?.filter((s) => s.status === 'COMPLETED').length || 0;
   let isSolved = c.status === 'RESOLVED' || c.status === 'CLOSED';
-  let stepsList: ExecutionStepItem[] = [];
-
-  if (Array.isArray(c.checklist) && c.checklist.length > 0) {
-    stepsList = c.checklist.map((s, idx) => ({
-      stepNumber: idx + 1,
-      title: s.title,
-      instruction: (s as any).instruction || (s as any).description || '',
-      status: s.status === 'COMPLETED' ? 'COMPLETED' : 'PENDING',
-    }));
-  }
+  let storedSteps: any[] | null = null;
 
   try {
     const keys = [
@@ -654,15 +781,8 @@ export function getCaseExecutionProgress(c: WorkOrderCase | null | undefined): E
         const parsed = JSON.parse(raw);
         if (parsed.isSolved) isSolved = true;
         if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-          totalSteps = parsed.steps.length;
-          doneSteps = parsed.steps.filter((st: any) => st.status === 'COMPLETED').length;
-          stepsList = parsed.steps.map((st: any, idx: number) => ({
-            stepNumber: st.stepNumber || idx + 1,
-            title: st.title || `Step ${idx + 1}`,
-            instruction: st.instruction || '',
-            status: st.status as any,
-          }));
-          if (doneSteps === totalSteps && totalSteps > 0) {
+          storedSteps = parsed.steps;
+          if (parsed.isSolved || parsed.steps.every((st: any) => st.status === 'COMPLETED')) {
             isSolved = true;
           }
           break;
@@ -671,20 +791,42 @@ export function getCaseExecutionProgress(c: WorkOrderCase | null | undefined): E
     }
   } catch {}
 
-  // Fallback default 4 standard procedure steps if empty
-  if (stepsList.length === 0) {
-    stepsList = [
-      { stepNumber: 1, title: 'Verify Zero Energy & Lockout/Tagout (LOTO)', instruction: 'Confirm electrical & hydraulic isolation per OSHA 1910.147 standards.', status: doneSteps >= 1 ? 'COMPLETED' : 'PENDING' },
-      { stepNumber: 2, title: 'Disassemble Housing & Inspect Internal Tolerances', instruction: 'Remove mechanical housing; check wear, clearances, and gaskets.', status: doneSteps >= 2 ? 'COMPLETED' : doneSteps === 1 ? 'IN_PROGRESS' : 'PENDING' },
-      { stepNumber: 3, title: 'Replace Defective Components & Torque Fasteners', instruction: 'Fit replacement parts; torque bolts to calibrated OEM specifications.', status: doneSteps >= 3 ? 'COMPLETED' : doneSteps === 2 ? 'IN_PROGRESS' : 'PENDING' },
-      { stepNumber: 4, title: 'Functional Test & 15-Minute Operational Baseline', instruction: 'Re-energize unit under supervision; monitor vibration and pressure baseline.', status: doneSteps >= 4 ? 'COMPLETED' : doneSteps === 3 ? 'IN_PROGRESS' : 'PENDING' },
-    ];
-    totalSteps = 4;
-  }
+  // Map 5 standard steps, syncing any completed status from storage or checklist
+  const stepsList: ExecutionStepItem[] = STANDARD_5_STEPS.map((std, idx) => {
+    const custom = Array.isArray(c.checklist) && c.checklist[idx] ? c.checklist[idx] : null;
+    const stored = storedSteps
+      ? storedSteps.find((s: any) => s.stepNumber === std.stepNumber || s.id === `step-${std.stepNumber}`)
+      : null;
+
+    let status: 'COMPLETED' | 'IN_PROGRESS' | 'PENDING' = 'PENDING';
+    if (stored?.status === 'COMPLETED' || custom?.status === 'COMPLETED') {
+      status = 'COMPLETED';
+    } else if (stored?.status === 'IN_PROGRESS') {
+      status = 'IN_PROGRESS';
+    }
+
+    return {
+      stepNumber: std.stepNumber,
+      title: std.title,
+      instruction: std.instruction,
+      status,
+    };
+  });
+
+  const totalSteps = stepsList.length;
+  let doneSteps = stepsList.filter((s) => s.status === 'COMPLETED').length;
 
   if (isSolved) {
     doneSteps = totalSteps;
-    stepsList = stepsList.map((s) => ({ ...s, status: 'COMPLETED' }));
+    stepsList.forEach((s) => {
+      s.status = 'COMPLETED';
+    });
+  } else if (doneSteps > 0 && doneSteps < totalSteps) {
+    const hasInProgress = stepsList.some((s) => s.status === 'IN_PROGRESS');
+    if (!hasInProgress) {
+      const firstPending = stepsList.find((s) => s.status === 'PENDING');
+      if (firstPending) firstPending.status = 'IN_PROGRESS';
+    }
   }
 
   const progressPct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
@@ -1638,6 +1780,11 @@ export const SopExecutionView: React.FC<{
     let solvedCount = 0;
     let queuedCount = 0;
 
+    let totalResolutionMinutes = 0;
+    let resolvedCount = 0;
+    let compliantCount = 0;
+    let totalEvaluated = 0;
+
     cases.forEach((c) => {
       const p = getCaseExecutionProgress(c);
       const isSolved = p.isSolved || c.status === 'RESOLVED' || c.status === 'CLOSED';
@@ -1648,15 +1795,59 @@ export const SopExecutionView: React.FC<{
       } else {
         queuedCount++;
       }
+
+      // Dynamic SLA & MTTR calculation
+      const { sla, mttr } = getAiSparesAndSla(c.assetTag, c.title, c.symptomDescription);
+      const targetMinutes =
+        parseInt(sla.replace(/\D/g, ''), 10) ||
+        (c.severity === 'CRITICAL' ? 30 : c.severity === 'HIGH' ? 45 : 60);
+
+      const createdTime = new Date(c.createdAt || (c as any).rawCreatedAt || Date.now()).getTime();
+
+      if (isSolved) {
+        resolvedCount++;
+        totalEvaluated++;
+        const resolvedTime = c.resolvedAt
+          ? new Date(c.resolvedAt).getTime()
+          : c.closedAt
+          ? new Date(c.closedAt).getTime()
+          : (c as any).updatedAt
+          ? new Date((c as any).updatedAt).getTime()
+          : createdTime + (parseInt(mttr.replace(/\D/g, ''), 10) || 18) * 60000;
+
+        const diffMinutes = Math.max(1, Math.round((resolvedTime - createdTime) / 60000));
+        totalResolutionMinutes += diffMinutes;
+        if (diffMinutes <= targetMinutes) {
+          compliantCount++;
+        }
+      } else {
+        totalEvaluated++;
+        const elapsedMinutes = Math.max(0, Math.floor((Date.now() - createdTime) / 60000));
+        if (elapsedMinutes <= targetMinutes) {
+          compliantCount++;
+        }
+      }
     });
+
+    let avgMttr = '-- m';
+    let slaCompliance = '100% SLA';
+
+    if (resolvedCount > 0) {
+      const avgMinutes = Math.round(totalResolutionMinutes / resolvedCount);
+      avgMttr = `${avgMinutes}m`;
+      const compliancePct = totalEvaluated > 0 ? (compliantCount / totalEvaluated) * 100 : 100;
+      slaCompliance = `${compliancePct.toFixed(1)}%`;
+    }
 
     return {
       total: cases.length,
       queued: queuedCount,
       active: activeInField,
       solved: solvedCount,
-      avgSla: '18m MTTR',
-      slaCompliance: '98.4%',
+      resolvedCount,
+      avgMttr,
+      slaCompliance,
+      slaSubtitle: resolvedCount === 0 ? 'MTTR · 100% SLA' : `MTTR · ${slaCompliance}`,
     };
   }, [cases, progressVersion]);
 
@@ -2730,10 +2921,10 @@ export const SopExecutionView: React.FC<{
             </div>
             <div className="flex items-baseline gap-1.5 mt-0.5">
               <span className="text-base font-bold text-blue-950 font-mono leading-none">
-                18m
+                {metrics.avgMttr}
               </span>
               <span className="text-[11px] font-semibold text-blue-700 font-mono whitespace-nowrap">
-                MTTR · {metrics.slaCompliance}
+                {metrics.slaSubtitle}
               </span>
             </div>
           </div>
@@ -2809,7 +3000,7 @@ export const SopExecutionView: React.FC<{
             </select>
           </div>
 
-          {/* View Toggle (Kanban Board vs Full Grid) */}
+          {/* View Toggle (Stage Pipeline vs Full Card View) */}
           <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 shadow-2xs font-sans">
             <button
               type="button"
@@ -2819,10 +3010,10 @@ export const SopExecutionView: React.FC<{
                   ? 'bg-white text-slate-900 shadow-xs border border-slate-200/60'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
-              title="3-Column Kanban Board View"
+              title="3-Column Stage Pipeline View"
             >
               <Kanban className="w-3.5 h-3.5" />
-              <span>Kanban</span>
+              <span>Stage Pipeline</span>
             </button>
             <button
               type="button"
@@ -2832,10 +3023,10 @@ export const SopExecutionView: React.FC<{
                   ? 'bg-white text-slate-900 shadow-xs border border-slate-200/60'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
-              title="Full Screen Grid View"
+              title="Full Screen Card View"
             >
               <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Grid</span>
+              <span>Card View</span>
             </button>
           </div>
 
@@ -3614,7 +3805,7 @@ export const SopExecutionView: React.FC<{
                   </Button>
                 </div>
 
-                {/* Card 3: Recommended Repair Procedure Steps (2x2 Compact Grid) */}
+                {/* Card 3: Recommended Repair Procedure Steps (2-Column Grid) */}
                 <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-3">
                   <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
                     <div className="flex items-center gap-2">
@@ -3628,11 +3819,13 @@ export const SopExecutionView: React.FC<{
                     </span>
                   </div>
 
-                  {/* 2x2 Grid of Step Cards (White/Slate with Deep Blue Badges and Verified Pills) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-stretch">
-                    {activeProgress.steps.map((st) => {
+                  {/* 2-Column Grid (grid-cols-1 md:grid-cols-2 gap-3, with 5th step spanning cleanly) */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                    {activeProgress.steps.map((st, idx) => {
                       const isDone = st.status === 'COMPLETED' || isTicketFullySolved;
                       const stepPadded = String(st.stepNumber).padStart(2, '0');
+                      const isLastOdd = idx === activeProgress.steps.length - 1 && activeProgress.steps.length % 2 !== 0;
+                      const spec = getStepEngineeringSpec(st.stepNumber);
 
                       return (
                         <div
@@ -3648,7 +3841,9 @@ export const SopExecutionView: React.FC<{
                               },
                             })
                           }
-                          className="p-3 rounded-lg border border-slate-200 bg-white hover:border-blue-400 shadow-2xs hover:shadow-md transition text-xs flex flex-col justify-between h-full min-h-[115px] cursor-pointer group"
+                          className={`p-3.5 rounded-xl border border-slate-200 bg-white hover:border-blue-400 shadow-2xs hover:shadow-md transition text-xs flex flex-col justify-between h-full min-h-[110px] cursor-pointer group ${
+                            isLastOdd ? 'md:col-span-2' : ''
+                          }`}
                           title="Click to expand step execution specifications, required tools & tolerances"
                         >
                           <div>
@@ -3664,7 +3859,7 @@ export const SopExecutionView: React.FC<{
                               {isDone ? (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded shrink-0">
                                   <Check className="w-2.5 h-2.5 stroke-[3]" />
-                                  <span>✓ Verified</span>
+                                  <span>Verified</span>
                                 </span>
                               ) : (
                                 <span className="text-[10px] font-mono font-medium text-slate-400 shrink-0">
@@ -3674,17 +3869,17 @@ export const SopExecutionView: React.FC<{
                             </div>
 
                             {st.instruction ? (
-                              <p className="text-[11px] text-slate-600 font-sans line-clamp-2 leading-relaxed min-h-[32px]">
+                              <p className="text-[11px] text-slate-600 font-sans line-clamp-2 leading-relaxed">
                                 {st.instruction}
                               </p>
-                            ) : (
-                              <div className="min-h-[32px]" />
-                            )}
+                            ) : null}
                           </div>
 
-                          <div className="mt-auto pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-mono text-slate-400 group-hover:text-blue-600 transition-colors">
-                            <span>Execution Specs & Torque</span>
-                            <span className="group-hover:translate-x-0.5 transition-transform font-bold">
+                          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] font-mono text-slate-400 group-hover:text-blue-600 transition-colors">
+                            <span className="truncate max-w-[200px] sm:max-w-[260px] text-slate-500 font-sans">
+                              {spec.toleranceSummary}
+                            </span>
+                            <span className="group-hover:translate-x-0.5 transition-transform font-bold whitespace-nowrap text-blue-600">
                               Click to expand ↗
                             </span>
                           </div>
@@ -4028,7 +4223,7 @@ export const SopExecutionView: React.FC<{
         )}
       </Modal>
 
-      {/* Step Execution Specification Modal (Requirement 4) */}
+      {/* Step Execution Specification Modal (Requirement 4 & 5) */}
       <Modal
         isOpen={stepDetailModal.isOpen}
         onClose={() => setStepDetailModal({ isOpen: false, step: null })}
@@ -4059,84 +4254,83 @@ export const SopExecutionView: React.FC<{
           </div>
         }
       >
-        {stepDetailModal.step && (
-          <div className="space-y-4 font-sans text-xs">
-            {/* Header Status & Step Description */}
-            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-              <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 pb-1.5">
-                <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
-                  STEP 0{stepDetailModal.step.stepNumber} EXECUTION SPECIFICATION
+        {stepDetailModal.step && (() => {
+          const stepNum = stepDetailModal.step.stepNumber;
+          const spec = getStepEngineeringSpec(stepNum);
+          const isDone = stepDetailModal.step.status === 'COMPLETED' || isTicketFullySolved;
+
+          return (
+            <div className="space-y-4 font-sans text-xs">
+              {/* Header Status & Step Description */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 pb-1.5">
+                  <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+                    STEP 0{stepNum} EXECUTION SPECIFICATION
+                  </span>
+                  {isDone ? (
+                    <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded inline-flex items-center gap-1">
+                      <Check className="w-3 h-3 stroke-[3]" />
+                      <span>VERIFIED COMPLETE</span>
+                    </span>
+                  ) : (
+                    <span className="font-mono text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
+                      ⚡ PENDING EXECUTION
+                    </span>
+                  )}
+                </div>
+                <h4 className="text-sm font-bold text-slate-900">
+                  {stepDetailModal.step.title}
+                </h4>
+                <p className="text-slate-700 font-medium leading-relaxed font-sans">
+                  {stepDetailModal.step.instruction ||
+                    'Execute precise disassembly, surface cleaning, and tolerance measurements according to standard engineering repair manual.'}
+                </p>
+              </div>
+
+              {/* Required Tools & Calibrated Instruments */}
+              <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1.5">
+                <span className="font-mono text-[10px] uppercase font-bold text-slate-500">
+                  🧰 REQUIRED CALIBRATED TOOLS & INSTRUMENTS
                 </span>
-                {stepDetailModal.step.status === 'COMPLETED' || isTicketFullySolved ? (
-                  <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded inline-flex items-center gap-1">
-                    <Check className="w-3 h-3 stroke-[3]" />
-                    <span>✓ VERIFIED COMPLETE</span>
-                  </span>
-                ) : (
-                  <span className="font-mono text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
-                    ⚡ PENDING EXECUTION
-                  </span>
-                )}
+                <ul className="list-disc list-inside text-slate-800 space-y-1 text-[11px] font-mono">
+                  {spec.tools.map((t, idx) => (
+                    <li key={idx}>{t}</li>
+                  ))}
+                </ul>
               </div>
-              <h4 className="text-sm font-bold text-slate-900">
-                {stepDetailModal.step.title}
-              </h4>
-              <p className="text-slate-700 font-medium leading-relaxed font-sans">
-                {stepDetailModal.step.instruction ||
-                  'Execute precise disassembly, surface cleaning, and tolerance measurements according to standard engineering repair manual.'}
-              </p>
-            </div>
 
-            {/* Required Tools & Calibrated Instruments */}
-            <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-1.5">
-              <span className="font-mono text-[10px] uppercase font-bold text-slate-500">
-                🧰 REQUIRED CALIBRATED TOOLS & INSTRUMENTS
-              </span>
-              <ul className="list-disc list-inside text-slate-800 space-y-1 text-[11px] font-mono">
-                <li>1/2" Drive Calibrated Click Torque Wrench (40 - 200 Nm, ISO 6789 Certified)</li>
-                <li>Magnetic-Base Dial Indicator (Resolution: 0.01 mm / 0.0005 in)</li>
-                <li>Metric Feeler Gauge Set (0.05 mm - 1.00 mm hardened spring steel)</li>
-                <li>OSHA Compliant Multi-Lock Safety Hasp & Danger Tag #402</li>
-              </ul>
-            </div>
-
-            {/* Critical Engineering Tolerances & Torque Values */}
-            <div className="p-3 bg-blue-50/50 border border-blue-200 rounded-xl space-y-1.5">
-              <span className="font-mono text-[10px] uppercase font-bold text-blue-900">
-                📐 CRITICAL ENGINEERING TOLERANCES & TORQUE VALUES
-              </span>
-              <div className="grid grid-cols-2 gap-2 font-mono text-[11px] pt-1">
-                <div className="bg-white p-2 rounded border border-blue-100">
-                  <span className="text-slate-500 text-[10px] block">FASTENER TORQUE:</span>
-                  <span className="font-bold text-slate-900">85 Nm (±2.5 Nm)</span>
+              {/* Critical Engineering Tolerances & Torque Values */}
+              <div className="p-3 bg-blue-50/50 border border-blue-200 rounded-xl space-y-1.5">
+                <span className="font-mono text-[10px] uppercase font-bold text-blue-900">
+                  📐 CRITICAL ENGINEERING TOLERANCES & TORQUE VALUES
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[11px] pt-1">
+                  {spec.tolerances.map((tol, idx) => (
+                    <div key={idx} className="bg-white p-2 rounded border border-blue-100">
+                      <span className="text-slate-500 text-[10px] block">{tol.label}</span>
+                      <span className="font-bold text-slate-900">{tol.value}</span>
+                    </div>
+                  ))}
                 </div>
-                <div className="bg-white p-2 rounded border border-blue-100">
-                  <span className="text-slate-500 text-[10px] block">TOTAL INDICATED RUNOUT:</span>
-                  <span className="font-bold text-slate-900">&lt; 0.05 mm (TIR)</span>
-                </div>
-                <div className="bg-white p-2 rounded border border-blue-100">
-                  <span className="text-slate-500 text-[10px] block">DYNAMIC SEAL GAP:</span>
-                  <span className="font-bold text-slate-900">0.12 - 0.18 mm</span>
-                </div>
-                <div className="bg-white p-2 rounded border border-blue-100">
-                  <span className="text-slate-500 text-[10px] block">BARRIER POT PRESSURE:</span>
-                  <span className="font-bold text-slate-900">2.5 bar Nitrogen Blanketed</span>
+                <div className="mt-1.5 p-2 bg-blue-100/60 rounded-md border border-blue-200 text-[10px] font-mono text-blue-900">
+                  <strong>Key Tolerance Target: </strong>
+                  <span>{spec.toleranceSummary}</span>
                 </div>
               </div>
-            </div>
 
-            {/* LOTO Safety Gate Verification */}
-            <div className="p-3 bg-slate-900 text-slate-200 rounded-xl space-y-1 font-mono text-[11px]">
-              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase border-b border-slate-800 pb-1">
-                <span>LOTO VERIFICATION GATE</span>
-                <span className="text-emerald-400 font-bold">OSHA 1910.147 PASS</span>
+              {/* LOTO / Safety Verification Protocol */}
+              <div className="p-3 bg-slate-900 text-slate-200 rounded-xl space-y-1 font-mono text-[11px]">
+                <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase border-b border-slate-800 pb-1">
+                  <span>SAFETY & QUALITY GATE VERIFICATION</span>
+                  <span className="text-emerald-400 font-bold">OSHA 1910.147 COMPLIANT</span>
+                </div>
+                <p className="text-slate-300 font-sans leading-relaxed pt-1">
+                  {spec.safetyProtocol}
+                </p>
               </div>
-              <p className="text-slate-300 font-sans leading-relaxed pt-1">
-                Zero mechanical, electrical, and pneumatic energy verified. Suction & discharge isolation valves locked closed; drain bleeder open to atmosphere.
-              </p>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* Smart Similar Past Fault Record Modal (Requirement 1) */}
