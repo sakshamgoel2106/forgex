@@ -59,6 +59,41 @@ export interface AcousticTelemetry {
   waveformSnapshot?: number[];
 }
 
+export type VisionMode = 'COPILOT_DIAGNOSTIC' | 'LOTO_ZERO_ENERGY_CHECK';
+
+export type DetectedVisualObject =
+  | 'ANALOG_GAUGE'
+  | 'MECHANICAL_COMPONENT'
+  | 'NAMEPLATE'
+  | 'LOTO_PADLOCK';
+
+export type VisionSafetyStatus =
+  | 'SAFE_ZERO_ENERGY'
+  | 'CRITICAL_OVERPRESSURE'
+  | 'WEAR_DETECTED'
+  | 'NORMAL';
+
+export interface VisionDiagnosticResult {
+  detectedObject: DetectedVisualObject;
+  readingValue: number | null;
+  readingUnit: string | null;
+  oemLimitComparison: {
+    parameter: string;
+    thresholdValue: number;
+    thresholdUnit: string;
+    exceeded: boolean;
+    marginPercent?: number;
+    status: 'EXCEEDED' | 'NORMAL' | 'ZERO_ENERGY';
+    oemSourceSpec?: string;
+  } | null;
+  safetyStatus: VisionSafetyStatus;
+  summary: string;
+  timestamp: string;
+  imageThumbnailUrl?: string;
+  confidenceScore: number;
+  samplePresetId?: string;
+}
+
 export interface CopilotMessage {
   id: string;
   conversationId: string;
@@ -76,6 +111,8 @@ export interface CopilotMessage {
   createdAt: string;
   feedback?: MessageFeedback | null;
   acousticTelemetry?: AcousticTelemetry;
+  visionDiagnostic?: VisionDiagnosticResult;
+  imageUrl?: string;
 }
 
 export interface Conversation {
@@ -99,6 +136,9 @@ export interface RAGQueryRequest {
   documentCategory?: DocumentType;
   topK?: number;
   imageUrl?: string;
+  imageBase64?: string;
+  visionMode?: VisionMode;
+  visionDiagnostic?: VisionDiagnosticResult;
   disclosurePolicy?: string | null;
   questionMode?: QuestionHandlingMode;
   language?: string;

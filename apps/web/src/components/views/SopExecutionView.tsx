@@ -24,10 +24,13 @@ import {
   Layers,
   Zap,
   Clock,
+  ShieldCheck,
+  Camera,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
+import { LotoSafetyRunnerModal } from '../copilot/LotoSafetyRunnerModal';
 import type {
   MaintenanceCase,
   MaintenanceCaseStatus,
@@ -908,6 +911,7 @@ export const SopExecutionView: React.FC<{
   const [isUnassignConfirmOpen, setIsUnassignConfirmOpen] = useState(false);
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
   const [isRejectConfirmOpen, setIsRejectConfirmOpen] = useState(false);
+  const [isLotoModalOpen, setIsLotoModalOpen] = useState(false);
 
   // Form Field State - Report New Ticket Modal (Zero Pre-Selected Defaults)
   const [newTitle, setNewTitle] = useState('');
@@ -2368,6 +2372,17 @@ export const SopExecutionView: React.FC<{
               <span>Grid</span>
             </button>
           </div>
+
+          {/* Vision-Locked LOTO Safety Gate Launcher */}
+          <button
+            type="button"
+            onClick={() => setIsLotoModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-bold transition shadow-2xs cursor-pointer font-sans"
+            title="OSHA 1910.147 Vision-Locked Lockout/Tagout Runner (Live Camera / Gauge Zero-Energy Check)"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Vision LOTO Gate</span>
+          </button>
         </div>
       </div>
 
@@ -3044,6 +3059,34 @@ export const SopExecutionView: React.FC<{
                     </div>
                   );
                 })()}
+
+                {/* Vision-Locked LOTO Safety Gate Banner */}
+                <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between gap-3 shadow-2xs">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-xs text-emerald-950 flex items-center gap-1.5">
+                        <span>OSHA 1910.147 Vision-Locked LOTO Gate</span>
+                        <span className="text-[9px] font-mono bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded border border-emerald-300 font-bold uppercase">
+                          Safety-Critical
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-emerald-800 mt-0.5">
+                        Zero-energy state must be visually verified via gauge camera snapshot prior to casing disassembly.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => setIsLotoModalOpen(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shrink-0 flex items-center gap-1.5"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Run Vision LOTO</span>
+                  </Button>
+                </div>
 
                 {/* Card 3: Recommended Repair Procedure Steps (2x2 Compact Grid) (Requirement 3 & 4) */}
                 <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-3">
@@ -4231,6 +4274,18 @@ export const SopExecutionView: React.FC<{
           </div>
         </div>
       </Modal>
+
+      {/* Interactive Vision-Locked LOTO Safety Runner Drawer/Modal */}
+      <LotoSafetyRunnerModal
+        isOpen={isLotoModalOpen}
+        onClose={() => setIsLotoModalOpen(false)}
+        assetId={activeCase?.assetTag || 'PUMP-001'}
+        assetTag={
+          activeCase
+            ? `${activeCase.assetTag || 'PUMP-001'} (${activeCase.title})`
+            : 'PUMP-001 (Lowara 10SV08F030T)'
+        }
+      />
     </div>
   );
 };

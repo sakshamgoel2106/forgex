@@ -31,6 +31,7 @@ import {
   Play,
   Radio,
   Building2,
+  Camera,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Modal } from '../ui/Modal';
@@ -47,10 +48,13 @@ import {
   type Machine,
   type SupportedLanguageCode,
   type AcousticTelemetry,
+  type VisionDiagnosticResult,
   SUPPORTED_LANGUAGES,
   getLanguageConfig,
 } from '@forgex/shared-types';
 import { AcousticDiagnosticsModal } from '../copilot/AcousticDiagnosticsModal';
+import { VisionDiagnosticsModal } from '../copilot/VisionDiagnosticsModal';
+import { LotoSafetyRunnerModal } from '../copilot/LotoSafetyRunnerModal';
 
 /**
  * Clean, safe Markdown renderer for assistant messages:
@@ -257,6 +261,10 @@ export const CopilotWorkspaceView: React.FC = () => {
 
   // Acoustic Diagnostics ("Shazam for Factory Machines")
   const [isAcousticModalOpen, setIsAcousticModalOpen] = useState(false);
+
+  // Vision Diagnostics & Vision-Locked LOTO Safety Gate
+  const [isVisionModalOpen, setIsVisionModalOpen] = useState(false);
+  const [isLotoModalOpen, setIsLotoModalOpen] = useState(false);
 
   // Active Language Configuration
   const currentLangConfig = useMemo(() => getLanguageConfig(speechLanguage), [speechLanguage]);
@@ -547,7 +555,12 @@ export const CopilotWorkspaceView: React.FC = () => {
   };
 
   // Execute Grounded RAG Query
-  const handleSendQuery = async (queryText?: string, acousticTelemetry?: AcousticTelemetry) => {
+  const handleSendQuery = async (
+    queryText?: string,
+    acousticTelemetry?: AcousticTelemetry,
+    imageBase64?: string,
+    visionDiagnostic?: VisionDiagnosticResult
+  ) => {
     stopSpeech();
 
     const text = (queryText || queryInput).trim();
@@ -556,7 +569,9 @@ export const CopilotWorkspaceView: React.FC = () => {
     setQueryError(null);
     setIsQuerying(true);
     setQueryStep(
-      acousticTelemetry
+      visionDiagnostic
+        ? 'Cross-referencing multimodal visual readings with OEM engineering limits...'
+        : acousticTelemetry
         ? 'Analyzing FFT vibration spectrum and acoustic anomalies...'
         : 'Validating factory context and equipment access...'
     );
@@ -570,6 +585,8 @@ export const CopilotWorkspaceView: React.FC = () => {
       confidence: 'HIGH',
       citations: [],
       acousticTelemetry,
+      visionDiagnostic,
+      imageUrl: imageBase64,
       createdAt: new Date().toISOString(),
     };
 
@@ -580,7 +597,9 @@ export const CopilotWorkspaceView: React.FC = () => {
       setTimeout(
         () =>
           setQueryStep(
-            acousticTelemetry
+            visionDiagnostic
+              ? 'Analyzing dial needle position, hydrostatic pressure & casing tolerances...'
+              : acousticTelemetry
               ? 'Evaluating fluid turbulence and harmonic blade pass signatures...'
               : 'Reviewing authorized technical manuals & engineering specs...'
           ),
@@ -589,7 +608,9 @@ export const CopilotWorkspaceView: React.FC = () => {
       setTimeout(
         () =>
           setQueryStep(
-            acousticTelemetry
+            visionDiagnostic
+              ? 'Validating against Lowara e-SV Maximum Allowable Working Pressure (MAWP)...'
+              : acousticTelemetry
               ? 'Cross-referencing bearing raceway and cavitation tolerances...'
               : 'Correlating relational asset documentation and safety limits...'
           ),
@@ -610,6 +631,8 @@ export const CopilotWorkspaceView: React.FC = () => {
           conversationId: activeConversationId || undefined,
           language: speechLanguage,
           acousticTelemetry: acousticTelemetry || undefined,
+          imageBase64: imageBase64 || undefined,
+          visionDiagnostic: visionDiagnostic || undefined,
         }),
       });
 
@@ -1546,6 +1569,79 @@ export const CopilotWorkspaceView: React.FC = () => {
                     {msg.content}
                   </p>
 
+                  {/* Multimodal Gauge / Part Vision Inspection Badge */}
+                  {((msg as any).visionDiagnostic || (msg as any).imageUrl) && (
+                    <div className="mt-2.5 p-3 rounded-lg bg-[#0F172A] border border-blue-500/40 text-white space-y-2 shadow-sm">
+                      <div className="flex items-center justify-between gap-2 flex-wrap border-b border-slate-700 pb-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <Camera className="w-3.5 h-3.5 text-blue-400" />
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-blue-200">
+                            GEMINI MULTIMODAL VISION SCAN
+                          </span>
+                        </div>
+                        {(msg as any).visionDiagnostic?.safetyStatus && (
+                          <span
+                            className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                              (msg as any).visionDiagnostic.safetyStatus === 'CRITICAL_OVERPRESSURE'
+                                ? 'bg-rose-950 text-rose-300 border border-rose-600'
+                                : (msg as any).visionDiagnostic.safetyStatus === 'SAFE_ZERO_ENERGY'
+                                ? 'bg-emerald-950 text-emerald-300 border border-emerald-600'
+                                : (msg as any).visionDiagnostic.safetyStatus === 'WEAR_DETECTED'
+                                ? 'bg-amber-950 text-amber-300 border border-amber-600'
+                                : 'bg-blue-950 text-blue-300 border border-blue-600'
+                            }`}
+                          >
+                            {(msg as any).visionDiagnostic.safetyStatus.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {(msg as any).imageUrl && (
+                          <div className="relative group shrink-0">
+                            <img
+                              src={(msg as any).imageUrl}
+                              alt="Vision Scan"
+                              className="w-16 h-16 rounded-lg object-cover border border-slate-600 bg-slate-900 shadow-xs"
+                            />
+                            {(msg as any).visionDiagnostic?.readingValue !== null &&
+                              (msg as any).visionDiagnostic?.readingValue !== undefined && (
+                                <span className="absolute bottom-0 inset-x-0 bg-black/85 text-[8px] font-mono font-bold text-center text-white py-0.5 rounded-b-md truncate">
+                                  {(msg as any).visionDiagnostic.readingValue} {(msg as any).visionDiagnostic.readingUnit || 'bar'}
+                                </span>
+                              )}
+                          </div>
+                        )}
+                        <div className="space-y-1 min-w-0 flex-1">
+                          {(msg as any).visionDiagnostic?.readingValue !== null &&
+                            (msg as any).visionDiagnostic?.readingValue !== undefined && (
+                              <div
+                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border inline-block ${
+                                  (msg as any).visionDiagnostic.safetyStatus === 'CRITICAL_OVERPRESSURE'
+                                    ? 'bg-rose-950 text-rose-300 border-rose-700'
+                                    : (msg as any).visionDiagnostic.safetyStatus === 'SAFE_ZERO_ENERGY'
+                                    ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                                    : 'bg-slate-800 text-slate-200 border-slate-700'
+                                }`}
+                              >
+                                {(msg as any).visionDiagnostic.readingValue}{' '}
+                                {((msg as any).visionDiagnostic.readingUnit || 'BAR').toUpperCase()}{' '}
+                                {(msg as any).visionDiagnostic.safetyStatus === 'CRITICAL_OVERPRESSURE'
+                                  ? '— EXCEEDS OEM MAWP (25 BAR)'
+                                  : (msg as any).visionDiagnostic.safetyStatus === 'SAFE_ZERO_ENERGY'
+                                  ? '— ZERO ENERGY CONFIRMED'
+                                  : ''}
+                              </div>
+                            )}
+                          <p className="text-[11px] text-slate-300 leading-snug line-clamp-2">
+                            {(msg as any).visionDiagnostic?.summary ||
+                              'Multimodal visual frame analyzed against OEM engineering tolerances.'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Compact Acoustic Telemetry Badge */}
                   {(msg as any).acousticTelemetry && (
                     <div className="mt-2.5 p-3 rounded-lg bg-[#0B132B] border border-indigo-500/40 text-white space-y-2 shadow-sm">
@@ -1742,7 +1838,18 @@ export const CopilotWorkspaceView: React.FC = () => {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2.5 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Vision-Guided LOTO Quick Launcher */}
+                      <button
+                        type="button"
+                        onClick={() => setIsLotoModalOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-300 text-emerald-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                        title="OSHA 1910.147 Vision-Locked Lockout/Tagout protocol with camera zero-energy verification"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>Start Vision-Guided LOTO</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => handleRaiseTicketForRca(msg)}
@@ -1838,6 +1945,19 @@ export const CopilotWorkspaceView: React.FC = () => {
                   </span>
                 </>
               )}
+            </button>
+
+            {/* Vision Scan ("Gemini Multimodal Gauge & Part Vision") */}
+            <button
+              type="button"
+              onClick={() => setIsVisionModalOpen(true)}
+              className="p-2.5 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
+              title="Multimodal Vision Scan: Inspect analog pressure gauges, mechanical seal wear & nameplates with Gemini Vision"
+            >
+              <Camera className="w-4 h-4 text-blue-600" />
+              <span className="text-[10px] font-sans font-bold hidden sm:inline">
+                Vision Scan
+              </span>
             </button>
 
             {/* Acoustic Scan ("Shazam for Factory Machines") */}
@@ -1966,6 +2086,31 @@ export const CopilotWorkspaceView: React.FC = () => {
           handleSendQuery(prompt, telemetry);
         }}
         currentLanguage={speechLanguage}
+      />
+
+      {/* Multimodal Gauge & Part Vision Diagnostics Modal */}
+      <VisionDiagnosticsModal
+        isOpen={isVisionModalOpen}
+        onClose={() => setIsVisionModalOpen(false)}
+        selectedMachine={selectedMachine}
+        machines={machines}
+        onSelectMachine={(id) => setSelectedMachineId(id)}
+        onDiagnose={(dataUri: string, prompt?: string) => {
+          handleSendQuery(prompt, undefined, dataUri);
+        }}
+        currentLanguage={speechLanguage}
+      />
+
+      {/* Interactive Vision-Locked LOTO Safety Runner Drawer/Modal */}
+      <LotoSafetyRunnerModal
+        isOpen={isLotoModalOpen}
+        onClose={() => setIsLotoModalOpen(false)}
+        assetId={selectedMachine?.assetTag || selectedMachine?.id || 'PUMP-001'}
+        assetTag={
+          selectedMachine
+            ? `${selectedMachine.assetTag} (${selectedMachine.name})`
+            : 'PUMP-001 (Lowara 10SV08F030T)'
+        }
       />
     </div>
   );

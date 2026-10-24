@@ -252,6 +252,17 @@ Respond in strict JSON with:
       };
     }
 
+    if (request.visionDiagnostic) {
+      return {
+        answerText: request.visionDiagnostic.summary,
+        confidence: 'HIGH',
+        isInsufficientEvidence: false,
+        conflictDetected: false,
+        usedEvidenceChunkIds: authorizedEvidence.slice(0, 2).map((e) => e.chunkId),
+        modelUsed: this.modelName,
+      };
+    }
+
     const candidateLines: string[] = [];
     for (const ev of authorizedEvidence.slice(0, 4)) {
       const lines = ev.content

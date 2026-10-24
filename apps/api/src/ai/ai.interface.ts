@@ -55,7 +55,7 @@ export interface GenerationEvidenceItem {
   score: number;
 }
 
-import type { AcousticTelemetry } from '@forgex/shared-types';
+import type { AcousticTelemetry, VisionDiagnosticResult } from '@forgex/shared-types';
 
 export interface GenerationRequest {
   query: string;
@@ -66,6 +66,7 @@ export interface GenerationRequest {
   targetLanguage?: string;
   retrievalQuery?: string;
   acousticTelemetry?: AcousticTelemetry;
+  visionDiagnostic?: VisionDiagnosticResult;
 }
 
 export interface RawCitationOutput {

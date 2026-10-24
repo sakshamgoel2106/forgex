@@ -183,6 +183,17 @@ export class RAGQueryEngine {
       const acousticHints = patternHints[request.acousticTelemetry.detectedPattern] || 'acoustic vibration diagnosis';
       effectiveSearchQuery = `${effectiveSearchQuery} ${acousticHints}`;
     }
+    if (request.visionDiagnostic) {
+      const visionHints =
+        request.visionDiagnostic.safetyStatus === 'CRITICAL_OVERPRESSURE'
+          ? 'discharge pressure overpressure MAWP maximum operating pressure limit relief valve'
+          : request.visionDiagnostic.safetyStatus === 'SAFE_ZERO_ENERGY'
+          ? 'lockout tagout zero energy state line pressure bleed valve OSHA 1910.147'
+          : request.visionDiagnostic.safetyStatus === 'WEAR_DETECTED'
+          ? 'mechanical seal face wear cavitation scoring leakage inspection'
+          : 'analog gauge reading visual inspection';
+      effectiveSearchQuery = `${effectiveSearchQuery} ${visionHints}`;
+    }
     const rawMachineId = (request as any).machineId;
     const rawAssetTag = (request as any).assetTag;
     const cleanAssetId = rawAssetId ? sanitizeMachineOrAssetId(rawAssetId) : undefined;
@@ -874,6 +885,12 @@ ${generalKnowledgeText}
     if (request.acousticTelemetry) {
       (userMessage as any).acousticTelemetry = request.acousticTelemetry;
     }
+    if (request.visionDiagnostic) {
+      (userMessage as any).visionDiagnostic = request.visionDiagnostic;
+    }
+    if (request.imageUrl) {
+      (userMessage as any).imageUrl = request.imageUrl;
+    }
 
     // 4. Retrieve Candidate Chunks (Qdrant Hybrid Search Dense 768-dim + BM25 Sparse with RRF)
     let vectorHits: VectorSearchResult[] = [];
@@ -1469,6 +1486,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
         targetLanguage,
         retrievalQuery: effectiveSearchQuery,
         acousticTelemetry: request.acousticTelemetry,
+        visionDiagnostic: request.visionDiagnostic,
       });
     } else {
       generationResult = await this.generationProvider.generateAnswer({
@@ -1479,6 +1497,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
         targetLanguage,
         retrievalQuery: effectiveSearchQuery,
         acousticTelemetry: request.acousticTelemetry,
+        visionDiagnostic: request.visionDiagnostic,
       });
     }
 
@@ -1493,6 +1512,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
 
     const isOldOrIncompleteMachine =
       !request.acousticTelemetry &&
+      !request.visionDiagnostic &&
       machine !== null &&
       (machine.documentationReadiness === 'INCOMPLETE' ||
        machine.verificationState === 'UNVERIFIED' ||
@@ -1524,6 +1544,7 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
 
     const shouldEscalate =
       !request.acousticTelemetry &&
+      !request.visionDiagnostic &&
       !isGeneralKnowledgeQuestion &&
       !isMachineIssueWithoutIdentity &&
       (isWorkerRequestingSupport ||

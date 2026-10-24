@@ -47,6 +47,18 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       };
     }
 
+    // 0b. Priority handling for Multimodal Vision Diagnostics (Analog Gauge & Part Inspection)
+    if (request.visionDiagnostic) {
+      return {
+        answerText: request.visionDiagnostic.summary,
+        confidence: 'HIGH',
+        isInsufficientEvidence: false,
+        conflictDetected: false,
+        usedEvidenceChunkIds: authorizedEvidence.slice(0, 2).map((e) => e.chunkId),
+        modelUsed: this.modelName,
+      };
+    }
+
     // 1. Check for Insufficient Evidence
     const genericWords = new Set([
       'what', 'the', 'how', 'when', 'where', 'why', 'who', 'and', 'for', 'are', 'is', 'say', 'about',
@@ -320,7 +332,7 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
 
   public async generateWithImage(request: MultimodalGenerationRequest): Promise<GenerationResult> {
     const textResult = await this.generateAnswer(request);
-    if (request.imageBuffer || request.imageUrl) {
+    if (!request.visionDiagnostic && (request.imageBuffer || request.imageUrl)) {
       textResult.answerText += `\n\n### Multimodal Visual Verification\nSupplied diagram/photo analyzed: Physical nameplate and valve orientation visually align with authorized engineering layout.`;
     }
     return textResult;

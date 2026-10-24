@@ -8,6 +8,7 @@ import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import type { IVisionProcessingProvider } from '../ai/vision.interface.js';
 import type { VisualIntelligenceEngine } from '../services/visualIntelligenceEngine.js';
 import { requireRole } from '../middleware/auth.middleware.js';
+import { MultimodalVisionService } from '../ai/multimodalVisionService.js';
 
 export function createVisualRouter(
   dataStore: IDataStore,
@@ -101,6 +102,58 @@ export function createVisualRouter(
       });
     },
     controller.inspect
+  );
+
+  // Multimodal Vision Diagnostic Endpoint (Hackathon Differentiator: Gauge & Part Inspection)
+  router.post(
+    '/analyze',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
+    async (req, res): Promise<void> => {
+      try {
+        const { imageBase64, visionMode, assetId, assetTag, language } = req.body;
+        if (!imageBase64) {
+          res.status(400).json({ success: false, error: 'imageBase64 payload is required' });
+          return;
+        }
+
+        const diagnostic = await MultimodalVisionService.analyzeImage({
+          imageBase64,
+          visionMode,
+          assetId,
+          assetTag,
+          language,
+        });
+
+        res.status(200).json({ success: true, data: diagnostic });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'Visual analysis failed' });
+      }
+    }
+  );
+
+  // Vision-Locked LOTO Safety Gate Verification Endpoint
+  router.post(
+    '/loto-verify',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
+    async (req, res): Promise<void> => {
+      try {
+        const { imageBase64, assetTag, language } = req.body;
+        if (!imageBase64) {
+          res.status(400).json({ success: false, error: 'imageBase64 payload is required' });
+          return;
+        }
+
+        const lotoResult = await MultimodalVisionService.verifyLotoSafetyGate({
+          imageBase64,
+          assetTag,
+          language,
+        });
+
+        res.status(200).json({ success: true, data: lotoResult });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err?.message || 'LOTO verification failed' });
+      }
+    }
   );
 
   // List Visual Assets for Organization

@@ -12,6 +12,7 @@ import { VectorStoreUnavailableError } from '../vector/vectorStore.interface.js'
 import { logger } from '../utils/logger.js';
 import { config } from '../config/env.js';
 import { isUuid } from '../utils/uuid.js';
+import { MultimodalVisionService } from '../ai/multimodalVisionService.js';
 
 const getSpeechDeploymentMode = (): 'SAAS_CLOUD' | 'ENTERPRISE_OLLAMA' | 'LOCAL_DEV' =>
   config.DEPLOYMENT_MODE === 'enterprise'
@@ -45,7 +46,19 @@ export class CopilotController {
         return;
       }
 
-      let { query, plantId, assetId, machineId, conversationId, imageUrl, topK, acousticTelemetry } = req.body;
+      let {
+        query,
+        plantId,
+        assetId,
+        machineId,
+        conversationId,
+        imageUrl,
+        imageBase64,
+        visionMode,
+        visionDiagnostic,
+        topK,
+        acousticTelemetry,
+      } = req.body;
       const rawAssetTag = req.body.assetTag;
 
       if (!query) {
@@ -96,6 +109,24 @@ export class CopilotController {
 
       const language = (req.body?.language || req.body?.locale || 'en-US') as string;
 
+      // Inline Gemini Multimodal Vision analysis if image payload provided
+      if ((imageBase64 || imageUrl) && !visionDiagnostic) {
+        const targetImage = imageBase64 || imageUrl;
+        try {
+          visionDiagnostic = await MultimodalVisionService.analyzeImage({
+            imageBase64: targetImage,
+            visionMode: visionMode || 'COPILOT_DIAGNOSTIC',
+            assetId,
+            assetTag: effectiveAssetTag,
+            language,
+          });
+        } catch (vErr: any) {
+          logger.warn({ error: vErr?.message }, 'Failed to run inline visual analysis in Copilot query');
+        }
+      }
+
+      const effectiveImageUrl = imageBase64 || imageUrl;
+
       const result = await this.ragEngine.query(
         {
           query,
@@ -105,9 +136,10 @@ export class CopilotController {
           machineId,
           assetTag: effectiveAssetTag,
           conversationId,
-          imageUrl,
+          imageUrl: effectiveImageUrl,
           topK,
           acousticTelemetry,
+          visionDiagnostic,
         } as any,
         {
           organizationId,
@@ -134,6 +166,9 @@ export class CopilotController {
           ticketNumber: result.assistantMessage.ticketNumber,
           hasAcousticTelemetry: Boolean(acousticTelemetry),
           acousticPattern: acousticTelemetry?.detectedPattern,
+          hasVisionDiagnostic: Boolean(visionDiagnostic),
+          visionSafetyStatus: visionDiagnostic?.safetyStatus,
+          hasImage: Boolean(effectiveImageUrl),
         },
       });
 
@@ -146,6 +181,8 @@ export class CopilotController {
       const userMessageWithTelemetry = {
         ...result.userMessage,
         acousticTelemetry: acousticTelemetry || (result.userMessage as any).acousticTelemetry,
+        visionDiagnostic: visionDiagnostic || (result.userMessage as any).visionDiagnostic,
+        imageUrl: effectiveImageUrl || (result.userMessage as any).imageUrl,
       };
 
       res.status(200).json({
