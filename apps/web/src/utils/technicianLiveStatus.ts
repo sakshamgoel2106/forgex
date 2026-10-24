@@ -56,27 +56,67 @@ export function computeTechnicianLiveStatus(
     return {
       statusType: 'UNAVAILABLE',
       badgeColor: 'rose',
-      shortText: shift === 'ON_BREAK' ? '🔴 On Break' : '🔴 Off-Shift',
-      fullText: shift === 'ON_BREAK' ? '🔴 On Break (Unavailable)' : '🔴 Off-Shift (Unavailable)',
+      shortText: shift === 'ON_BREAK' ? '⚪ Paused' : '⚪ Off-Shift',
+      fullText: shift === 'ON_BREAK' ? '⚪ Paused (On Break)' : '⚪ Off-Shift (Unavailable)',
       activeTicketsCount: 0,
       highestProgressPct: 0,
       shiftStatus: shift,
     };
   }
 
-  const nameLower = techName.toLowerCase();
+  const nameLower = techName.toLowerCase().trim();
 
-  // Find active/in-progress tickets for this technician
+  // Find active/in-progress tickets for this technician (strictly exclude 100% solved/completed)
   const activeTickets = casesOrTasks.filter((t) => {
     if (!t) return false;
-    const tTechName = (t.assignedTechnicianName || t.assignedTechnician?.name || '').toLowerCase();
+    const tTechName = (t.assignedTechnicianName || t.assignedTechnician?.name || '').toLowerCase().trim();
     const tTechId = t.assignedTechnicianUserId || t.assignedTechnicianId || t.assignedTechnician?.id;
 
     const matches =
-      (nameLower && tTechName === nameLower) ||
-      (techId && (tTechId === techId || tTechId === tech.userId));
+      (Boolean(nameLower) && Boolean(tTechName) && (tTechName === nameLower || tTechName.includes(nameLower) || nameLower.includes(tTechName))) ||
+      (Boolean(techId) && Boolean(tTechId) && tTechId === techId) ||
+      (Boolean(tech.userId) && Boolean(tTechId) && tTechId === tech.userId);
 
     if (!matches) return false;
+
+    // 1. Explicit resolved/closed flags
+    if (t.isSolved || t.status === 'Resolved' || t.status === 'RESOLVED' || t.status === 'CLOSED' || t.status === 'REJECTED') {
+      return false;
+    }
+
+    // 2. Check localStorage execution state for 100% step completion
+    try {
+      const keys = [
+        t.caseNumber ? `forgex_tech_exec_${t.caseNumber}` : null,
+        t.id ? `forgex_tech_exec_${t.id}` : null,
+        t.rawCaseId ? `forgex_tech_exec_${t.rawCaseId}` : null,
+      ].filter(Boolean) as string[];
+
+      for (const k of keys) {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.isSolved) return false;
+          if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
+            const completed = parsed.steps.filter((s: any) => s.status === 'COMPLETED').length;
+            if (completed === parsed.steps.length) return false;
+          }
+        }
+      }
+    } catch {}
+
+    // 3. In-memory step arrays
+    if (Array.isArray(t.checklist) && t.checklist.length > 0) {
+      const done = t.checklist.filter((s: any) => s.status === 'COMPLETED').length;
+      if (done === t.checklist.length) return false;
+    }
+    if (Array.isArray(t.steps) && t.steps.length > 0) {
+      const done = t.steps.filter((s: any) => s.status === 'COMPLETED').length;
+      if (done === t.steps.length) return false;
+    }
+    if (typeof t.stepsCount === 'number' && typeof t.completedSteps === 'number' && t.stepsCount > 0 && t.completedSteps === t.stepsCount) {
+      return false;
+    }
 
     const status = (t.status || '').toUpperCase();
     return status !== 'RESOLVED' && status !== 'CLOSED' && status !== 'REJECTED';
@@ -136,8 +176,8 @@ export function computeTechnicianLiveStatus(
   return {
     statusType: 'AVAILABLE',
     badgeColor: 'emerald',
-    shortText: '🟢 Available',
-    fullText: '🟢 Available (On Shift)',
+    shortText: '🟢 Available / Idle',
+    fullText: '🟢 Available / Idle — Ready for Dispatch',
     activeTicketsCount: 0,
     highestProgressPct: 0,
     shiftStatus: 'ON_SHIFT',

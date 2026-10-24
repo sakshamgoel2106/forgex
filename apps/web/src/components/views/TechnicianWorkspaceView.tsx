@@ -4,7 +4,6 @@ import { useToast } from '../../lib/ToastContext';
 import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill } from '../modals/ExpertKnowledgeCaptureModal';
 import {
   Wrench,
-  Clock,
   FileText,
   ShieldAlert,
   ShieldCheck,
@@ -28,6 +27,7 @@ import {
   AlertTriangle,
   Building2,
   Lock,
+  Lightbulb,
 } from 'lucide-react';
 import {
   computeTechnicianLiveStatus,
@@ -127,7 +127,7 @@ export const TechnicianWorkspaceView: React.FC<{
   onLaunchSop?: (ticketId: string) => void;
   onNavigateToCopilot?: (assetTag: string) => void;
   initialTicketId?: string;
-}> = ({ onLaunchSop, onNavigateToCopilot, initialTicketId }) => {
+}> = ({ onLaunchSop: _onLaunchSop, onNavigateToCopilot, initialTicketId }) => {
   const { user, token, organization, isOwnerOrAdmin, membership } = useAuth();
   const { toast } = useToast();
   const [tasks, setTasks] = useState<TechTask[]>([]);
@@ -586,11 +586,11 @@ export const TechnicianWorkspaceView: React.FC<{
             return matchedByTarget;
           }
         }
-        if (!prevSelected) return allTasks.length > 0 ? allTasks[0] : null;
+        if (!prevSelected) return null;
         const matched = allTasks.find(
           (t) => t.id === prevSelected.id || (t.rawCaseId && t.rawCaseId === prevSelected.rawCaseId)
         );
-        return matched || (allTasks.length > 0 ? allTasks[0] : null);
+        return matched || null;
       });
     } catch (err) {
       console.error('Failed to load technician queue:', err);
@@ -640,21 +640,38 @@ export const TechnicianWorkspaceView: React.FC<{
   // Compute live workload and live progress % per technician across active tasks
   const technicianStats = useMemo(() => {
     return TECHNICIAN_ROSTER.map((tech) => {
-      const assigned = tasks.filter((t) => t.assignedTechnicianName === tech.name);
-      const totalSteps = assigned.reduce((sum, t) => sum + t.stepsCount, 0);
-      const doneSteps = assigned.reduce((sum, t) => sum + t.completedSteps, 0);
-      const progressPct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+      const assigned = tasks.filter(
+        (t) => (t.assignedTechnicianName || '').toLowerCase() === tech.name.toLowerCase()
+      );
+      // Strictly exclude resolved / 100% completed tasks from active workload
+      const activeAssigned = assigned.filter((t) => {
+        if (t.status === 'Resolved' || (t as any).isSolved) return false;
+        if (t.stepsCount > 0 && t.completedSteps >= t.stepsCount) return false;
+        return true;
+      });
+
       const solvedCount = solvedCounts[tech.name] ?? tech.initialSolved;
       const liveStatus = computeTechnicianLiveStatus(
         { fullName: tech.name, id: tech.id },
         tasks
       );
+
+      // Progress %: If active ticket exists, show that active ticket's progress %; if activeAssigned is 0, strictly reset to 0%!
+      let progressPct = 0;
+      if (activeAssigned.length > 0) {
+        const activeTask = activeAssigned[0];
+        if (activeTask.stepsCount > 0) {
+          progressPct = Math.round((activeTask.completedSteps / activeTask.stepsCount) * 100);
+        }
+      }
+
       return {
         ...tech,
         solvedCount,
-        assignedCount: assigned.length,
-        totalSteps,
-        doneSteps,
+        assignedCount: activeAssigned.length,
+        activeTickets: activeAssigned,
+        totalSteps: activeAssigned.reduce((sum, t) => sum + t.stepsCount, 0),
+        doneSteps: activeAssigned.reduce((sum, t) => sum + t.completedSteps, 0),
         progressPct,
         liveStatus,
       };
@@ -769,6 +786,39 @@ export const TechnicianWorkspaceView: React.FC<{
             })
           );
           incrementSolved(t.assignedTechnicianName);
+
+          // Auto-Advance to next queued ticket on 100% completion
+          setTimeout(() => {
+            setTasks((current) => {
+              const nextForTech =
+                current.find(
+                  (other) =>
+                    other.id !== taskId &&
+                    other.assignedTechnicianName === t.assignedTechnicianName &&
+                    other.status !== 'Resolved'
+                ) ||
+                current.find(
+                  (other) =>
+                    other.id !== taskId &&
+                    (!other.assignedTechnicianName || other.assignedTechnicianName === 'Unassigned') &&
+                    other.status !== 'Resolved'
+                );
+
+              if (nextForTech) {
+                setSelectedTask(nextForTech);
+                toast.info(
+                  'Auto-Advanced to Next Ticket',
+                  `Technician ${t.assignedTechnicianName} transitioned focus to next queued ticket [${nextForTech.assetTag}].`
+                );
+              } else {
+                toast.info(
+                  'All Assigned Tickets Solved',
+                  `Technician ${t.assignedTechnicianName} is now 🟢 Available (Idle — Ready for Dispatch).`
+                );
+              }
+              return current;
+            });
+          }, 300);
         }
 
         return updatedTask;
@@ -1014,18 +1064,40 @@ export const TechnicianWorkspaceView: React.FC<{
         })
       );
 
-      // 5. Update local task state
-      setTasks((prev) =>
-        prev.map((t) =>
+      // 5. Update local task state and auto-advance to next queued ticket
+      let nextTargetTask: TechTask | null = null;
+      setTasks((prev) => {
+        const nextList = prev.map((t) =>
           t.id === task.id
             ? { ...t, status: 'Resolved' as const, steps: completedSteps, completedSteps: completedSteps.length }
             : t
-        )
-      );
+        );
 
-      if (selectedTask?.id === task.id) {
+        nextTargetTask =
+          nextList.find(
+            (t) => t.id !== task.id && t.assignedTechnicianName === task.assignedTechnicianName && t.status !== 'Resolved'
+          ) ||
+          nextList.find(
+            (t) => t.id !== task.id && (!t.assignedTechnicianName || t.assignedTechnicianName === 'Unassigned') && t.status !== 'Resolved'
+          ) ||
+          null;
+
+        return nextList;
+      });
+
+      if (nextTargetTask) {
+        setSelectedTask(nextTargetTask);
+        toast.info(
+          'Auto-Advanced to Next Ticket',
+          `Technician ${task.assignedTechnicianName} transitioned focus to next queued ticket [${(nextTargetTask as any).assetTag}].`
+        );
+      } else {
         setSelectedTask((prev) =>
           prev ? { ...prev, status: 'Resolved', steps: completedSteps, completedSteps: completedSteps.length } : null
+        );
+        toast.info(
+          'All Assigned Tickets Solved',
+          `Technician ${task.assignedTechnicianName} is now 🟢 Available (Idle — Ready for Dispatch).`
         );
       }
 
@@ -1052,6 +1124,42 @@ export const TechnicianWorkspaceView: React.FC<{
     } catch (err) {
       console.error('Failed to resolve task:', err);
     }
+  };
+
+  // Archive verified repair task to Maintenance History and clear from active queue (Requirement 3)
+  const handleArchiveTaskToHistory = async (task: TechTask) => {
+    try {
+      await handleMarkTaskSolved(task);
+      setTasks((prev) => {
+        const nextList = prev.filter((t) => t.id !== task.id);
+        const nextTarget = nextList[0] || null;
+        setSelectedTask(nextTarget);
+        return nextList;
+      });
+      toast.success(
+        'Archived to Maintenance History',
+        `Task ${task.id} [${task.assetTag}] permanently archived to Maintenance History and cleared from active queue.`
+      );
+    } catch (err) {
+      console.error('Failed to archive task:', err);
+      toast.error('Archive Notice', 'Could not archive task to Maintenance History.');
+    }
+  };
+
+  // Pre-fill and open quick tip to Expert Knowledge (Requirement 3)
+  const handleAddTipToExpertKnowledge = (task: TechTask) => {
+    setExpertCapturePrefill({
+      machineAssetTag: task.assetTag,
+      issueTitle: `Field Fix: [${task.assetTag}] ${task.title}`,
+      category: task.specialistDiscipline?.toLowerCase().includes('hydraul')
+        ? 'Tooling Hack'
+        : task.specialistDiscipline?.toLowerCase().includes('safety')
+        ? 'Safety & LOTO'
+        : 'Troubleshooting Trick',
+      resolutionSummary: `All ${task.steps.length} field repair steps completed. Root Cause: ${task.topRootCause || 'Mechanical anomaly'}. Remedy: ${task.recommendedFix || 'Restored operational baseline.'}`,
+      symptom: task.symptomDescription,
+    });
+    setIsExpertCaptureOpen(true);
   };
 
   // Open OEM Vendor Escalation Modal
@@ -1130,13 +1238,55 @@ export const TechnicianWorkspaceView: React.FC<{
         )
       );
 
+      const escalationRecord = {
+        id: `OEM-ESC-${Date.now().toString().slice(-4)}`,
+        ticketId: oemTargetTask.id,
+        rawCaseId: oemTargetTask.rawCaseId,
+        assetTag: oemTargetTask.assetTag,
+        assetName: oemTargetTask.assetName,
+        oemManufacturer: oemVendorName,
+        oemContactEmail: oemContactEmail,
+        slaPriority: oemSlaPriority,
+        faultCode: oemTargetTask.faultCode || 'FC-ALERT-OEM',
+        rcaFindings: oemRcaFindings,
+        failedNotes: oemFailedNotes,
+        escalatedByTechnician: oemTargetTask.assignedTechnicianName || user?.fullName || 'Marcus Vance',
+        escalatedAt: new Date().toISOString(),
+        status: 'Awaiting OEM / Authority Review' as const,
+        warrantyStatus: 'Active Factory OEM Warranty',
+        contractRef: `OEM-${oemTargetTask.assetTag}-2026`,
+      };
+
+      try {
+        const raw = localStorage.getItem('forgex_oem_escalations');
+        const list = raw ? JSON.parse(raw) : [];
+        list.unshift(escalationRecord);
+        localStorage.setItem('forgex_oem_escalations', JSON.stringify(list));
+      } catch {}
+
+      window.dispatchEvent(
+        new CustomEvent('forgex:oem-escalated', { detail: escalationRecord })
+      );
+
       toast.success(
         'OEM Vendor Escalation Dispatched',
-        `Official L4 Service Request dispatched to ${oemVendorName}. Ticket status marked ESCALATED_TO_OEM.`
+        `Official L4 Service Request dispatched to ${oemVendorName}. Routing to OEM & Authority Escalations desk...`
       );
 
       setIsOemModalOpen(false);
       setOemTargetTask(null);
+
+      // Route directly to OEM Escalations view
+      setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent('forgex:navigate', {
+            detail: {
+              module: 'oem-escalations',
+              ticketId: escalationRecord.ticketId,
+            },
+          })
+        );
+      }, 600);
     } catch (err) {
       console.error('OEM Escalation failed:', err);
       toast.error(
@@ -1218,21 +1368,21 @@ export const TechnicianWorkspaceView: React.FC<{
       </div>
 
       {/* Technician Roster & Kundli Bar */}
-      <div className="bg-white border-b border-slate-200 px-4 py-3 shrink-0 shadow-2xs">
-        <div className="flex items-center justify-between gap-2 mb-2">
+      <div className="bg-white border-b border-slate-200 px-4 py-2 shrink-0 shadow-2xs">
+        <div className="flex items-center justify-between gap-2 mb-1.5">
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-slate-700 flex items-center gap-1.5">
               <Award className="w-3.5 h-3.5 text-blue-600" />
               Technician Roster & Kundli Register
             </span>
-            <span className="text-[10px] font-mono bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded font-semibold">
+            <span className="text-[9px] font-mono bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.2 rounded font-semibold">
               Live Workload & Skill Dispatch
             </span>
           </div>
           {selectedTechnician !== 'ALL' && (
             <button
               onClick={() => setSelectedTechnician('ALL')}
-              className="text-[11px] font-mono text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center gap-1 cursor-pointer"
+              className="text-[10px] font-mono text-blue-600 hover:text-blue-800 font-semibold inline-flex items-center gap-1 cursor-pointer"
             >
               <span>Show All Queue ({tasks.length})</span>
               <X className="w-3 h-3" />
@@ -1240,58 +1390,70 @@ export const TechnicianWorkspaceView: React.FC<{
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
           {technicianStats.map((tech) => {
             const isSelected = selectedTechnician === tech.name;
             const live = tech.liveStatus;
             const isOnShift = live.shiftStatus === 'ON_SHIFT';
+            const hasActiveWork = tech.activeTickets.length > 0;
+            const activeMachineTag = hasActiveWork
+              ? tech.activeTickets[0].assetTag || tech.activeTickets[0].assetName || 'Equipment'
+              : '';
 
             return (
               <div
                 key={tech.id}
                 onClick={() => setSelectedTechnician(isSelected ? 'ALL' : tech.name)}
-                className={`p-2.5 rounded-lg border transition-all cursor-pointer relative ${
+                className={`p-2 rounded-lg border transition-all cursor-pointer relative ${
                   isSelected
                     ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
                     : 'bg-slate-50/60 hover:bg-slate-100/70 border-slate-200 hover:border-slate-300 shadow-2xs'
                 }`}
                 title={`Click to filter queue for ${tech.name}`}
               >
-                <div className="flex items-start justify-between gap-2">
+                {/* Header: Name + Discipline + Rating */}
+                <div className="flex items-start justify-between gap-1.5">
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-bold text-slate-900 truncate">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[11px] font-bold text-slate-900 truncate">
                         {tech.name}
                       </span>
                       {isSelected && (
                         <span className="w-1.5 h-1.5 rounded-full bg-blue-600 shrink-0" />
                       )}
                     </div>
-                    <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                    <p className="text-[9px] text-slate-500 truncate leading-tight">
                       {tech.discipline}
                     </p>
                   </div>
-                  <span className="text-[10px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded shrink-0">
+                  <span className="text-[9px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200 px-1 py-0.2 rounded shrink-0">
                     ⭐ {tech.rating.toFixed(1)}
                   </span>
                 </div>
 
-                {/* Live Status Pill & Quick Shift Toggle */}
-                <div className="mt-2 pt-1.5 border-t border-slate-200/60 flex items-center justify-between gap-1 text-[10px] font-mono">
-                  <span
-                    className={`font-semibold px-1.5 py-0.5 rounded border truncate max-w-[130px] ${
-                      live.statusType === 'AVAILABLE'
-                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                        : live.statusType === 'BUSY'
-                        ? 'bg-amber-50 text-amber-800 border-amber-200'
-                        : 'bg-rose-50 text-rose-800 border-rose-200'
-                    }`}
-                    title={live.fullText}
-                  >
-                    {live.shortText}
-                  </span>
+                {/* Two Distinct Badges:
+                    1) Left Badge: Live Machine Status (Read-Only)
+                    2) Right Button: Shift Status (Automatic + Manual Toggle) */}
+                <div className="mt-1.5 pt-1 border-t border-slate-200/60 flex items-center justify-between gap-1 text-[9px] font-mono">
+                  {/* Left Badge: Live Machine Status (Read-Only) */}
+                  {!isOnShift ? (
+                    <span className="font-semibold px-1.5 py-0.2 rounded border bg-slate-100 text-slate-600 border-slate-200 truncate shrink-0">
+                      ⚪ Paused
+                    </span>
+                  ) : hasActiveWork ? (
+                    <span
+                      className="font-semibold px-1.5 py-0.2 rounded border bg-amber-50 text-amber-800 border-amber-200 truncate max-w-[120px]"
+                      title={`Busy on ${activeMachineTag}`}
+                    >
+                      🟡 Busy on {activeMachineTag}
+                    </span>
+                  ) : (
+                    <span className="font-semibold px-1.5 py-0.2 rounded border bg-emerald-50 text-emerald-800 border-emerald-200 truncate shrink-0">
+                      🟢 Available / Idle
+                    </span>
+                  )}
 
-                  {/* Manual Shift Toggle Chip */}
+                  {/* Right Button: Shift Status (Manual 1-Click Toggle: On Shift <-> On Break) */}
                   <button
                     type="button"
                     onClick={(e) => {
@@ -1299,18 +1461,19 @@ export const TechnicianWorkspaceView: React.FC<{
                       const next = isOnShift ? 'ON_BREAK' : 'ON_SHIFT';
                       setTechnicianShiftStatus(tech.name, next);
                     }}
-                    className={`px-1.5 py-0.5 rounded border font-bold transition shrink-0 cursor-pointer text-[10px] ${
+                    className={`px-1.5 py-0.2 rounded border font-bold transition shrink-0 cursor-pointer text-[9px] ${
                       isOnShift
                         ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border-emerald-300'
                         : 'bg-rose-100 text-rose-800 hover:bg-rose-200 border-rose-300'
                     }`}
-                    title="Click to toggle technician shift availability"
+                    title="Click to toggle shift availability"
                   >
-                    {isOnShift ? '🟢 On Shift' : '🔴 On Break'}
+                    {isOnShift ? '🟢 On Shift' : '☕ On Break'}
                   </button>
                 </div>
 
-                <div className="mt-1.5 flex items-center justify-between text-[11px] font-mono">
+                {/* Workload Counts: Active Work & 🏆 Solved */}
+                <div className="mt-1 flex items-center justify-between text-[10px] font-mono">
                   <span className="text-slate-600">
                     Active: <strong className="text-slate-900">{tech.assignedCount}</strong>
                   </span>
@@ -1319,13 +1482,13 @@ export const TechnicianWorkspaceView: React.FC<{
                   </span>
                 </div>
 
-                {/* Live Step Progress Bar */}
-                <div className="mt-1.5">
-                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 mb-0.5">
+                {/* Live Step Progress Bar (Strictly 0% when Active: 0) */}
+                <div className="mt-1">
+                  <div className="flex items-center justify-between text-[9px] font-mono text-slate-500 mb-0.5">
                     <span>Live Progress</span>
                     <span className="font-bold text-slate-700">{tech.progressPct}%</span>
                   </div>
-                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                  <div className="w-full h-1 bg-slate-200 rounded-full overflow-hidden">
                     <div
                       className={`h-full transition-all duration-300 ${
                         tech.progressPct === 100
@@ -1433,27 +1596,26 @@ export const TechnicianWorkspaceView: React.FC<{
                   return (
                     <div
                       key={task.id}
-                      onClick={() => setSelectedTask(task)}
-                      className={`p-3 rounded-lg border transition cursor-pointer text-xs space-y-2 group relative ${
+                      onClick={() => setSelectedTask((prev) => (prev?.id === task.id ? null : task))}
+                      className={`p-2.5 rounded-lg border transition cursor-pointer text-xs space-y-1.5 group relative ${
                         isSelected
                           ? 'bg-blue-50/70 border-blue-500 ring-1 ring-blue-500/20 shadow-xs'
-                          : 'bg-white border-slate-200 hover:border-slate-300'
+                          : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
                       }`}
                     >
-                      {/* Top Row: Case ID, Date Dispatched, Priority Pill */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-mono font-bold text-blue-600 text-[11px] truncate">
+                      {/* Row 1 (Header Strip): Case ID + Asset Tag Pill on left; Priority Badge + Delete icon on right */}
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-mono font-bold text-blue-600 text-xs truncate">
                             {task.id}
                           </span>
-                          <span className="text-[10px] text-slate-400 font-mono flex items-center gap-1 shrink-0">
-                            <Clock className="w-3 h-3 text-slate-400 shrink-0" />
-                            {task.createdAtFormatted}
+                          <span className="font-mono font-semibold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded text-[10px] shrink-0 truncate max-w-[140px]">
+                            {task.assetTag}
                           </span>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="flex items-center gap-1 shrink-0">
                           <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-bold border ${
                               task.priority === 'Critical'
                                 ? 'bg-red-50 text-red-700 border-red-200'
                                 : task.priority === 'High'
@@ -1464,7 +1626,7 @@ export const TechnicianWorkspaceView: React.FC<{
                             {task.priority}
                           </span>
 
-                          {/* Quick delete icon on card (visible on hover for Admins/Supervisors or Resolved tasks) */}
+                          {/* Quick delete icon on card */}
                           {canDelete && (
                             <button
                               type="button"
@@ -1472,7 +1634,7 @@ export const TechnicianWorkspaceView: React.FC<{
                                 e.stopPropagation();
                                 setDeleteConfirmTask(task);
                               }}
-                              title="Delete task from active queue (Purge to history)"
+                              title="Delete / Archive task"
                               className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-red-600 transition cursor-pointer"
                             >
                               <Trash2 className="w-3 h-3" />
@@ -1481,54 +1643,33 @@ export const TechnicianWorkspaceView: React.FC<{
                         </div>
                       </div>
 
-                      {/* Middle Row: Asset Tag (bold) + 1-Line Short Issue Title (truncated) */}
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono font-bold text-slate-900 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[11px] shrink-0">
-                          {task.assetTag}
-                        </span>
-                        <p className="text-slate-800 text-xs font-medium truncate" title={task.title}>
+                      {/* Row 2 (Issue & Footer Strip): 1-line truncated Issue Title on left; Tech Name (⭐4.9) + Steps (4/4) + Status Pill on right */}
+                      <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <p className="text-slate-700 font-medium truncate flex-1 min-w-0" title={task.title}>
                           {task.title}
                         </p>
-                      </div>
-
-                      {/* Technician Rating & Workload Badge */}
-                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-0.5">
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedTechnician(task.assignedTechnicianName);
-                          }}
-                          className="flex items-center gap-1.5 hover:text-blue-600 transition cursor-pointer"
-                          title="Click to filter by this technician"
-                        >
-                          <span className="font-semibold text-slate-700">
-                            👤 {task.assignedTechnicianName}
+                        <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
+                          <span className="text-slate-600 font-semibold truncate max-w-[90px]" title={task.assignedTechnicianName}>
+                            👤 {task.assignedTechnicianName.split(' ')[0]} <span className="text-amber-700 font-bold">⭐{task.assignedTechnicianRating.toFixed(1)}</span>
                           </span>
-                          <span className="inline-flex items-center gap-0.5 bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded font-bold">
-                            <Star className="w-2.5 h-2.5 fill-amber-500 text-amber-500" />
-                            {task.assignedTechnicianRating}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Bottom Row: Steps Progress Counter & Status Tag */}
-                      <div className="flex items-center justify-between text-[11px] font-mono pt-1.5 border-t border-slate-100 text-slate-500">
-                        <span>
-                          Steps:{' '}
-                          <strong className="text-slate-800">
+                          <span className="text-slate-300">•</span>
+                          <span className="font-bold text-slate-800">
                             {task.completedSteps}/{task.stepsCount}
-                          </strong>
-                        </span>
-                        {task.isStarted && task.completedSteps < task.stepsCount && (
-                          <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
-                            IN PROGRESS
                           </span>
-                        )}
-                        {task.completedSteps === task.stepsCount && task.stepsCount > 0 && (
-                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                            RESOLVED
-                          </span>
-                        )}
+                          {task.completedSteps === task.stepsCount && task.stepsCount > 0 ? (
+                            <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded text-[9px]">
+                              RESOLVED
+                            </span>
+                          ) : task.isStarted ? (
+                            <span className="font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded text-[9px]">
+                              IN PROGRESS
+                            </span>
+                          ) : (
+                            <span className="font-medium text-slate-500 bg-slate-100 border border-slate-200 px-1 py-0.2 rounded text-[9px]">
+                              PENDING
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -1539,32 +1680,32 @@ export const TechnicianWorkspaceView: React.FC<{
 
           {/* Right: Streamlined Action-Oriented Detail View */}
           {selectedTask ? (
-            <div className="flex-1 min-h-0 min-w-0 p-5 lg:p-6 overflow-y-auto space-y-5 w-full">
-              <div className="bg-white rounded-xl border border-slate-200 p-5 lg:p-6 shadow-xs space-y-5">
+            <div className="flex-1 min-h-0 min-w-0 p-3.5 sm:p-4 overflow-y-auto space-y-3.5 w-full">
+              <div className="bg-white rounded-xl border border-slate-200 p-3.5 sm:p-4 shadow-xs space-y-3.5">
                 {/* 1. Clean Detail Header */}
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-4 border-b border-slate-100">
-                  <div className="space-y-1.5 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5 pb-3 border-b border-slate-100">
+                  <div className="space-y-1 flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
                         {selectedTask.id}
                       </span>
                       {selectedTask.faultCode && (
-                        <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                        <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
                           FAULT: {selectedTask.faultCode}
                         </span>
                       )}
                       {selectedTask.lotoRequired ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 text-[11px] font-mono font-bold">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 text-[10px] font-mono font-bold">
                           <ShieldAlert className="w-3 h-3" /> LOTO MANDATORY
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-mono font-bold">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-mono font-bold">
                           <ShieldCheck className="w-3 h-3" /> LIVE / ISOLATED
                         </span>
                       )}
 
                       {/* Assigned Technician & Rating Badge */}
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 text-[11px] font-mono font-semibold">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 text-[10px] font-mono font-semibold">
                         <Award className="w-3 h-3 text-amber-600" />
                         {selectedTask.assignedTechnicianName}
                         <span className="text-amber-700 font-bold ml-0.5">
@@ -1573,12 +1714,12 @@ export const TechnicianWorkspaceView: React.FC<{
                       </span>
                     </div>
 
-                    <h2 className="text-base font-bold text-slate-900 leading-tight">
+                    <h2 className="text-sm sm:text-base font-bold text-slate-900 leading-snug">
                       {selectedTask.title}
                     </h2>
 
                     {/* Single-Line Metadata Strip: Asset | Date Dispatched | Plant */}
-                    <div className="flex items-center gap-2 text-xs text-slate-500 font-mono flex-wrap pt-0.5">
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-mono flex-wrap">
                       <span>
                         Asset: <strong className="text-slate-800">{selectedTask.assetTag}</strong>
                       </span>
@@ -1604,7 +1745,7 @@ export const TechnicianWorkspaceView: React.FC<{
                   {/* Priority, Status Pills & Delete Button */}
                   <div className="flex items-center gap-2 shrink-0">
                     <span
-                      className={`px-2.5 py-1 rounded text-xs font-mono font-bold border ${
+                      className={`px-2 py-0.5 rounded text-xs font-mono font-bold border ${
                         selectedTask.priority === 'Critical'
                           ? 'bg-red-50 text-red-700 border-red-200'
                           : selectedTask.priority === 'High'
@@ -1614,7 +1755,7 @@ export const TechnicianWorkspaceView: React.FC<{
                     >
                       {selectedTask.priority}
                     </span>
-                    <span className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 border border-slate-200 text-xs font-mono font-bold">
+                    <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-xs font-mono font-bold">
                       {selectedTask.status}
                     </span>
 
@@ -1629,6 +1770,16 @@ export const TechnicianWorkspaceView: React.FC<{
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     )}
+
+                    {/* Deselect / Close Button (Requirement 1) */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTask(null)}
+                      title="Close task details (Return to empty state)"
+                      className="p-1.5 border border-slate-200 bg-white hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition cursor-pointer shadow-2xs"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 
@@ -1637,7 +1788,7 @@ export const TechnicianWorkspaceView: React.FC<{
                   <button
                     type="button"
                     onClick={() => setShowDiagnostics((prev) => !prev)}
-                    className="w-full flex items-center justify-between p-3 bg-slate-50/80 hover:bg-slate-100/80 transition text-left cursor-pointer"
+                    className="w-full flex items-center justify-between py-2 px-3 bg-slate-50/80 hover:bg-slate-100/80 transition text-left cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <FileText className="w-4 h-4 text-blue-600 shrink-0" />
@@ -1743,9 +1894,9 @@ export const TechnicianWorkspaceView: React.FC<{
                   </div>
                 ) : (
                   /* STARTED STATE: Clean Vertical Checklist Execution Board */
-                  <div className="space-y-4">
+                  <div className="space-y-3.5">
                     {/* Execution Board Header & Progress (Strict Persistence Sync) */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-slate-50 rounded-lg border border-slate-200">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 py-2 px-3 bg-slate-50 rounded-lg border border-slate-200">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-slate-900">Execution Board</span>
@@ -1789,154 +1940,168 @@ export const TechnicianWorkspaceView: React.FC<{
                       </div>
                     </div>
 
-                    {/* Vertical Checklist Steps */}
-                    <div className="space-y-2.5">
+                    {/* 2x2 Grid of Execution Steps with Auto-Slim Completed Steps (Requirement 2) */}
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
                       {selectedTask.steps.map((step) => {
                         const isCompleted = step.status === 'COMPLETED';
                         const isActive = step.status === 'IN_PROGRESS';
 
-                        return (
-                          <div
-                            key={step.id}
-                            className={`p-4 rounded-lg border transition space-y-3 ${
-                              isCompleted
-                                ? 'bg-slate-50/70 border-slate-200 opacity-90'
-                                : isActive
-                                ? 'bg-blue-50/30 border-blue-400 ring-2 ring-blue-400/20 shadow-xs'
-                                : 'bg-white border-slate-200'
-                            }`}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              {/* Checkbox & Step Info */}
-                              <div className="flex items-start gap-3 flex-1 min-w-0">
-                                <button
-                                  type="button"
-                                  disabled={isCompleted}
-                                  onClick={() => handleToggleStep(selectedTask.id, step.id)}
-                                  className={`mt-0.5 transition shrink-0 ${
-                                    isCompleted
-                                      ? 'text-emerald-600 cursor-not-allowed opacity-90'
-                                      : 'text-slate-400 hover:text-blue-600 cursor-pointer'
-                                  }`}
-                                  title={isCompleted ? 'Step confirmed and permanently locked' : 'Click to confirm step'}
-                                >
-                                  {isCompleted ? (
-                                    <CheckSquare className="w-5 h-5 text-emerald-600 fill-emerald-50" />
-                                  ) : (
-                                    <Square className="w-5 h-5 text-slate-300 hover:text-slate-500" />
-                                  )}
-                                </button>
-
-                                <div className="space-y-1 flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-mono text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
-                                      STEP {step.stepNumber.toString().padStart(2, '0')}
-                                    </span>
-                                    <h4
-                                      className={`text-xs font-bold leading-tight ${
-                                        isCompleted
-                                          ? 'line-through text-slate-500 font-medium'
-                                          : 'text-slate-900'
-                                      }`}
-                                    >
-                                      {step.title}
-                                    </h4>
-                                    {step.requiresLoto && (
-                                      <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
-                                        <ShieldAlert className="w-2.5 h-2.5" /> LOTO REQUIRED
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  <p
-                                    className={`text-xs leading-relaxed ${
-                                      isCompleted ? 'text-slate-400' : 'text-slate-600'
-                                    }`}
-                                  >
-                                    {step.instruction}
-                                  </p>
+                        if (isCompleted) {
+                          return (
+                            <div
+                              key={step.id}
+                              className="p-3 rounded-lg border transition bg-emerald-50/40 border-emerald-200/80 space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <CheckSquare className="w-4 h-4 text-emerald-600 fill-emerald-50 shrink-0" />
+                                  <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-100/90 border border-emerald-200 px-1.5 py-0.5 rounded shrink-0">
+                                    STEP {step.stepNumber.toString().padStart(2, '0')}
+                                  </span>
+                                  <h4 className="text-xs font-semibold text-slate-700 truncate line-through">
+                                    {step.title}
+                                  </h4>
                                 </div>
+                                <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded shadow-2xs shrink-0">
+                                  <Lock className="w-2.5 h-2.5 text-emerald-700" />
+                                  <span>Completed</span>
+                                </span>
                               </div>
+                              <p className="line-clamp-1 text-xs text-slate-400 pl-6" title={step.instruction}>
+                                {step.instruction}
+                              </p>
+                            </div>
+                          );
+                        }
 
-                              {/* Status Tag & Quick Solve Button */}
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                {!isCompleted && selectedTask.status !== 'Resolved' && (
+                        if (isActive) {
+                          return (
+                            <div
+                              key={step.id}
+                              className="p-3 rounded-lg border transition bg-blue-50/30 border-blue-400 ring-2 ring-blue-400/20 shadow-xs space-y-2.5"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-start gap-2 flex-1 min-w-0">
                                   <button
                                     type="button"
-                                    onClick={() => handleMarkTaskSolved(selectedTask, step)}
-                                    className="px-2.5 py-1 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white border border-emerald-300 transition cursor-pointer flex items-center gap-1 shadow-2xs active:scale-95"
-                                    title="Fault solved at this step — complete ticket immediately"
+                                    onClick={() => handleToggleStep(selectedTask.id, step.id)}
+                                    className="mt-0.5 text-slate-400 hover:text-blue-600 cursor-pointer shrink-0"
+                                    title="Click to confirm step"
                                   >
-                                    <CheckCircle2 className="w-3 h-3" />
-                                    <span>✅ Issue Solved Here</span>
+                                    <Square className="w-4 h-4 text-slate-400 hover:text-blue-600" />
                                   </button>
-                                )}
-                                {isCompleted ? (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded shadow-2xs">
-                                    <Lock className="w-3 h-3 text-emerald-700" />
-                                    <span>🔒 Completed</span>
-                                  </span>
-                                ) : isActive ? (
-                                  <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
-                                    ACTIVE STEP
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
-                                    PENDING
-                                  </span>
-                                )}
+                                  <div className="space-y-1 flex-1 min-w-0">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">
+                                        STEP {step.stepNumber.toString().padStart(2, '0')}
+                                      </span>
+                                      <h4 className="text-xs font-bold text-slate-900 leading-tight">
+                                        {step.title}
+                                      </h4>
+                                      {step.requiresLoto && (
+                                        <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
+                                          <ShieldAlert className="w-2.5 h-2.5" /> LOTO
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-xs text-slate-700 leading-relaxed">
+                                      {step.instruction}
+                                    </p>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-100 border border-blue-200 px-2 py-0.5 rounded shrink-0">
+                                  ACTIVE STEP
+                                </span>
                               </div>
-                            </div>
 
-                            {/* Active Step Dedicated Actions */}
-                            {isActive && (
-                              <div className="pt-2.5 border-t border-blue-100 flex flex-wrap items-center justify-between gap-2.5">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  {/* Option 1: Confirm Step & Next */}
+                              {/* Active Step Dedicated Actions */}
+                              <div className="pt-2 border-t border-blue-200/80 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   <button
                                     type="button"
                                     onClick={() => handleCompleteAndNext(selectedTask.id, step.id)}
-                                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1.5 transition shadow-xs cursor-pointer whitespace-nowrap"
+                                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap"
                                   >
                                     <Check className="w-3.5 h-3.5" />
-                                    <span>✓ Confirm Step & Next</span>
-                                    <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
+                                    <span>Confirm Step & Next</span>
+                                    <ArrowRight className="w-3 h-3 ml-0.5" />
                                   </button>
 
-                                  {/* Option 2: Issue Solved Here — Complete Ticket */}
                                   <button
                                     type="button"
                                     onClick={() => handleMarkTaskSolved(selectedTask, step)}
-                                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1.5 transition shadow-xs cursor-pointer whitespace-nowrap active:scale-95"
+                                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap active:scale-95"
                                     title="Fault resolved at this procedure step — complete ticket and log to Maintenance History"
                                   >
                                     <CheckCircle2 className="w-3.5 h-3.5" />
-                                    <span>✅ Issue Solved Here — Complete Ticket</span>
+                                    <span>Issue Solved Here</span>
                                   </button>
                                 </div>
 
-                                <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   <button
                                     type="button"
                                     onClick={() => handleAskCopilot(selectedTask, step)}
-                                    className="px-3 py-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                                    className="px-2 py-1.5 border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg inline-flex items-center gap-1 transition cursor-pointer shadow-2xs"
                                   >
                                     <Cpu className="w-3.5 h-3.5 text-blue-600" />
-                                    <span>Ask Copilot</span>
+                                    <span>Copilot</span>
                                   </button>
 
                                   <button
                                     type="button"
                                     onClick={() => handleOpenOemModal(selectedTask)}
-                                    className="px-3 py-1.5 border border-amber-300 hover:border-amber-400 bg-amber-50/80 hover:bg-amber-100/80 text-amber-900 text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                                    className="px-2 py-1.5 border border-amber-300 hover:border-amber-400 bg-amber-50/80 hover:bg-amber-100/80 text-amber-900 text-xs font-semibold rounded-lg inline-flex items-center gap-1 transition cursor-pointer shadow-2xs"
                                     title="Hardware blocked or requires manufacturer factory intervention"
                                   >
                                     <Building2 className="w-3.5 h-3.5 text-amber-700" />
-                                    <span>Escalate to OEM</span>
+                                    <span>OEM</span>
                                   </button>
                                 </div>
                               </div>
-                            )}
+                            </div>
+                          );
+                        }
+
+                        /* PENDING STATE */
+                        return (
+                          <div
+                            key={step.id}
+                            className="p-3 rounded-lg border transition bg-white border-slate-200 space-y-1.5"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-start gap-2 flex-1 min-w-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleStep(selectedTask.id, step.id)}
+                                  className="mt-0.5 text-slate-300 hover:text-slate-500 cursor-pointer shrink-0"
+                                  title="Click to confirm step"
+                                >
+                                  <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                                </button>
+                                <div className="space-y-1 flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-mono text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                      STEP {step.stepNumber.toString().padStart(2, '0')}
+                                    </span>
+                                    <h4 className="text-xs font-semibold text-slate-800 leading-tight">
+                                      {step.title}
+                                    </h4>
+                                    {step.requiresLoto && (
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded">
+                                        <ShieldAlert className="w-2.5 h-2.5" /> LOTO
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="line-clamp-2 text-xs text-slate-500 leading-relaxed">
+                                    {step.instruction}
+                                  </p>
+                                </div>
+                              </div>
+                              <span className="text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded shrink-0">
+                                PENDING
+                              </span>
+                            </div>
                           </div>
                         );
                       })}
@@ -1944,7 +2109,7 @@ export const TechnicianWorkspaceView: React.FC<{
 
                     {/* Fallback Unresolved Action if technician is blocked / hardware beyond in-house repair */}
                     {selectedTask.completedSteps < selectedTask.stepsCount && (
-                      <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                      <div className="p-2.5 bg-amber-50/80 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
                         <div className="flex items-center gap-2 text-amber-900 font-medium">
                           <Building2 className="w-4 h-4 text-amber-700 shrink-0" />
                           <span>
@@ -1954,7 +2119,7 @@ export const TechnicianWorkspaceView: React.FC<{
                         <button
                           type="button"
                           onClick={() => handleOpenOemModal(selectedTask)}
-                          className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-md inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer shrink-0"
+                          className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-md inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer shrink-0"
                         >
                           <Building2 className="w-3.5 h-3.5" />
                           <span>🏭 Issue Unresolved — Escalate to OEM / Manufacturer</span>
@@ -1962,37 +2127,42 @@ export const TechnicianWorkspaceView: React.FC<{
                       </div>
                     )}
 
-                    {/* Completion Banner when all steps are done */}
+                    {/* Completion Banner when all steps are done (Requirement 3: direct Archive & Expert Knowledge actions) */}
                     {selectedTask.completedSteps === selectedTask.stepsCount &&
                       selectedTask.stepsCount > 0 && (
-                        <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                          <div className="flex items-center gap-2 text-emerald-800 font-semibold">
-                            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                            <div>
-                              <div className="font-bold">
+                        <div className="py-2.5 px-4 rounded-lg bg-emerald-50 border border-emerald-300 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-2xs">
+                          <div className="flex items-center gap-2 text-emerald-900 font-medium">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>
+                              <strong className="font-bold text-emerald-950">
                                 All {selectedTask.stepsCount}/{selectedTask.stepsCount} Execution Steps Completed
-                              </div>
-                              <div className="text-[11px] text-emerald-700 font-normal">
-                                Field maintenance verified & operational baseline restored.
-                              </div>
-                            </div>
+                              </strong>{' '}
+                              <span className="text-emerald-700 text-[11px] hidden md:inline">
+                                • Field maintenance verified & baseline restored.
+                              </span>
+                            </span>
                           </div>
-                          <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                            {/* Secondary Action: Add Tip to Expert Knowledge */}
                             <button
                               type="button"
-                              onClick={() => handleMarkTaskSolved(selectedTask)}
-                              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
+                              onClick={() => handleAddTipToExpertKnowledge(selectedTask)}
+                              className="px-3 py-1.5 bg-white hover:bg-emerald-100/60 border border-emerald-300 text-emerald-800 font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                              title="Capture field insights and tricks directly into Expert Knowledge"
                             >
-                              <Award className="w-4 h-4 text-emerald-200" />
-                              <span>Mark Solved & Archive to Maintenance History</span>
+                              <Lightbulb className="w-3.5 h-3.5 text-amber-500 fill-amber-100" />
+                              <span>💡 Add Tip to Expert Knowledge</span>
                             </button>
+
+                            {/* Primary Action: Archive to Maintenance History */}
                             <button
                               type="button"
-                              onClick={() => onLaunchSop?.(selectedTask.id)}
-                              className="px-3 py-2 bg-white hover:bg-emerald-100/50 border border-emerald-300 text-emerald-800 font-semibold rounded-lg inline-flex items-center justify-center gap-1.5 transition cursor-pointer"
+                              onClick={() => handleArchiveTaskToHistory(selectedTask)}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
+                              title="Archive verified repair record to Maintenance History and clear from active queue"
                             >
-                              <span>Formal SOP Signoff</span>
-                              <ArrowRight className="w-3.5 h-3.5" />
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-100" />
+                              <span>✅ Archive to Maintenance History</span>
                             </button>
                           </div>
                         </div>
@@ -2002,18 +2172,14 @@ export const TechnicianWorkspaceView: React.FC<{
               </div>
             </div>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 space-y-3 font-mono">
-              <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
-                <Wrench className="w-6 h-6 text-slate-400" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm font-bold text-slate-600 font-sans">
-                  {tasks.length === 0 ? 'Technician Queue is Empty' : 'No Field Task Selected'}
-                </p>
-                <p className="text-xs text-slate-400 font-sans max-w-sm">
-                  {tasks.length === 0
-                    ? 'No active tickets in dispatch. Tickets flow in live from RCA escalations and operator reports.'
-                    : 'Select a task from the list on the left to review procedure steps and start maintenance execution.'}
+            <div className="flex-1 flex items-center justify-center p-8 bg-[#F8FAFC]">
+              <div className="max-w-md w-full bg-white rounded-xl border border-slate-200 p-8 text-center space-y-3 shadow-xs">
+                <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto border border-blue-100">
+                  <Wrench className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900 font-sans">No Ticket Selected</h3>
+                <p className="text-xs text-slate-500 leading-relaxed font-sans max-w-sm mx-auto">
+                  Click any ticket from the left panel list to inspect diagnostic context, assigned technician status, and execution steps.
                 </p>
               </div>
             </div>

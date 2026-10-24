@@ -110,6 +110,27 @@ export async function bootstrapInitialData(
       logger.info({ membershipId: workerMembership.id }, 'Bootstrapped worker membership');
     }
 
+    // 3e. Bootstrap Sagar (Owner) Persona
+    let sagarUser = await dataStore.getUserByEmail('sagarmaheshwari200761@gmail.com');
+    if (!sagarUser) {
+      sagarUser = await dataStore.createUser({
+        externalAuthId: 'user-dev-sagar-1',
+        email: 'sagarmaheshwari200761@gmail.com',
+        fullName: 'Sagar Maheshwari',
+      });
+      logger.info({ userId: sagarUser.id }, 'Bootstrapped Sagar owner user');
+    }
+    let sagarMembership = await dataStore.getMembership(sagarUser.id, org.id);
+    if (!sagarMembership) {
+      sagarMembership = await dataStore.createMembership({
+        organizationId: org.id,
+        userId: sagarUser.id,
+        role: 'ORGANIZATION_OWNER',
+        status: 'ACTIVE',
+      });
+      logger.info({ membershipId: sagarMembership.id }, 'Bootstrapped Sagar owner membership');
+    }
+
     // 4. Bootstrap Texas Plant
     let plant = await dataStore.getPlantById(org.id, 'PLANT-TX-04');
     if (!plant) {

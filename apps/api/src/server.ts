@@ -97,6 +97,14 @@ async function startServer() {
 
   process.on('SIGTERM', () => handleShutdown('SIGTERM'));
   process.on('SIGINT', () => handleShutdown('SIGINT'));
+
+  process.on('uncaughtException', (err: any) => {
+    logger.error({ err: err?.message, stack: err?.stack }, 'Uncaught exception caught by global safety handler');
+  });
+
+  process.on('unhandledRejection', (reason: any) => {
+    logger.error({ reason: reason?.message || reason }, 'Unhandled promise rejection caught by global safety handler');
+  });
 }
 
 startServer().catch((err) => {

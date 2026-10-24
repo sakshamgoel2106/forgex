@@ -24,6 +24,7 @@ import { TechnicianWorkspaceView } from './components/views/TechnicianWorkspaceV
 import { WorkerWorkspaceView } from './components/views/WorkerWorkspaceView';
 import { ReportsAnalyticsView } from './components/views/ReportsAnalyticsView';
 import { NotificationsFeedView } from './components/views/NotificationsFeedView';
+import { OemEscalationsView } from './components/views/OemEscalationsView';
 
 export function getDefaultModuleForRole(role?: string): NavModule {
   switch (role) {
@@ -207,6 +208,15 @@ const AppContent: React.FC = () => {
             initialTicketId={navTargetId}
             onLaunchSop={() => setActiveModule('maintenance')}
             onNavigateToCopilot={(_tag) => setActiveModule('copilot')}
+          />
+        );
+      case 'oem-escalations':
+        return (
+          <OemEscalationsView
+            onNavigateToTechQueue={(ticketId) => {
+              setNavTargetId(ticketId);
+              setActiveModule('tech');
+            }}
           />
         );
       case 'worker':

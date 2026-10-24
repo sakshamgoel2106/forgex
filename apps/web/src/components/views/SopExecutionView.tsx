@@ -18,6 +18,7 @@ import {
   Copy,
   Check,
   Play,
+  ClipboardList,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Button } from '../ui/button';
@@ -30,7 +31,7 @@ import type {
 } from '@forgex/shared-types';
 import { apiFetch } from '../../lib/api';
 import { useToast } from '../../lib/ToastContext';
-import { computeTechnicianLiveStatus, formatRelativeTime } from '../../utils/technicianLiveStatus';
+import { computeTechnicianLiveStatus } from '../../utils/technicianLiveStatus';
 
 export interface WorkOrderCase extends MaintenanceCase {
   history: Array<{
@@ -47,6 +48,9 @@ export interface WorkOrderCase extends MaintenanceCase {
   assetTag?: string;
   assetName?: string;
   faultCode?: string;
+  errorCode?: string;
+  completedSteps?: number;
+  stepsCount?: number;
   specialistDiscipline?: string;
   plantName?: string;
   isAiAutoAssigned?: boolean;
@@ -348,6 +352,141 @@ export const purgeExecutionLocalStorage = (activeCaseIds?: string[]) => {
     console.warn('Failed to clean execution localStorage', err);
   }
 };
+
+// -----------------------------------------------------------------------------
+// LIVE EXECUTION PROGRESS & TITLE CLEANING HELPERS
+// -----------------------------------------------------------------------------
+export interface ExecutionStepItem {
+  stepNumber: number;
+  title: string;
+  instruction?: string;
+  status: 'COMPLETED' | 'IN_PROGRESS' | 'PENDING';
+}
+
+export interface ExecutionProgressInfo {
+  totalSteps: number;
+  doneSteps: number;
+  progressPct: number;
+  isSolved: boolean;
+  activeStepName: string;
+  steps: ExecutionStepItem[];
+}
+
+export function cleanFaultTitle(rawTitle?: string, caseNumber?: string, assetTag?: string): string {
+  if (!rawTitle) return 'Operating Tolerance Deviation';
+  let clean = rawTitle;
+  if (caseNumber) {
+    clean = clean.replace(new RegExp(`^\\[?${caseNumber}\\]?[:\\s-]*`, 'gi'), '');
+  }
+  clean = clean.replace(/^\[(?:ESC|CASE|WO|TKT|ALM)-[A-Z0-9-]+\][:\s-]*/gi, '');
+  if (assetTag) {
+    clean = clean.replace(new RegExp(`^\\[?${assetTag}\\]?[:\\s-]*`, 'gi'), '');
+  }
+  clean = clean.replace(/^\[[A-Za-z0-9]+-[A-Za-z0-9-]+\][:\s-]*/gi, '');
+  clean = clean.replace(/^[A-Za-z0-9]+-[A-Za-z0-9-]+[:\s-]+/g, '');
+  // Strip any alarm code prefix like ALM-DIAG-201 /
+  clean = clean.replace(/^[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+\s*[\/:\s-]+\s*/i, '');
+  // Strip leading slash, colon, or dashes
+  clean = clean.replace(/^[\s/:\-]+/g, '');
+  // Strip trailing role in parentheses like (Lead Vibration Analyst) or any technician roles
+  clean = clean.replace(/\s*\([^)]*(?:Analyst|Technician|Overhaul|Lead|Engineer|Specialist|Certified|Senior|Operator)[^)]*\)\s*$/i, '');
+  clean = clean.replace(/^[\s/:\-]+/g, '').trim();
+  if (!clean || clean === ':' || clean === '-' || clean === '/') {
+    return 'Operating Tolerance Deviation';
+  }
+  return clean;
+}
+
+export function getCaseExecutionProgress(c: WorkOrderCase | null | undefined): ExecutionProgressInfo {
+  if (!c) {
+    return {
+      totalSteps: 4,
+      doneSteps: 0,
+      progressPct: 0,
+      isSolved: false,
+      activeStepName: 'Procedure Initialization',
+      steps: [],
+    };
+  }
+
+  let totalSteps = c.checklist?.length || 4;
+  let doneSteps = c.checklist?.filter((s) => s.status === 'COMPLETED').length || 0;
+  let isSolved = c.status === 'RESOLVED' || c.status === 'CLOSED';
+  let stepsList: ExecutionStepItem[] = [];
+
+  if (Array.isArray(c.checklist) && c.checklist.length > 0) {
+    stepsList = c.checklist.map((s, idx) => ({
+      stepNumber: idx + 1,
+      title: s.title,
+      instruction: (s as any).instruction || (s as any).description || '',
+      status: s.status === 'COMPLETED' ? 'COMPLETED' : 'PENDING',
+    }));
+  }
+
+  try {
+    const keys = [
+      c.caseNumber ? `forgex_tech_exec_${c.caseNumber}` : null,
+      c.id ? `forgex_tech_exec_${c.id}` : null,
+    ].filter(Boolean) as string[];
+
+    for (const key of keys) {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.isSolved) isSolved = true;
+        if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
+          totalSteps = parsed.steps.length;
+          doneSteps = parsed.steps.filter((st: any) => st.status === 'COMPLETED').length;
+          stepsList = parsed.steps.map((st: any, idx: number) => ({
+            stepNumber: st.stepNumber || idx + 1,
+            title: st.title || `Step ${idx + 1}`,
+            instruction: st.instruction || '',
+            status: st.status as any,
+          }));
+          if (doneSteps === totalSteps && totalSteps > 0) {
+            isSolved = true;
+          }
+          break;
+        }
+      }
+    }
+  } catch {}
+
+  // Fallback default 4 standard procedure steps if empty
+  if (stepsList.length === 0) {
+    stepsList = [
+      { stepNumber: 1, title: 'Verify Zero Energy & Lockout/Tagout (LOTO)', instruction: 'Confirm electrical & hydraulic isolation per OSHA 1910.147 standards.', status: doneSteps >= 1 ? 'COMPLETED' : 'PENDING' },
+      { stepNumber: 2, title: 'Disassemble Housing & Inspect Internal Tolerances', instruction: 'Remove mechanical housing; check wear, clearances, and gaskets.', status: doneSteps >= 2 ? 'COMPLETED' : doneSteps === 1 ? 'IN_PROGRESS' : 'PENDING' },
+      { stepNumber: 3, title: 'Replace Defective Components & Torque Fasteners', instruction: 'Fit replacement parts; torque bolts to calibrated OEM specifications.', status: doneSteps >= 3 ? 'COMPLETED' : doneSteps === 2 ? 'IN_PROGRESS' : 'PENDING' },
+      { stepNumber: 4, title: 'Functional Test & 15-Minute Operational Baseline', instruction: 'Re-energize unit under supervision; monitor vibration and pressure baseline.', status: doneSteps >= 4 ? 'COMPLETED' : doneSteps === 3 ? 'IN_PROGRESS' : 'PENDING' },
+    ];
+    totalSteps = 4;
+  }
+
+  if (isSolved) {
+    doneSteps = totalSteps;
+    stepsList = stepsList.map((s) => ({ ...s, status: 'COMPLETED' }));
+  }
+
+  const progressPct = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+
+  let activeStepName = 'All procedure steps verified & complete';
+  if (!isSolved) {
+    const active = stepsList.find((s) => s.status === 'IN_PROGRESS') || stepsList.find((s) => s.status === 'PENDING') || stepsList[0];
+    if (active) {
+      activeStepName = `Step ${active.stepNumber}: ${active.title}`;
+    }
+  }
+
+  return {
+    totalSteps,
+    doneSteps,
+    progressPct,
+    isSolved,
+    activeStepName,
+    steps: stepsList,
+  };
+}
 
 // -----------------------------------------------------------------------------
 // HELPER: Frontline Worker Jargon Simplification
@@ -683,8 +822,7 @@ export const SopExecutionView: React.FC<{
   const [isLoadingCases, setIsLoadingCases] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [errorDetailsModalContent, setErrorDetailsModalContent] = useState<string | null>(null);
-
-
+  const [progressVersion, setProgressVersion] = useState(0);
 
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
@@ -707,6 +845,8 @@ export const SopExecutionView: React.FC<{
   const [newErrorCode, setNewErrorCode] = useState('');
   const [newLotoRequired, setNewLotoRequired] = useState(false);
   const [newSymptoms, setNewSymptoms] = useState('');
+  const [newMachineStatus, setNewMachineStatus] = useState<'HALTED' | 'DEGRADED'>('HALTED');
+  const [newShiftArea, setNewShiftArea] = useState('Bay 04 · Stamping Line A');
 
   const QUICK_SYMPTOM_CHIPS = [
     '+ High Vibration',
@@ -734,6 +874,8 @@ export const SopExecutionView: React.FC<{
     setNewErrorCode('');
     setNewLotoRequired(false);
     setNewSymptoms('');
+    setNewMachineStatus('HALTED');
+    setNewShiftArea('Bay 04 · Stamping Line A');
     setIsNewCaseModalOpen(true);
   };
 
@@ -745,6 +887,8 @@ export const SopExecutionView: React.FC<{
     setNewErrorCode('');
     setNewLotoRequired(false);
     setNewSymptoms('');
+    setNewMachineStatus('HALTED');
+    setNewShiftArea('Bay 04 · Stamping Line A');
   };
 
   const [escalateReason, setEscalateReason] = useState('');
@@ -883,7 +1027,7 @@ export const SopExecutionView: React.FC<{
             const matched = mappedCases.find((c) => c.id === target || c.caseNumber === target);
             if (matched) return matched.id;
           }
-          return mappedCases.length > 0 ? mappedCases[0].id : null;
+          return null;
         });
 
         if (savedSelectedId) {
@@ -929,29 +1073,44 @@ export const SopExecutionView: React.FC<{
         rawCaseId?: string;
         status?: string;
         isSolved?: boolean;
+        completedSteps?: number;
+        totalSteps?: number;
+        technicianName?: string;
       }>;
       if (!custom.detail) return;
-      const { ticketId, rawCaseId, status, isSolved } = custom.detail;
+      const { ticketId, rawCaseId, status, isSolved, completedSteps, totalSteps, technicianName } = custom.detail;
       setCases((prev) =>
         prev.map((c) => {
           if (c.id === ticketId || c.caseNumber === ticketId || (rawCaseId && c.id === rawCaseId)) {
             return {
               ...c,
               status: isSolved ? 'RESOLVED' : (status as any) || c.status,
+              assignedTechnicianName: technicianName || c.assignedTechnicianName,
+              completedSteps: completedSteps ?? c.completedSteps,
+              stepsCount: totalSteps ?? (c as any).stepsCount,
             };
           }
           return c;
         })
       );
+      setProgressVersion((v) => v + 1);
+    };
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key && e.key.startsWith('forgex_tech_exec_')) {
+        setProgressVersion((v) => v + 1);
+      }
     };
 
     window.addEventListener('forgex:navigate', handleNav);
     window.addEventListener('forgex:ticket-progress-sync', handleProgressSync);
     window.addEventListener('forgex:ticket-solved', handleProgressSync);
+    window.addEventListener('storage', handleStorageChange);
     return () => {
       window.removeEventListener('forgex:navigate', handleNav);
       window.removeEventListener('forgex:ticket-progress-sync', handleProgressSync);
       window.removeEventListener('forgex:ticket-solved', handleProgressSync);
+      window.removeEventListener('storage', handleStorageChange);
     };
   }, [loadCases]);
 
@@ -1046,24 +1205,13 @@ export const SopExecutionView: React.FC<{
     return cases.find((c) => c.id === activeCaseId || c.caseNumber === activeCaseId) || null;
   }, [cases, activeCaseId]);
 
+  // Real-time execution progress of the active case (reactive to Technician Queue updates)
+  const activeProgress = useMemo(() => {
+    return getCaseExecutionProgress(activeCase);
+  }, [activeCase, progressVersion]);
+
   // Check if ticket is 100% solved and locked (Requirement 5)
-  const isTicketFullySolved = useMemo(() => {
-    if (!activeCase) return false;
-    if (activeCase.status === 'RESOLVED' || activeCase.status === 'CLOSED') return true;
-    try {
-      const raw =
-        localStorage.getItem(`forgex_tech_exec_${activeCase.caseNumber}`) ||
-        localStorage.getItem(`forgex_tech_exec_${activeCase.id}`);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed.isSolved) return true;
-        if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-          return parsed.steps.every((s: any) => s.status === 'COMPLETED');
-        }
-      }
-    } catch {}
-    return false;
-  }, [activeCase]);
+  const isTicketFullySolved = activeProgress.isSolved;
 
   // Deep-link to Technician Queue directly with specific ticket (Requirement 4)
   const handleOpenInTechQueue = async (c: WorkOrderCase) => {
@@ -1543,6 +1691,8 @@ export const SopExecutionView: React.FC<{
 
     const fullDescription = [
       newSymptoms.trim(),
+      `Machine Status: ${newMachineStatus === 'HALTED' ? 'Down / Halted' : 'Running with Anomaly'}`,
+      `Shift / Area: ${newShiftArea.trim() || 'Bay 04 · Stamping Line A'}`,
       newErrorCode.trim()
         ? `Alarm Code: ${newErrorCode.trim()}`
         : 'Alarm Code: Auto-Detected via AI Diagnostics',
@@ -1828,11 +1978,6 @@ export const SopExecutionView: React.FC<{
               filteredCases.map((c) => {
                 const isSelected = activeCase ? c.id === activeCase.id : false;
 
-                const cleanSummary = (c.title || c.symptomDescription || 'Maintenance Work Order')
-                  .replace(/^RCA Corrective Work Order\s*[:-]?\s*/i, '')
-                  .replace(/^Work Order\s*[:-]?\s*/i, '')
-                  .trim();
-
                 const isUUID = (str?: string) =>
                   Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
 
@@ -1841,32 +1986,15 @@ export const SopExecutionView: React.FC<{
                   displayTag = c.assetId && !isUUID(c.assetId) ? c.assetId : 'ELEC-MTR-701';
                 }
 
-                // Check solved state
-                let cardTotalSteps = c.checklist?.length || 4;
-                let cardDoneSteps = c.checklist?.filter((s) => s.status === 'COMPLETED').length || 0;
-                let isCardFullySolved = c.status === 'RESOLVED' || c.status === 'CLOSED';
-                try {
-                  const execRaw =
-                    localStorage.getItem(`forgex_tech_exec_${c.caseNumber}`) ||
-                    localStorage.getItem(`forgex_tech_exec_${c.id}`);
-                  if (execRaw) {
-                    const parsed = JSON.parse(execRaw);
-                    if (parsed.isSolved) isCardFullySolved = true;
-                    if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-                      cardTotalSteps = parsed.steps.length;
-                      cardDoneSteps = parsed.steps.filter((st: any) => st.status === 'COMPLETED').length;
-                      if (cardDoneSteps === cardTotalSteps && cardTotalSteps > 0) {
-                        isCardFullySolved = true;
-                      }
-                    }
-                  }
-                } catch {}
+                const cleanSummary = cleanFaultTitle(
+                  c.title || c.symptomDescription || 'Maintenance Work Order',
+                  c.caseNumber,
+                  displayTag
+                );
 
-                if (isCardFullySolved) {
-                  cardDoneSteps = cardTotalSteps;
-                }
-                const cardProgressPct =
-                  cardTotalSteps > 0 ? Math.round((cardDoneSteps / cardTotalSteps) * 100) : 0;
+                // Live step progress sync
+                const cardProgress = getCaseExecutionProgress(c);
+                const isCardFullySolved = cardProgress.isSolved;
 
                 // Priority Border Color
                 const priorityBorderClass =
@@ -1884,43 +2012,38 @@ export const SopExecutionView: React.FC<{
                   c.title?.toLowerCase().includes('escalated rca') ||
                   Boolean(c.topRootCause);
 
-                // Technician live status for this card
+                // Technician name for this card
                 const techName = c.assignedTechnicianName || 'Unassigned';
-                const cardTechStatus = computeTechnicianLiveStatus(
-                  { fullName: techName, id: c.assignedTechnicianUserId || '' },
-                  cases
-                );
 
                 return (
                   <div
                     key={c.id}
-                    onClick={() => setActiveCaseId(c.id)}
-                    className={`p-3 rounded-lg border border-l-4 text-xs cursor-pointer transition space-y-2 ${priorityBorderClass} ${
+                    onClick={() => setActiveCaseId((prev) => (prev === c.id ? null : c.id))}
+                    className={`p-2.5 rounded-lg border border-l-4 text-xs cursor-pointer transition space-y-1.5 ${priorityBorderClass} ${
                       isSelected
-                        ? 'bg-blue-50/70 border-blue-500 shadow-xs ring-1 ring-blue-500/30'
-                        : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-xs'
+                        ? 'bg-blue-50/40 border-blue-500 ring-2 ring-blue-600 shadow-xs'
+                        : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-xs'
                     }`}
                   >
-                    {/* Row 1: Ticket ID (Bold) + Source Badge (🔍 RCA / ✍️ Manual) + Priority Pill + Status Pill */}
-                    <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                    {/* Row 1: Ticket ID + Asset Tag on Left; Priority + Status/Progress % on Right */}
+                    <div className="flex items-center justify-between gap-1.5">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="font-mono font-bold text-blue-700 text-xs truncate">
                           {c.caseNumber}
                         </span>
-                        <span
-                          className={`inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-mono font-bold border shrink-0 ${
-                            isRcaSource
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-slate-100 text-slate-600 border-slate-200'
-                          }`}
-                        >
-                          {isRcaSource ? '🔍 RCA' : '✍️ Manual'}
+                        <span className="font-mono font-semibold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded text-[10px] shrink-0 truncate max-w-[130px]">
+                          {displayTag}
                         </span>
+                        {isRcaSource && (
+                          <span className="bg-purple-50 text-purple-700 border border-purple-200 px-1 py-0.2 rounded text-[9px] font-mono font-bold shrink-0">
+                            RCA
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5 shrink-0 font-mono text-[9px]">
                         <span
-                          className={`font-mono font-bold px-1.5 py-0.2 rounded text-[9px] border ${
+                          className={`font-bold px-1.5 py-0.2 rounded border ${
                             c.severity === 'CRITICAL'
                               ? 'bg-rose-50 text-rose-700 border-rose-200'
                               : c.severity === 'HIGH'
@@ -1931,72 +2054,34 @@ export const SopExecutionView: React.FC<{
                           {c.severity}
                         </span>
                         {isCardFullySolved ? (
-                          <span className="font-mono font-bold px-1.5 py-0.2 rounded text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
-                            RESOLVED
+                          <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                            ✅ 100%
+                          </span>
+                        ) : cardProgress.progressPct > 0 ? (
+                          <span className="font-bold text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
+                            📊 {cardProgress.doneSteps}/{cardProgress.totalSteps} · {cardProgress.progressPct}%
                           </span>
                         ) : (
-                          <CaseStatusBadge status={c.status} />
+                          <span className="font-medium text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
+                            {c.status}
+                          </span>
                         )}
                       </div>
                     </div>
 
-                    {/* Row 2: Asset Tag pill + relative time (⏱️ 15m ago) + 1-line truncated Symptom/Title */}
-                    <div className="flex items-center gap-2 text-[11px] font-mono">
-                      <span className="bg-slate-100 text-slate-800 border border-slate-200 px-1.5 py-0.2 rounded font-bold text-[10px] shrink-0 font-mono">
-                        {displayTag}
-                      </span>
-                      <span className="text-[10px] text-slate-400 shrink-0 font-medium">
-                        {formatRelativeTime(c.createdAt)}
-                      </span>
-                      <span
-                        className="text-slate-600 text-xs font-medium truncate flex-1 font-sans"
-                        title={cleanSummary}
-                      >
+                    {/* Row 2: 1-line Issue Summary on Left; Assigned Tech + Rating on Right */}
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <p className="text-slate-700 font-medium truncate flex-1 min-w-0" title={cleanSummary}>
                         {cleanSummary}
-                      </span>
-                    </div>
-
-                    {/* Row 3 (Live Footer Strip): Assigned Tech + Live Availability Dot & Mini Step Progress */}
-                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[10px] font-mono">
-                      <div
-                        className="flex items-center gap-1 min-w-0 truncate text-slate-700"
-                        title={cardTechStatus.fullText}
-                      >
-                        <span className="font-semibold truncate">👨‍🔧 {techName}</span>
-                        <span className="text-slate-300">•</span>
-                        {cardTechStatus.statusType === 'AVAILABLE' ? (
-                          <span className="text-emerald-700 font-bold shrink-0">🟢 Available</span>
-                        ) : cardTechStatus.statusType === 'BUSY' ? (
-                          <span className="text-amber-700 font-bold shrink-0 truncate">
-                            {cardTechStatus.currentTicketId && cardTechStatus.currentTicketId !== c.caseNumber
-                              ? `🟡 Busy #${cardTechStatus.currentTicketId.slice(-4)}`
-                              : `🟡 Working`}
-                          </span>
-                        ) : (
-                          <span className="text-rose-700 font-bold shrink-0 truncate">
-                            {cardTechStatus.shortText}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Right side: Mini Step Progress indicator */}
-                      {isCardFullySolved ? (
-                        <span className="inline-flex items-center gap-1 font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 shrink-0 text-[10px]">
-                          🔒 100% Solved
+                      </p>
+                      <div className="flex items-center gap-1 shrink-0 font-mono text-[10px] text-slate-600">
+                        <span className="font-semibold truncate max-w-[95px]" title={techName}>
+                          👤 {techName.split(' ')[0]}
                         </span>
-                      ) : (
-                        <div className="flex items-center gap-1.5 shrink-0 text-slate-500 font-medium">
-                          <span>
-                            {cardDoneSteps}/{cardTotalSteps} Steps ({cardProgressPct}%)
-                          </span>
-                          <div className="w-10 h-1.5 bg-slate-200 rounded-full overflow-hidden shrink-0">
-                            <div
-                              className={`h-full ${cardProgressPct > 0 ? 'bg-blue-600' : 'bg-slate-300'}`}
-                              style={{ width: `${cardProgressPct}%` }}
-                            />
-                          </div>
-                        </div>
-                      )}
+                        <span className="text-amber-700 font-bold">
+                          ⭐{c.assignedTechnicianRating ? Number(c.assignedTechnicianRating).toFixed(1) : '4.9'}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 );
@@ -2009,49 +2094,44 @@ export const SopExecutionView: React.FC<{
         {/* 2. SUPERVISOR & QA MANAGEMENT WORKBENCH (RIGHT MAIN VIEW)         */}
         {/* ================================================================= */}
         {activeCase ? (
-          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto p-5 sm:p-6 bg-[#F8FAFC]">
+          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto p-3.5 sm:p-4 bg-[#F8FAFC]">
             {/* WORK ORDER MANAGEMENT CARD */}
             <div className="bg-white rounded-xl border border-slate-200 shadow-xs divide-y divide-slate-100 overflow-hidden">
-              {/* SECTION A — HEADER (Clean 2-Column Flex Layout) */}
-              <div className="p-5">
-                <div className="flex flex-col xl:flex-row justify-between items-start gap-4">
-                  {/* Left Column: Row 1 Metadata (Case ID + Asset Tag + Priority + Status) & Row 2 Title */}
-                  <div className="flex-1 min-w-0 space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-1 rounded-md shadow-2xs">
-                        {activeCase.caseNumber}
+              {/* SECTION A — COMPACT HEADER WITH SINGLE-ROW CONTROLS & METADATA STRIP */}
+              <div className="p-3 sm:p-3.5 bg-white space-y-2.5">
+                {/* Row 1: Badges on Left, Technician Assignment Pill & Action Buttons on Same Horizontal Row */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5">
+                  {/* Left Column: Badges (Case Number, Asset Tag, Severity, Status) */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded shadow-2xs">
+                      {activeCase.caseNumber}
+                    </span>
+                    <span className="font-mono text-xs font-bold text-slate-800 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+                      {activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label || 'PUMP-CENTRIFUGAL-402'}
+                    </span>
+                    <span
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
+                        activeCase.severity === 'CRITICAL'
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                          : activeCase.severity === 'HIGH'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-blue-50 text-blue-700 border-blue-200'
+                      }`}
+                    >
+                      {activeCase.severity || 'HIGH'}
+                    </span>
+                    {isTicketFullySolved ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md font-mono text-[10px] font-bold border tracking-wider uppercase bg-emerald-100 text-emerald-800 border-emerald-300 shadow-2xs">
+                        <Lock className="w-3 h-3 text-emerald-700" />
+                        <span>100% SOLVED & LOCKED</span>
                       </span>
-                      <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md">
-                        {activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label || 'PUMP-CENTRIFUGAL-402'}
-                      </span>
-                      <span
-                        className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${
-                          activeCase.severity === 'CRITICAL'
-                            ? 'bg-rose-50 text-rose-700 border-rose-200'
-                            : activeCase.severity === 'HIGH'
-                            ? 'bg-amber-50 text-amber-700 border-amber-200'
-                            : 'bg-blue-50 text-blue-700 border-blue-200'
-                        }`}
-                      >
-                        {activeCase.severity || 'HIGH'}
-                      </span>
-                      {isTicketFullySolved ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md font-mono text-[10px] font-bold border tracking-wider uppercase bg-emerald-100 text-emerald-800 border-emerald-300 shadow-2xs">
-                          <Lock className="w-3 h-3 text-emerald-700" />
-                          <span>🔒 100% SOLVED & LOCKED</span>
-                        </span>
-                      ) : (
-                        <CaseStatusBadge status={activeCase.status} />
-                      )}
-                    </div>
-
-                    <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight font-sans">
-                      {activeCase.title}
-                    </h1>
+                    ) : (
+                      <CaseStatusBadge status={activeCase.status} />
+                    )}
                   </div>
 
-                  {/* Right Column: Single-line Non-Wrapping Pill Box & Action Buttons */}
-                  <div className="flex flex-col items-start xl:items-end gap-2 shrink-0 w-full xl:w-auto">
+                  {/* Right Column: Technician Assignment Pill & Action Buttons on the Same Single Horizontal Row */}
+                  <div className="flex items-center gap-2 flex-wrap">
                     {activeCase.assignedTechnicianUserId && !isChangingTech ? (
                       <>
                         {(() => {
@@ -2069,9 +2149,21 @@ export const SopExecutionView: React.FC<{
                               ? 'bg-amber-50 border-amber-200 text-amber-900'
                               : 'bg-rose-50 border-rose-200 text-rose-900';
 
+                          const statusBadgeText =
+                            activeTechStatus.statusType === 'AVAILABLE'
+                              ? 'Available'
+                              : activeTechStatus.statusType === 'BUSY'
+                              ? 'Busy'
+                              : 'Paused';
+
+                          const isTechLocked =
+                            isTicketFullySolved ||
+                            activeProgress.doneSteps > 0 ||
+                            Boolean((activeCase as any).executionStarted) ||
+                            Boolean((activeCase as any).isStarted);
+
                           return (
-                            /* Top Row: Single-line non-wrapping compact pill container with live status */
-                            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border whitespace-nowrap text-xs shadow-2xs ${toneContainerClass}`}>
+                            <div className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border whitespace-nowrap text-xs shadow-2xs ${toneContainerClass}`}>
                               <span
                                 className="flex h-2 w-2 relative"
                                 title={`Live Status: ${activeTechStatus.shortText}`}
@@ -2105,21 +2197,30 @@ export const SopExecutionView: React.FC<{
                                 }`}
                                 title={activeTechStatus.fullText}
                               >
-                                {activeTechStatus.shortText}
+                                {statusBadgeText}
                               </span>
                               <span>
-                                🔒 <strong>{activeCase.assignedTechnicianName}</strong>
+                                {isTicketFullySolved ? (
+                                  <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded mr-1 shadow-2xs">
+                                    🔒 Completed
+                                  </span>
+                                ) : isTechLocked ? (
+                                  <span className="font-mono text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded mr-1 shadow-2xs">
+                                    🔒 Tech Locked (Execution Underway)
+                                  </span>
+                                ) : null}
+                                <strong>{activeCase.assignedTechnicianName}</strong>
                               </span>
                               <span className="bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded text-[10px] font-mono font-bold">
                                 ⭐ {activeCase.assignedTechnicianRating || 4.9}
                               </span>
                               {activeCase.isAiAutoAssigned !== false && (
-                                <span className="bg-blue-100 text-blue-800 border border-blue-200 px-1.5 py-0.2 rounded text-[10px] font-bold font-sans flex items-center gap-1 shadow-2xs">
+                                <span className="bg-blue-100 text-blue-800 border border-blue-200 px-1.5 py-0.5 rounded text-[10px] font-bold font-sans flex items-center gap-1 shadow-2xs">
                                   <Sparkles className="w-2.5 h-2.5 text-blue-600" />
-                                  ✨ AI Auto-Assigned
+                                  <span>AI Auto-Assigned</span>
                                 </span>
                               )}
-                              {!isTicketFullySolved && (
+                              {!isTechLocked && (
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -2129,7 +2230,7 @@ export const SopExecutionView: React.FC<{
                                       actionType: 'MANUAL_CHANGE',
                                     });
                                   }}
-                                  className="ml-1 text-[11px] font-bold underline hover:opacity-80 cursor-pointer"
+                                  className="ml-1 text-[11px] font-bold underline hover:opacity-80 cursor-pointer text-blue-700"
                                   title="Supervisor manual override"
                                 >
                                   Change
@@ -2139,56 +2240,68 @@ export const SopExecutionView: React.FC<{
                           );
                         })()}
 
-                        {/* Bottom Row: Clean inline row with two compact action buttons */}
-                        <div className="flex items-center gap-2 flex-wrap xl:flex-nowrap">
-                          {/* Button 1: [🔄 Tech Unavailable? Next Best] */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (isTicketFullySolved) return;
-                              setReassignModalState({
-                                isOpen: true,
-                                targetCase: activeCase,
-                                actionType: 'AUTO_NEXT',
-                              });
-                            }}
-                            disabled={isSubmitting || isTicketFullySolved}
-                            className="inline-flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 text-amber-900 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                            title={
-                              isTicketFullySolved
-                                ? 'Ticket is 100% solved and permanently locked'
-                                : 'Mark current technician unavailable and auto-dispatch to the next best match'
-                            }
-                          >
-                            <RefreshCw className={`w-3.5 h-3.5 text-amber-600 ${isSubmitting ? 'animate-spin' : ''}`} />
-                            <span>🔄 Tech Unavailable? Next Best</span>
-                          </button>
+                        {/* Button: [▶ Open in Tech Queue ->] on Same Horizontal Row */}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenInTechQueue(activeCase)}
+                          className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3 py-1 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer whitespace-nowrap"
+                          title="Open this ticket directly in Technician Queue"
+                        >
+                          <Play className="w-3 h-3 fill-current" />
+                          <span>Open in Tech Queue &rarr;</span>
+                        </button>
 
-                          {/* Button 2: [▶ Open in Tech Queue ->] */}
-                          <button
-                            type="button"
-                            onClick={() => handleOpenInTechQueue(activeCase)}
-                            className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer whitespace-nowrap"
-                            title="Open this ticket directly in Technician Queue"
-                          >
-                            <Play className="w-3 h-3 fill-current" />
-                            <span>Open in Tech Queue &rarr;</span>
-                          </button>
+                        {!isTicketFullySolved && (() => {
+                          const isTechLocked =
+                            activeProgress.doneSteps > 0 ||
+                            Boolean((activeCase as any).executionStarted) ||
+                            Boolean((activeCase as any).isStarted);
 
-                          {activeCase.status === 'RESOLVED' && (
-                            <Button
-                              size="sm"
-                              onClick={() => setIsCloseConfirmOpen(true)}
-                              className="bg-slate-900 hover:bg-black text-white font-bold text-xs inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg shadow-xs cursor-pointer whitespace-nowrap"
+                          if (isTechLocked) return null;
+
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReassignModalState({
+                                  isOpen: true,
+                                  targetCase: activeCase,
+                                  actionType: 'AUTO_NEXT',
+                                });
+                              }}
+                              disabled={isSubmitting}
+                              className="inline-flex items-center gap-1 bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 text-amber-900 px-2 py-1 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                              title="Mark current technician unavailable and auto-dispatch to the next best match"
                             >
-                              <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
-                              <span>Formally Close</span>
-                            </Button>
-                          )}
-                        </div>
+                              <RefreshCw className={`w-3 h-3 text-amber-600 ${isSubmitting ? 'animate-spin' : ''}`} />
+                              <span>Next Tech</span>
+                            </button>
+                          );
+                        })()}
+
+                        {activeCase.status === 'RESOLVED' && (
+                          <Button
+                            size="sm"
+                            onClick={() => setIsCloseConfirmOpen(true)}
+                            className="bg-slate-900 hover:bg-black text-white font-bold text-xs inline-flex items-center gap-1.5 px-3 py-1 rounded-lg shadow-xs cursor-pointer whitespace-nowrap"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Formally Close</span>
+                          </Button>
+                        )}
+
+                        {/* Deselect / Close Button (Requirement 1) */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveCaseId(null)}
+                          className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md transition cursor-pointer border border-slate-200 bg-white shadow-2xs"
+                          title="Close ticket details (Return to empty state)"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       </>
                     ) : (
-                      /* UNASSIGNED / OVERRIDE STATE: Single Technician Selection & Dispatch */
+                      /* UNASSIGNED / OVERRIDE STATE */
                       <div className="flex items-center gap-2 flex-wrap">
                         <div className="relative inline-flex items-center">
                           <select
@@ -2304,24 +2417,26 @@ export const SopExecutionView: React.FC<{
                     )}
                   </div>
                 </div>
-              </div>
 
-              {/* SECTION B — COMPACT INFO GRID (2x2 small cells) */}
-              <div className="p-5">
-                <div className="grid grid-cols-2 gap-3 bg-slate-50/70 p-3.5 rounded-lg border border-slate-200 text-xs">
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
-                      Asset Tag
-                    </span>
-                    <p className="font-mono font-bold text-slate-900 text-xs truncate">
-                      {activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label || 'PUMP-CENTRIFUGAL-402'}
-                    </p>
+                {/* Row 2: Ticket Title */}
+                <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight font-sans">
+                  {cleanFaultTitle(
+                    activeCase.title || activeCase.symptomDescription,
+                    activeCase.caseNumber,
+                    activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label
+                  )}
+                </h1>
+
+                {/* Row 3: Single Sleek 1-Line Horizontal Metadata Strip (Replaces Section B) */}
+                <div className="flex items-center gap-3 py-1.5 px-3 bg-slate-50 border border-slate-200/80 rounded-lg text-[11px] font-mono text-slate-600 flex-wrap">
+                  <div className="flex items-center gap-1">
+                    <span className="text-slate-400 uppercase font-bold text-[10px]">ASSET TAG:</span>
+                    <span className="font-bold text-slate-900">{activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label || 'PUMP-CENTRIFUGAL-402'}</span>
                   </div>
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
-                      Created Date & Time
-                    </span>
-                    <p className="font-mono text-slate-800 text-xs">
+                  <span className="text-slate-300">•</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-slate-400 uppercase font-bold text-[10px]">CREATED:</span>
+                    <span className="text-slate-800">
                       {activeCase.createdAtFormatted ||
                         (activeCase.createdAt
                           ? new Date(activeCase.createdAt).toLocaleString(undefined, {
@@ -2333,58 +2448,184 @@ export const SopExecutionView: React.FC<{
                               hour12: true,
                             })
                           : 'Oct 23, 2026 · 12:07 PM')}
-                    </p>
-                  </div>
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
-                      Assigned Technician
                     </span>
-                    <p className="font-sans font-semibold text-slate-900 text-xs flex items-center gap-1.5 truncate">
-                      <UserCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                      <span>{activeCase.assignedTechnicianName || 'Unassigned'}</span>
-                    </p>
                   </div>
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase font-bold tracking-wider block">
-                      Facility / Plant
-                    </span>
-                    <p className="font-sans font-semibold text-slate-900 text-xs truncate">
-                      {activeCase.plantName || organization?.name || 'Cleveland Stamping Plant'}
-                    </p>
+                  <span className="text-slate-300">•</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-slate-400 uppercase font-bold text-[10px]">FACILITY:</span>
+                    <span className="text-slate-800">{activeCase.plantName || organization?.name || 'Cleveland Stamping Plant'}</span>
                   </div>
                 </div>
               </div>
 
-              {/* SECTION C — ISSUE & WORK SUMMARY */}
-              <div className="p-5 space-y-3">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-mono text-slate-400 uppercase font-bold block">
-                    Reported Issue / Field Symptom
+              {/* LIVE 4-STEP CONNECTED PROGRESS STEPPER (Requirement 3) */}
+              <div className={`py-2.5 px-4 border-t border-b transition-colors flex flex-col md:flex-row items-center justify-between gap-3 ${
+                isTicketFullySolved ? 'bg-emerald-50/50 border-emerald-200' : 'bg-slate-50 border-slate-200'
+              }`}>
+                {/* Left: Status Badge & Steps Verified */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border ${
+                    isTicketFullySolved
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                      : 'bg-blue-100 text-blue-800 border-blue-300'
+                  }`}>
+                    {isTicketFullySolved ? '✅ COMPLETED' : '⚡ IN PROGRESS'}
                   </span>
-                  <p className="text-xs text-slate-800 font-medium font-sans leading-relaxed">
-                    {activeCase.symptomDescription || activeCase.description || activeCase.title}
-                  </p>
+                  <span className="text-xs font-mono font-semibold text-slate-700">
+                    <strong className="text-slate-900">{activeProgress.doneSteps} of {activeProgress.totalSteps}</strong> Steps Verified
+                  </span>
                 </div>
-                <div className="pt-2 border-t border-slate-100 space-y-1">
-                  <span className="text-[10px] font-mono text-blue-600 uppercase font-bold block">
-                    Root Cause (Identified from RCA)
-                  </span>
-                  <p className="text-xs text-slate-900 font-semibold font-sans leading-relaxed">
-                    {activeCase.diagnosticHypothesis?.primaryHypothesis ||
-                      activeCase.topRootCause ||
-                      'Mechanical wear or operational deviation identified during diagnostic root-cause inspection.'}
-                  </p>
+
+                {/* Center: 4 Connected Segmented Pill Bars */}
+                <div className="flex-1 w-full md:max-w-md flex items-center gap-1.5 px-2">
+                  {Array.from({ length: Math.max(activeProgress.totalSteps, 4) }, (_, idx) => {
+                    const stepNum = idx + 1;
+                    const isCompleted = stepNum <= activeProgress.doneSteps || isTicketFullySolved;
+                    const isActive = stepNum === activeProgress.doneSteps + 1 && !isTicketFullySolved;
+
+                    return (
+                      <div
+                        key={stepNum}
+                        className={`flex-1 h-7 rounded-md flex items-center justify-center gap-1 text-[10px] font-mono font-bold transition-all ${
+                          isCompleted
+                            ? 'bg-emerald-500 text-white shadow-2xs'
+                            : isActive
+                            ? 'bg-blue-600 text-white ring-2 ring-blue-300 ring-offset-1 animate-pulse'
+                            : 'bg-slate-200 text-slate-500'
+                        }`}
+                        title={`Step ${stepNum}: ${activeProgress.steps[idx]?.title || 'Pending'}`}
+                      >
+                        {isCompleted ? (
+                          <Check className="w-3 h-3 stroke-[3]" />
+                        ) : (
+                          <span>{stepNum}</span>
+                        )}
+                        <span className="hidden sm:inline">Step {stepNum}</span>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="pt-2 border-t border-slate-100 space-y-1">
-                  <span className="text-[10px] font-mono text-slate-400 uppercase font-bold block">
-                    Required Repair Summary
+
+                {/* Right: Bold Percentage Pill */}
+                <div className="shrink-0">
+                  <span className={`font-mono text-xs font-bold px-3 py-1 rounded-full border shadow-2xs ${
+                    isTicketFullySolved
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                      : activeProgress.progressPct > 0
+                      ? 'bg-blue-100 text-blue-800 border-blue-300'
+                      : 'bg-slate-200 text-slate-600 border-slate-300'
+                  }`}>
+                    {isTicketFullySolved ? '100% Solved' : `${activeProgress.progressPct}% Solved`}
                   </span>
-                  <p className="text-xs text-slate-700 font-sans leading-relaxed">
-                    {activeCase.findings?.resolutionSummary ||
-                      (Array.isArray(activeCase.checklist) && activeCase.checklist.length > 0
-                        ? activeCase.checklist.map((s) => s.title).join(' → ')
-                        : 'Isolate zero-energy LOTO, disassemble assembly housings, replace worn mechanical components to specification, and perform 15-minute diagnostic functional verification.')}
-                  </p>
+                </div>
+              </div>
+
+              {/* SECTION C — DIAGNOSTIC RCA & REPAIR PROCEDURES */}
+              <div className="p-4 space-y-3.5">
+                {/* Side-by-Side Symptom & RCA Cards (Requirement 4) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Left Card: Reported Symptom & Alarm Code (Amber Accent Border) */}
+                  <div className="p-3.5 rounded-xl border border-amber-300/80 bg-gradient-to-br from-amber-50/40 via-white to-amber-50/20 shadow-2xs space-y-2 flex flex-col justify-between">
+                    <div className="flex items-center justify-between gap-2 border-b border-amber-100 pb-2">
+                      <div className="flex items-center gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span className="text-[11px] font-bold text-slate-900 uppercase font-mono tracking-wide">
+                          Reported Symptom & Alarm Code
+                        </span>
+                      </div>
+                      <span className="font-mono text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded shadow-2xs">
+                        {activeCase.errorCode || activeCase.faultCode || 'ALM-AUTO-DETECT'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-800 font-medium font-sans leading-relaxed">
+                      {activeCase.symptomDescription || activeCase.description || activeCase.title}
+                    </p>
+                  </div>
+
+                  {/* Right Card: Confirmed Root Cause (from RCA) (Indigo/Violet Gradient Accent) */}
+                  <div className="p-3.5 rounded-xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/50 via-white to-purple-50/30 shadow-2xs space-y-2 flex flex-col justify-between">
+                    <div className="flex items-center justify-between gap-2 border-b border-indigo-100 pb-2">
+                      <div className="flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <span className="text-[11px] font-bold text-indigo-950 uppercase font-mono tracking-wide">
+                          Confirmed Root Cause (from RCA)
+                        </span>
+                      </div>
+                      <span className="font-mono text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300 px-2 py-0.5 rounded shadow-2xs">
+                        RCA Verified
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-900 font-semibold font-sans leading-relaxed">
+                      {activeCase.diagnosticHypothesis?.primaryHypothesis ||
+                        activeCase.topRootCause ||
+                        'Mechanical wear or operational deviation identified during diagnostic root-cause inspection.'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Card 3: Recommended Repair Procedure Steps (2x2 Compact Grid) (Requirement 5) */}
+                <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-3">
+                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                    <div className="flex items-center gap-2">
+                      <ClipboardList className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
+                        Recommended Repair Procedure Steps
+                      </span>
+                    </div>
+                    <span className="font-mono text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded">
+                      {activeProgress.doneSteps} of {activeProgress.totalSteps} Steps Complete
+                    </span>
+                  </div>
+
+                  {/* 2x2 Grid of Step Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    {activeProgress.steps.map((st) => {
+                      const isDone = st.status === 'COMPLETED' || isTicketFullySolved;
+                      const stepPadded = String(st.stepNumber).padStart(2, '0');
+
+                      return (
+                        <div
+                          key={st.stepNumber}
+                          className={`p-3 rounded-lg border text-xs flex flex-col justify-between transition-all ${
+                            isDone
+                              ? 'bg-emerald-50/40 border-emerald-300/80 text-slate-800 shadow-2xs'
+                              : 'bg-slate-50/80 border-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`w-5 h-5 rounded-md font-mono text-[10px] font-bold flex items-center justify-center shrink-0 ${
+                                isDone
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-200 text-slate-700'
+                              }`}>
+                                {stepPadded}
+                              </span>
+                              <span className={`font-bold font-sans truncate text-xs ${isDone ? 'text-emerald-950' : 'text-slate-900'}`}>
+                                {st.title}
+                              </span>
+                            </div>
+                            {isDone ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5 rounded shrink-0">
+                                <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                <span>CONFIRMED</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-mono font-medium text-slate-400 shrink-0">
+                                PENDING
+                              </span>
+                            )}
+                          </div>
+
+                          {st.instruction && (
+                            <p className="text-[11px] text-slate-500 font-sans line-clamp-2 leading-relaxed">
+                              {st.instruction}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -2502,12 +2743,12 @@ export const SopExecutionView: React.FC<{
         ) : (
           <div className="flex-1 flex items-center justify-center p-8 bg-[#F8FAFC]">
             <div className="max-w-md w-full bg-white rounded-xl border border-slate-200 p-8 text-center space-y-3 shadow-xs">
-              <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
+              <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto border border-blue-100">
                 <Wrench className="w-6 h-6" />
               </div>
               <h3 className="text-base font-bold text-slate-900 font-sans">No Ticket Selected</h3>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Select a Ticket from the left list to review details, assign a technician, and dispatch.
+              <p className="text-xs text-slate-500 leading-relaxed font-sans max-w-sm mx-auto">
+                Click any ticket from the left panel list to inspect diagnostic context, assigned technician status, and execution steps.
               </p>
               <div className="pt-2">
                 <Button
@@ -2515,7 +2756,7 @@ export const SopExecutionView: React.FC<{
                   onClick={handleOpenNewCaseModal}
                   className="bg-slate-900 hover:bg-black text-white font-semibold shadow-xs px-3.5 py-1.5 rounded-lg cursor-pointer"
                 >
-                  <span>+ Report Ticket</span>
+                  <span>+ Raise Manual Ticket</span>
                 </Button>
               </div>
             </div>
@@ -2597,9 +2838,9 @@ export const SopExecutionView: React.FC<{
       >
         <div className="space-y-4 font-sans text-xs">
           {/* Row 1 (Full Width): Ticket Title */}
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
-              <span>Ticket Title</span>
+              <span>Ticket Title *</span>
               <span className="text-[10px] text-slate-400 font-sans">Required</span>
             </label>
             <input
@@ -2607,90 +2848,87 @@ export const SopExecutionView: React.FC<{
               placeholder="e.g. Booster Pump #3 - Mechanical Seal Fluid Leakage & High Temp"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-sans text-xs shadow-xs transition"
+              className="w-full h-10 px-3 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-sans text-xs shadow-xs transition"
             />
           </div>
 
-          {/* Row 2 (2 Columns): Affected Asset / Machinery & Priority / Severity (Zero Defaults) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div className="space-y-1.5">
-              <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
-                <span>Affected Asset / Machinery</span>
-                <span className="text-[10px] text-slate-400 font-sans">Required • Single Facility Mode</span>
+          {/* Row 2 (2 Columns): Affected Asset & Priority / Severity (Concise single-line labels, items-end, h-10) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-end">
+            <div className="space-y-1">
+              <label className="text-slate-700 font-semibold text-xs block whitespace-nowrap">
+                Affected Asset *
               </label>
               <select
                 value={newAssetTag}
                 onChange={(e) => setNewAssetTag(e.target.value)}
-                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
-                  !newAssetTag ? 'text-slate-400' : 'text-slate-900'
-                } focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs`}
+                className={`w-full h-10 px-3 rounded-lg bg-white border border-slate-300 ${
+                  !newAssetTag ? 'text-slate-500 font-normal' : 'text-slate-900 font-semibold'
+                } focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-sans text-xs cursor-pointer shadow-xs`}
               >
-                <option value="">-- Select Asset --</option>
-                <option value="PUMP-CENTRIFUGAL-402 (Main Feed Pump)">
+                <option value="" className="text-slate-500 font-normal bg-white">-- Select Asset / Machinery --</option>
+                <option value="PUMP-CENTRIFUGAL-402 (Main Feed Pump)" className="text-slate-900 font-medium bg-white">
                   PUMP-CENTRIFUGAL-402 (Main Feed Pump)
                 </option>
-                <option value="MOTOR-INDUCTION-104 (500HP Drive Motor)">
+                <option value="MOTOR-INDUCTION-104 (500HP Drive Motor)" className="text-slate-900 font-medium bg-white">
                   MOTOR-INDUCTION-104 (500HP Drive Motor)
                 </option>
-                <option value="COMPRESSOR-RECIP-201 (Air System Unit)">
+                <option value="COMPRESSOR-RECIP-201 (Air System Unit)" className="text-slate-900 font-medium bg-white">
                   COMPRESSOR-RECIP-201 (Air System Unit)
                 </option>
-                <option value="GEARBOX-HELICAL-305 (Main Drive Reducer)">
+                <option value="GEARBOX-HELICAL-305 (Main Drive Reducer)" className="text-slate-900 font-medium bg-white">
                   GEARBOX-HELICAL-305 (Main Drive Reducer)
                 </option>
+                <option value="HEX-PLATE-801 (Heat Exchanger Unit 1)" className="text-slate-900 font-medium bg-white">
+                  HEX-PLATE-801 (Heat Exchanger Unit 1)
+                </option>
                 {machines.map((m) => (
-                  <option key={m.id} value={`${m.assetTag} (${m.name})`}>
+                  <option key={m.id} value={`${m.assetTag} (${m.name})`} className="text-slate-900 font-medium bg-white">
                     {m.assetTag} — {m.name} {m.area ? `(${m.area})` : ''}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
-                <span>Priority / Severity</span>
-                <span className="text-[10px] text-slate-400 font-sans">Required</span>
+            <div className="space-y-1">
+              <label className="text-slate-700 font-semibold text-xs block whitespace-nowrap">
+                Priority / Severity *
               </label>
               <select
                 value={newSeverity}
                 onChange={(e) => setNewSeverity(e.target.value as MaintenanceCaseSeverity)}
-                className={`w-full px-3 py-2 rounded-lg bg-white border border-slate-300 ${
-                  !newSeverity ? 'text-slate-400' : 'text-slate-900'
-                } focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs`}
+                className={`w-full h-10 px-3 rounded-lg bg-white border border-slate-300 ${
+                  !newSeverity ? 'text-slate-500 font-normal' : 'text-slate-900 font-semibold'
+                } focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-sans text-xs cursor-pointer shadow-xs`}
               >
-                <option value="">-- Select Priority / Severity --</option>
-                <option value="CRITICAL">CRITICAL - Line Down</option>
-                <option value="HIGH">HIGH - Risk of Failure</option>
-                <option value="MEDIUM">MEDIUM - Degradation</option>
-                <option value="LOW">LOW</option>
+                <option value="" className="text-slate-500 font-normal bg-white">-- Select Priority / Severity --</option>
+                <option value="CRITICAL" className="text-slate-900 font-medium bg-white">CRITICAL - Line Down</option>
+                <option value="HIGH" className="text-slate-900 font-medium bg-white">HIGH - Risk of Failure</option>
+                <option value="MEDIUM" className="text-slate-900 font-medium bg-white">MEDIUM - Degradation</option>
+                <option value="LOW" className="text-slate-900 font-medium bg-white">LOW</option>
               </select>
             </div>
           </div>
 
-          {/* Row 3 (2 Columns): Error Code & LOTO Safety Protocol Toggle */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {/* Row 3 (2 Columns): Error Code & LOTO Safety Protocol Toggle (items-end, h-10) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-end">
             <div className="space-y-1">
-              <label className="text-slate-700 font-semibold text-xs">
-                Error / Alarm Code (Optional — AI auto-detects if blank)
+              <label className="text-slate-700 font-semibold text-xs block whitespace-nowrap">
+                Error / Alarm Code
               </label>
               <input
                 type="text"
-                placeholder="e.g. ERR-VIB-902 or PLC Alarm 404"
+                placeholder="e.g. ALM-201 (Auto-detected by AI if blank)"
                 value={newErrorCode}
                 onChange={(e) => setNewErrorCode(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 font-mono text-xs shadow-xs"
+                className="w-full h-10 px-3 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-mono text-xs shadow-xs"
               />
-              <p className="text-[10px] text-slate-500 font-sans">
-                Leave blank for AI auto-detection based on symptoms
-              </p>
             </div>
 
             <div className="space-y-1">
-              <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
-                <span>LOTO Required</span>
-                <span className="text-[10px] text-slate-400 font-mono">OSHA 1910.147</span>
+              <label className="text-slate-700 font-semibold text-xs block whitespace-nowrap">
+                LOTO Safety Gate
               </label>
-              <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 border border-slate-200">
+              <div className="h-10 px-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   {newLotoRequired ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-700 text-[10px] font-mono font-bold">
@@ -2723,10 +2961,58 @@ export const SopExecutionView: React.FC<{
             </div>
           </div>
 
-          {/* Row 4 (Full Width): Observed Symptoms & Operating Anomalies */}
+          {/* Row 4 (2 Columns): Machine Status & Shift / Area (Practical Operational Context Row) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-end">
+            <div className="space-y-1">
+              <label className="text-slate-700 font-semibold text-xs block whitespace-nowrap">
+                Machine Status *
+              </label>
+              <div className="h-10 p-1 rounded-lg bg-slate-100 border border-slate-200 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setNewMachineStatus('HALTED')}
+                  className={`flex-1 h-full rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer ${
+                    newMachineStatus === 'HALTED'
+                      ? 'bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>🔴 Machine Down / Halted</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewMachineStatus('DEGRADED')}
+                  className={`flex-1 h-full rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer ${
+                    newMachineStatus === 'DEGRADED'
+                      ? 'bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs font-bold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <span>🟡 Running with Anomaly</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-slate-700 font-semibold text-xs block whitespace-nowrap">
+                Shift / Area
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="e.g. Bay 04 · Stamping Line A"
+                  value={newShiftArea}
+                  onChange={(e) => setNewShiftArea(e.target.value)}
+                  className="w-full h-10 px-3 rounded-lg bg-white border border-slate-300 text-slate-800 font-mono text-xs shadow-xs focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Row 5 (Full Width): Observed Symptoms & Operating Anomalies */}
           <div className="space-y-1.5">
             <label className="text-slate-700 font-semibold text-xs flex items-center justify-between">
-              <span>Observed Symptoms</span>
+              <span>Observed Symptoms &amp; Operating Anomalies *</span>
               <span className="text-[10px] text-slate-400 font-sans">Detailed physical observations</span>
             </label>
             <textarea
@@ -2734,7 +3020,7 @@ export const SopExecutionView: React.FC<{
               placeholder="e.g. High-pitched whining sound above 85dB, fluid leak rate ~50ml/min from drive-side seal, bearing temp spiked to 82°C."
               value={newSymptoms}
               onChange={(e) => setNewSymptoms(e.target.value)}
-              className="w-full p-2.5 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 font-sans focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 text-xs shadow-xs"
+              className="w-full p-2.5 rounded-lg bg-white border border-slate-300 text-slate-900 placeholder-slate-400 font-sans focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 text-xs shadow-xs font-normal"
             />
             {/* Quick Symptom Chips */}
             <div className="flex items-center gap-1.5 flex-wrap pt-0.5">

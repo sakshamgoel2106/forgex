@@ -51,6 +51,7 @@ const MODULE_LABELS: Record<NavModule, string> = {
   history: 'Maintenance History',
   visual: 'Visual Intelligence',
   tech: 'Technician Queue',
+  'oem-escalations': 'OEM Escalations',
   worker: 'Worker Workspace',
   reports: 'Reports & Analytics',
   notifications: 'Notifications',

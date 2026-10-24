@@ -37,8 +37,17 @@ export async function createDataStore(cfg: EnvConfig): Promise<DataStoreInitResu
         connectionTimeoutMillis: 10000,
       });
 
+      pool.on('error', (err) => {
+        logger.warn({ err: err?.message }, 'Unexpected error on idle PostgreSQL pool client (handled)');
+      });
+
       pool.on('connect', (client) => {
-        client.query('SET search_path TO forgex, public');
+        client.on('error', (err) => {
+          logger.warn({ err: err?.message }, 'PostgreSQL client connection error (handled)');
+        });
+        client.query('SET search_path TO forgex, public').catch((err) => {
+          logger.warn({ err: err?.message }, 'Failed setting search_path on client connect');
+        });
       });
 
       // Verify PostgreSQL connectivity

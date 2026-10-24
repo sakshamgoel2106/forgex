@@ -536,6 +536,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
           'tech@forgex.industrial': 'Tech@1234',
           'worker@forgex.industrial': 'Worker@1234',
           'engineer@forgex.industrial': 'Engineer@1234',
+          'sagarmaheshwari200761@gmail.com': 'Admin@1234',
         };
 
         if (normalizedEmail === 'engineer@forgex.industrial') {
@@ -546,6 +547,8 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
           user = await dataStore.getUserByExternalAuthId('user-dev-tech-1');
         } else if (normalizedEmail === 'worker@forgex.industrial') {
           user = await dataStore.getUserByExternalAuthId('user-dev-worker-1');
+        } else if (normalizedEmail === 'sagarmaheshwari200761@gmail.com') {
+          user = (await dataStore.getUserByExternalAuthId('user-dev-sagar-1')) || (await dataStore.getUserByEmail('sagarmaheshwari200761@gmail.com'));
         }
 
         if (!user) {
