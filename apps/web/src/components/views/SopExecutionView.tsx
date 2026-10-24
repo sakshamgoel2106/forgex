@@ -652,6 +652,14 @@ export const STANDARD_5_STEPS = [
   },
 ];
 
+export const PROCEDURE_STEP_LABELS = [
+  '01 LOTO Gate',
+  '02 Disassembly',
+  '03 Inspection',
+  '04 Torque Spec',
+  '05 Run Test',
+] as const;
+
 export const getStepEngineeringSpec = (stepNumber: number): StepEngineeringSpec => {
   switch (stepNumber) {
     case 1:
@@ -1193,6 +1201,7 @@ export const SopExecutionView: React.FC<{
   // Primary Work Orders State
   const [cases, setCases] = useState<WorkOrderCase[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(initialCaseId || null);
+  const [selectedDrawerStepIdx, setSelectedDrawerStepIdx] = useState<number>(0);
   const [isLoadingCases, setIsLoadingCases] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [errorDetailsModalContent, setErrorDetailsModalContent] = useState<string | null>(null);
@@ -1670,6 +1679,21 @@ export const SopExecutionView: React.FC<{
 
   // Check if ticket is 100% solved and locked (Requirement 5)
   const isTicketFullySolved = activeProgress.isSolved;
+
+  // Sync selected drawer step to active case or first step
+  useEffect(() => {
+    if (activeCase) {
+      const p = getCaseExecutionProgress(activeCase);
+      if (p.isSolved) {
+        setSelectedDrawerStepIdx(0);
+      } else {
+        const nextStep = Math.min(Math.max(p.doneSteps, 0), 4);
+        setSelectedDrawerStepIdx(nextStep);
+      }
+    } else {
+      setSelectedDrawerStepIdx(0);
+    }
+  }, [activeCase?.id, activeCase?.status]);
 
   // Deep-link to Technician Queue directly with specific ticket (Requirement 4)
   const handleOpenInTechQueue = async (c: WorkOrderCase) => {
@@ -2678,35 +2702,46 @@ export const SopExecutionView: React.FC<{
           </div>
         </div>
 
-        {/* 3. Live Progress: Sleek gradient progress bar with X/5 Steps • Y% */}
-        <div className="space-y-1 pt-0.5">
+        {/* 3. Live Progress: High-tech 5-Segment Gradient Progress Bar */}
+        <div className="space-y-1.5 pt-0.5">
           <div className="flex items-center justify-between text-[10px] font-mono">
-            <span className={isCardFullySolved ? 'text-emerald-700 font-bold' : cardProgress.progressPct > 0 ? 'text-indigo-700 font-bold' : 'text-slate-500 font-medium'}>
+            <span
+              className={
+                isCardFullySolved
+                  ? 'text-emerald-700 font-bold'
+                  : cardProgress.progressPct > 0
+                  ? 'text-indigo-700 font-bold'
+                  : 'text-slate-500 font-medium'
+              }
+            >
               {isCardFullySolved
                 ? '5/5 Steps • 100% Solved'
                 : cardProgress.progressPct > 0
                 ? `${cardProgress.doneSteps}/5 Steps • ${cardProgress.progressPct}%`
                 : '0/5 Steps • Awaiting Start'}
             </span>
-            <span className="text-slate-400 font-medium">5 Steps</span>
           </div>
-          <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                isCardFullySolved
-                  ? 'bg-gradient-to-r from-emerald-600 to-teal-500 w-full'
-                  : cardProgress.progressPct > 0
-                  ? 'bg-gradient-to-r from-indigo-600 to-blue-500'
-                  : 'bg-slate-200 w-1'
-              }`}
-              style={{
-                width: isCardFullySolved
-                  ? '100%'
-                  : cardProgress.progressPct > 0
-                  ? `${Math.max(cardProgress.progressPct, 8)}%`
-                  : '0%',
-              }}
-            />
+          <div className="grid grid-cols-5 gap-1 w-full pt-0.5">
+            {[1, 2, 3, 4, 5].map((stepNum) => {
+              const isStepDone = isCardFullySolved || cardProgress.doneSteps >= stepNum;
+              const isStepActive =
+                !isCardFullySolved &&
+                cardProgress.doneSteps + 1 === stepNum &&
+                (cardProgress.doneSteps > 0 || cardProgress.progressPct > 0);
+
+              return (
+                <div
+                  key={stepNum}
+                  className={`h-1.5 rounded-full transition-all duration-300 ${
+                    isStepDone
+                      ? 'bg-gradient-to-r from-indigo-600 via-blue-500 to-cyan-400 shadow-xs'
+                      : isStepActive
+                      ? 'bg-gradient-to-r from-amber-500 to-orange-400 animate-pulse'
+                      : 'bg-slate-200/80'
+                  }`}
+                />
+              );
+            })}
           </div>
         </div>
       </div>
@@ -3000,9 +3035,9 @@ export const SopExecutionView: React.FC<{
           /* ================================================================= */
           /* 3-COLUMN INDUSTRIAL KANBAN DISPATCH BOARD                         */
           /* ================================================================= */
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
             {/* Column 1: Dispatched / Queued */}
-            <div className="bg-slate-100/70 border border-slate-200/80 rounded-2xl p-3 flex flex-col h-fit">
+            <div className="bg-slate-100/70 border border-slate-200/80 rounded-2xl p-3 flex flex-col h-full">
               <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-200">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
@@ -3014,9 +3049,9 @@ export const SopExecutionView: React.FC<{
                   {kanbanColumns.queued.length}
                 </span>
               </div>
-              <div className="space-y-2.5">
+              <div className="flex-1 flex flex-col space-y-2.5">
                 {kanbanColumns.queued.length === 0 ? (
-                  <div className="py-6 flex items-center justify-center text-center px-4 border border-dashed border-slate-300/80 rounded-xl bg-white/40 text-[11px] text-slate-400 font-mono">
+                  <div className="flex-1 py-8 flex items-center justify-center text-center px-4 border border-dashed border-slate-300/80 rounded-xl bg-white/40 text-[11px] text-slate-400 font-mono">
                     No tickets in queue
                   </div>
                 ) : (
@@ -3026,7 +3061,7 @@ export const SopExecutionView: React.FC<{
             </div>
 
             {/* Column 2: In Execution (Live Field Work) */}
-            <div className="bg-amber-50/40 border border-amber-200/70 rounded-2xl p-3 flex flex-col h-fit">
+            <div className="bg-amber-50/40 border border-amber-200/70 rounded-2xl p-3 flex flex-col h-full">
               <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-amber-200/80">
                 <div className="flex items-center gap-2">
                   <span className="relative flex h-2.5 w-2.5">
@@ -3041,9 +3076,9 @@ export const SopExecutionView: React.FC<{
                   {kanbanColumns.inExecution.length}
                 </span>
               </div>
-              <div className="space-y-2.5">
+              <div className="flex-1 flex flex-col space-y-2.5">
                 {kanbanColumns.inExecution.length === 0 ? (
-                  <div className="py-6 flex items-center justify-center text-center px-4 border border-dashed border-amber-300/70 rounded-xl bg-white/40 text-[11px] text-amber-600/70 font-mono">
+                  <div className="flex-1 py-8 flex items-center justify-center text-center px-4 border border-dashed border-amber-300/70 rounded-xl bg-white/40 text-[11px] text-amber-600/70 font-mono">
                     No live executions active
                   </div>
                 ) : (
@@ -3053,7 +3088,7 @@ export const SopExecutionView: React.FC<{
             </div>
 
             {/* Column 3: 100% Solved & Verified */}
-            <div className="bg-emerald-50/40 border border-emerald-200/70 rounded-2xl p-3 flex flex-col h-fit">
+            <div className="bg-emerald-50/40 border border-emerald-200/70 rounded-2xl p-3 flex flex-col h-full">
               <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-emerald-200/80">
                 <div className="flex items-center gap-2">
                   <Lock className="w-3.5 h-3.5 text-emerald-700" />
@@ -3065,9 +3100,9 @@ export const SopExecutionView: React.FC<{
                   {kanbanColumns.solved.length}
                 </span>
               </div>
-              <div className="space-y-2.5">
+              <div className="flex-1 flex flex-col space-y-2.5">
                 {kanbanColumns.solved.length === 0 ? (
-                  <div className="py-6 flex items-center justify-center text-center px-4 border border-dashed border-emerald-300/70 rounded-xl bg-white/40 text-[11px] text-emerald-600/70 font-mono">
+                  <div className="flex-1 py-8 flex items-center justify-center text-center px-4 border border-dashed border-emerald-300/70 rounded-xl bg-white/40 text-[11px] text-emerald-600/70 font-mono">
                     No solved records in filter
                   </div>
                 ) : (
@@ -3191,19 +3226,35 @@ export const SopExecutionView: React.FC<{
             <div className="flex-1 overflow-y-auto p-4 bg-[#F8FAFC]">
               {/* WORK ORDER MANAGEMENT CARD */}
               <div className="bg-white rounded-xl border border-slate-200 shadow-xs divide-y divide-slate-100 overflow-hidden">
-              {/* SECTION A — COMPACT HEADER WITH SINGLE-ROW CONTROLS & METADATA STRIP */}
-              <div className="p-3 sm:p-3.5 bg-white space-y-2.5">
-                {/* Row 1: Assigned Field Engineer on Left, Technician Assignment Pill & Action Buttons on Same Horizontal Row */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  {/* Left Column: Section Title & Indicator */}
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-bold text-slate-700 uppercase font-mono tracking-wider">
-                      Assigned Field Engineer
-                    </span>
+              {/* SECTION A — COMPACT 2-COLUMN EXECUTIVE HEADER (Requirement 2) */}
+              <div className="p-3.5 bg-slate-50/80 border-b border-slate-200 space-y-2.5">
+                {/* 2-Column Executive Header: Title & Facility on Left, Engineer & Actions on Right */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  {/* Left Side: Bold Ticket Title + Single Compact Metadata Line */}
+                  <div className="space-y-1 min-w-0 flex-1">
+                    <h1
+                      className="text-base font-bold text-slate-900 tracking-tight font-sans truncate"
+                      title={cleanFaultTitle(
+                        activeCase.title || activeCase.symptomDescription,
+                        activeCase.caseNumber,
+                        activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label
+                      )}
+                    >
+                      {cleanFaultTitle(
+                        activeCase.title || activeCase.symptomDescription,
+                        activeCase.caseNumber,
+                        activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label
+                      )}
+                    </h1>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-mono flex-wrap">
+                      <span>🕒 {formatLocalDateTime(activeCase.createdAt || (activeCase as any).rawCreatedAt)}</span>
+                      <span className="text-slate-300">•</span>
+                      <span>🏭 {activeCase.plantName || organization?.name || 'JMK Tiles Facility'}</span>
+                    </div>
                   </div>
 
-                  {/* Right Column: Technician Assignment Pill & Action Buttons on the Same Single Horizontal Row */}
-                  <div className="flex items-center gap-2 flex-wrap">
+                  {/* Right Side: Technician Assignment Pill & Action Buttons */}
+                  <div className="flex items-center gap-2 flex-wrap shrink-0">
                     {activeCase.assignedTechnicianUserId && !isChangingTech ? (
                       <>
                         {(() => {
@@ -3265,11 +3316,7 @@ export const SopExecutionView: React.FC<{
                                 {statusBadgeText}
                               </span>
                               <span>
-                                {isTicketFullySolved ? (
-                                  <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded mr-1 shadow-2xs">
-                                    🔒 Completed
-                                  </span>
-                                ) : isTechLocked ? (
+                                {isTechLocked ? (
                                   <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded mr-1 shadow-2xs">
                                     🔒 Tech Locked (Execution Underway)
                                   </span>
@@ -3277,12 +3324,12 @@ export const SopExecutionView: React.FC<{
                                 <strong>{activeCase.assignedTechnicianName}</strong>
                               </span>
                               <span className="bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded text-[10px] font-mono font-bold">
-                                ⭐ {activeCase.assignedTechnicianRating || 4.9}
+                                ⭐ {activeCase.assignedTechnicianRating ? Number(activeCase.assignedTechnicianRating).toFixed(1) : '4.9'}
                               </span>
                               {activeCase.isAiAutoAssigned !== false && (
                                 <span className="bg-violet-50 text-violet-700 border border-violet-200 px-1.5 py-0.5 rounded text-[10px] font-bold font-sans flex items-center gap-1 shadow-2xs">
                                   <Sparkles className="w-2.5 h-2.5 text-violet-600" />
-                                  <span>AI Auto-Assigned</span>
+                                  <span>AI Assigned</span>
                                 </span>
                               )}
                               {!isTechLocked && (
@@ -3574,81 +3621,97 @@ export const SopExecutionView: React.FC<{
                   );
                 })()}
 
-                {/* Row 2: Ticket Title */}
-                <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight font-sans">
-                  {cleanFaultTitle(
-                    activeCase.title || activeCase.symptomDescription,
-                    activeCase.caseNumber,
-                    activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label
-                  )}
-                </h1>
-
-                {/* Row 3: Single Sleek 1-Line Horizontal Metadata Strip (Replaces Section B) */}
-                <div className="flex items-center gap-3 py-1.5 px-3 bg-slate-50 border border-slate-200/80 rounded-lg text-[11px] font-mono text-slate-600 flex-wrap">
-                  <div className="flex items-center gap-1">
-                    <span className="text-slate-400 uppercase font-bold text-[10px]">CREATED:</span>
-                    <span className="text-slate-800">
-                      {formatLocalDateTime(activeCase.createdAt || (activeCase as any).rawCreatedAt)}
-                    </span>
-                  </div>
-                  <span className="text-slate-300">•</span>
-                  <div className="flex items-center gap-1">
-                    <span className="text-slate-400 uppercase font-bold text-[10px]">FACILITY:</span>
-                    <span className="text-slate-800">{activeCase.plantName || organization?.name || 'Cleveland Stamping Plant'}</span>
-                  </div>
-                </div>
               </div>
 
-              {/* LIVE 5-STEP CONNECTED PROGRESS STEPPER (Deep Navy-Indigo Gradient Theme) */}
-              <div className="py-2.5 px-4 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white border-y border-indigo-900/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
-                {/* Left: Status Badge & Steps Verified */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase border ${
-                    isTicketFullySolved
-                      ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
-                      : 'bg-indigo-900/60 text-indigo-200 border-indigo-700'
-                  }`}>
-                    {isTicketFullySolved ? '✅ COMPLETED' : '⚡ IN PROGRESS'}
-                  </span>
-                  <span className="text-xs font-mono font-medium text-slate-300 whitespace-nowrap">
-                    <strong className="text-white font-bold">{activeProgress.doneSteps} of {activeProgress.totalSteps}</strong> Steps
-                  </span>
-                </div>
-
-                {/* Center: Sleek Single-Line Step Pills (Step 1 to Step 5) */}
-                <div className="flex items-center gap-1.5 overflow-x-auto max-w-full py-0.5">
-                  {Array.from({ length: Math.max(activeProgress.totalSteps, 5) }, (_, idx) => {
+              {/* LIVE 5-STEP INTERACTIVE PROCEDURE & TOLERANCE EXPLORER (Requirement 3) */}
+              <div className="p-3 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white border-y border-indigo-900/40 shadow-sm">
+                {/* 5 Full-Width, Evenly Spaced Step Pills (Grid 5 - Never Clips) */}
+                <div className="grid grid-cols-5 gap-2 w-full">
+                  {PROCEDURE_STEP_LABELS.map((label, idx) => {
                     const stepNum = idx + 1;
                     const isCompleted = stepNum <= activeProgress.doneSteps || isTicketFullySolved;
-                    const isActive = stepNum === activeProgress.doneSteps + 1 && !isTicketFullySolved;
+                    const isCurrentActive = !isTicketFullySolved && stepNum === activeProgress.doneSteps + 1;
+                    const isSelected = selectedDrawerStepIdx === idx;
 
                     return (
-                      <div
-                        key={stepNum}
-                        className={`whitespace-nowrap px-2.5 py-1 text-xs font-semibold rounded-md flex items-center justify-center gap-1 transition-all ${
-                          isCompleted
-                            ? 'bg-indigo-600 text-white shadow-2xs font-bold'
-                            : isActive
-                            ? 'bg-indigo-500 text-white ring-2 ring-indigo-300 ring-offset-1 ring-offset-slate-950 animate-pulse font-bold'
-                            : 'bg-slate-800/80 text-slate-400 border border-slate-700/80'
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setSelectedDrawerStepIdx(idx)}
+                        className={`px-2 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer text-center select-none ${
+                          isSelected
+                            ? 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-bold shadow-md ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950'
+                            : isCompleted
+                            ? 'bg-indigo-950/80 hover:bg-indigo-900/90 text-indigo-200 border border-indigo-700/60 font-semibold shadow-2xs'
+                            : isCurrentActive
+                            ? 'bg-amber-950/70 hover:bg-amber-900/80 text-amber-200 border border-amber-600/60 animate-pulse font-semibold'
+                            : 'bg-slate-900/70 hover:bg-slate-800 text-slate-400 border border-slate-800 font-medium'
                         }`}
-                        title={`Step ${stepNum}: ${activeProgress.steps[idx]?.title || 'Pending'}`}
+                        title={`Click to view Step 0${stepNum} procedure & engineering tolerance`}
                       >
-                        {isCompleted ? (
-                          <Check className="w-3 h-3 stroke-[3] text-white shrink-0" />
-                        ) : null}
-                        <span>Step {stepNum}</span>
-                      </div>
+                        {isCompleted && <Check className="w-3.5 h-3.5 stroke-[3] text-emerald-400 shrink-0" />}
+                        <span className="truncate">{label}</span>
+                      </button>
                     );
                   })}
                 </div>
 
-                {/* Right: Bold Percentage Pill */}
-                <div className="shrink-0 self-end sm:self-auto">
-                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono text-xs font-bold px-2.5 py-1 rounded-full shadow-2xs whitespace-nowrap">
-                    {isTicketFullySolved ? '100% Solved' : `${activeProgress.progressPct}% Solved`}
-                  </span>
-                </div>
+                {/* Compact Active/Selected Step Detail Strip Right Below the 5 Pills */}
+                {(() => {
+                  const currentStepNum = selectedDrawerStepIdx + 1;
+                  const currentStep = STANDARD_5_STEPS[selectedDrawerStepIdx] || STANDARD_5_STEPS[0];
+                  const isDone = isTicketFullySolved || currentStepNum <= activeProgress.doneSteps;
+                  const isStepActive = !isTicketFullySolved && currentStepNum === activeProgress.doneSteps + 1;
+
+                  const getToleranceSpecText = (step: number) => {
+                    switch (step) {
+                      case 1:
+                        return '0V Live • 0.0 PSI Bleed • OSHA 1910.147';
+                      case 2:
+                        return 'Flange Gap ≤ 0.10 mm • Zero Casing Scratches';
+                      case 3:
+                        return 'Flatness ≤ 0.0005 in (3 Light Bands) • Runout ≤ 0.03 mm';
+                      case 4:
+                        return '45 Nm ± 2 Nm (Star Pattern) • Laser Align ≤ 0.05 mm';
+                      case 5:
+                      default:
+                        return 'RMS Vib ≤ 1.8 mm/s • ΔT ≤ 15°C • 0 Drops/min';
+                    }
+                  };
+
+                  return (
+                    <div className="bg-white/10 backdrop-blur-md border border-white/15 rounded-lg p-2.5 mt-2.5 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                      {/* Left Side: Step Title & Exact Procedure Instruction */}
+                      <div className="flex items-start md:items-center gap-2.5 min-w-0">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider shrink-0 ${
+                            isDone
+                              ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400/40'
+                              : isStepActive
+                              ? 'bg-amber-500/30 text-amber-300 border border-amber-400/40 animate-pulse'
+                              : 'bg-indigo-500/30 text-indigo-200 border border-indigo-400/30'
+                          }`}
+                        >
+                          STEP 0{currentStepNum} {isDone ? '✓ DONE' : isStepActive ? '⚡ ACTIVE' : 'PENDING'}
+                        </span>
+                        <div className="min-w-0">
+                          <span className="font-bold text-white mr-1.5">{currentStep.title}:</span>
+                          <span className="text-slate-200 text-[11px] leading-relaxed">{currentStep.instruction}</span>
+                        </div>
+                      </div>
+
+                      {/* Right Side: Unique Critical Engineering Tolerance & Spec Pill */}
+                      <div className="shrink-0 flex items-center gap-1.5 self-start md:self-center">
+                        <span className="text-[10px] font-mono text-cyan-300/90 uppercase font-bold tracking-wider shrink-0">
+                          ⚙️ Spec / Tolerance:
+                        </span>
+                        <span className="bg-cyan-950/70 border border-cyan-400/40 text-cyan-200 font-mono text-[10px] font-bold px-2 py-1 rounded-md shadow-2xs whitespace-nowrap">
+                          {getToleranceSpecText(currentStepNum)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* SECTION C — DIAGNOSTIC RCA & REPAIR PROCEDURES */}
