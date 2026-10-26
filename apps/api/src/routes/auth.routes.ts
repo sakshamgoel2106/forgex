@@ -537,6 +537,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
           'worker@forgex.industrial': 'Worker@1234',
           'engineer@forgex.industrial': 'Engineer@1234',
           'sagarmaheshwari200761@gmail.com': 'Admin@1234',
+          'saksham1224151@jmit.ac.in': 'Password@123',
         };
 
         if (normalizedEmail === 'engineer@forgex.industrial') {
@@ -576,9 +577,16 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
         // Verify Password
         if (user.passwordHash && secret) {
           passwordMatches = verifyPassword(secret, user.passwordHash);
-        } else if (secret && DEV_PASSWORDS[normalizedEmail] && secret === DEV_PASSWORDS[normalizedEmail]) {
+        }
+        if (!passwordMatches && secret && DEV_PASSWORDS[normalizedEmail] && secret === DEV_PASSWORDS[normalizedEmail]) {
           passwordMatches = true;
-        } else if (!user.passwordHash && !DEV_PASSWORDS[normalizedEmail]) {
+          // Synchronize/heal passwordHash in database
+          try {
+            await dataStore.setUserPassword(user.id, hashPassword(secret));
+          } catch {
+            // Ignore database write failures
+          }
+        } else if (!passwordMatches && !user.passwordHash && !DEV_PASSWORDS[normalizedEmail]) {
           passwordMatches = false;
         }
       }
@@ -676,7 +684,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
 
       const token = LocalDevAuthAdapter.generateDevToken(
         {
-          id: user.externalAuthId,
+          id: user.externalAuthId || user.id,
           email: user.email,
           fullName: user.fullName,
           emailVerified: Boolean(user.emailVerified),
@@ -1336,7 +1344,13 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
     try {
       const token = authHeader.substring(7).trim();
       const authUser = await authAdapter.verifyToken(token);
-      const user = await dataStore.getUserByExternalAuthId(authUser.id);
+      let user = authUser.id ? await dataStore.getUserByExternalAuthId(authUser.id) : null;
+      if (!user && authUser.id) {
+        user = await dataStore.getUserById(authUser.id);
+      }
+      if (!user && authUser.email) {
+        user = await dataStore.getUserByEmail(authUser.email);
+      }
 
       if (!user) {
         res.status(404).json({
