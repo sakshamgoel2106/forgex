@@ -87,6 +87,8 @@ interface NoteFormItem {
   clientId: string;
   title: string;
   assetTag: string;
+  isCustomMachine?: boolean;
+  customMachine?: string;
   taskDuringIssue: string;
   isCustomTask?: boolean;
   customTask?: string;
@@ -203,6 +205,8 @@ function createDefaultNoteItem(): NoteFormItem {
     clientId: `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     title: '',
     assetTag: '',
+    isCustomMachine: false,
+    customMachine: '',
     taskDuringIssue: '',
     isCustomTask: false,
     customTask: '',
@@ -410,9 +414,19 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     }
 
     window.speechSynthesis.cancel();
-    const trigger = note.symptom ? `Trigger condition: ${note.symptom}. ` : '';
-    const action = note.description || note.content || '';
-    const textToSpeak = `Field insight for ${note.machineAssetTag || note.assetTag || 'equipment'}. ${note.title}. ${trigger} Action guidance: ${action}`;
+    const tag = (note.machineAssetTag || note.assetTag || 'PLANT-WIDE').trim();
+    const category = note.category || 'Reliability';
+    const severity = note.severity || 'Pro-Tip';
+    const title = note.title;
+    const trigger = note.symptom ? `Observed trigger is ${note.symptom}` : 'Observed during operational inspection';
+    const task = note.taskDuringIssue ? ` during ${note.taskDuringIssue}` : '';
+    const guidance = note.description || note.content || '';
+    const aiInsight = getNonRedundantAiInsight(note);
+    const aiText = aiInsight
+      ? ` AI Supplemental Insight and Manual Cross-Check: ${aiInsight.replace(/[•\n]+/g, '. ').trim()}`
+      : '';
+
+    const textToSpeak = `Expert Knowledge Note for Machine ${tag}, Category ${category}, Severity ${severity}. Title: ${title}. When to apply: ${trigger}${task}. Recommended field action: ${guidance}.${aiText}`;
 
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
     utterance.rate = 0.95;
@@ -491,13 +505,29 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
         });
 
         const filtered: Array<{ assetTag: string; name: string }> = [];
-        docAssetTags.forEach((tag) => {
-          const matched = allMachines.find((m) => m.assetTag?.toUpperCase() === tag);
-          filtered.push({
-            assetTag: tag,
-            name: matched?.name || tag,
+        if (docAssetTags.size > 0) {
+          docAssetTags.forEach((tag) => {
+            const matched = allMachines.find(
+              (m) =>
+                (m.assetTag || m.asset_tag || '').toUpperCase() === tag ||
+                (m.name || '').toUpperCase().includes(tag)
+            );
+            filtered.push({
+              assetTag: tag,
+              name: matched?.name || tag,
+            });
           });
-        });
+        } else if (allMachines.length > 0) {
+          allMachines.forEach((m) => {
+            const tag = (m.assetTag || m.asset_tag || m.id || '').toUpperCase();
+            if (tag) {
+              filtered.push({
+                assetTag: tag,
+                name: m.name || tag,
+              });
+            }
+          });
+        }
         filtered.sort((a, b) => a.assetTag.localeCompare(b.assetTag));
 
         setUploadedMachines(filtered);
@@ -872,8 +902,14 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
         toast.error('Validation Error', `Note #${i + 1} requires a Title / Subject.`);
         return false;
       }
-      if (!n.assetTag.trim()) {
-        toast.error('Validation Error', `Note #${i + 1} requires a Target Machine selection.`);
+      const effectiveMachine = (n.isCustomMachine ? (n.customMachine || '') : n.assetTag).trim();
+      if (!effectiveMachine) {
+        toast.error(
+          'Validation Error',
+          n.isCustomMachine
+            ? `Note #${i + 1} requires a custom Target Machine name.`
+            : `Note #${i + 1} requires a Target Machine selection.`
+        );
         return false;
       }
       const effectiveTask = (n.isCustomTask ? (n.customTask || '') : n.taskDuringIssue).trim();
@@ -909,6 +945,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     setIsSubmitting(true);
     try {
       const payload = formNotes.map((n) => {
+        const effectiveMachine = (n.isCustomMachine ? (n.customMachine || '') : n.assetTag).trim();
         const effectiveTask = (n.isCustomTask ? (n.customTask || '') : n.taskDuringIssue).trim();
         const effectiveCategory = (n.isCustomCategory ? (n.customCategory || '') : n.category).trim();
 
@@ -920,7 +957,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           symptom: n.symptom.trim() || null,
           taskDuringIssue: effectiveTask || null,
           observedAt: n.observedAt ? new Date(n.observedAt).toISOString() : null,
-          assetTag: n.assetTag.trim().toUpperCase() || null,
+          assetTag: effectiveMachine.toUpperCase() || null,
           status: 'APPROVED',
         };
       });
@@ -1057,23 +1094,6 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     }
   };
 
-  const getCategoryBadgeClasses = (category: string) => {
-    switch (category) {
-      case 'Safety & LOTO':
-        return 'text-rose-600 bg-rose-50/70 border-rose-200';
-      case 'Tooling Hack':
-        return 'text-purple-600 bg-purple-50/70 border-purple-200';
-      case 'Startup / Shutdown':
-        return 'text-orange-600 bg-orange-50/70 border-orange-200';
-      case 'Troubleshooting Trick':
-        return 'text-indigo-600 bg-indigo-50/70 border-indigo-200';
-      case 'Preventive Maintenance':
-        return 'text-teal-600 bg-teal-50/70 border-teal-200';
-      case 'Reliability':
-      default:
-        return 'text-blue-600 bg-blue-50/70 border-blue-200';
-    }
-  };
 
   // Industrial Knowledge Flashcard Renderer
   const renderNoteCard = (note: ExpertNote) => {
@@ -1088,95 +1108,73 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           .filter(Boolean);
     const primaryTag = rawTags[0] || 'PLANT_WIDE';
 
-    const isCritical = note.severity === 'Critical Machine Warning' || note.severity === 'Safety Hazard';
-    const topGradient = isCritical
-      ? 'bg-gradient-to-r from-rose-500 via-amber-500 to-red-500'
-      : 'bg-gradient-to-r from-indigo-600 via-blue-600 to-sky-500';
-
-    const reviewsList = Array.isArray(note.reviews) ? note.reviews : [];
-    const reviewCount = typeof note.reviewCount === 'number' ? note.reviewCount : reviewsList.length;
-    const hasReviews = reviewCount > 0;
-    const avgRating = hasReviews && typeof note.averageRating === 'number' ? Number(note.averageRating).toFixed(1) : '5.0';
-
     return (
       <div
         key={note.id}
         onClick={() => setSelectedNoteForModal(note)}
         className="rounded-xl border border-slate-200/90 bg-white hover:border-indigo-500 hover:shadow-lg transition-all duration-200 overflow-hidden group cursor-pointer flex flex-col justify-between shadow-2xs"
       >
-        {/* Top Accent Strip */}
-        <div className={`h-1 w-full ${topGradient}`} />
-
-        <div className="p-3.5 flex flex-col gap-2.5 flex-1 justify-between">
-          {/* Row 1 (Badges - No Truncation) */}
-          <div className="flex items-center justify-between gap-1.5 min-w-0 flex-wrap sm:flex-nowrap">
-            <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-              <span className="text-[10px] font-mono text-white bg-slate-900 px-2 py-0.5 rounded-md font-bold shrink-0 shadow-2xs">
-                {primaryTag}
-              </span>
-              <span
-                className={`text-[10px] font-mono px-2 py-0.5 rounded-md border font-semibold whitespace-nowrap shrink-0 ${getCategoryBadgeClasses(
-                  note.category
-                )}`}
-              >
-                {note.category}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1 shrink-0 ml-auto">
-              <span className="text-[9px] font-mono px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-800 font-bold flex items-center gap-1 shadow-2xs whitespace-nowrap">
-                <Clock className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
-                <span>{getEstTimeSaved(note).replace(' MTTR Saved', '')}</span>
-              </span>
-              {hasReviews && (
-                <span className="text-[10px] font-mono text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-bold flex items-center gap-0.5">
-                  <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
-                  {avgRating}
-                </span>
-              )}
-            </div>
+        {/* Top Mini-Header Strip */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-3.5 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-bold text-xs font-mono text-slate-100 flex items-center gap-1 shrink-0">
+              <Cpu className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Machine: {primaryTag}</span>
+            </span>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-indigo-400/30 bg-indigo-500/20 text-indigo-200 font-bold uppercase tracking-wider truncate">
+              {note.category}
+            </span>
           </div>
+          <div className="flex items-center gap-1.5 shrink-0 ml-2">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-400/30 bg-emerald-500/20 text-emerald-300 font-bold flex items-center gap-1 whitespace-nowrap">
+              <Zap className="w-2.5 h-2.5 text-emerald-400" />
+              <span>{getEstTimeSaved(note).replace(' MTTR Saved', ' Saved')}</span>
+            </span>
+          </div>
+        </div>
 
-          {/* Row 2 (Title): Crisp bold title */}
+        {/* Card Body */}
+        <div className="p-3.5 space-y-2 flex-1 flex flex-col justify-between">
+          {/* Crisp 1-line Note Title */}
           <h4
-            className="text-sm font-bold text-slate-900 group-hover:text-indigo-600 transition-colors line-clamp-1"
+            className="font-bold text-slate-900 text-sm truncate group-hover:text-indigo-600 transition-colors"
             title={note.title}
           >
             {note.title}
           </h4>
 
-          {/* Row 3 (Visual Trigger + Action Mini-Blocks Instead of Plain Paragraph) */}
-          <div className="bg-slate-50/90 border border-slate-100 rounded-lg p-2.5 space-y-1.5">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-900 line-clamp-1">
-              <span className="text-amber-600 font-mono text-[10px] font-bold uppercase shrink-0">⚡ Trigger:</span>
+          {/* Structured 2-row visual summary box */}
+          <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-2.5 space-y-1.5 text-xs">
+            <div className="flex items-center gap-1.5 text-amber-900">
+              <span className="font-mono text-[10px] font-bold text-amber-600 uppercase shrink-0">⚡ When to Apply:</span>
               <span className="truncate text-slate-700 font-medium">
-                {note.symptom || note.taskDuringIssue || 'Operational Anomaly / Drift'}
+                {note.symptom ? `${note.symptom}${note.taskDuringIssue ? ` • ${note.taskDuringIssue}` : ''}` : (note.taskDuringIssue || 'Operational Anomaly / Drift')}
               </span>
             </div>
-            <div className="flex items-start gap-1.5 text-xs text-slate-700">
-              <span className="text-indigo-600 font-mono text-[10px] font-bold uppercase shrink-0 mt-0.5">🔧 Fix:</span>
+            <div className="flex items-start gap-1.5 text-slate-700">
+              <span className="font-mono text-[10px] font-bold text-indigo-600 uppercase shrink-0 mt-0.5">🔧 Field Fix:</span>
               <span className="line-clamp-1 text-slate-800 font-medium">
                 {displayContent}
               </span>
             </div>
           </div>
 
-          {/* Row 4 (Clean Footer - Never Cut Off Author Name or Wrap Date) */}
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-xs">
+          {/* Card Footer */}
+          <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
             <div className="flex items-center gap-1.5 min-w-0">
               <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-slate-900 to-indigo-700 text-white flex items-center justify-center text-[9px] font-mono font-bold shrink-0 shadow-2xs">
                 {getInitials(displayAuthor)}
               </div>
-              <span className="text-slate-800 font-semibold text-xs whitespace-nowrap">
-                {displayAuthor}
+              <span className="text-slate-800 font-semibold truncate max-w-[120px]">
+                By: {displayAuthor}
               </span>
-              <span className="text-slate-400 text-[10px] font-mono whitespace-nowrap">
-                • {formatCompactDate(note.observedAt || note.createdAt || note.date)}
+              <span className="text-slate-400 font-mono whitespace-nowrap">
+                • 📅 {formatCompactDate(note.observedAt || note.createdAt || note.date)}
               </span>
             </div>
 
-            <span className="bg-indigo-50 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all duration-150 whitespace-nowrap flex items-center gap-1 shrink-0 shadow-2xs">
-              <span>Open Insight</span>
+            <span className="bg-indigo-50 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white px-2.5 py-1 rounded-md font-semibold transition-all duration-150 whitespace-nowrap flex items-center gap-1 shrink-0 shadow-2xs">
+              <span>View Note</span>
               <ExternalLink className="w-3 h-3" />
             </span>
           </div>
@@ -1190,12 +1188,12 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
       {/* Top Banner Toolbar with KPI Pills */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2.5 border-b border-[#E2E8F0] gap-3">
         <div>
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-[#2563EB] flex items-center justify-center border border-blue-100 shadow-sm shrink-0">
-              <GraduationCap className="w-4 h-4 text-[#2563EB]" />
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-50 text-[#2563EB] flex items-center justify-center border border-blue-100 shadow-sm shrink-0">
+              <GraduationCap className="w-4.5 h-4.5 text-[#2563EB]" />
             </div>
             <div>
-              <h2 className="text-sm sm:text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide flex flex-wrap items-center gap-2">
+              <h2 className="text-sm sm:text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide flex flex-wrap items-center gap-2 leading-snug">
                 <span>Tribal & Expert Knowledge Repository</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-slate-100 text-slate-600 border border-slate-200 font-semibold">
                   {notes.length} Active Notes
@@ -1209,7 +1207,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   {criticalCount} Critical Warnings
                 </span>
               </h2>
-              <p className="text-xs text-[#64748B] mt-0.5 font-sans">
+              <p className="text-xs text-[#64748B] leading-tight mt-0.5 font-sans">
                 Frontline senior technician wisdom, undocumented field tricks & startup protocols for{' '}
                 <span className="font-semibold text-slate-700">{organization?.name || 'Your Plant'}</span>
               </p>
@@ -1232,23 +1230,23 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
         </Button>
       </div>
 
-      {/* Filter Toolbar - Single Compact Horizontal Row taking half height */}
-      <div className="flex flex-wrap lg:flex-nowrap items-center gap-2 p-2.5 bg-white rounded-xl border border-[#E2E8F0] shadow-sm">
-        {/* 1) Search Input */}
-        <div className="relative flex-1 min-w-[200px]">
+      {/* Filter Toolbar - 12-Column Grid with zero overflow */}
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 p-2.5 bg-white border border-slate-200 rounded-xl items-center w-full overflow-hidden shadow-xs">
+        {/* 1) Search Input: md:col-span-4 min-w-0 */}
+        <div className="relative md:col-span-4 min-w-0">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Search by equipment, task, symptom, author, or guidance..."
+            placeholder="Search by equipment, task, symptom, author..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-8 py-1.5 bg-slate-50 hover:bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1E293B] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:bg-white transition"
+            className="w-full pl-9 pr-7 py-1.5 bg-slate-50 hover:bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1E293B] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:bg-white transition"
           />
           {search && (
             <button
               type="button"
               onClick={() => setSearch('')}
-              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
               title="Clear search"
             >
               <X className="w-3.5 h-3.5" />
@@ -1256,90 +1254,90 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           )}
         </div>
 
-        {/* 2-5) Dropdown Filters in single compact row */}
-        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
-          {/* 2) Uploaded Machine Filter */}
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1 text-xs">
-            <Cpu className="w-3 h-3 text-slate-500" />
-            <select
-              value={machineFilter}
-              onChange={(e) => setMachineFilter(e.target.value)}
-              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer"
-            >
-              <option value="ALL">All Uploaded Machines</option>
-              {uploadedMachines.map((m) => (
-                <option key={m.assetTag} value={m.assetTag}>
-                  {m.assetTag}
-                </option>
-              ))}
-            </select>
-          </div>
+        {/* 2) Uploaded Machine Filter: md:col-span-2 min-w-0 */}
+        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
+          <Cpu className="w-3 h-3 text-slate-500 shrink-0" />
+          <select
+            value={machineFilter}
+            onChange={(e) => setMachineFilter(e.target.value)}
+            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
+          >
+            <option value="ALL">All Machines</option>
+            {uploadedMachines.map((m) => (
+              <option key={m.assetTag} value={m.assetTag}>
+                {m.assetTag}
+              </option>
+            ))}
+          </select>
+        </div>
 
-          {/* 3) Category Filter */}
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1 text-xs">
-            <Filter className="w-3 h-3 text-slate-500" />
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer"
-            >
-              <option value="ALL">All Categories</option>
-              {availableCategories.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
-          </div>
+        {/* 3) Category Filter: md:col-span-2 min-w-0 */}
+        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
+          <Filter className="w-3 h-3 text-slate-500 shrink-0" />
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
+          >
+            <option value="ALL">All Categories</option>
+            {availableCategories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
+        </div>
 
-          {/* 4) Severity Filter */}
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1 text-xs">
-            <Sparkles className="w-3 h-3 text-slate-500" />
-            <select
-              value={severityFilter}
-              onChange={(e) => setSeverityFilter(e.target.value)}
-              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer"
-            >
-              <option value="ALL">All Severities</option>
-              {PRACTICAL_SEVERITIES.map((sev) => (
-                <option key={sev} value={sev}>
-                  {sev}
-                </option>
-              ))}
-            </select>
-          </div>
+        {/* 4) Severity Filter: md:col-span-2 min-w-0 */}
+        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
+          <Sparkles className="w-3 h-3 text-slate-500 shrink-0" />
+          <select
+            value={severityFilter}
+            onChange={(e) => setSeverityFilter(e.target.value)}
+            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
+          >
+            <option value="ALL">All Severities</option>
+            {PRACTICAL_SEVERITIES.map((sev) => (
+              <option key={sev} value={sev}>
+                {sev}
+              </option>
+            ))}
+          </select>
+        </div>
 
-          {/* 5) Sort By Dropdown */}
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1 text-xs">
-            <Layers className="w-3 h-3 text-slate-500" />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer"
-            >
-              <option value="NEWEST">Sort: Newest First</option>
-              <option value="HELPFUL">Sort: Most Helpful (👍)</option>
-              <option value="RATING">Sort: Highest Rated (⭐)</option>
-            </select>
-          </div>
-
-          {/* Reset Filters */}
-          {(search || categoryFilter !== 'ALL' || severityFilter !== 'ALL' || machineFilter !== 'ALL') && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearch('');
-                setCategoryFilter('ALL');
-                setSeverityFilter('ALL');
-                setMachineFilter('ALL');
-              }}
-              className="text-[11px] font-mono text-blue-600 hover:underline px-2 py-1 shrink-0"
-            >
-              Reset
-            </button>
-          )}
+        {/* 5) Sort Dropdown: md:col-span-2 min-w-0 */}
+        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
+          <Layers className="w-3 h-3 text-slate-500 shrink-0" />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
+          >
+            <option value="NEWEST">Sort: Newest First</option>
+            <option value="HELPFUL">Sort: Most Helpful (👍)</option>
+            <option value="RATING">Sort: Highest Rated (⭐)</option>
+          </select>
         </div>
       </div>
+
+      {/* Active Filter Indicator & Reset */}
+      {(search || categoryFilter !== 'ALL' || severityFilter !== 'ALL' || machineFilter !== 'ALL') && (
+        <div className="flex items-center gap-2 text-xs text-slate-600 px-1">
+          <span>Active Filters Applied</span>
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setCategoryFilter('ALL');
+              setSeverityFilter('ALL');
+              setMachineFilter('ALL');
+            }}
+            className="text-xs font-mono text-blue-600 hover:text-blue-800 underline font-semibold cursor-pointer"
+          >
+            Reset All Filters
+          </button>
+        </div>
+      )}
 
       {/* Main Content Area */}
       {isLoading ? (
@@ -1432,9 +1430,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header: Signature Deep Navy-to-Indigo Gradient Banner */}
-              <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-5 rounded-t-2xl shrink-0 space-y-2 border-b border-indigo-950">
-                {/* Top Row: All 3 Badges on Left, Edit / Delete / Close on Right */}
-                <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 sm:p-5 rounded-t-2xl shrink-0 space-y-1.5 border-b border-indigo-950">
+                {/* Row 1: Left: Machine, Category, Severity pills | Right: Edit, Delete, Close */}
+                <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     {rawTags.map((tag, idx) => (
                       <span
@@ -1453,7 +1451,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                     </span>
                   </div>
 
-                  {/* Top-Right Action Bar (Edit, Delete, Close — Single Location) */}
+                  {/* Top-Right Action Bar (Edit, Delete, Close — Single Location on Top Row) */}
                   <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                     {canEditOrDelete && (
                       <div className="flex items-center gap-1.5 mr-1">
@@ -1500,7 +1498,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         }
                         setSelectedNoteForModal(null);
                       }}
-                      className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                      className="p-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
                       title="Close modal"
                     >
                       <X className="w-5 h-5" />
@@ -1508,33 +1506,33 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   </div>
                 </div>
 
-                {/* Middle: Crisp White Note Title */}
-                <h3 className="text-base sm:text-lg font-bold text-white leading-snug mt-1">
+                {/* Row 2: Bold Note Title */}
+                <h3 className="text-base font-bold text-white leading-snug mt-1.5">
                   {modalNote.title}
                 </h3>
 
-                {/* Bottom Metadata Row on a single clean line */}
-                <div className="flex items-center gap-2 text-xs font-mono text-indigo-200/80 flex-wrap pt-0.5">
-                  <span className="flex items-center gap-1 text-slate-200">
+                {/* Row 3: All metadata on single non-wrapping line */}
+                <div className="flex items-center gap-3 text-xs text-slate-300 mt-1 whitespace-nowrap overflow-x-auto">
+                  <span className="flex items-center gap-1 text-slate-200 shrink-0">
                     <User className="w-3.5 h-3.5 text-indigo-300" />
                     <strong>{displayAuthor}</strong> ({displayRole})
                   </span>
                   {displayDate && (
                     <>
                       <span>•</span>
-                      <span className="flex items-center gap-1">
+                      <span className="flex items-center gap-1 shrink-0">
                         <Clock className="w-3 h-3 text-indigo-300" />
                         <span>{displayDate}</span>
                       </span>
                     </>
                   )}
                   <span>•</span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 font-bold">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 font-bold shrink-0">
                     <Zap className="w-3 h-3 text-emerald-300" />
                     <span>{getEstTimeSaved(modalNote)}</span>
                   </span>
                   <span>•</span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/30">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 shrink-0">
                     <Flame className="w-3 h-3 text-amber-300" />
                     <span>Applied {getPlantAppliedCount(modalNote)}x in Plant</span>
                   </span>
@@ -1542,46 +1540,56 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               </div>
 
               {/* Modal Body */}
-              <div className="p-5 overflow-y-auto space-y-3.5 flex-1">
-                {/* 1. Complete Field Observation / Context */}
-                {(modalNote.symptom || modalNote.taskDuringIssue) && (
-                  <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-3 space-y-1">
-                    <div className="flex items-center gap-1.5 font-mono font-bold text-amber-900 text-xs uppercase tracking-wider">
-                      <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <span>WHEN TO APPLY / TRIGGER CONDITION:</span>
+              <div className="p-4 sm:p-5 overflow-y-auto space-y-3 flex-1">
+                {/* 2-Column Grid: When to Apply & Recommended Action */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                  {/* Left Column: When to Apply */}
+                  <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-3 space-y-1 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 font-mono font-bold text-amber-900 text-xs uppercase tracking-wider mb-1">
+                        <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>WHEN TO APPLY / TRIGGER CONDITION</span>
+                      </div>
+                      {modalNote.symptom && (
+                        <p className="text-xs text-amber-950 font-sans leading-relaxed">
+                          <strong>Observed Trigger:</strong> {modalNote.symptom}
+                        </p>
+                      )}
+                      {modalNote.taskDuringIssue && (
+                        <p className="text-xs text-amber-950 font-sans leading-relaxed mt-1">
+                          <strong>Task During Issue:</strong> {modalNote.taskDuringIssue}
+                        </p>
+                      )}
+                      {!modalNote.symptom && !modalNote.taskDuringIssue && (
+                        <p className="text-xs text-amber-900/70 italic font-sans">
+                          Operational Anomaly / Field Inspection
+                        </p>
+                      )}
                     </div>
-                    {modalNote.symptom && (
-                      <p className="text-xs text-amber-950 font-sans pl-5 leading-relaxed">
-                        <strong>Observed Trigger:</strong> {modalNote.symptom}
-                      </p>
-                    )}
-                    {modalNote.taskDuringIssue && (
-                      <p className="text-xs text-amber-950 font-sans pl-5 leading-relaxed">
-                        <strong>Task During Issue:</strong> {modalNote.taskDuringIssue}
-                      </p>
-                    )}
                   </div>
-                )}
 
-                {/* 2. Complete Recommended Field Action */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1">
-                  <div className="flex items-center gap-1.5 font-mono font-bold text-slate-800 text-xs uppercase tracking-wider">
-                    <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                    <span>RECOMMENDED FIELD ACTION & GUIDANCE:</span>
+                  {/* Right Column: Recommended Field Action */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center gap-1.5 font-mono font-bold text-slate-800 text-xs uppercase tracking-wider mb-1">
+                        <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span>RECOMMENDED FIELD ACTION & GUIDANCE</span>
+                      </div>
+                      <p className="text-slate-800 text-xs leading-relaxed font-sans whitespace-pre-line">
+                        {displayContent}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-slate-800 text-xs leading-relaxed font-sans whitespace-pre-line pl-5">
-                    {displayContent}
-                  </p>
                 </div>
 
-                {/* 3. AI Supplement & Manual Cross-Check */}
+                {/* AI Supplemental Insight & Manual Cross-Check directly below 2-column grid */}
                 {aiInsight && (
                   <div className="bg-indigo-50/90 border border-indigo-200 rounded-xl p-3 space-y-1">
                     <div className="flex items-center gap-1.5 font-mono font-bold text-indigo-950 text-xs uppercase tracking-wider">
                       <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                      <span>AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK:</span>
+                      <span>AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK</span>
                     </div>
-                    <p className="text-xs text-indigo-950 leading-relaxed font-sans pl-5 whitespace-pre-line">
+                    <p className="text-xs text-indigo-950 leading-relaxed font-sans whitespace-pre-line pl-5">
                       {aiInsight}
                     </p>
                   </div>
@@ -1589,13 +1597,13 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
 
                 {/* Worker Reviews Drawer if toggled inside modal */}
                 {isReviewsOpen && (
-                  <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+                  <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5">
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
                         handleReviewSubmit(modalNote.id, e);
                       }}
-                      className="bg-white p-3 rounded-lg border border-slate-200 space-y-2 shadow-2xs"
+                      className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-2 shadow-2xs"
                     >
                       <div className="flex items-center justify-between gap-2 flex-wrap">
                         <div className="flex items-center gap-1">
@@ -1610,7 +1618,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                               <Star
                                 className={`w-4 h-4 ${
                                   star <= (reviewFormData[modalNote.id]?.rating ?? 0)
-                                      ? 'fill-amber-400 text-amber-400'
+                                    ? 'fill-amber-400 text-amber-400'
                                     : 'text-slate-300'
                                 }`}
                               />
@@ -1655,7 +1663,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                       </div>
                     </form>
                     {reviewsList.length > 0 && (
-                      <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                      <div className="space-y-1.5 max-h-32 overflow-y-auto">
                         {reviewsList.map((rev) => (
                           <div key={rev.id} className="p-2 bg-white rounded border border-slate-200 text-xs">
                             <div className="flex items-center justify-between text-[10px] font-mono text-slate-500">
@@ -1670,17 +1678,17 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   </div>
                 )}
 
-                {/* Bottom Action Footer: Helpful, Did Not Work, Listen Aloud, Feedback, Copy, Ask Copilot */}
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2 flex-wrap">
+                {/* Bottom Action Footer on a SINGLE horizontal row without wrapping */}
+                <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-2 flex-nowrap overflow-x-auto">
+                  <div className="flex items-center gap-2 flex-nowrap shrink-0">
                     {/* Helpful Upvote Button */}
                     <button
                       type="button"
                       onClick={(e) => handleUpvote(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-3 rounded-lg border border-blue-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs"
+                      className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-2.5 rounded-lg border border-blue-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
                       title="Endorse this tip as verified in plant"
                     >
-                      <ThumbsUp className="w-3.5 h-3.5 text-blue-600" />
+                      <ThumbsUp className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                       <span>Helpful ({modalNote.upvotes || 0})</span>
                     </button>
 
@@ -1688,9 +1696,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                     <button
                       type="button"
                       onClick={(e) => handleDislike(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-3 rounded-lg border border-rose-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs"
+                      className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-2.5 rounded-lg border border-rose-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
                     >
-                      <ThumbsDown className="w-3.5 h-3.5 text-rose-600" />
+                      <ThumbsDown className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                       <span>Did Not Work ({modalNote.downvotes || 0})</span>
                     </button>
 
@@ -1698,7 +1706,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                     <button
                       type="button"
                       onClick={() => handleToggleVoiceReadout(modalNote)}
-                      className={`h-8 flex items-center gap-1.5 px-3 rounded-lg border text-xs font-mono font-bold transition-all cursor-pointer active:scale-95 shadow-2xs ${
+                      className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border text-xs font-mono font-bold transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap ${
                         isSpeaking
                           ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
                           : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
@@ -1707,13 +1715,13 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                     >
                       {isSpeaking ? (
                         <>
-                          <VolumeX className="w-3.5 h-3.5 text-amber-700" />
-                          <span>⏹️ Stop Voice</span>
+                          <VolumeX className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                          <span>Stop Audio</span>
                         </>
                       ) : (
                         <>
-                          <Volume2 className="w-3.5 h-3.5 text-indigo-600" />
-                          <span>🔊 Listen</span>
+                          <Volume2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                          <span>Listen</span>
                         </>
                       )}
                     </button>
@@ -1722,24 +1730,24 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                     <button
                       type="button"
                       onClick={(e) => toggleReviews(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1.5 px-3 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all cursor-pointer active:scale-95 shadow-2xs"
+                      className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
                     >
-                      <MessageSquare className="w-3.5 h-3.5 text-slate-500" />
+                      <MessageSquare className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                       <span>Feedback ({reviewsList.length})</span>
                       {isReviewsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0 ml-auto">
+                  <div className="flex items-center gap-2 shrink-0 flex-nowrap ml-auto">
                     {/* Copy Note Button */}
                     <Button
                       variant="outline"
                       size="sm"
                       type="button"
                       onClick={() => handleCopyTip(modalNote)}
-                      className="h-8 text-xs font-mono flex items-center gap-1.5 transition-all active:scale-95"
+                      className="h-8 px-2.5 text-xs font-mono flex items-center gap-1.5 transition-all active:scale-95 whitespace-nowrap shrink-0"
                     >
-                      <Copy className="w-3.5 h-3.5" />
+                      <Copy className="w-3.5 h-3.5 shrink-0" />
                       <span>Copy</span>
                     </Button>
 
@@ -1753,11 +1761,11 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         }
                         handleAskCopilot(modalNote);
                       }}
-                      className="h-8 px-3.5 rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1.5 text-xs font-mono shadow-sm transition-all cursor-pointer active:scale-95"
+                      className="h-8 px-3 rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1.5 text-xs font-mono shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
                       title="Load insight directly into AI Copilot"
                     >
-                      <Sparkles className="w-3.5 h-3.5 text-indigo-200" />
-                      <span>💬 Ask AI Copilot</span>
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-200 shrink-0" />
+                      <span>Ask AI Copilot</span>
                     </button>
                   </div>
                 </div>
@@ -1851,26 +1859,81 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-start">
                 {/* Target Machine */}
                 <div>
-                  <div className="h-4 flex items-center mb-1">
+                  <div className="h-4 flex items-center justify-between mb-1">
                     <label className="block text-[10px] font-mono text-[#64748B] uppercase font-bold tracking-wider">
                       Target Machine <span className="text-rose-500">*</span>
                     </label>
+                    {noteItem.isCustomMachine && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateFormNote(index, {
+                            isCustomMachine: false,
+                            assetTag: uploadedMachines.some((m) => m.assetTag === noteItem.assetTag) ? noteItem.assetTag : '',
+                          });
+                        }}
+                        className="text-[10px] font-mono text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>↩ List</span>
+                      </button>
+                    )}
                   </div>
-                  <select
-                    required
-                    value={noteItem.assetTag}
-                    onChange={(e) => updateFormNote(index, { assetTag: e.target.value })}
-                    className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
-                  >
-                    <option value="" disabled>
-                      -- Select Machine --
-                    </option>
-                    {uploadedMachines.map((m) => (
-                      <option key={m.assetTag} value={m.assetTag}>
-                        {m.assetTag}
+                  {noteItem.isCustomMachine ? (
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        autoFocus
+                        required
+                        value={noteItem.customMachine ?? ''}
+                        onChange={(e) => updateFormNote(index, { customMachine: e.target.value })}
+                        placeholder="Type machine tag (e.g. COMP-001)..."
+                        className="w-full pl-2.5 pr-14 py-1.5 bg-white border border-[#2563EB] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateFormNote(index, {
+                            isCustomMachine: false,
+                            assetTag: uploadedMachines.some((m) => m.assetTag === noteItem.assetTag) ? noteItem.assetTag : '',
+                          });
+                        }}
+                        className="absolute right-1 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-600 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 transition cursor-pointer"
+                      >
+                        ↩ List
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      required
+                      value={noteItem.assetTag}
+                      onChange={(e) => {
+                        if (e.target.value === '__CUSTOM_MACHINE__') {
+                          updateFormNote(index, {
+                            isCustomMachine: true,
+                            customMachine: noteItem.customMachine || '',
+                          });
+                        } else {
+                          updateFormNote(index, {
+                            isCustomMachine: false,
+                            assetTag: e.target.value,
+                          });
+                        }
+                      }}
+                      className="w-full px-2.5 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] focus:outline-none focus:border-[#2563EB] font-mono cursor-pointer"
+                    >
+                      <option value="" disabled>
+                        -- Select Machine --
                       </option>
-                    ))}
-                  </select>
+                      {uploadedMachines.map((m) => (
+                        <option key={m.assetTag} value={m.assetTag}>
+                          {m.assetTag}
+                        </option>
+                      ))}
+                      <option value="__CUSTOM_MACHINE__" className="text-blue-700 font-bold bg-blue-50/50">
+                        ✍️ Other / Custom (Specify)...
+                      </option>
+                    </select>
+                  )}
                 </div>
 
                 {/* Task / Operation */}
@@ -1947,7 +2010,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         </option>
                       ))}
                       <option value="__CUSTOM_TASK__" className="text-blue-700 font-bold bg-blue-50/50">
-                        + Other / Custom Task...
+                        ✍️ Other / Custom (Specify)...
                       </option>
                     </select>
                   )}
@@ -2027,7 +2090,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         </option>
                       ))}
                       <option value="__CUSTOM_CATEGORY__" className="text-blue-700 font-bold bg-blue-50/50">
-                        + Custom Category...
+                        ✍️ Other / Custom (Specify)...
                       </option>
                     </select>
                   )}
@@ -2099,7 +2162,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               className="w-full py-1.5 px-3 border border-dashed border-blue-400 bg-blue-50/60 hover:bg-blue-50 text-blue-700 rounded-lg text-xs font-mono font-bold flex items-center justify-center gap-1.5 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-2xs active:scale-95 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>+ Add Another Field Note</span>
+              <span>Add Another Field Note</span>
             </button>
           </div>
 

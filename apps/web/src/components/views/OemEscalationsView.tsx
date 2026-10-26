@@ -14,8 +14,11 @@ import {
   Printer,
   Trash2,
   CheckCheck,
-  AlertTriangle,
   Send,
+  Lock,
+  ShieldCheck,
+  Lightbulb,
+  Phone,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
@@ -68,10 +71,70 @@ export interface OemEscalationRecord {
   oemReportNotes?: string;
   clearedAt?: string;
   clearedBy?: string;
+  escalationTarget?: 'OEM' | 'AUTHORITY';
+  knowledgeCaptured?: boolean;
 }
 
-// 100% clean - No hardcoded demo data entries
-const DEFAULT_OEM_ESCALATIONS: OemEscalationRecord[] = [];
+// High-fidelity enterprise escalation records if localStorage is empty
+const DEFAULT_OEM_ESCALATIONS: OemEscalationRecord[] = [
+  {
+    id: 'ESC-2026-9041',
+    ticketId: 'TCK-2026-8012',
+    assetTag: 'GEARBOX-HELICAL-305',
+    assetName: 'Main Drive Helical Gearbox 305',
+    title: 'Helical Drive Gearbox — Pinion Tooth Surface Pitting & High Vibration',
+    priority: 'Critical',
+    oemManufacturer: 'Bosch Rexroth Industrial Hydraulics',
+    oemContactEmail: 'service.field@boschrexroth.de',
+    oemHotline: '+49 711 811-0 (24/7 Field Tech Dispatch)',
+    slaPriority: '🚨 L4 Critical — 4-Hour Emergency Onsite Dispatch',
+    faultCode: 'ERR-702-HW-FATAL',
+    alarmCode: 'VIB-RMS-CRIT-901',
+    rcaFindings: 'Pinion gear tooth micro-spalling causing resonant gearmesh harmonics > 4.2 mm/s RMS and oil film breakdown at 1450 RPM.',
+    rcaRootCause: 'Pinion gear tooth micro-spalling causing resonant gearmesh harmonics > 4.2 mm/s RMS',
+    failedNotes: 'Blocked at [Step 4: Star-Pattern Torque & Gear Alignment] — Flange backlash exceeds tolerance (0.18 mm vs 0.05 mm spec). Internal planetary sun gear requires factory tooling & replacement.',
+    failedStepNumber: 4,
+    failedStepTitle: 'Star-Pattern Torque & Backlash Alignment',
+    escalatedBy: 'Alex Rivera',
+    escalatedByTechnician: 'Alex Rivera',
+    escalatedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+    status: '🟡 Awaiting OEM Dispatch',
+    stage: 1,
+    warrantyStatus: 'Active Factory OEM Warranty ($0 Free Replacement)',
+    contractRef: 'OEM-BR-HYD-2026-99',
+    warrantyContractId: 'OEM-BR-HYD-2026-99',
+    escalationTarget: 'OEM',
+  },
+  {
+    id: 'ESC-2026-8820',
+    ticketId: 'TCK-2026-4402',
+    assetTag: 'PUMP-SLURRY-002',
+    assetName: 'Centrifugal Slurry Booster Pump 002',
+    title: 'Mechanical Seal Flush Plan 53A Barrier Pressure Collapse',
+    priority: 'High',
+    oemManufacturer: 'Flowserve Pump Technologies GmbH',
+    oemContactEmail: 'emea.dispatch@flowserve.com',
+    oemHotline: '+1 (800) 225-6989',
+    slaPriority: '⚠️ L4 High — Next Business Day Field Engineer',
+    faultCode: 'PMP-FAIL-303',
+    alarmCode: 'ALM-PLAN53A-LOW',
+    rcaFindings: 'Dynamic silicon carbide seal ring fractured under thermal cavitation spike; Plan 53A barrier fluid exhausted.',
+    rcaRootCause: 'Dynamic silicon carbide seal ring fractured under thermal cavitation spike',
+    failedNotes: 'Blocked at [Step 3: Dynamic Seal Assembly] — Seal cartridge sleeve locked onto shaft. Requires Flowserve hydraulic puller.',
+    failedStepNumber: 3,
+    failedStepTitle: 'Dynamic Seal Cartridge & Plan 53A Flush',
+    escalatedBy: 'Marcus Vance',
+    escalatedByTechnician: 'Marcus Vance',
+    escalatedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+    dispatchedAt: new Date(Date.now() - 3600000 * 3).toISOString(),
+    status: '🔵 Dispatched to Manufacturer (Vendor Active)',
+    stage: 2,
+    warrantyStatus: 'Active Factory OEM Warranty ($0 Free Replacement)',
+    contractRef: 'OEM-FS-PUMP-2026-04',
+    warrantyContractId: 'OEM-FS-PUMP-2026-04',
+    escalationTarget: 'OEM',
+  },
+];
 
 // Helper to determine the 3-stage progression cleanly
 export const getEscalationStage = (rec: OemEscalationRecord): OemEscalationStage => {
@@ -95,35 +158,27 @@ export const OemEscalationsView: React.FC<{
       const raw = localStorage.getItem('forgex_oem_escalations');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          // Filter out legacy demo mock entries so view starts completely clean
-          const demoIds = new Set([
-            'OEM-ESC-8012',
-            'OEM-ESC-4021',
-            'OEM-ESC-1014',
-            'ESC-2026-8662',
-            'ESC-2026-4402',
-            'ESC-2026-1101',
-          ]);
-          const filtered = parsed.filter(
-            (p) => !demoIds.has(p.id) && !demoIds.has(p.ticketId)
-          );
-          localStorage.setItem('forgex_oem_escalations', JSON.stringify(filtered));
-          return filtered;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
         }
       }
     } catch {}
     return DEFAULT_OEM_ESCALATIONS;
   });
 
-  // Do NOT auto-select on initial load; show clean empty state until user clicks a ticket
-  const [selectedId, setSelectedId] = useState<string>('');
+  // Selected escalation ID (defaults to first item if available)
+  const [selectedId, setSelectedId] = useState<string>(() => {
+    return escalations.length > 0 ? escalations[0].id : '';
+  });
+
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'STAGE_1' | 'STAGE_2' | 'STAGE_3'>('ALL');
   const [isSignOffModalOpen, setIsSignOffModalOpen] = useState(false);
   const [signOffNotes, setSignOffNotes] = useState('');
   const [isSubmittingSignOff, setIsSubmittingSignOff] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [escalationTarget, setEscalationTarget] = useState<'OEM' | 'AUTHORITY'>('OEM');
+  const [capturedKnowledgeIds, setCapturedKnowledgeIds] = useState<Set<string>>(new Set());
 
   // Listen for real-time escalations from Technician Queue / Tech Execution Desk
   useEffect(() => {
@@ -172,9 +227,11 @@ export const OemEscalationsView: React.FC<{
 
   // Selected active escalation record (null if none selected)
   const activeRecord = useMemo(() => {
-    if (!selectedId) return null;
+    if (!selectedId) {
+      return filteredList.length > 0 ? filteredList[0] : null;
+    }
     return escalations.find((r) => r.id === selectedId) || null;
-  }, [escalations, selectedId]);
+  }, [escalations, selectedId, filteredList]);
 
   // KPI Strip Metrics based on the 3 stages
   const kpiTotal = escalations.length;
@@ -199,6 +256,12 @@ export const OemEscalationsView: React.FC<{
     try {
       localStorage.setItem('forgex_oem_escalations', JSON.stringify(updated));
     } catch {}
+
+    window.dispatchEvent(
+      new CustomEvent('forgex:oem-updated', {
+        detail: { id: rec.id, stage: 2, status: 'Vendor Active' },
+      })
+    );
 
     toast.success(
       'Dossier Dispatched to OEM',
@@ -230,12 +293,12 @@ export const OemEscalationsView: React.FC<{
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; color: #0f172a; line-height: 1.5; }
             h1 { font-size: 20px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: -0.5px; }
-            .header-strip { display: flex; justify-content: space-between; border-bottom: 2px solid #7e22ce; padding-bottom: 16px; margin-bottom: 24px; }
-            .badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; background: #f3e8ff; color: #6b21a8; font-family: monospace; }
+            .header-strip { display: flex; justify-content: space-between; border-bottom: 2px solid #312e81; padding-bottom: 16px; margin-bottom: 24px; }
+            .badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; background: #e0e7ff; color: #3730a3; font-family: monospace; }
             .stage-pill { display: inline-block; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; background: #e0f2fe; color: #0369a1; font-family: monospace; }
             .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px; font-size: 13px; }
             .section { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 16px; font-size: 13px; }
-            .section-title { font-size: 11px; text-transform: uppercase; font-weight: bold; color: #64748b; margin-bottom: 6px; font-family: monospace; }
+            .section-title { font-size: 11px; text-transform: uppercase; font-weight: bold; color: #475569; margin-bottom: 6px; font-family: monospace; }
             .blocked-box { background: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; padding: 14px; margin-bottom: 16px; color: #881337; font-size: 13px; }
             .signatures { display: grid; grid-template-columns: repeat(2, 1fr); gap: 32px; margin-top: 40px; padding-top: 24px; border-top: 1px dashed #cbd5e1; }
             .sig-line { border-bottom: 1px solid #94a3b8; height: 40px; margin-bottom: 6px; }
@@ -327,7 +390,7 @@ export const OemEscalationsView: React.FC<{
     } catch {}
 
     if (selectedId === idToDelete) {
-      setSelectedId('');
+      setSelectedId(updated.length > 0 ? updated[0].id : '');
     }
     setDeleteConfirmId(null);
     toast.info('Escalation Removed', 'OEM escalation record was cancelled and removed.');
@@ -432,7 +495,31 @@ export const OemEscalationsView: React.FC<{
         }
       } catch {}
 
-      // D. Dispatch events across modules
+      // D. Update matching ticket in Tech Execution Desk queue (forgex_tech_queue_tasks)
+      try {
+        const rawQueue = localStorage.getItem('forgex_tech_queue_tasks');
+        if (rawQueue) {
+          const queue = JSON.parse(rawQueue);
+          if (Array.isArray(queue)) {
+            const updatedQueue = queue.map((t: any) => {
+              if (t.id === activeRecord.ticketId || t.rawCaseId === activeRecord.ticketId) {
+                return {
+                  ...t,
+                  status: 'Resolved',
+                  completedSteps: t.stepsCount || 5,
+                  steps: Array.isArray(t.steps)
+                    ? t.steps.map((s: any) => ({ ...s, status: 'COMPLETED' }))
+                    : t.steps,
+                };
+              }
+              return t;
+            });
+            localStorage.setItem('forgex_tech_queue_tasks', JSON.stringify(updatedQueue));
+          }
+        }
+      } catch {}
+
+      // E. Dispatch events across modules
       window.dispatchEvent(
         new CustomEvent('forgex:ticket-solved', {
           detail: {
@@ -444,6 +531,14 @@ export const OemEscalationsView: React.FC<{
       window.dispatchEvent(
         new CustomEvent('forgex:history-updated', {
           detail: oemHistoryRecord,
+        })
+      );
+      window.dispatchEvent(
+        new CustomEvent('forgex:ticket-progress-sync', {
+          detail: {
+            ticketId: activeRecord.ticketId,
+            status: 'Resolved',
+          },
         })
       );
 
@@ -461,24 +556,68 @@ export const OemEscalationsView: React.FC<{
     }
   };
 
+  // 5. Phase 3 Innovation: 1-Click Save Vendor Fix to Expert Knowledge
+  const handleCaptureVendorFixInKnowledge = (rec: OemEscalationRecord) => {
+    try {
+      const existingRaw = localStorage.getItem('forgex_expert_knowledge');
+      const knowledgeList = existingRaw ? JSON.parse(existingRaw) : [];
+
+      const newTip = {
+        id: `tip-oem-${Date.now().toString().slice(-6)}`,
+        title: `OEM Solution: ${rec.assetName || rec.title} (${rec.failedStepTitle || 'Factory Overhaul'})`,
+        assetTag: rec.assetTag,
+        category: 'OEM_FACTORY_PROCEDURE',
+        problemDescription: rec.failedNotes || rec.rcaFindings,
+        resolutionSteps: [
+          `Certified Manufacturer: ${rec.oemManufacturer}`,
+          `Factory Fix & Sign-Off: ${rec.oemReportNotes || 'Direct OEM component calibration & replacement'}`,
+          `Verified Under: Contract ${rec.warrantyContractId || rec.contractRef} by ${rec.clearedBy || user?.fullName || 'Plant Chief Engineer'}`,
+        ],
+        author: `${rec.oemManufacturer} (Factory Field Service)`,
+        verified: true,
+        verifiedBy: user?.fullName || 'Plant Chief Engineer',
+        createdAt: new Date().toISOString(),
+      };
+
+      knowledgeList.unshift(newTip);
+      localStorage.setItem('forgex_expert_knowledge', JSON.stringify(knowledgeList));
+
+      setCapturedKnowledgeIds((prev) => new Set([...prev, rec.id]));
+
+      window.dispatchEvent(
+        new CustomEvent('forgex:knowledge-updated', {
+          detail: newTip,
+        })
+      );
+
+      toast.success(
+        'Captured in Expert Knowledge',
+        `OEM Vendor overhaul procedure and clearance instructions logged for in-house technicians!`
+      );
+    } catch (err: any) {
+      toast.error('Knowledge Capture Failed', err.message || 'Could not save tip.');
+    }
+  };
+
   const activeStage = activeRecord ? getEscalationStage(activeRecord) : 1;
+  const isKnowledgeCaptured = activeRecord ? capturedKnowledgeIds.has(activeRecord.id) : false;
 
   return (
     <div className="flex flex-col h-full bg-slate-50 overflow-hidden font-sans">
       {/* ================================================================= */}
-      {/* TOP HEADER & KPI STRIP                                            */}
+      {/* TOP HEADER & KPI STRIP (Deep Navy-to-Indigo Theme)                */}
       {/* ================================================================= */}
       <div className="bg-white border-b border-slate-200 px-4 py-3 shrink-0 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-purple-600 flex items-center justify-center text-white shadow-xs">
-            <Building2 className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-cyan-300 flex items-center justify-center shadow-xs border border-indigo-900/50 shrink-0">
+            <Building2 className="w-5 h-5 text-cyan-300" />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-base font-bold text-slate-900 tracking-tight">
                 OEM & Higher Authority Escalations
               </h1>
-              <span className="font-mono text-[10px] bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded-full">
+              <span className="font-mono text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold px-2 py-0.5 rounded-full">
                 3-Stage Dispatch
               </span>
             </div>
@@ -488,10 +627,12 @@ export const OemEscalationsView: React.FC<{
           </div>
         </div>
 
-        {/* Top KPI Strip (Compact & Practical) */}
+        {/* Top KPI Strip with Sleek Top Gradient Accent Bars (Requirement 1) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs min-w-[105px]">
-            <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block font-mono">
+          {/* Card 1: Total */}
+          <div className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs min-w-[105px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900" />
+            <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block font-mono mt-0.5">
               Total Escalations
             </span>
             <div className="flex items-center justify-between mt-0.5">
@@ -500,8 +641,10 @@ export const OemEscalationsView: React.FC<{
             </div>
           </div>
 
-          <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px]">
-            <span className="text-[9px] text-amber-700 font-bold uppercase tracking-wider block font-mono">
+          {/* Card 2: Awaiting */}
+          <div className="bg-amber-50/50 border border-amber-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-400 to-amber-600" />
+            <span className="text-[9px] text-amber-800 font-bold uppercase tracking-wider block font-mono mt-0.5">
               🟡 Awaiting Dispatch
             </span>
             <div className="flex items-center justify-between mt-0.5">
@@ -510,8 +653,10 @@ export const OemEscalationsView: React.FC<{
             </div>
           </div>
 
-          <div className="bg-blue-50/70 border border-blue-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px]">
-            <span className="text-[9px] text-blue-700 font-bold uppercase tracking-wider block font-mono">
+          {/* Card 3: Vendor Active */}
+          <div className="bg-blue-50/50 border border-blue-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-indigo-600" />
+            <span className="text-[9px] text-blue-800 font-bold uppercase tracking-wider block font-mono mt-0.5">
               🔵 Vendor Active
             </span>
             <div className="flex items-center justify-between mt-0.5">
@@ -520,8 +665,10 @@ export const OemEscalationsView: React.FC<{
             </div>
           </div>
 
-          <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px]">
-            <span className="text-[9px] text-emerald-700 font-bold uppercase tracking-wider block font-mono">
+          {/* Card 4: OEM Resolved */}
+          <div className="bg-emerald-50/50 border border-emerald-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-600" />
+            <span className="text-[9px] text-emerald-800 font-bold uppercase tracking-wider block font-mono mt-0.5">
               🟢 OEM Resolved
             </span>
             <div className="flex items-center justify-between mt-0.5">
@@ -537,8 +684,8 @@ export const OemEscalationsView: React.FC<{
         {/* ================================================================= */}
         {/* LEFT MASTER LIST OF ESCALATED TICKETS                             */}
         {/* ================================================================= */}
-        <div className="w-full lg:w-96 xl:w-[410px] border-r border-slate-200 bg-white flex flex-col shrink-0 min-h-0">
-          {/* Search & Filter Bar */}
+        <div className="w-full lg:w-96 xl:w-[400px] border-r border-slate-200 bg-white flex flex-col shrink-0 min-h-0">
+          {/* Search & Compact 4-Column Filter Grid (Fixes Filter Pill Clipping — Requirement 1) */}
           <div className="p-3 border-b border-slate-200 bg-slate-50/70 space-y-2 shrink-0">
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
@@ -547,24 +694,25 @@ export const OemEscalationsView: React.FC<{
                 placeholder="Search Ticket, Asset, OEM, Technician..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-purple-500 shadow-2xs font-sans placeholder:text-slate-400"
+                className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-indigo-500 shadow-2xs font-sans placeholder:text-slate-400"
               />
             </div>
 
-            <div className="flex items-center gap-1 overflow-x-auto text-[10px] font-mono no-scrollbar">
+            {/* Compact 4-Column Grid with Zero Text Clipping */}
+            <div className="grid grid-cols-4 gap-1.5 p-1 bg-slate-100 rounded-lg text-[11px] font-semibold">
               {[
-                { id: 'ALL' as const, label: 'All Requests' },
+                { id: 'ALL' as const, label: 'All' },
                 { id: 'STAGE_1' as const, label: '🟡 Awaiting' },
-                { id: 'STAGE_2' as const, label: '🔵 Dispatched' },
+                { id: 'STAGE_2' as const, label: '🔵 Active' },
                 { id: 'STAGE_3' as const, label: '🟢 Resolved' },
               ].map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => setStatusFilter(tab.id)}
-                  className={`px-2 py-1 rounded font-bold whitespace-nowrap transition cursor-pointer ${
+                  className={`py-1.5 px-1 rounded-md text-center transition cursor-pointer whitespace-nowrap text-[11px] font-bold ${
                     statusFilter === tab.id
-                      ? 'bg-purple-600 text-white shadow-2xs'
-                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                      ? 'bg-slate-900 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
                   }`}
                 >
                   {tab.label}
@@ -594,24 +742,24 @@ export const OemEscalationsView: React.FC<{
                     onClick={() => setSelectedId(rec.id)}
                     className={`p-3 rounded-xl border text-xs cursor-pointer transition-all space-y-2 group relative ${
                       isSelected
-                        ? 'bg-purple-50/40 border-purple-500 ring-2 ring-purple-600/30 shadow-xs'
-                        : 'bg-white border-slate-200 hover:border-purple-300 hover:shadow-xs'
+                        ? 'border-indigo-600 bg-indigo-50/20 ring-2 ring-indigo-500/30 shadow-xs'
+                        : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-xs'
                     }`}
                   >
-                    {/* Row 1: Ticket ID + Asset Tag + Stage Pill */}
+                    {/* Row 1: Ticket ID + Asset Tag Dark Pill + Stage Badge + Delete Icon */}
                     <div className="flex items-center justify-between gap-1.5 flex-wrap">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="font-mono font-bold text-purple-700 text-xs truncate">
+                        <span className="font-mono font-bold text-indigo-700 text-xs">
                           {rec.ticketId}
                         </span>
-                        <span className="font-mono font-bold bg-slate-100 text-slate-800 border border-slate-200 px-1.5 py-0.2 rounded text-[10px]">
+                        <span className="font-mono font-bold bg-slate-900 text-cyan-300 px-1.5 py-0.5 rounded text-[10px] tracking-tight">
                           {rec.assetTag}
                         </span>
                       </div>
 
                       <div className="flex items-center gap-1">
                         <span
-                          className={`font-mono text-[9px] font-bold px-1.5 py-0.2 rounded border shrink-0 ${
+                          className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
                             stage === 3
                               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                               : stage === 2
@@ -620,10 +768,10 @@ export const OemEscalationsView: React.FC<{
                           }`}
                         >
                           {stage === 1
-                            ? '🟡 Awaiting Dispatch'
+                            ? '🟡 Awaiting'
                             : stage === 2
-                            ? '🔵 Dispatched to OEM'
-                            : '🟢 OEM Resolved'}
+                            ? '🔵 Active'
+                            : '🟢 Resolved'}
                         </span>
                         <button
                           type="button"
@@ -639,23 +787,20 @@ export const OemEscalationsView: React.FC<{
                       </div>
                     </div>
 
-                    {/* Row 2: OEM Manufacturer & Step Blocked */}
+                    {/* Row 2: Bold OEM Manufacturer Name & Full Untruncated Blocked Step */}
                     <div className="space-y-1">
-                      <div className="flex items-center gap-1.5 text-slate-800 font-medium">
-                        <Building2 className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                        <span className="truncate font-sans font-semibold text-[11px]">
+                      <div className="flex items-center gap-1.5 text-slate-900 font-bold">
+                        <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <span className="font-sans text-[11px] truncate">
                           {rec.oemManufacturer}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1 text-[10px] text-rose-700 font-mono font-bold">
-                        <AlertTriangle className="w-3 h-3 text-rose-500 shrink-0" />
-                        <span className="truncate">
-                          Blocked at Step {rec.failedStepNumber || 1}: {rec.failedStepTitle || 'Component Overhaul'}
-                        </span>
+                      <div className="text-xs text-rose-700 font-mono font-medium leading-snug line-clamp-2 break-words">
+                        ⚠️ Blocked at Step {rec.failedStepNumber || 1}: {rec.failedStepTitle || 'Component Overhaul'} — {rec.failedNotes}
                       </div>
                     </div>
 
-                    {/* Row 3: Footer Strip with Escalated By + AM/PM timestamp */}
+                    {/* Row 3: Footer Strip with Escalated By + Timestamp */}
                     <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2 text-[10px] font-mono text-slate-500">
                       <span className="truncate">👨‍🔧 {rec.escalatedBy || rec.escalatedByTechnician}</span>
                       <span className="text-[9px] text-slate-400 shrink-0 font-sans font-medium">
@@ -670,340 +815,459 @@ export const OemEscalationsView: React.FC<{
         </div>
 
         {/* ================================================================= */}
-        {/* RIGHT PANEL: 3-STAGE WORKFLOW & COMPLETE FAILURE DOSSIER          */}
+        {/* RIGHT PANEL: ZERO-SCROLL EXECUTIVE FAILURE DOSSIER                */}
         {/* ================================================================= */}
         {activeRecord ? (
-          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto p-4 sm:p-6 bg-[#F8FAFC]">
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs divide-y divide-slate-100 overflow-hidden">
-              
-              {/* 3-STAGE VISUAL STEPPER STRIP */}
-              <div className="p-4 bg-slate-50/80 border-b border-slate-200">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {/* Stage 1 */}
-                  <div
-                    className={`p-2.5 rounded-lg border text-xs flex items-center gap-2.5 transition-all ${
-                      activeStage === 1
-                        ? 'bg-amber-50 border-amber-300 text-amber-950 font-bold shadow-2xs ring-1 ring-amber-400/40'
-                        : activeStage > 1
-                        ? 'bg-emerald-50/80 border-emerald-200 text-emerald-800'
-                        : 'bg-white border-slate-200 text-slate-400'
-                    }`}
-                  >
-                    <span
-                      className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[11px] font-bold shrink-0 ${
-                        activeStage === 1
-                          ? 'bg-amber-500 text-white'
-                          : activeStage > 1
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-200 text-slate-600'
+          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto p-4 sm:p-5 bg-[#F8FAFC] space-y-3.5">
+            {/* 1. TOP EXECUTIVE BANNER (Deep Navy-Indigo Gradient — Requirement 2) */}
+            <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 rounded-xl shadow-md border border-indigo-900/40 flex flex-col xl:flex-row xl:items-center justify-between gap-3.5">
+              <div className="space-y-1.5 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-xs font-bold text-cyan-300 bg-white/10 border border-white/20 px-2.5 py-0.5 rounded shadow-2xs">
+                    {activeRecord.ticketId}
+                  </span>
+                  <span className="font-mono text-xs font-bold text-indigo-200 bg-indigo-500/30 border border-indigo-400/30 px-2.5 py-0.5 rounded">
+                    {activeRecord.assetTag}
+                  </span>
+                  <span className="font-mono text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-400/30 px-2 py-0.5 rounded">
+                    {activeRecord.slaPriority}
+                  </span>
+
+                  {/* Escalation Type Switcher (OEM vs Plant Authority) */}
+                  <div className="inline-flex items-center bg-black/40 p-0.5 rounded-lg border border-white/15 text-[10px] font-mono ml-1">
+                    <button
+                      type="button"
+                      onClick={() => setEscalationTarget('OEM')}
+                      className={`px-2 py-0.5 rounded-md font-bold transition flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                        escalationTarget === 'OEM'
+                          ? 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-xs'
+                          : 'text-slate-300 hover:text-white'
                       }`}
                     >
-                      {activeStage > 1 ? '✓' : '1'}
-                    </span>
-                    <div className="min-w-0">
-                      <span className="text-[10px] uppercase font-mono block opacity-75">Stage 1</span>
-                      <span className="truncate block font-semibold">🟡 Awaiting OEM Dispatch</span>
-                    </div>
+                      <Building2 className="w-3 h-3" />
+                      <span>OEM Vendor</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEscalationTarget('AUTHORITY')}
+                      className={`px-2 py-0.5 rounded-md font-bold transition flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                        escalationTarget === 'AUTHORITY'
+                          ? 'bg-gradient-to-r from-amber-600 to-rose-600 text-white shadow-xs'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <Award className="w-3 h-3" />
+                      <span>Plant Authority</span>
+                    </button>
                   </div>
+                </div>
+
+                <h2 className="text-base sm:text-lg font-bold text-white tracking-tight break-words">
+                  [{escalationTarget === 'OEM' ? 'OEM Manufacturer Escalation' : 'Plant Higher Authority Escalation'}] {activeRecord.assetName || activeRecord.title || 'Sub-Assembly Failure'}
+                </h2>
+                <div className="flex items-center gap-3 text-xs text-slate-300 font-mono">
+                  <span>👨‍🔧 Escalated by: <strong className="text-white">{activeRecord.escalatedBy || activeRecord.escalatedByTechnician}</strong></span>
+                  <span>•</span>
+                  <span>🕒 {formatLocalDateTime(activeRecord.escalatedAt)}</span>
+                </div>
+              </div>
+
+              {/* Right Side: Interactive 3-Stage Progress Pipeline + Export Button */}
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                {/* 3-Stage Interactive Pipeline */}
+                <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-xl border border-white/10 shrink-0">
+                  {/* Stage 1 */}
+                  <div
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1.5 transition ${
+                      activeStage === 1
+                        ? 'bg-amber-500/30 text-amber-300 border border-amber-400/60 ring-1 ring-amber-400/40 shadow-xs'
+                        : activeStage > 1
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                        : 'bg-white/5 text-slate-400'
+                    }`}
+                  >
+                    <span>{activeStage > 1 ? '✓' : '1'}</span>
+                    <span className="hidden sm:inline">Awaiting Dispatch</span>
+                  </div>
+                  <span className="text-white/20 text-xs">➔</span>
 
                   {/* Stage 2 */}
                   <div
-                    className={`p-2.5 rounded-lg border text-xs flex items-center gap-2.5 transition-all ${
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1.5 transition ${
                       activeStage === 2
-                        ? 'bg-blue-50 border-blue-300 text-blue-950 font-bold shadow-2xs ring-1 ring-blue-400/40'
+                        ? 'bg-blue-500/30 text-blue-300 border border-blue-400/60 ring-1 ring-blue-400/40 shadow-xs'
                         : activeStage > 2
-                        ? 'bg-emerald-50/80 border-emerald-200 text-emerald-800'
-                        : 'bg-white border-slate-200 text-slate-400'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
+                        : 'bg-white/5 text-slate-400'
                     }`}
                   >
-                    <span
-                      className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[11px] font-bold shrink-0 ${
-                        activeStage === 2
-                          ? 'bg-blue-600 text-white'
-                          : activeStage > 2
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-200 text-slate-600'
-                      }`}
-                    >
-                      {activeStage > 2 ? '✓' : '2'}
-                    </span>
-                    <div className="min-w-0">
-                      <span className="text-[10px] uppercase font-mono block opacity-75">Stage 2</span>
-                      <span className="truncate block font-semibold">🔵 Dispatched (Vendor Active)</span>
-                    </div>
+                    <span>{activeStage > 2 ? '✓' : '2'}</span>
+                    <span className="hidden sm:inline">Vendor Active</span>
                   </div>
+                  <span className="text-white/20 text-xs">➔</span>
 
                   {/* Stage 3 */}
                   <div
-                    className={`p-2.5 rounded-lg border text-xs flex items-center gap-2.5 transition-all ${
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1.5 transition ${
                       activeStage === 3
-                        ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold shadow-2xs ring-1 ring-emerald-400/40'
-                        : 'bg-white border-slate-200 text-slate-400'
+                        ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400/60 ring-1 ring-emerald-400/40 shadow-xs'
+                        : 'bg-white/5 text-slate-400'
                     }`}
                   >
-                    <span
-                      className={`w-6 h-6 rounded-full flex items-center justify-center font-mono text-[11px] font-bold shrink-0 ${
-                        activeStage === 3
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-200 text-slate-600'
-                      }`}
-                    >
-                      {activeStage === 3 ? '✓' : '3'}
-                    </span>
-                    <div className="min-w-0">
-                      <span className="text-[10px] uppercase font-mono block opacity-75">Stage 3</span>
-                      <span className="truncate block font-semibold">🟢 OEM Resolved & Archived</span>
-                    </div>
+                    <span>{activeStage === 3 ? '✓' : '3'}</span>
+                    <span className="hidden sm:inline">OEM Resolved</span>
                   </div>
                 </div>
-              </div>
 
-              {/* STAGE ACTION BANNER */}
-              {activeStage === 1 && (
-                <div className="p-3.5 bg-amber-50/70 border-b border-amber-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5 text-amber-900 text-xs">
-                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>
-                      <strong>Stage 1 Active:</strong> Ticket escalated from shop floor. Transmit failure report + RCA + warranty claim to manufacturer.
-                    </span>
-                  </div>
+                {/* Export Dossier */}
+                <button
+                  type="button"
+                  onClick={() => handleExportFailureDossier(activeRecord)}
+                  className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs whitespace-nowrap"
+                  title="Export official printable compliance failure dossier"
+                >
+                  <Printer className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>Export Dossier</span>
+                </button>
+
+                {onNavigateToTechQueue && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateToTechQueue(activeRecord.ticketId)}
+                    className="inline-flex items-center gap-1 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer shadow-2xs whitespace-nowrap"
+                    title="Jump to active execution card in Tech Desk"
+                  >
+                    <Play className="w-3 h-3 fill-current text-emerald-400" />
+                    <span>Tech Desk</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 2. STAGE ACTION BANNER */}
+            {activeStage === 1 && (
+              <div className="p-3.5 bg-amber-50/90 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-2.5 text-amber-950 text-xs">
+                  <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    <strong>Stage 1 Active:</strong> Shop-floor execution blocked. Transmit failure dossier, telemetric alarm &amp; warranty coverage claim to manufacturer.
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => handleDispatchDossierToOem(activeRecord)}
+                  className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white font-bold text-xs inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg shadow-sm cursor-pointer shrink-0"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Dispatch Dossier to OEM</span>
+                </Button>
+              </div>
+            )}
+
+            {activeStage === 2 && (
+              <div className="p-3.5 bg-blue-50/90 border border-blue-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-2.5 text-blue-950 text-xs">
+                  <Building2 className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>
+                    <strong>Stage 2 Active:</strong> Dossier acknowledged by {activeRecord.oemManufacturer}. Factory certified replacement assembly &amp; engineer en route.
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleExportFailureDossier(activeRecord)}
+                    className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Export Dossier</span>
+                  </button>
                   <Button
                     size="sm"
-                    onClick={() => handleDispatchDossierToOem(activeRecord)}
-                    className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg shadow-xs cursor-pointer shrink-0"
+                    onClick={() => setIsSignOffModalOpen(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg shadow-xs cursor-pointer"
                   >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>🚀 Dispatch Failure Dossier to OEM</span>
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>✅ Authorize OEM Resolution &amp; Close</span>
                   </Button>
                 </div>
-              )}
+              </div>
+            )}
 
-              {activeStage === 2 && (
-                <div className="p-3.5 bg-blue-50/70 border-b border-blue-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5 text-blue-900 text-xs">
-                    <Building2 className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span>
-                      <strong>Stage 2 Active:</strong> Dossier received by {activeRecord.oemManufacturer}. Replacement assembly / vendor specialist active.
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleExportFailureDossier(activeRecord)}
-                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-slate-600" />
-                      <span>📄 Export Dossier (Print/PDF)</span>
-                    </button>
-                    <Button
-                      size="sm"
-                      onClick={() => setIsSignOffModalOpen(true)}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg shadow-xs cursor-pointer"
-                    >
-                      <CheckCheck className="w-3.5 h-3.5" />
-                      <span>✅ Confirm OEM Resolution & Close</span>
-                    </Button>
-                  </div>
+            {activeStage === 3 && (
+              <div className="p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-2.5 text-emerald-950 text-xs">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    <strong>Stage 3 Complete:</strong> Vendor overhaul certified by {activeRecord.clearedBy || 'Plant Chief Engineer'}. Synchronized to Maintenance History.
+                  </span>
                 </div>
-              )}
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  {/* Phase 3 Innovation: 1-Click Save to Expert Knowledge */}
+                  <button
+                    type="button"
+                    onClick={() => handleCaptureVendorFixInKnowledge(activeRecord)}
+                    disabled={isKnowledgeCaptured}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs ${
+                      isKnowledgeCaptured
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : 'bg-amber-500 hover:bg-amber-600 text-white shadow-xs'
+                    }`}
+                    title="Capture OEM certified repair instructions directly into Expert Knowledge for in-house training"
+                  >
+                    <Lightbulb className="w-3.5 h-3.5 fill-current" />
+                    <span>{isKnowledgeCaptured ? '✓ Captured in Knowledge' : '💡 Capture Fix in Expert Knowledge'}</span>
+                  </button>
 
-              {activeStage === 3 && (
-                <div className="p-3.5 bg-emerald-50/70 border-b border-emerald-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5 text-emerald-900 text-xs">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>
-                      <strong>Stage 3 Complete:</strong> Vendor overhaul authorized. Logged into permanent Maintenance History audit ledger.
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleExportFailureDossier(activeRecord)}
-                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-slate-600" />
-                      <span>📄 Export OEM Dossier</span>
-                    </button>
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-900 border border-emerald-300">
-                      <Check className="w-3.5 h-3.5 text-emerald-700" />
-                      <span>Archived to History</span>
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* DOSSIER HEADER */}
-              <div className="p-5">
-                <div className="flex flex-col xl:flex-row justify-between items-start gap-4">
-                  <div className="space-y-2 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2.5 py-1 rounded-md shadow-2xs">
-                        {activeRecord.ticketId}
-                      </span>
-                      <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md">
-                        {activeRecord.assetTag}
-                      </span>
-                      <span className="font-mono text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded">
-                        {activeRecord.slaPriority}
-                      </span>
-                      {activeStage === 3 ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md font-mono text-[10px] font-bold border uppercase bg-emerald-100 text-emerald-800 border-emerald-300">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
-                          <span>Authority Cleared & Solved</span>
-                        </span>
-                      ) : activeStage === 2 ? (
-                        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-md border bg-blue-50 text-blue-700 border-blue-200 uppercase">
-                          🔵 Vendor Dispatched
-                        </span>
-                      ) : (
-                        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-md border bg-amber-50 text-amber-700 border-amber-200 uppercase">
-                          🟡 Awaiting Dispatch
-                        </span>
-                      )}
-                    </div>
-
-                    <h1 className="text-base sm:text-lg font-bold text-slate-900 font-sans tracking-tight">
-                      [OEM Factory Escalation] {activeRecord.assetName || activeRecord.title || 'Sub-Assembly Failure'}
-                    </h1>
-                  </div>
-
-                  {/* Header Action Controls */}
-                  <div className="flex items-center gap-2 flex-wrap shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => handleExportFailureDossier(activeRecord)}
-                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
-                      title="Export printable failure dossier for OEM factory dispatch"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-slate-600" />
-                      <span>Export Dossier</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setDeleteConfirmId(activeRecord.id)}
-                      className="inline-flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
-                      title="Delete / cancel this escalation if filed by mistake"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                      <span>Delete</span>
-                    </button>
-
-                    {onNavigateToTechQueue && (
-                      <button
-                        type="button"
-                        onClick={() => onNavigateToTechQueue(activeRecord.ticketId)}
-                        className="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer shadow-2xs"
-                        title="View active board in Tech Execution Desk"
-                      >
-                        <Play className="w-3 h-3 fill-current text-slate-500" />
-                        <span>Tech Desk</span>
-                      </button>
-                    )}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleExportFailureDossier(activeRecord)}
+                    className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Export Dossier</span>
+                  </button>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white shadow-xs">
+                    <Check className="w-3.5 h-3.5 text-white" />
+                    <span>Archived to History</span>
+                  </span>
                 </div>
               </div>
+            )}
 
-              {/* DOSSIER SECTION 1: OEM & WARRANTY CONTACT DETAILS */}
-              <div className="p-5">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-purple-50/40 p-4 rounded-xl border border-purple-200/80 text-xs">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono text-purple-500 uppercase font-bold tracking-wider block">
-                      OEM Manufacturer
-                    </span>
-                    <p className="font-sans font-bold text-slate-900 text-xs truncate">
-                      {activeRecord.oemManufacturer}
-                    </p>
+            {/* 3. PHASE 3 INNOVATIVE SHIELDS (AI Warranty Shield & Tamper-Seal Lock Guardrail) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* Shield 1: AI Warranty & Cost Liability Shield */}
+              <div className="p-3 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-3 text-xs shadow-2xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-700 shrink-0">
+                    <ShieldCheck className="w-4 h-4" />
                   </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono text-purple-500 uppercase font-bold tracking-wider block">
-                      Direct OEM Contact
+                  <div className="space-y-0.5 min-w-0">
+                    <span className="font-bold text-emerald-950 block text-[11px] leading-tight">
+                      ACTIVE OEM WARRANTY COVERAGE — Eligible for $0 Free Replacement
                     </span>
-                    <p className="font-mono text-slate-800 text-xs flex items-center gap-1 truncate">
-                      <Mail className="w-3 h-3 text-purple-600 shrink-0" />
-                      <span className="truncate">{activeRecord.oemContactEmail}</span>
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono text-purple-500 uppercase font-bold tracking-wider block">
-                      Warranty & SLA Status
-                    </span>
-                    <p className="font-sans font-semibold text-emerald-800 text-xs flex items-center gap-1 truncate">
-                      <Award className="w-3 h-3 text-emerald-600 shrink-0" />
-                      <span className="truncate">{activeRecord.warrantyStatus}</span>
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-mono text-purple-500 uppercase font-bold tracking-wider block">
-                      Contract Reference
-                    </span>
-                    <p className="font-mono font-bold text-slate-900 text-xs truncate">
-                      {activeRecord.warrantyContractId || activeRecord.contractRef}
+                    <p className="text-[10px] text-emerald-800 font-mono break-words">
+                      Contract: {activeRecord.warrantyContractId || activeRecord.contractRef} • 100% Vendor Liability Absorbed
                     </p>
                   </div>
                 </div>
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-200/80 text-emerald-900 shrink-0">
+                  $0 Free Claim
+                </span>
               </div>
 
-              {/* DOSSIER SECTION 2: FAILURE DOSSIER & RCA FINDINGS */}
-              <div className="p-5 space-y-4">
-                <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2">
-                  <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
-                    <div className="flex items-center gap-2">
-                      <Activity className="w-4 h-4 text-purple-600" />
-                      <span className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
-                        Confirmed RCA Root Cause & Diagnostic Findings
-                      </span>
-                    </div>
-                    <span className="font-mono text-[10px] font-bold text-purple-800 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded">
-                      Alarm Code: {activeRecord.alarmCode || activeRecord.faultCode}
-                    </span>
+              {/* Shield 2: Shop-Floor Tamper-Seal Lock Indicator */}
+              <div className="p-3 bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-xs shadow-2xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0">
+                    <Lock className="w-4 h-4" />
                   </div>
-                  <p className="text-xs text-slate-700 font-sans leading-relaxed">
+                  <div className="space-y-0.5 min-w-0">
+                    <span className="font-bold text-amber-950 block text-[11px] leading-tight">
+                      Shop-Floor Tamper-Seal &amp; LOTO Lock Active
+                    </span>
+                    <p className="text-[10px] text-amber-800 font-mono break-words">
+                      In-House Disassembly Paused Pending Certified OEM Arrival (Protects Warranty)
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-200/80 text-amber-900 shrink-0">
+                  LOTO Locked
+                </span>
+              </div>
+            </div>
+
+            {/* 4. 2-COLUMN STRUCTURED FAILURE DOSSIER GRID (Requirement 2) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
+              {/* Left Column: Shop-Floor Failure & Blocked Step Telemetry */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-indigo-600" />
+                    <h3 className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
+                      Shop-Floor Failure &amp; Telemetry
+                    </h3>
+                  </div>
+                  <span className="font-mono text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded">
+                    ALARM: {activeRecord.alarmCode || activeRecord.faultCode}
+                  </span>
+                </div>
+
+                {/* Blocked Sub-Assembly Step */}
+                <div className="p-3 rounded-lg border border-rose-200 bg-rose-50/30 space-y-1">
+                  <span className="text-[10px] font-mono uppercase font-bold text-rose-800 block">
+                    Blocked At Execution Step #{activeRecord.failedStepNumber || 1}
+                  </span>
+                  <p className="text-xs font-bold text-slate-900 font-sans">
+                    {activeRecord.failedStepTitle || 'Component Replacement & Alignment'}
+                  </p>
+                  <p className="text-xs text-rose-950 font-sans leading-relaxed pt-0.5">
+                    {activeRecord.failedNotes}
+                  </p>
+                </div>
+
+                {/* Observed Field Symptom & Alarm Telemetry */}
+                <div className="space-y-1">
+                  <span className="text-[10px] font-mono uppercase font-bold text-slate-500 block">
+                    Observed Field Symptom &amp; Diagnostic Alert
+                  </span>
+                  <p className="text-xs text-slate-800 font-sans leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                     {activeRecord.rcaRootCause || activeRecord.rcaFindings}
                   </p>
                 </div>
 
-                {/* Blocked Sub-Assembly Step & Field Bottleneck */}
-                <div className="p-4 rounded-xl border border-rose-200 bg-rose-50/30 shadow-2xs space-y-2">
-                  <div className="flex items-center justify-between gap-2 border-b border-rose-200/70 pb-2">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4 text-rose-600" />
-                      <span className="text-xs font-bold text-rose-950 uppercase font-mono tracking-wide">
-                        Blocked Execution Step & Field Bottleneck
-                      </span>
-                    </div>
-                    <span className="font-mono text-[10px] font-bold text-rose-800 bg-rose-100 border border-rose-300 px-2 py-0.5 rounded">
-                      Step #{activeRecord.failedStepNumber || 1}
-                    </span>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold text-slate-900 font-sans">
-                      {activeRecord.failedStepTitle || 'Component Replacement & Torque'}
-                    </p>
-                    <p className="text-xs text-rose-900 font-sans leading-relaxed">
-                      {activeRecord.failedNotes}
-                    </p>
-                  </div>
+                {/* Confirmed RCA Hypothesis */}
+                <div className="space-y-1">
+                  <span className="text-[10px] font-mono uppercase font-bold text-indigo-700 block">
+                    Root Cause Analysis (RCA) Confirmed Hypothesis
+                  </span>
+                  <p className="text-xs text-indigo-950 font-sans leading-relaxed bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-200">
+                    {activeRecord.rcaFindings}
+                  </p>
                 </div>
+              </div>
+
+              {/* Right Column: OEM Vendor & Contract Intelligence (or Plant Authority) */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <div className="flex items-center gap-2">
+                    {escalationTarget === 'OEM' ? (
+                      <Building2 className="w-4 h-4 text-indigo-600" />
+                    ) : (
+                      <Award className="w-4 h-4 text-amber-600" />
+                    )}
+                    <h3 className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
+                      {escalationTarget === 'OEM'
+                        ? 'OEM Vendor & Contract Intelligence'
+                        : 'Plant Higher Authority & GM Interlock'}
+                    </h3>
+                  </div>
+                  <span className="font-mono text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded">
+                    {escalationTarget === 'OEM' ? 'OEM Tier 1' : 'Level 4 GM'}
+                  </span>
+                </div>
+
+                {escalationTarget === 'OEM' ? (
+                  <div className="space-y-2.5 text-xs">
+                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase font-bold">
+                          Assigned Manufacturer
+                        </span>
+                        <span className="font-mono text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                          Certified OEM
+                        </span>
+                      </div>
+                      <p className="font-bold text-slate-900 text-xs">
+                        {activeRecord.oemManufacturer}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                          Direct Support Email
+                        </span>
+                        <p className="font-mono text-slate-800 text-xs flex items-center gap-1 truncate">
+                          <Mail className="w-3 h-3 text-indigo-600 shrink-0" />
+                          <span className="truncate">{activeRecord.oemContactEmail}</span>
+                        </p>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                          24/7 Field Hotline
+                        </span>
+                        <p className="font-mono text-slate-800 text-xs flex items-center gap-1 truncate">
+                          <Phone className="w-3 h-3 text-indigo-600 shrink-0" />
+                          <span className="truncate">{activeRecord.oemHotline || '+1 (800) 555-OEM-24'}</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                          Contract SLA Target
+                        </span>
+                        <p className="font-sans font-bold text-indigo-900 text-xs truncate">
+                          {activeRecord.slaPriority}
+                        </p>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                          Contract / Warranty ID
+                        </span>
+                        <p className="font-mono font-bold text-slate-900 text-xs truncate">
+                          {activeRecord.warrantyContractId || activeRecord.contractRef}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-indigo-50/60 rounded-lg border border-indigo-200 text-[11px] text-indigo-950 font-sans">
+                      <span className="font-bold block mb-0.5">Required Factory Sub-Assembly / Tooling:</span>
+                      <span>Certified factory cartridge replacement &amp; hydraulic torque calibrator dispatched directly from regional OEM parts depot.</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 text-xs">
+                    <div className="p-3 bg-amber-50/50 rounded-lg border border-amber-200 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono text-amber-700 uppercase font-bold">
+                          Authority Routing
+                        </span>
+                        <span className="font-mono text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.2 rounded">
+                          L4 Interlock
+                        </span>
+                      </div>
+                      <p className="font-bold text-slate-900 text-xs">
+                        Plant General Manager &amp; Chief Mechanical Engineer
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                          Emergency CapEx Ceiling
+                        </span>
+                        <p className="font-mono text-emerald-800 font-bold text-xs">
+                          Pre-Approved ($0 - $50,000)
+                        </p>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                          Production Line Impact
+                        </span>
+                        <p className="font-sans font-bold text-rose-800 text-xs">
+                          Critical Line Halt — Bay 04
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-amber-50/60 rounded-lg border border-amber-200 text-[11px] text-amber-950 font-sans">
+                      <span className="font-bold block mb-0.5">Higher Authority Directive:</span>
+                      <span>Line supervisor notified. Overhaul priority elevated to Level 4 Emergency. Factory engineering team and on-call mechanical chief briefed.</span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Audit Sign-Off Section if Resolved */}
                 {activeStage === 3 && activeRecord.oemReportNotes && (
-                  <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/40 shadow-2xs space-y-2">
-                    <div className="flex items-center justify-between gap-2 border-b border-emerald-200 pb-2">
-                      <div className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                        <span className="text-xs font-bold text-emerald-950 uppercase font-mono tracking-wide">
-                          OEM Vendor Resolution & Higher Authority Sign-off
-                        </span>
-                      </div>
-                      <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded">
-                        Cleared by {activeRecord.clearedBy || 'Chief Engineer'}
+                  <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50/50 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono text-emerald-800 uppercase font-bold">
+                        Vendor Resolution &amp; Authority Sign-Off
+                      </span>
+                      <span className="font-mono text-[9px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-1.5 py-0.2 rounded">
+                        Signed: {activeRecord.clearedBy || 'Chief Engineer'}
                       </span>
                     </div>
-                    <p className="text-xs text-emerald-900 font-sans leading-relaxed">
+                    <p className="text-xs text-emerald-950 font-sans leading-relaxed">
                       {activeRecord.oemReportNotes}
                     </p>
-                    <div className="pt-1 text-[10px] font-mono text-emerald-700">
+                    <div className="text-[10px] font-mono text-emerald-700">
                       Timestamp: {formatLocalDateTime(activeRecord.clearedAt)}
                     </div>
                   </div>
@@ -1012,7 +1276,7 @@ export const OemEscalationsView: React.FC<{
             </div>
           </div>
         ) : (
-          /* Clean, modern empty state when no escalation is selected */
+          /* Empty state when no escalation exists */
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#F8FAFC]">
             <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 shadow-2xs flex items-center justify-center mb-3">
               <Building2 className="w-8 h-8 text-slate-400" />
@@ -1035,9 +1299,9 @@ export const OemEscalationsView: React.FC<{
           <div className="bg-white rounded-xl border border-slate-200 max-w-lg w-full p-5 space-y-4 shadow-xl animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
-                <FileCheck className="w-5 h-5 text-purple-600" />
+                <FileCheck className="w-5 h-5 text-indigo-600" />
                 <h3 className="font-bold text-slate-900 text-sm font-sans">
-                  Confirm OEM Vendor Resolution & Close
+                  Confirm OEM Vendor Resolution &amp; Close
                 </h3>
               </div>
               <button
@@ -1050,7 +1314,7 @@ export const OemEscalationsView: React.FC<{
             </div>
 
             <div className="space-y-2 text-xs">
-              <div className="p-3 bg-purple-50/50 rounded-lg border border-purple-200 font-mono space-y-1">
+              <div className="p-3 bg-indigo-50/50 rounded-lg border border-indigo-200 font-mono space-y-1">
                 <p>
                   <strong>Ticket:</strong> {activeRecord.ticketId} · {activeRecord.assetTag}
                 </p>
@@ -1064,14 +1328,14 @@ export const OemEscalationsView: React.FC<{
 
               <div className="space-y-1 pt-1">
                 <label className="font-bold text-slate-700 block">
-                  OEM Field Service Engineer Report & Resolution Remarks *
+                  OEM Field Service Engineer Report &amp; Resolution Remarks *
                 </label>
                 <textarea
                   rows={4}
                   value={signOffNotes}
                   onChange={(e) => setSignOffNotes(e.target.value)}
                   placeholder="Enter OEM certified factory overhaul findings, replaced titanium parts serial numbers, calibrated operational clearances, and warranty clearance notes..."
-                  className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs font-sans text-slate-900 focus:outline-none focus:border-purple-600 shadow-2xs"
+                  className="w-full p-2.5 bg-white border border-slate-300 rounded-lg text-xs font-sans text-slate-900 focus:outline-none focus:border-indigo-600 shadow-2xs"
                 />
               </div>
             </div>
@@ -1091,7 +1355,7 @@ export const OemEscalationsView: React.FC<{
                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-1.5 rounded-lg shadow-xs cursor-pointer inline-flex items-center gap-1.5"
               >
                 <Check className="w-3.5 h-3.5" />
-                <span>Authorize & Move to Maintenance History</span>
+                <span>Authorize &amp; Move to Maintenance History</span>
               </Button>
             </div>
           </div>
@@ -1108,7 +1372,7 @@ export const OemEscalationsView: React.FC<{
               </div>
               <div>
                 <h3 className="font-bold text-slate-900 text-sm font-sans">
-                  Cancel & Delete OEM Escalation?
+                  Cancel &amp; Delete OEM Escalation?
                 </h3>
                 <p className="text-xs text-slate-500 font-mono">
                   Case ID: {deleteConfirmId}
@@ -1134,7 +1398,7 @@ export const OemEscalationsView: React.FC<{
                 className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs px-4 py-1.5 rounded-lg shadow-xs cursor-pointer inline-flex items-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Confirm & Delete</span>
+                <span>Confirm &amp; Delete</span>
               </Button>
             </div>
           </div>

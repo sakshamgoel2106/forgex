@@ -1300,6 +1300,48 @@ export const SopExecutionView: React.FC<{
     actionType: 'MANUAL_CHANGE',
   });
 
+  // Busy Technician Center Popup Confirmation Modal State
+  const [busyTechModalState, setBusyTechModalState] = useState<{
+    isOpen: boolean;
+    busyTech: DispatchTech | null;
+    nextAvailableTech: DispatchTech | null;
+    pendingTicketData?: {
+      assetId: string;
+      title: string;
+      severity: string;
+      symptomDescription: string;
+      createdAtFormatted: string;
+      fullDescription: string;
+      nowIso: string;
+    } | null;
+    targetCase?: WorkOrderCase | null;
+  }>({
+    isOpen: false,
+    busyTech: null,
+    nextAvailableTech: null,
+    pendingTicketData: null,
+    targetCase: null,
+  });
+
+  const getNextAvailableSpecialist = (excludeTechId?: string | null): DispatchTech => {
+    const available = DISPATCH_TECHNICIAN_ROSTER.find((t) => {
+      if (t.id === excludeTechId || t.userId === excludeTechId) return false;
+      const st = computeTechnicianLiveStatus(
+        { fullName: t.fullName, id: t.id, userId: t.userId },
+        cases
+      );
+      return st.statusType === 'AVAILABLE';
+    });
+    if (available) return available;
+    const other = DISPATCH_TECHNICIAN_ROSTER.find((t) => t.id !== excludeTechId && t.userId !== excludeTechId);
+    return other || DISPATCH_TECHNICIAN_ROSTER[1] || DISPATCH_TECHNICIAN_ROSTER[0];
+  };
+
+  const isTicketEditingLocked = (c: WorkOrderCase | null | undefined): boolean => {
+    if (!c) return false;
+    return isTicketExecutionUnderway(c) || Boolean((c as any).isConfirmed) || Boolean((c as any).isLocked);
+  };
+
   const [excludedTechsPerCase, setExcludedTechsPerCase] = useState<Record<string, string[]>>({});
 
   // Diagnostic Detail Modal State (Requirement 4)
@@ -1351,7 +1393,6 @@ export const SopExecutionView: React.FC<{
   });
 
   // Edit Ticket Modal State (Requirement 2)
-  const [dismissedBusyPrompt, setDismissedBusyPrompt] = useState<Record<string, boolean>>({});
 
   const [editModalState, setEditModalState] = useState<{
     isOpen: boolean;
@@ -2433,6 +2474,170 @@ export const SopExecutionView: React.FC<{
 
 
 
+  // Helper: Dispatch newly created ticket to backend and update state
+  const dispatchNewCase = async (tech: DispatchTech, isQueued: boolean, pendingData?: any) => {
+    const p = pendingData || busyTechModalState.pendingTicketData;
+    if (!p) return;
+    setIsSubmitting(true);
+    try {
+      const res = await apiFetch('/api/v1/maintenance/cases', {
+        method: 'POST',
+        body: JSON.stringify({
+          assetId: p.assetId,
+          title: p.title,
+          severity: p.severity,
+          symptomDescription: p.fullDescription,
+          createdAtFormatted: p.createdAtFormatted,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success || !json.data) {
+        throw new Error(json?.error?.message || json?.error || 'Failed to create maintenance ticket');
+      }
+
+      const created = json.data;
+
+      // Immediately assign technician on backend
+      try {
+        await apiFetch(`/api/v1/maintenance/cases/${created.id}/assign`, {
+          method: 'POST',
+          body: JSON.stringify({
+            technicianUserId: tech.id,
+            technicianName: tech.fullName,
+          }),
+        });
+      } catch (assignErr) {
+        console.warn('Backend auto-assign sync notice:', assignErr);
+      }
+
+      const targetStatus = isQueued ? 'OPEN_DISPATCHED' : 'IN_PROGRESS';
+      try {
+        await apiFetch(`/api/v1/maintenance/cases/${created.id}/status`, {
+          method: 'POST',
+          body: JSON.stringify({
+            status: targetStatus,
+            notes: isQueued
+              ? `Placed in ${tech.fullName}'s Queue awaiting active task completion.`
+              : `Dispatched to available specialist ${tech.fullName} (${tech.discipline}).`,
+          }),
+        });
+      } catch {}
+
+      const enrichedNew: WorkOrderCase = {
+        ...created,
+        createdAt: created.createdAt || p.nowIso,
+        createdAtFormatted: p.createdAtFormatted,
+        status: targetStatus,
+        assignedTechnicianUserId: tech.id,
+        assignedTechnicianName: tech.fullName,
+        assignedTechnicianRating: tech.rating,
+        isAiAutoAssigned: true,
+        specialistDiscipline: tech.discipline,
+        history: [
+          {
+            id: `h-init-${created.id}`,
+            action: isQueued ? 'TICKET_QUEUED_TO_BUSY_SPECIALIST' : 'TICKET_RAISED_AND_AI_ASSIGNED',
+            user: user?.fullName || 'Shift Supervisor',
+            timestamp: p.nowIso,
+            notes: isQueued
+              ? `Ticket raised & placed in ${tech.fullName}'s queue.`
+              : `Ticket raised & auto-assigned to ${tech.fullName} (${tech.discipline}).`,
+          },
+        ],
+      };
+
+      setCases((prev) => [enrichedNew, ...prev]);
+      setActiveCaseId(enrichedNew.id);
+      setIsNewCaseModalOpen(false);
+      setBusyTechModalState({
+        isOpen: false,
+        busyTech: null,
+        nextAvailableTech: null,
+        pendingTicketData: null,
+        targetCase: null,
+      });
+      setNewTitle('');
+      setNewAssetTag('');
+      setNewSeverity('');
+      setNewErrorCode('');
+      setNewLotoRequired(false);
+      setNewSymptoms('');
+
+      if (isQueued) {
+        toast.info(
+          'Ticket Placed in Queue',
+          `Ticket ${created.caseNumber} queued for ${tech.fullName}. Will begin once active task finishes.`
+        );
+      } else {
+        toast.success(
+          'Ticket Raised & AI Dispatched',
+          `Ticket ${created.caseNumber} auto-assigned to ${tech.fullName} (⭐ ${tech.rating} · ${tech.discipline}).`
+        );
+      }
+
+      const activeCount = cases.filter((c) => c.status !== 'CLOSED').length + 1;
+      onActiveCountChange?.(activeCount);
+    } catch (err: any) {
+      toast.error('Creation Failed', err.message || 'Server rejected ticket creation.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const executeReassignCase = async (targetCase: WorkOrderCase, tech: DispatchTech) => {
+    setIsSubmitting(true);
+    try {
+      const res = await apiFetch(`/api/v1/maintenance/cases/${targetCase.id}/assign`, {
+        method: 'POST',
+        headers: targetCase.updatedAt ? { 'If-Match': targetCase.updatedAt } : undefined,
+        body: JSON.stringify({
+          technicianUserId: tech.id,
+          technicianName: tech.fullName,
+          expectedUpdatedAt: targetCase.updatedAt,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json?.error?.message || 'Assignment failed');
+
+      setCases((prev) =>
+        prev.map((c) =>
+          c.id === targetCase.id
+            ? {
+                ...c,
+                ...json.data,
+                assignedTechnicianUserId: tech.id,
+                assignedTechnicianName: tech.fullName,
+                assignedTechnicianRating: tech.rating,
+                isAiAutoAssigned: false,
+              }
+            : c
+        )
+      );
+      setIsChangingTech(false);
+      setBusyTechModalState({ isOpen: false, busyTech: null, nextAvailableTech: null, pendingTicketData: null, targetCase: null });
+      toast.success('Technician Assigned', `Ticket reassigned to ${tech.fullName}.`);
+    } catch (err: any) {
+      toast.error('Assignment Failed', err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResolveBusyTechModal = async (action: 'QUEUE' | 'SWITCH') => {
+    if (busyTechModalState.pendingTicketData) {
+      const tech = action === 'QUEUE' ? busyTechModalState.busyTech : busyTechModalState.nextAvailableTech;
+      if (tech) {
+        await dispatchNewCase(tech, action === 'QUEUE');
+      }
+    } else if (busyTechModalState.targetCase) {
+      const tech = action === 'QUEUE' ? busyTechModalState.busyTech : busyTechModalState.nextAvailableTech;
+      if (tech) {
+        await executeReassignCase(busyTechModalState.targetCase, tech);
+      }
+    }
+  };
+
   // 8. Create New Raised Ticket with Automated Machine Link & AI Smart Auto-Assignment
   const handleCreateNewCase = async () => {
     if (!newTitle.trim()) {
@@ -2467,8 +2672,6 @@ export const SopExecutionView: React.FC<{
       cases
     );
 
-    setIsSubmitting(true);
-
     const fullDescription = [
       newSymptoms.trim(),
       `Machine Status: ${newMachineStatus === 'HALTED' ? 'Down / Halted' : 'Running with Anomaly'}`,
@@ -2484,92 +2687,34 @@ export const SopExecutionView: React.FC<{
 
     const nowIso = new Date().toISOString();
 
-    try {
-      const res = await apiFetch('/api/v1/maintenance/cases', {
-        method: 'POST',
-        body: JSON.stringify({
-          assetId: effectiveAsset,
-          title: newTitle.trim(),
-          severity: newSeverity,
-          symptomDescription: fullDescription,
-          createdAtFormatted: formatLocalDateTime(nowIso),
-        }),
+    const pendingData = {
+      assetId: effectiveAsset,
+      title: newTitle.trim(),
+      severity: newSeverity,
+      symptomDescription: fullDescription,
+      createdAtFormatted: formatLocalDateTime(nowIso),
+      fullDescription,
+      nowIso,
+    };
+
+    // Check if the matched technician is currently BUSY executing another ticket
+    const liveStatus = computeTechnicianLiveStatus(
+      { fullName: bestTech.fullName, id: bestTech.id, userId: bestTech.userId },
+      cases
+    );
+
+    if (liveStatus.statusType === 'BUSY') {
+      const nextAvailable = getNextAvailableSpecialist(bestTech.id);
+      setBusyTechModalState({
+        isOpen: true,
+        busyTech: bestTech,
+        nextAvailableTech: nextAvailable,
+        pendingTicketData: pendingData,
       });
-
-      const json = await res.json();
-      if (!res.ok || !json.success || !json.data) {
-        throw new Error(json?.error?.message || json?.error || 'Failed to create maintenance ticket');
-      }
-
-      const created = json.data;
-
-      // Immediately assign best technician on backend
-      try {
-        await apiFetch(`/api/v1/maintenance/cases/${created.id}/assign`, {
-          method: 'POST',
-          body: JSON.stringify({
-            technicianUserId: bestTech.id,
-            technicianName: bestTech.fullName,
-          }),
-        });
-      } catch (assignErr) {
-        console.warn('Backend auto-assign sync notice:', assignErr);
-      }
-
-      // Transition status to IN_PROGRESS so it goes directly to technician execution queue
-      try {
-        await apiFetch(`/api/v1/maintenance/cases/${created.id}/status`, {
-          method: 'POST',
-          body: JSON.stringify({
-            status: 'IN_PROGRESS',
-            notes: `AI Auto-Assigned & Dispatched to ${bestTech.fullName} (${bestTech.discipline}).`,
-          }),
-        });
-      } catch {}
-
-      const enrichedNew: WorkOrderCase = {
-        ...created,
-        createdAt: created.createdAt || nowIso,
-        createdAtFormatted: formatLocalDateTime(created.createdAt || nowIso),
-        status: 'IN_PROGRESS',
-        assignedTechnicianUserId: bestTech.id,
-        assignedTechnicianName: bestTech.fullName,
-        assignedTechnicianRating: bestTech.rating,
-        isAiAutoAssigned: true,
-        specialistDiscipline: bestTech.discipline,
-        history: [
-          {
-            id: `h-init-${created.id}`,
-            action: 'TICKET_RAISED_AND_AI_ASSIGNED',
-            user: user?.fullName || 'Shift Supervisor',
-            timestamp: nowIso,
-            notes: `Ticket raised & AI auto-assigned to ${bestTech.fullName} (${bestTech.discipline}).`,
-          },
-        ],
-      };
-
-      setCases((prev) => [enrichedNew, ...prev]);
-      setActiveCaseId(enrichedNew.id);
-      setIsNewCaseModalOpen(false);
-      setNewTitle('');
-      setNewAssetTag('');
-      setNewSeverity('');
-      setNewErrorCode('');
-      setNewLotoRequired(false);
-      setNewSymptoms('');
-
-      toast.success(
-        'Ticket Raised & AI Dispatched',
-        `Ticket ${created.caseNumber} auto-assigned to ${bestTech.fullName} (⭐ ${bestTech.rating} · ${bestTech.discipline}).`
-      );
-
-      const activeCount = cases.filter((c) => c.status !== 'CLOSED').length + 1;
-      onActiveCountChange?.(activeCount);
-    } catch (err: any) {
-      toast.error('Creation Failed', err.message || 'Server rejected ticket creation.');
-    } finally {
-      setIsSubmitting(false);
+      return;
     }
+
+    await dispatchNewCase(bestTech, false, pendingData);
   };
 
   // Render individual card for Kanban columns and Grid view
@@ -2593,14 +2738,8 @@ export const SopExecutionView: React.FC<{
     // Live step progress sync
     const cardProgress = getCaseExecutionProgress(c);
     const isCardFullySolved = cardProgress.isSolved;
-
-    // Priority Border Color
-    const priorityBorderClass =
-      c.severity === 'CRITICAL'
-        ? 'border-l-rose-500'
-        : c.severity === 'HIGH'
-        ? 'border-l-amber-500'
-        : 'border-l-blue-500';
+    const doneCount = isCardFullySolved ? 5 : Math.min(5, cardProgress.doneSteps);
+    const pendingCount = Math.max(0, 5 - doneCount);
 
     // Source identification
     const isRcaSource =
@@ -2627,121 +2766,133 @@ export const SopExecutionView: React.FC<{
       <div
         key={c.id}
         onClick={() => setActiveCaseId((prev) => (prev === c.id ? null : c.id))}
-        className={`bg-white rounded-xl border border-l-4 p-2.5 cursor-pointer transition-all duration-150 space-y-2 shadow-xs hover:shadow-md hover:border-slate-300 ${priorityBorderClass} ${
+        className={`rounded-xl border border-slate-200 bg-white shadow-xs hover:shadow-md hover:border-indigo-400 transition-all duration-200 overflow-hidden cursor-pointer ${
           isSelected
-            ? 'ring-2 ring-indigo-600 border-indigo-500 bg-indigo-50/20'
+            ? 'ring-2 ring-indigo-600 border-indigo-500 shadow-md'
             : ''
         }`}
       >
-        {/* 1. What the Problem Is: Top row with Ticket ID, Asset Tag, Priority Badge */}
-        <div className="flex items-center justify-between gap-1.5">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="font-mono font-bold text-indigo-700 text-xs truncate">
+        {/* Top Gradient Header Strip */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-3.5 py-2 rounded-t-xl flex items-center justify-between gap-2 border-b border-indigo-900/40">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-mono font-bold text-xs text-cyan-300 tracking-wide whitespace-nowrap shrink-0">
               {c.caseNumber}
             </span>
-            <span className="font-mono font-semibold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded text-[10px] shrink-0 truncate max-w-[120px]">
+            <span className="font-mono font-semibold text-[10px] text-slate-200 bg-white/10 border border-white/20 px-2 py-0.5 rounded-full shrink-0 whitespace-nowrap">
               {displayTag}
             </span>
             {isRcaSource && (
-              <span className="bg-purple-50 text-purple-700 border border-purple-200 px-1 py-0.2 rounded text-[9px] font-mono font-bold shrink-0">
+              <span className="bg-purple-500/20 text-purple-200 border border-purple-400/40 px-1.5 py-0.2 rounded text-[9px] font-mono font-bold shrink-0">
                 RCA
               </span>
             )}
           </div>
 
           <span
-            className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+            className={`font-mono text-[9px] font-bold px-2 py-0.5 rounded-full border shrink-0 tracking-wider uppercase ${
               c.severity === 'CRITICAL'
-                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                ? 'bg-rose-500/20 text-rose-300 border-rose-400/40'
                 : c.severity === 'HIGH'
-                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                : 'bg-blue-50 text-blue-700 border-blue-200'
+                ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                : 'bg-blue-500/20 text-blue-300 border-blue-400/40'
             }`}
           >
             {c.severity}
           </span>
         </div>
 
-        {/* 1-Line Clean Problem Title */}
-        <p className="text-xs font-semibold text-slate-900 truncate" title={cleanSummary}>
-          {cleanSummary}
-        </p>
+        {/* Card Body with subtle gradient background */}
+        <div className="bg-gradient-to-b from-white to-slate-50/80 p-3.5 space-y-2.5">
+          {/* 1-Line Clean Problem Title */}
+          <p className="text-xs font-semibold text-slate-900 truncate leading-snug" title={cleanSummary}>
+            {cleanSummary}
+          </p>
 
-        {/* 2. Who It Is Assigned To: Compact technician row */}
-        <div className="flex items-center justify-between gap-1.5 bg-slate-50 border border-slate-200/80 rounded-lg px-2 py-1 text-[11px]">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 ${
-                techStatus.statusType === 'AVAILABLE'
-                  ? 'bg-emerald-500'
-                  : techStatus.statusType === 'BUSY'
-                  ? 'bg-amber-500'
-                  : 'bg-rose-500'
-              }`}
-            />
-            <span className="font-semibold text-slate-800 truncate" title={techName}>
-              👤 {techName}
-            </span>
-            <span className="text-amber-700 font-bold font-mono text-[10px]">
-              ⭐{c.assignedTechnicianRating ? Number(c.assignedTechnicianRating).toFixed(1) : '4.9'}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1 shrink-0 font-mono text-[9px]">
-            {isTechLocked && (
-              <span className="text-indigo-700 bg-indigo-50 border border-indigo-200 px-1 py-0.2 rounded font-bold">
-                Locked
+          {/* Assigned Technician row */}
+          <div className="flex items-center justify-between gap-1.5 bg-slate-50 border border-slate-200/80 rounded-lg px-2.5 py-1 text-[11px]">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  techStatus.statusType === 'AVAILABLE'
+                    ? 'bg-emerald-500'
+                    : techStatus.statusType === 'BUSY'
+                    ? 'bg-amber-500'
+                    : 'bg-rose-500'
+                }`}
+              />
+              <span className="font-semibold text-slate-800 truncate" title={techName}>
+                👤 {techName}
               </span>
-            )}
-            {c.isAiAutoAssigned !== false && (
-              <span className="text-violet-700 bg-violet-50 border border-violet-200 px-1 py-0.2 rounded font-bold flex items-center gap-0.5">
-                <Sparkles className="w-2.5 h-2.5" />
-                <span>AI</span>
+              <span className="text-amber-700 font-bold font-mono text-[10px]">
+                ⭐{c.assignedTechnicianRating ? Number(c.assignedTechnicianRating).toFixed(1) : '4.9'}
               </span>
-            )}
-          </div>
-        </div>
+            </div>
 
-        {/* 3. Live Progress: High-tech 5-Segment Gradient Progress Bar */}
-        <div className="space-y-1.5 pt-0.5">
-          <div className="flex items-center justify-between text-[10px] font-mono">
-            <span
-              className={
-                isCardFullySolved
-                  ? 'text-emerald-700 font-bold'
-                  : cardProgress.progressPct > 0
-                  ? 'text-indigo-700 font-bold'
-                  : 'text-slate-500 font-medium'
-              }
-            >
-              {isCardFullySolved
-                ? '5/5 Steps • 100% Solved'
-                : cardProgress.progressPct > 0
-                ? `${cardProgress.doneSteps}/5 Steps • ${cardProgress.progressPct}%`
-                : '0/5 Steps • Awaiting Start'}
-            </span>
+            <div className="flex items-center gap-1 shrink-0 font-mono text-[9px]">
+              {isTechLocked && (
+                <span className="text-indigo-700 bg-indigo-50 border border-indigo-200 px-1 py-0.2 rounded font-bold">
+                  Locked
+                </span>
+              )}
+              {c.isAiAutoAssigned !== false && (
+                <span className="text-violet-700 bg-violet-50 border border-violet-200 px-1.5 py-0.2 rounded font-bold flex items-center gap-0.5">
+                  <Sparkles className="w-2.5 h-2.5" />
+                  <span>AI</span>
+                </span>
+              )}
+            </div>
           </div>
-          <div className="grid grid-cols-5 gap-1 w-full pt-0.5">
-            {[1, 2, 3, 4, 5].map((stepNum) => {
-              const isStepDone = isCardFullySolved || cardProgress.doneSteps >= stepNum;
-              const isStepActive =
-                !isCardFullySolved &&
-                cardProgress.doneSteps + 1 === stepNum &&
-                (cardProgress.doneSteps > 0 || cardProgress.progressPct > 0);
 
-              return (
-                <div
-                  key={stepNum}
-                  className={`h-1.5 rounded-full transition-all duration-300 ${
-                    isStepDone
-                      ? 'bg-gradient-to-r from-indigo-600 via-blue-500 to-cyan-400 shadow-xs'
-                      : isStepActive
-                      ? 'bg-gradient-to-r from-amber-500 to-orange-400 animate-pulse'
-                      : 'bg-slate-200/80'
-                  }`}
-                />
-              );
-            })}
+          {/* 5-Node Live Step Progress Tracker */}
+          <div className="space-y-1.5 pt-0.5">
+            {/* Live Status Summary Header */}
+            <div className="flex items-center justify-between text-[10px] font-mono">
+              <span
+                className={
+                  isCardFullySolved
+                    ? 'text-emerald-700 font-bold'
+                    : doneCount > 0
+                    ? 'text-indigo-700 font-bold'
+                    : 'text-slate-600 font-medium'
+                }
+              >
+                ✓ {doneCount} Completed &nbsp;•&nbsp; ⏳ {pendingCount} Pending in Tech Desk
+              </span>
+              <span className="text-slate-400 text-[9px] uppercase tracking-wider font-semibold">
+                {isCardFullySolved ? '100% Solved' : cardProgress.progressPct > 0 ? `${cardProgress.progressPct}%` : 'Queued'}
+              </span>
+            </div>
+
+            {/* 5 Connected Step Nodes */}
+            <div className="relative flex items-center justify-between w-full pt-1 px-1">
+              {/* Connected Track Rail */}
+              <div className="absolute left-3 right-3 top-1/2 -translate-y-1/2 h-0.5 bg-slate-200 z-0" />
+
+              {[1, 2, 3, 4, 5].map((stepNum) => {
+                const isStepDone = isCardFullySolved || cardProgress.doneSteps >= stepNum;
+                const isStepActive =
+                  !isCardFullySolved &&
+                  cardProgress.doneSteps + 1 === stepNum &&
+                  (cardProgress.doneSteps > 0 || cardProgress.progressPct > 0 || (c as any).executionStarted || (c as any).isStarted);
+
+                return (
+                  <div key={stepNum} className="relative z-10 flex flex-col items-center">
+                    <div
+                      className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-mono font-bold shadow-2xs transition-all duration-200 ${
+                        isStepDone
+                          ? 'bg-gradient-to-r from-indigo-600 to-cyan-500 text-white ring-2 ring-indigo-200 shadow-sm'
+                          : isStepActive
+                          ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white ring-2 ring-amber-200 animate-pulse shadow-sm'
+                          : 'bg-slate-100 text-slate-500 border border-slate-300'
+                      }`}
+                      title={`Step 0${stepNum}: ${isStepDone ? 'Completed in Tech Desk' : isStepActive ? 'Active in Tech Desk' : 'Pending in Tech Desk'}`}
+                    >
+                      {isStepDone ? '✓' : `0${stepNum}`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
@@ -2819,8 +2970,9 @@ export const SopExecutionView: React.FC<{
 
       {/* 4-METRIC COMMAND CENTER SUMMARY STRIP */}
       <div className="px-4 py-2.5 bg-white border-b border-slate-200 grid grid-cols-2 md:grid-cols-4 gap-2.5 shrink-0 shadow-2xs">
-        <div className="bg-slate-50/90 border border-slate-200/90 rounded-xl p-2.5 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 flex items-center justify-center shrink-0">
+        <div className="relative overflow-hidden bg-gradient-to-b from-white to-slate-50/90 border border-slate-200/90 rounded-xl p-2.5 flex items-center gap-3 shadow-2xs hover:shadow-xs transition">
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-600 to-indigo-600" />
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-xs flex items-center justify-center shrink-0">
             <Layers className="w-4 h-4" />
           </div>
           <div className="min-w-0">
@@ -2833,9 +2985,10 @@ export const SopExecutionView: React.FC<{
           </div>
         </div>
 
-        <div className="bg-amber-50/60 border border-amber-200/80 rounded-xl p-2.5 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-amber-100/80 border border-amber-300 text-amber-800 flex items-center justify-center shrink-0">
-            <Zap className="w-4 h-4 text-amber-600" />
+        <div className="relative overflow-hidden bg-gradient-to-b from-white to-amber-50/40 border border-amber-200/80 rounded-xl p-2.5 flex items-center gap-3 shadow-2xs hover:shadow-xs transition">
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-amber-500 to-orange-500" />
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-xs flex items-center justify-center shrink-0">
+            <Zap className="w-4 h-4" />
           </div>
           <div className="min-w-0">
             <div className="text-[10px] font-mono uppercase font-bold text-amber-800 tracking-wider">
@@ -2847,9 +3000,10 @@ export const SopExecutionView: React.FC<{
           </div>
         </div>
 
-        <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl p-2.5 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-emerald-100/80 border border-emerald-300 text-emerald-800 flex items-center justify-center shrink-0">
-            <Lock className="w-4 h-4 text-emerald-700" />
+        <div className="relative overflow-hidden bg-gradient-to-b from-white to-emerald-50/40 border border-emerald-200/80 rounded-xl p-2.5 flex items-center gap-3 shadow-2xs hover:shadow-xs transition">
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-emerald-500 to-teal-500" />
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-xs flex items-center justify-center shrink-0">
+            <Lock className="w-4 h-4" />
           </div>
           <div className="min-w-0">
             <div className="text-[10px] font-mono uppercase font-bold text-emerald-800 tracking-wider">
@@ -2861,9 +3015,10 @@ export const SopExecutionView: React.FC<{
           </div>
         </div>
 
-        <div className="bg-blue-50/50 border border-blue-200/80 rounded-xl p-2.5 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-blue-100/80 border border-blue-300 text-blue-800 flex items-center justify-center shrink-0">
-            <Clock className="w-4 h-4 text-blue-700" />
+        <div className="relative overflow-hidden bg-gradient-to-b from-white to-blue-50/40 border border-blue-200/80 rounded-xl p-2.5 flex items-center gap-3 shadow-2xs hover:shadow-xs transition">
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-500 to-cyan-500" />
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-600 to-cyan-600 text-white shadow-xs flex items-center justify-center shrink-0">
+            <Clock className="w-4 h-4" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-[10px] font-mono uppercase font-bold text-blue-800 tracking-wider truncate">
@@ -3037,8 +3192,8 @@ export const SopExecutionView: React.FC<{
           /* ================================================================= */
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
             {/* Column 1: Dispatched / Queued */}
-            <div className="bg-slate-100/70 border border-slate-200/80 rounded-2xl p-3 flex flex-col h-full">
-              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-200">
+            <div className="bg-slate-100/70 border border-slate-200/80 rounded-2xl p-3 flex flex-col max-h-[calc(100vh-240px)]">
+              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-200 shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
                   <h3 className="font-bold text-xs font-mono uppercase text-slate-700 tracking-wider">
@@ -3049,7 +3204,7 @@ export const SopExecutionView: React.FC<{
                   {kanbanColumns.queued.length}
                 </span>
               </div>
-              <div className="flex-1 flex flex-col space-y-2.5">
+              <div className="flex-1 flex flex-col space-y-3 overflow-y-auto pr-1 min-h-0">
                 {kanbanColumns.queued.length === 0 ? (
                   <div className="flex-1 py-8 flex items-center justify-center text-center px-4 border border-dashed border-slate-300/80 rounded-xl bg-white/40 text-[11px] text-slate-400 font-mono">
                     No tickets in queue
@@ -3061,8 +3216,8 @@ export const SopExecutionView: React.FC<{
             </div>
 
             {/* Column 2: In Execution (Live Field Work) */}
-            <div className="bg-amber-50/40 border border-amber-200/70 rounded-2xl p-3 flex flex-col h-full">
-              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-amber-200/80">
+            <div className="bg-amber-50/40 border border-amber-200/70 rounded-2xl p-3 flex flex-col max-h-[calc(100vh-240px)]">
+              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-amber-200/80 shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="relative flex h-2.5 w-2.5">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
@@ -3076,7 +3231,7 @@ export const SopExecutionView: React.FC<{
                   {kanbanColumns.inExecution.length}
                 </span>
               </div>
-              <div className="flex-1 flex flex-col space-y-2.5">
+              <div className="flex-1 flex flex-col space-y-3 overflow-y-auto pr-1 min-h-0">
                 {kanbanColumns.inExecution.length === 0 ? (
                   <div className="flex-1 py-8 flex items-center justify-center text-center px-4 border border-dashed border-amber-300/70 rounded-xl bg-white/40 text-[11px] text-amber-600/70 font-mono">
                     No live executions active
@@ -3088,8 +3243,8 @@ export const SopExecutionView: React.FC<{
             </div>
 
             {/* Column 3: 100% Solved & Verified */}
-            <div className="bg-emerald-50/40 border border-emerald-200/70 rounded-2xl p-3 flex flex-col h-full">
-              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-emerald-200/80">
+            <div className="bg-emerald-50/40 border border-emerald-200/70 rounded-2xl p-3 flex flex-col max-h-[calc(100vh-240px)]">
+              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-emerald-200/80 shrink-0">
                 <div className="flex items-center gap-2">
                   <Lock className="w-3.5 h-3.5 text-emerald-700" />
                   <h3 className="font-bold text-xs font-mono uppercase text-emerald-900 tracking-wider">
@@ -3100,7 +3255,7 @@ export const SopExecutionView: React.FC<{
                   {kanbanColumns.solved.length}
                 </span>
               </div>
-              <div className="flex-1 flex flex-col space-y-2.5">
+              <div className="flex-1 flex flex-col space-y-3 overflow-y-auto pr-1 min-h-0">
                 {kanbanColumns.solved.length === 0 ? (
                   <div className="flex-1 py-8 flex items-center justify-center text-center px-4 border border-dashed border-emerald-300/70 rounded-xl bg-white/40 text-[11px] text-emerald-600/70 font-mono">
                     No solved records in filter
@@ -3173,33 +3328,29 @@ export const SopExecutionView: React.FC<{
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0">
-                {/* ✏️ Edit Ticket Button (Requirement 2) */}
-                <button
-                  type="button"
-                  onClick={() => handleOpenEditModal(activeCase)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 shadow-2xs transition cursor-pointer"
-                  title="Edit ticket title, severity, alarm code, and description"
-                >
-                  <Edit3 className="w-3.5 h-3.5 text-slate-600" />
-                  <span>Edit Ticket</span>
-                </button>
-
-                {/* 🗑️ Delete Ticket Button (With Safety Guard - Requirement 1) */}
-                {isTicketExecutionUnderway(activeCase) ? (
+                {/* ✏️ Edit Ticket Button (Locked once confirmed / in execution) */}
+                {isTicketEditingLocked(activeCase) ? (
                   <span
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed shadow-2xs select-none"
-                    title="🔒 Cannot delete: Field execution already underway. Use OEM Escalation or Archive instead."
-                    onClick={() => {
-                      toast.warning(
-                        'Deletion Blocked',
-                        '🔒 Cannot delete: Field execution already underway. Use OEM Escalation or Archive instead.'
-                      );
-                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-indigo-200 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-indigo-500/40 shadow-2xs select-none"
+                    title="🔒 Editing locked: Ticket is confirmed and active in execution"
                   >
-                    <Lock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Locked</span>
+                    <Lock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Confirmed & Locked</span>
                   </span>
                 ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEditModal(activeCase)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 shadow-2xs transition cursor-pointer"
+                    title="Edit ticket title, severity, alarm code, and description"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Edit Ticket</span>
+                  </button>
+                )}
+
+                {/* 🗑️ Delete Ticket Button (With Safety Guard - only shown when not underway) */}
+                {!isTicketExecutionUnderway(activeCase) && (
                   <button
                     type="button"
                     onClick={() => setDeleteModalState({ isOpen: true, targetCase: activeCase })}
@@ -3226,13 +3377,12 @@ export const SopExecutionView: React.FC<{
             <div className="flex-1 overflow-y-auto p-4 bg-[#F8FAFC]">
               {/* WORK ORDER MANAGEMENT CARD */}
               <div className="bg-white rounded-xl border border-slate-200 shadow-xs divide-y divide-slate-100 overflow-hidden">
-              {/* SECTION A — COMPACT 2-COLUMN EXECUTIVE HEADER (Requirement 2) */}
-              <div className="p-3.5 bg-slate-50/80 border-b border-slate-200 space-y-2.5">
-                {/* 2-Column Executive Header: Title & Facility on Left, Engineer & Actions on Right */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  {/* Left Side: Bold Ticket Title + Single Compact Metadata Line */}
-                  <div className="space-y-1 min-w-0 flex-1">
-                    <h1
+              {/* SECTION A — 2-ROW FULL-WIDTH EXECUTIVE HEADER */}
+              <div className="p-3.5 bg-gradient-to-r from-slate-50 to-indigo-50/30 border-b border-slate-200 rounded-t-xl space-y-2.5 shadow-2xs">
+                {/* ROW 1 (Full Width — Title & Metadata) */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 pb-2.5">
+                  <div className="min-w-0 flex-1">
+                    <h2
                       className="text-base font-bold text-slate-900 tracking-tight font-sans truncate"
                       title={cleanFaultTitle(
                         activeCase.title || activeCase.symptomDescription,
@@ -3245,272 +3395,160 @@ export const SopExecutionView: React.FC<{
                         activeCase.caseNumber,
                         activeCase.assetTag || formatAssetDisplay(activeCase.assetId).label
                       )}
-                    </h1>
-                    <div className="flex items-center gap-2 text-xs text-slate-500 font-mono flex-wrap">
-                      <span>🕒 {formatLocalDateTime(activeCase.createdAt || (activeCase as any).rawCreatedAt)}</span>
-                      <span className="text-slate-300">•</span>
-                      <span>🏭 {activeCase.plantName || organization?.name || 'JMK Tiles Facility'}</span>
-                    </div>
+                    </h2>
                   </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-500 font-mono whitespace-nowrap shrink-0">
+                    <span>🕒 {formatLocalDateTime(activeCase.createdAt || (activeCase as any).rawCreatedAt)}</span>
+                    <span className="text-slate-300">•</span>
+                    <span>🏭 {activeCase.plantName || organization?.name || 'JMK Tiles Primary Facility'}</span>
+                  </div>
+                </div>
 
-                  {/* Right Side: Technician Assignment Pill & Action Buttons */}
-                  <div className="flex items-center gap-2 flex-wrap shrink-0">
+                {/* ROW 2 (Full Width — Assigned Tech & Action) */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-0.5">
+                  {/* Left: Assigned Technician Badge */}
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
                     {activeCase.assignedTechnicianUserId && !isChangingTech ? (
-                      <>
-                        {(() => {
-                          const activeTechStatus = computeTechnicianLiveStatus(
-                            {
-                              fullName: activeCase.assignedTechnicianName || '',
-                              id: activeCase.assignedTechnicianUserId || '',
-                            },
-                            cases
-                          );
-                          const statusBadgeText =
-                            activeTechStatus.statusType === 'AVAILABLE'
-                              ? 'Available'
-                              : activeTechStatus.statusType === 'BUSY'
-                              ? 'Busy'
-                              : 'Paused';
+                      (() => {
+                        const activeTechStatus = computeTechnicianLiveStatus(
+                          {
+                            fullName: activeCase.assignedTechnicianName || '',
+                            id: activeCase.assignedTechnicianUserId || '',
+                          },
+                          cases
+                        );
+                        const isTechLocked =
+                          isTicketFullySolved ||
+                          activeProgress.doneSteps > 0 ||
+                          Boolean((activeCase as any).executionStarted) ||
+                          Boolean((activeCase as any).isStarted);
 
-                          const isTechLocked =
-                            isTicketFullySolved ||
-                            activeProgress.doneSteps > 0 ||
-                            Boolean((activeCase as any).executionStarted) ||
-                            Boolean((activeCase as any).isStarted);
-
-                          return (
-                            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 whitespace-nowrap text-xs shadow-2xs">
-                              <span
-                                className="flex h-2 w-2 relative"
-                                title={`Live Status: ${activeTechStatus.shortText}`}
+                        return (
+                          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200/90 bg-white text-slate-800 text-xs shadow-2xs">
+                            <span
+                              className={`w-2 h-2 rounded-full shrink-0 ${
+                                activeTechStatus.statusType === 'AVAILABLE'
+                                  ? 'bg-emerald-500'
+                                  : activeTechStatus.statusType === 'BUSY'
+                                  ? 'bg-amber-500'
+                                  : 'bg-rose-500'
+                              }`}
+                              title={`Live Status: ${activeTechStatus.shortText}`}
+                            />
+                            <span className="font-semibold text-slate-900 truncate">
+                              👤 {activeCase.assignedTechnicianName}
+                            </span>
+                            <span className="bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold shrink-0">
+                              ★ {activeCase.assignedTechnicianRating ? Number(activeCase.assignedTechnicianRating).toFixed(1) : '4.9'}
+                            </span>
+                            {activeCase.isAiAutoAssigned !== false && (
+                              <span className="bg-violet-50 text-violet-700 border border-violet-200 px-2 py-0.5 rounded text-[10px] font-bold font-sans flex items-center gap-1 shrink-0">
+                                <Sparkles className="w-2.5 h-2.5 text-violet-600" />
+                                <span>AI Assigned</span>
+                              </span>
+                            )}
+                            {!isTechLocked && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedTechId(activeCase.assignedTechnicianUserId || '');
+                                  setSelectedTechName(activeCase.assignedTechnicianName || '');
+                                  setIsChangingTech(true);
+                                }}
+                                className="ml-1 text-[11px] font-bold text-blue-700 hover:text-blue-900 hover:underline cursor-pointer flex items-center gap-1 shrink-0"
+                                title="Reassign specialist"
                               >
-                                <span
-                                  className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                                    activeTechStatus.statusType === 'AVAILABLE'
-                                      ? 'bg-emerald-400'
-                                      : activeTechStatus.statusType === 'BUSY'
-                                      ? 'bg-amber-400'
-                                      : 'bg-rose-400'
-                                  }`}
-                                />
-                                <span
-                                  className={`relative inline-flex rounded-full h-2 w-2 ${
-                                    activeTechStatus.statusType === 'AVAILABLE'
-                                      ? 'bg-emerald-500'
-                                      : activeTechStatus.statusType === 'BUSY'
-                                      ? 'bg-amber-500'
-                                      : 'bg-rose-500'
-                                  }`}
-                                />
-                              </span>
-                              <span
-                                className={`font-mono text-[10px] font-bold border px-1.5 py-0.2 rounded ${
-                                  activeTechStatus.statusType === 'AVAILABLE'
-                                    ? 'text-emerald-700 bg-emerald-100/80 border-emerald-200'
-                                    : activeTechStatus.statusType === 'BUSY'
-                                    ? 'text-amber-700 bg-amber-100/80 border-amber-200'
-                                    : 'text-rose-700 bg-rose-100/80 border-rose-200'
-                                }`}
-                                title={activeTechStatus.fullText}
-                              >
-                                {statusBadgeText}
-                              </span>
-                              <span>
-                                {isTechLocked ? (
-                                  <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded mr-1 shadow-2xs">
-                                    🔒 Tech Locked (Execution Underway)
-                                  </span>
-                                ) : null}
-                                <strong>{activeCase.assignedTechnicianName}</strong>
-                              </span>
-                              <span className="bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.2 rounded text-[10px] font-mono font-bold">
-                                ⭐ {activeCase.assignedTechnicianRating ? Number(activeCase.assignedTechnicianRating).toFixed(1) : '4.9'}
-                              </span>
-                              {activeCase.isAiAutoAssigned !== false && (
-                                <span className="bg-violet-50 text-violet-700 border border-violet-200 px-1.5 py-0.5 rounded text-[10px] font-bold font-sans flex items-center gap-1 shadow-2xs">
-                                  <Sparkles className="w-2.5 h-2.5 text-violet-600" />
-                                  <span>AI Assigned</span>
-                                </span>
-                              )}
-                              {!isTechLocked && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setReassignModalState({
-                                      isOpen: true,
-                                      targetCase: activeCase,
-                                      actionType: 'MANUAL_CHANGE',
-                                    });
-                                  }}
-                                  className="ml-1 text-[11px] font-bold underline hover:opacity-80 cursor-pointer text-blue-700"
-                                  title="Supervisor manual override"
-                                >
-                                  Change
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })()}
+                                <RefreshCw className="w-3 h-3" />
+                                <span>Reassign</span>
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      /* Reassignment Dropdown Controls */
+                      <div className="flex items-center gap-2 flex-wrap min-w-0">
+                        <select
+                          aria-label="Assign Single Technician"
+                          value={selectedTechId}
+                          disabled={isSubmitting || activeCase.status === 'CLOSED'}
+                          onChange={(e) => {
+                            const techId = e.target.value;
+                            setSelectedTechId(techId);
+                            const tech =
+                              DISPATCH_TECHNICIAN_ROSTER.find((t) => t.id === techId || t.userId === techId) ||
+                              technicians.find((t) => (t.userId || t.id) === techId);
+                            setSelectedTechName(tech?.fullName || 'Technician');
+                          }}
+                          className="h-8 max-w-[280px] sm:max-w-[320px] pl-2.5 pr-7 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 hover:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-xs disabled:opacity-50 truncate"
+                        >
+                          <option value="">-- Select Specialist Technician --</option>
+                          {DISPATCH_TECHNICIAN_ROSTER.map((t) => {
+                            const live = computeTechnicianLiveStatus(
+                              { fullName: t.fullName, id: t.id, userId: t.userId },
+                              cases
+                            );
+                            return (
+                              <option key={t.id} value={t.id}>
+                                {t.fullName} — {t.discipline} • [{live.statusType === 'AVAILABLE' ? 'Available' : 'Busy'}] ★ {t.rating}
+                              </option>
+                            );
+                          })}
+                        </select>
 
-                        {/* Button: [▶ Open in Tech Execution Desk ->] on Same Horizontal Row */}
                         <button
                           type="button"
-                          onClick={() => handleOpenInTechQueue(activeCase)}
-                          className="inline-flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white px-3.5 py-1 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer whitespace-nowrap"
-                          title="Open this ticket directly in Tech Execution Desk"
-                        >
-                          <Play className="w-3 h-3 fill-current" />
-                          <span>Open in Tech Execution Desk &rarr;</span>
-                        </button>
-
-                        {!isTicketFullySolved && (() => {
-                          const isTechLocked =
-                            activeProgress.doneSteps > 0 ||
-                            Boolean((activeCase as any).executionStarted) ||
-                            Boolean((activeCase as any).isStarted);
-
-                          if (isTechLocked) return null;
-
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setReassignModalState({
-                                  isOpen: true,
-                                  targetCase: activeCase,
-                                  actionType: 'AUTO_NEXT',
-                                });
-                              }}
-                              disabled={isSubmitting}
-                              className="inline-flex items-center gap-1 bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 text-amber-900 px-2 py-1 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                              title="Mark current technician unavailable and auto-dispatch to the next best match"
-                            >
-                              <RefreshCw className={`w-3 h-3 text-amber-600 ${isSubmitting ? 'animate-spin' : ''}`} />
-                              <span>Next Tech</span>
-                            </button>
-                          );
-                        })()}
-
-                        {activeCase.status === 'RESOLVED' && (
-                          <Button
-                            size="sm"
-                            onClick={() => setIsCloseConfirmOpen(true)}
-                            className="bg-slate-900 hover:bg-black text-white font-bold text-xs inline-flex items-center gap-1.5 px-3 py-1 rounded-lg shadow-xs cursor-pointer whitespace-nowrap"
-                          >
-                            <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Formally Close</span>
-                          </Button>
-                        )}
-                      </>
-                    ) : (
-                      /* UNASSIGNED / OVERRIDE STATE */
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <div className="relative inline-flex items-center">
-                          <select
-                            aria-label="Assign Single Technician"
-                            value={selectedTechId}
-                            disabled={isSubmitting || activeCase.status === 'CLOSED'}
-                            onChange={(e) => {
-                              const techId = e.target.value;
-                              setSelectedTechId(techId);
-                              const tech =
-                                DISPATCH_TECHNICIAN_ROSTER.find((t) => t.id === techId || t.userId === techId) ||
-                                technicians.find((t) => (t.userId || t.id) === techId);
-                              setSelectedTechName(tech?.fullName || 'Technician');
-                            }}
-                            className="h-8 pl-2.5 pr-7 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:border-slate-400 focus:outline-none focus:border-blue-500 cursor-pointer shadow-xs disabled:opacity-50"
-                          >
-                            <option value="">-- Select Single Technician --</option>
-                            {DISPATCH_TECHNICIAN_ROSTER.map((t) => {
-                              const live = computeTechnicianLiveStatus(
-                                { fullName: t.fullName, id: t.id, userId: t.userId },
-                                cases
-                              );
-                              return (
-                                <option key={t.id} value={t.id}>
-                                  ⭐ {t.rating} {t.fullName} · {t.discipline} — {live.fullText}
-                                </option>
-                              );
-                            })}
-                          </select>
-                        </div>
-
-                        <Button
-                          size="sm"
                           disabled={!selectedTechId || isSubmitting}
                           onClick={async () => {
                             if (!selectedTechId) return;
-                            const tech =
-                              DISPATCH_TECHNICIAN_ROSTER.find((t) => t.id === selectedTechId) ||
-                              technicians.find((t) => (t.userId || t.id) === selectedTechId);
-                            const techName = tech?.fullName || selectedTechName || 'Technician';
-                            const techRating = tech && 'rating' in tech ? (tech as any).rating : 4.9;
-                            setIsSubmitting(true);
-                            try {
-                              const res = await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/assign`, {
-                                method: 'POST',
-                                headers: activeCase.updatedAt ? { 'If-Match': activeCase.updatedAt } : undefined,
-                                body: JSON.stringify({
-                                  technicianUserId: selectedTechId,
-                                  technicianName: techName,
-                                  expectedUpdatedAt: activeCase.updatedAt,
-                                }),
+                            const rosterTech = DISPATCH_TECHNICIAN_ROSTER.find(
+                              (t) => t.id === selectedTechId || t.userId === selectedTechId
+                            );
+                            const fallbackTech = technicians.find(
+                              (t) => (t.userId || t.id) === selectedTechId
+                            );
+                            const techName =
+                              rosterTech?.fullName || fallbackTech?.fullName || selectedTechName || 'Technician';
+
+                            const resolvedTech: DispatchTech = rosterTech || {
+                              id: selectedTechId,
+                              userId: selectedTechId,
+                              fullName: techName,
+                              discipline: 'Specialist',
+                              role: fallbackTech?.role || 'Specialist',
+                              rating: 4.9,
+                              isAvailable: false,
+                            };
+
+                            // Check if selected tech is busy -> open center popup modal!
+                            const live = computeTechnicianLiveStatus(
+                              { fullName: techName, id: selectedTechId, userId: selectedTechId },
+                              cases
+                            );
+                            if (live.statusType === 'BUSY') {
+                              const nextAvail = getNextAvailableSpecialist(selectedTechId);
+                              setBusyTechModalState({
+                                isOpen: true,
+                                busyTech: resolvedTech,
+                                nextAvailableTech: nextAvail,
+                                targetCase: activeCase,
                               });
-                              const json = await res.json();
-                              if (!res.ok || !json.success) {
-                                throw new Error(json?.error?.message || 'Assignment failed');
-                              }
-
-                              let newStatus = activeCase.status;
-                              if (activeCase.status !== 'IN_PROGRESS' && activeCase.status !== 'RESOLVED' && activeCase.status !== 'CLOSED') {
-                                await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/status`, {
-                                  method: 'POST',
-                                  body: JSON.stringify({
-                                    status: 'IN_PROGRESS',
-                                    notes: `Supervisor locked ticket to single technician ${techName} and dispatched to field queue.`,
-                                  }),
-                                }).catch(() => null);
-                                newStatus = 'IN_PROGRESS';
-                              }
-
-                              const serverCase = json.data;
-                              setCases((prev) =>
-                                prev.map((c) =>
-                                  c.id === activeCase.id
-                                    ? {
-                                        ...c,
-                                        ...serverCase,
-                                        assignedTechnicianUserId: selectedTechId,
-                                        assignedTechnicianName: techName,
-                                        assignedTechnicianRating: techRating,
-                                        isAiAutoAssigned: false,
-                                        status: newStatus,
-                                      }
-                                    : c
-                                )
-                              );
-                              setIsChangingTech(false);
-                              toast.success(
-                                'Technician Locked & Dispatched',
-                                `Ticket strictly locked to single technician ${techName} and dispatched to Tech Execution Desk.`
-                              );
-                            } catch (err: any) {
-                              toast.error('Assignment Failed', err.message);
-                            } finally {
-                              setIsSubmitting(false);
+                              return;
                             }
+
+                            await executeReassignCase(activeCase, resolvedTech);
                           }}
-                          className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs shadow-xs px-3.5 py-1.5 rounded-lg border-0 transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          className="bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs shadow-xs px-3.5 py-1.5 rounded-lg border-0 transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
                         >
                           <Lock className="w-3.5 h-3.5" />
-                          <span>Assign & Dispatch</span>
-                        </Button>
+                          <span>Confirm Reassign</span>
+                        </button>
 
                         {isChangingTech && (
                           <button
                             type="button"
                             onClick={() => setIsChangingTech(false)}
-                            className="text-xs text-slate-500 hover:text-slate-700 font-semibold px-2 py-1 cursor-pointer"
+                            className="text-xs text-slate-500 hover:text-slate-700 font-semibold px-2 py-1 cursor-pointer whitespace-nowrap"
                           >
                             Cancel
                           </button>
@@ -3518,109 +3556,32 @@ export const SopExecutionView: React.FC<{
                       </div>
                     )}
                   </div>
+
+                  {/* Right: Actions */}
+                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    {/* Button: [▶ Open in Tech Execution Desk ->] */}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenInTechQueue(activeCase)}
+                      className="inline-flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow-xs hover:shadow-md cursor-pointer whitespace-nowrap"
+                      title="Open this ticket directly in Tech Execution Desk"
+                    >
+                      <Play className="w-3 h-3 fill-current" />
+                      <span>Open in Tech Execution Desk &rarr;</span>
+                    </button>
+
+                    {activeCase.status === 'RESOLVED' && (
+                      <Button
+                        size="sm"
+                        onClick={() => setIsCloseConfirmOpen(true)}
+                        className="bg-slate-900 hover:bg-black text-white font-bold text-xs inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl shadow-xs cursor-pointer whitespace-nowrap"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Formally Close</span>
+                      </Button>
+                    )}
+                  </div>
                 </div>
-
-                {/* Busy Technician Admin Confirmation Banner (Requirement 2) */}
-                {(() => {
-                  const activeTechStatus = computeTechnicianLiveStatus(
-                    {
-                      fullName: activeCase.assignedTechnicianName || '',
-                      id: activeCase.assignedTechnicianUserId || '',
-                    },
-                    cases
-                  );
-                  if (activeTechStatus.statusType !== 'BUSY' || dismissedBusyPrompt[activeCase.id]) {
-                    return null;
-                  }
-                  const nextAvailable = DISPATCH_TECHNICIAN_ROSTER.find((t) => {
-                    const st = computeTechnicianLiveStatus(
-                      { fullName: t.fullName, id: t.id, userId: t.userId },
-                      cases
-                    );
-                    return (
-                      st.statusType === 'AVAILABLE' &&
-                      t.id !== activeCase.assignedTechnicianUserId &&
-                      t.userId !== activeCase.assignedTechnicianUserId
-                    );
-                  });
-                  const nextTechName = nextAvailable?.fullName || 'Available Specialist';
-
-                  return (
-                    <div className="p-3 rounded-xl bg-amber-50/90 border border-amber-300 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 text-xs shadow-xs animate-in fade-in duration-200">
-                      <div className="flex items-start gap-2 min-w-0">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-semibold text-amber-950">
-                            ⚠️ <strong>{activeCase.assignedTechnicianName}</strong> is currently busy on another task.
-                          </p>
-                          <p className="text-[11px] text-amber-800 mt-0.5">
-                            Assign anyway (Queue) or switch to available specialist <strong>{nextTechName}</strong>?
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center font-sans">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDismissedBusyPrompt((prev) => ({ ...prev, [activeCase.id]: true }));
-                            toast.info('Technician Confirmed', `Ticket queued for ${activeCase.assignedTechnicianName}.`);
-                          }}
-                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs shadow-2xs transition cursor-pointer"
-                        >
-                          Keep Assigned
-                        </button>
-                        {nextAvailable && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              setIsSubmitting(true);
-                              try {
-                                const res = await apiFetch(`/api/v1/maintenance/cases/${activeCase.id}/assign`, {
-                                  method: 'POST',
-                                  headers: activeCase.updatedAt ? { 'If-Match': activeCase.updatedAt } : undefined,
-                                  body: JSON.stringify({
-                                    technicianUserId: nextAvailable.id,
-                                    technicianName: nextAvailable.fullName,
-                                    expectedUpdatedAt: activeCase.updatedAt,
-                                  }),
-                                });
-                                const json = await res.json();
-                                if (!res.ok || !json.success) throw new Error(json?.error?.message || 'Assignment failed');
-                                setCases((prev) =>
-                                  prev.map((c) =>
-                                    c.id === activeCase.id
-                                      ? {
-                                          ...c,
-                                          ...json.data,
-                                          assignedTechnicianUserId: nextAvailable.id,
-                                          assignedTechnicianName: nextAvailable.fullName,
-                                          assignedTechnicianRating: nextAvailable.rating,
-                                          isAiAutoAssigned: false,
-                                        }
-                                      : c
-                                  )
-                                );
-                                setDismissedBusyPrompt((prev) => ({ ...prev, [activeCase.id]: true }));
-                                toast.success(
-                                  'Switched to Available Tech',
-                                  `Reassigned ticket to available specialist ${nextAvailable.fullName}.`
-                                );
-                              } catch (err: any) {
-                                toast.error('Switch Failed', err.message);
-                              } finally {
-                                setIsSubmitting(false);
-                              }
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-2xs transition cursor-pointer"
-                          >
-                            Switch to Available Tech
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
-
               </div>
 
               {/* LIVE 5-STEP INTERACTIVE PROCEDURE & TOLERANCE EXPLORER (Requirement 3) */}
@@ -3680,34 +3641,39 @@ export const SopExecutionView: React.FC<{
                   };
 
                   return (
-                    <div className="bg-white/10 backdrop-blur-md border border-white/15 rounded-lg p-2.5 mt-2.5 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
-                      {/* Left Side: Step Title & Exact Procedure Instruction */}
-                      <div className="flex items-start md:items-center gap-2.5 min-w-0">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider shrink-0 ${
-                            isDone
-                              ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400/40'
-                              : isStepActive
-                              ? 'bg-amber-500/30 text-amber-300 border border-amber-400/40 animate-pulse'
-                              : 'bg-indigo-500/30 text-indigo-200 border border-indigo-400/30'
-                          }`}
-                        >
-                          STEP 0{currentStepNum} {isDone ? '✓ DONE' : isStepActive ? '⚡ ACTIVE' : 'PENDING'}
-                        </span>
-                        <div className="min-w-0">
-                          <span className="font-bold text-white mr-1.5">{currentStep.title}:</span>
-                          <span className="text-slate-200 text-[11px] leading-relaxed">{currentStep.instruction}</span>
+                    <div className="bg-white/10 border border-white/15 rounded-xl p-3.5 mt-2.5 space-y-2 text-xs">
+                      {/* Top Row: Left has Step Badge + Step Title; Right has Spec / Tolerance pill */}
+                      <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider shrink-0 ${
+                              isDone
+                                ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400/40'
+                                : isStepActive
+                                ? 'bg-amber-500/30 text-amber-300 border border-amber-400/40 animate-pulse'
+                                : 'bg-indigo-500/30 text-indigo-200 border border-indigo-400/30'
+                            }`}
+                          >
+                            STEP 0{currentStepNum} {isDone ? '• DONE' : isStepActive ? '• ACTIVE' : '• PENDING'}
+                          </span>
+                          <span className="font-bold text-white text-xs break-words">
+                            {currentStep.title}
+                          </span>
+                        </div>
+
+                        <div className="shrink-0 flex items-center gap-1.5 self-start sm:self-center">
+                          <span className="text-[10px] font-mono text-cyan-300/90 uppercase font-bold tracking-wider shrink-0">
+                            ⚙️ Spec / Tolerance:
+                          </span>
+                          <span className="bg-cyan-950/80 border border-cyan-400/40 text-cyan-200 font-mono text-[10px] font-bold px-2 py-0.5 rounded-md shadow-2xs whitespace-nowrap">
+                            {getToleranceSpecText(currentStepNum)}
+                          </span>
                         </div>
                       </div>
 
-                      {/* Right Side: Unique Critical Engineering Tolerance & Spec Pill */}
-                      <div className="shrink-0 flex items-center gap-1.5 self-start md:self-center">
-                        <span className="text-[10px] font-mono text-cyan-300/90 uppercase font-bold tracking-wider shrink-0">
-                          ⚙️ Spec / Tolerance:
-                        </span>
-                        <span className="bg-cyan-950/70 border border-cyan-400/40 text-cyan-200 font-mono text-[10px] font-bold px-2 py-1 rounded-md shadow-2xs whitespace-nowrap">
-                          {getToleranceSpecText(currentStepNum)}
-                        </span>
+                      {/* Bottom Row: Full-width instruction spanning 100% of container */}
+                      <div className="w-full text-xs text-slate-200 leading-relaxed pt-0.5">
+                        {currentStep.instruction}
                       </div>
                     </div>
                   );
@@ -3845,7 +3811,7 @@ export const SopExecutionView: React.FC<{
                         <Button
                           size="sm"
                           onClick={() => setIsLotoModalOpen(true)}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs h-7 px-3 rounded-lg flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                          className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs h-7 px-3.5 rounded-lg flex items-center gap-1.5 shadow-sm border-0 transition-all cursor-pointer"
                           title="OSHA 1910.147 Vision-Locked Lockout/Tagout Gate"
                         >
                           <Camera className="w-3.5 h-3.5" />
@@ -5007,6 +4973,140 @@ export const SopExecutionView: React.FC<{
           />
         </div>
       </Modal>
+
+      {/* Centered Popup Confirmation Modal: Busy Technician Active Task */}
+      {busyTechModalState.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div
+            className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-indigo-100 overflow-hidden animate-in zoom-in-95 duration-150"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="busy-tech-modal-title"
+          >
+            {/* Header: Deep Navy-Indigo Gradient */}
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-400/30 flex items-center justify-center text-amber-400">
+                  <Zap className="w-4 h-4 fill-amber-400" />
+                </div>
+                <div>
+                  <h3 id="busy-tech-modal-title" className="text-sm font-bold tracking-tight text-white flex items-center gap-1.5">
+                    <span>⚡ Specialist Currently Executing Active Task</span>
+                  </h3>
+                  <p className="text-[11px] text-indigo-200 font-mono">
+                    Live Dispatch Conflict Resolution • Real-Time Floor Telemetry
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setBusyTechModalState({
+                    isOpen: false,
+                    busyTech: null,
+                    nextAvailableTech: null,
+                    pendingTicketData: null,
+                    targetCase: null,
+                  })
+                }
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                title="Cancel Dispatch"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4">
+              <div className="p-3.5 rounded-xl bg-gradient-to-r from-amber-50/80 to-orange-50/50 border border-amber-200/80 flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-xs text-slate-800 leading-relaxed font-sans">
+                  Technician <strong className="text-slate-950 font-semibold">{busyTechModalState.busyTech?.fullName || 'Assigned Specialist'}</strong> is currently busy on another machine. Would you like to place this ticket in <strong className="text-indigo-950 font-semibold">{busyTechModalState.busyTech?.fullName || 'Assigned Specialist'}'s Queue</strong>, or assign it immediately to available specialist <strong className="text-emerald-700 font-semibold">{busyTechModalState.nextAvailableTech?.fullName || 'Elena Rostova'}</strong>?
+                </div>
+              </div>
+
+              {/* Technician Profiles Comparison */}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                {/* Busy Tech Pill */}
+                <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/40 space-y-1">
+                  <div className="text-[10px] uppercase font-mono font-bold text-amber-800 tracking-wider">
+                    Current Specialist (Busy)
+                  </div>
+                  <div className="font-bold text-slate-900 truncate">
+                    👤 {busyTechModalState.busyTech?.fullName || 'Technician'}
+                  </div>
+                  <div className="text-[11px] text-slate-600 flex items-center gap-1.5">
+                    <span>★ {busyTechModalState.busyTech?.rating || '4.9'}</span>
+                    <span>•</span>
+                    <span className="truncate">{busyTechModalState.busyTech?.discipline || 'Mechanical'}</span>
+                  </div>
+                  <div className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-700 font-semibold mt-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                    <span>Active in Floor Desk</span>
+                  </div>
+                </div>
+
+                {/* Available Tech Pill */}
+                <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/40 space-y-1">
+                  <div className="text-[10px] uppercase font-mono font-bold text-emerald-800 tracking-wider">
+                    Available Specialist
+                  </div>
+                  <div className="font-bold text-slate-900 truncate">
+                    👤 {busyTechModalState.nextAvailableTech?.fullName || 'Elena Rostova'}
+                  </div>
+                  <div className="text-[11px] text-slate-600 flex items-center gap-1.5">
+                    <span>★ {busyTechModalState.nextAvailableTech?.rating || '4.8'}</span>
+                    <span>•</span>
+                    <span className="truncate">{busyTechModalState.nextAvailableTech?.discipline || 'Vibration / Acoustic'}</span>
+                  </div>
+                  <div className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-700 font-semibold mt-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    <span>On-Shift • 0 Active Tasks</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions Footer: Two Clear Gradient Buttons */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() =>
+                  setBusyTechModalState({
+                    isOpen: false,
+                    busyTech: null,
+                    nextAvailableTech: null,
+                    pendingTicketData: null,
+                    targetCase: null,
+                  })
+                }
+                className="w-full sm:w-auto px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => handleResolveBusyTechModal('QUEUE')}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-slate-800 via-indigo-900 to-slate-900 hover:from-slate-700 hover:via-indigo-800 hover:to-slate-800 shadow-sm transition-all cursor-pointer"
+              >
+                <span>📥 Place in {busyTechModalState.busyTech?.fullName || 'Specialist'}'s Queue</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => handleResolveBusyTechModal('SWITCH')}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 hover:from-amber-500 hover:via-orange-500 hover:to-amber-600 shadow-sm transition-all cursor-pointer"
+              >
+                <span>⚡ Assign to {busyTechModalState.nextAvailableTech?.fullName || 'Elena Rostova'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 6. Technician Reassignment Confirmation Modal (Requirement 3) */}
       <Modal

@@ -257,6 +257,28 @@ export function createRcaRouter(
     }
   };
 
+  /**
+   * GET /api/v1/rca/teardown-sop
+   * Retrieve structured Teardown & LOTO Disassembly SOP for machine
+   */
+  router.get('/teardown-sop', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const organizationId = req.auth!.organization.id;
+      const assetTag = (req.query.assetTag as string) || (req.query.machineAssetTag as string) || 'EQUIPMENT-01';
+
+      const sop = await rcaService.getTeardownSop(organizationId, assetTag);
+      res.status(200).json({
+        success: true,
+        data: sop,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
   router.get('/sessions/:id', getSessionHandler);
   router.get('/:id', getSessionHandler);
 
@@ -620,28 +642,6 @@ Maintenance Engineer Field Notes: ${activeNotes}`;
           ticketNumber: fallbackTicketNum,
           status: 'OPEN',
         },
-      });
-    }
-  });
-
-  /**
-   * GET /api/v1/rca/teardown-sop
-   * Retrieve structured Teardown & LOTO Disassembly SOP for machine
-   */
-  router.get('/teardown-sop', async (req: Request, res: Response): Promise<void> => {
-    try {
-      const organizationId = req.auth!.organization.id;
-      const assetTag = (req.query.assetTag as string) || (req.query.machineAssetTag as string) || 'EQUIPMENT-01';
-
-      const sop = await rcaService.getTeardownSop(organizationId, assetTag);
-      res.status(200).json({
-        success: true,
-        data: sop,
-      });
-    } catch (err: any) {
-      res.status(500).json({
-        success: false,
-        error: { code: 'FORGEX_INTERNAL_ERROR', message: err.message },
       });
     }
   });

@@ -26,6 +26,7 @@ import {
   GitBranch,
   MessageSquare,
   Lightbulb,
+  Mic,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
@@ -98,6 +99,8 @@ export const TroubleshootingView: React.FC<{
   const [isLoadingRecents, setIsLoadingRecents] = useState(false);
   const [isHistoryDropdownOpen, setIsHistoryDropdownOpen] = useState(false);
   const historyDropdownRef = useRef<HTMLDivElement>(null);
+  const [isMoreRecentOpen, setIsMoreRecentOpen] = useState(false);
+  const moreRecentDropdownRef = useRef<HTMLDivElement>(null);
 
   // Escalation Modal State (Defaults start completely unselected)
   const [isEscalateOpen, setIsEscalateOpen] = useState(false);
@@ -162,6 +165,520 @@ export const TroubleshootingView: React.FC<{
     [storageKey]
   );
 
+  // Hands-Free Voice Control State & Active Step Tracking
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  const [activeStepIndex, setActiveStepIndex] = useState<number>(0);
+  const stepRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [autoRaisedTicket, setAutoRaisedTicket] = useState<{
+    ticketId: string;
+    techName: string;
+    assetTag: string;
+  } | null>(null);
+
+  // Keep refs up-to-date for async speech recognition callbacks
+  const activeStepIndexRef = useRef(activeStepIndex);
+  activeStepIndexRef.current = activeStepIndex;
+  const activeSessionRef = useRef(activeSession);
+  activeSessionRef.current = activeSession;
+  const isVoiceListeningRef = useRef(isVoiceListening);
+  isVoiceListeningRef.current = isVoiceListening;
+
+  // Initialize active step index to the first pending step when activeSession changes
+  useEffect(() => {
+    if (activeSession?.investigationSteps) {
+      const firstPending = activeSession.investigationSteps.findIndex(
+        (st) => st.status !== 'PASS' && st.status !== 'FAIL'
+      );
+      setActiveStepIndex(firstPending !== -1 ? firstPending : 0);
+    }
+  }, [activeSession?.id]);
+
+  // Speech Synthesis Speaker
+  const speakText = useCallback((text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('Voice speech error:', e);
+    }
+  }, []);
+
+  // Cleanup speech recognition and synthesis on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  // Automatic Ticket Creation & AI Technician Dispatch when all 5 steps fail
+  const autoDispatchTicketForAllFailedSteps = useCallback(
+    async (session: RcaSession) => {
+      const targetTag = session.assetTag || selectedMachineTag || 'ASSET-001';
+      const activeFault =
+        session.detectedFaultCode || session.errorCode || errorCode || 'CRIT-DIAG-FAIL';
+      const topHyp =
+        session.hypotheses?.find((h) => h.status === 'CONFIRMED') || session.hypotheses?.[0];
+      const currentSymptom =
+        session.symptom?.trim() || symptom?.trim() || 'All 5 diagnostic verification checks failed';
+      const engineerName =
+        user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
+      const matchedMachine = machines.find(
+        (m) => (m.asset_tag || m.assetTag || m.name || m.id) === targetTag
+      );
+
+      // AI Smart Auto-Assignment
+      const assignedTech = selectBestTechnician(
+        {
+          assetTag: targetTag,
+          title: `[CRITICAL] ${targetTag}: All 5 Diagnostic Steps Failed (${activeFault})`,
+          symptomDescription: currentSymptom,
+          faultCode: activeFault,
+        },
+        []
+      );
+
+      const ticketNum = `AUTO-ESC-${new Date().getFullYear()}-${Math.floor(
+        1000 + Math.random() * 9000
+      )}`;
+
+      const newTicket = {
+        id: ticketNum,
+        caseNumber: ticketNum,
+        assetTag: targetTag,
+        assetId: targetTag,
+        assetName: matchedMachine?.name || session.machineName || targetTag,
+        title: `[${ticketNum}] ${targetTag}: Critical Anomaly — All 5 Diagnostic Steps Failed`,
+        description: `CRITICAL DISPATCH: All 5 investigation steps on ${targetTag} failed verification.\n\nObserved Symptom: ${currentSymptom}\nTop AI Root Cause: ${
+          topHyp?.title || 'Systemic Mechanical Breakdown'
+        }\nRecommended Fix: ${
+          topHyp?.recommendedFix ||
+          'Execute immediate hazardous energy isolation (LOTO) and senior technician overhaul.'
+        }\n\nAuto-dispatched via Hands-Free Diagnostic Copilot.`,
+        severity: 'CRITICAL' as const,
+        priority: 'CRITICAL' as const,
+        status: 'IN_PROGRESS' as const,
+        symptomDescription: currentSymptom,
+        faultCode: activeFault,
+        machineStatus: session.machineStatus || 'Tripped / Offline',
+        topRootCause: topHyp?.title || 'Systemic Mechanical Breakdown',
+        probability: topHyp?.probability || 92,
+        recommendedFix:
+          topHyp?.recommendedFix || 'Execute immediate LOTO and replace damaged components.',
+        investigationProgress: '5/5 Failed (Critical Anomaly)',
+        specialistDiscipline: 'Mechanical / Rotating Equipment Lead',
+        lotoApplied: true,
+        reportedByRole: 'AI Diagnostic Assistant',
+        reportedByName: `RCA Copilot / ${engineerName}`,
+        assignedTechnicianUserId: assignedTech.id,
+        assignedTechnicianName: assignedTech.fullName,
+        assignedTechnicianRating: assignedTech.rating,
+        isAiAutoAssigned: true,
+        rcaSessionId: session.id,
+        source: 'RCA_AUTO_DISPATCH',
+        createdAtFormatted: new Date().toLocaleString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        checklist: session.investigationSteps.map((s, i) => ({
+          id: `auto-chk-${i + 1}`,
+          stepNumber: s.stepNumber,
+          title: s.name,
+          instruction: s.instruction,
+          requiresLoto: s.requiresLoto,
+          status: 'PENDING' as const,
+        })),
+        history: [
+          {
+            id: `h-${Date.now()}`,
+            action: 'AUTO_DISPATCHED_ALL_STEPS_FAILED',
+            user: 'ForgeX AI Copilot',
+            timestamp: new Date().toISOString(),
+            notes: `All 5 diagnostic steps failed on ${targetTag}. High-priority repair ticket auto-created and assigned to ${assignedTech.fullName} (⭐ ${assignedTech.rating}).`,
+          },
+        ],
+      };
+
+      // Store in forgex_shared_raised_tickets
+      try {
+        const existingRaw = localStorage.getItem('forgex_shared_raised_tickets');
+        const existingList = existingRaw ? JSON.parse(existingRaw) : [];
+        const filtered = existingList.filter(
+          (t: any) => t.id !== ticketNum && t.caseNumber !== ticketNum
+        );
+        filtered.unshift(newTicket);
+        localStorage.setItem('forgex_shared_raised_tickets', JSON.stringify(filtered));
+      } catch (err) {
+        console.warn('Error saving shared ticket:', err);
+      }
+
+      sessionStorage.setItem('forgex_selected_case_id', ticketNum);
+
+      try {
+        window.dispatchEvent(new CustomEvent('forgex:case-created', { detail: newTicket }));
+        window.dispatchEvent(new CustomEvent('forgex:ticket-created', { detail: newTicket }));
+      } catch {}
+
+      // Async backend call
+      apiFetch('/api/v1/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plantId: matchedMachine?.plant_area || organization?.id || 'plant-default',
+          machineId: matchedMachine?.id || undefined,
+          machineAssetTag: targetTag,
+          originalQuestion: `Auto-Dispatched: [${targetTag}] All 5 RCA Steps Failed`,
+          diagnosticDetails: `Equipment: ${targetTag}\nAll 5 diagnostic verification steps failed.\nSymptom: ${currentSymptom}\nPrimary Root Cause: ${topHyp?.title}\nAuto-Assigned To: ${assignedTech.fullName}`,
+          severity: 'CRITICAL',
+          escalationReason: 'RCA_ALL_STEPS_FAILED',
+        }),
+      }).catch(() => null);
+
+      // State updates
+      setEscalatedTicketId(ticketNum);
+      setAutoRaisedTicket({
+        ticketId: ticketNum,
+        techName: assignedTech.fullName,
+        assetTag: targetTag,
+      });
+
+      // Voice announcement
+      speakText(
+        `All 5 diagnostic checks failed on ${targetTag}. High-priority repair ticket has been automatically raised and dispatched to the field technician ${assignedTech.fullName}.`
+      );
+
+      toast.error(
+        'All 5 Steps Failed — Ticket Auto-Raised',
+        `Dispatched Ticket #${ticketNum} to ${assignedTech.fullName}.`
+      );
+    },
+    [errorCode, machines, organization?.id, selectedMachineTag, speakText, symptom, toast, user]
+  );
+
+  // Navigate to Raised Tickets / Maintenance Desk
+  const handleNavigateToRaisedTickets = useCallback(
+    (ticketId?: string) => {
+      if (ticketId) {
+        sessionStorage.setItem('forgex_selected_case_id', ticketId);
+      }
+      window.history.pushState({}, '', '/maintenance');
+      window.dispatchEvent(
+        new CustomEvent('forgex:navigate', { detail: { module: 'maintenance', ticketId } })
+      );
+      if (onNavigateToSop) {
+        onNavigateToSop();
+      }
+    },
+    [onNavigateToSop]
+  );
+
+  // Execute Step Fail: Unlock & Auto-Next on Fail, Auto-Raise when all 5 fail
+  const handleExecuteStepFail = useCallback(
+    async (step: any, stepIdx: number) => {
+      const session = activeSessionRef.current;
+      if (!session) return;
+      const nowIso = new Date().toISOString();
+      const engineerName =
+        user?.fullName || (user as any)?.name || user?.email || 'Maintenance Engineer';
+
+      const updatedSteps = session.investigationSteps.map((s, idx) => {
+        if (idx === stepIdx) {
+          return {
+            ...s,
+            status: 'FAIL' as const,
+            verifiedAt: nowIso,
+            verifiedBy: engineerName,
+          };
+        }
+        return s;
+      });
+
+      const allStepsFailed =
+        updatedSteps.length > 0 && updatedSteps.every((s) => s.status === 'FAIL');
+
+      const updatedSession: RcaSession = {
+        ...session,
+        investigationSteps: updatedSteps,
+        status: allStepsFailed ? ('ESCALATED' as any) : session.status,
+        updatedAt: nowIso,
+      };
+
+      setActiveSession(updatedSession);
+      persistSession(updatedSession);
+
+      apiFetch(`/api/v1/rca/sessions/${session.id}/steps/${step.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'FAIL',
+          verifiedAt: nowIso,
+          verifiedBy: engineerName,
+        }),
+      }).catch(() => null);
+
+      if (allStepsFailed) {
+        await autoDispatchTicketForAllFailedSteps(updatedSession);
+      } else {
+        const nextIdx = Math.min(stepIdx + 1, updatedSteps.length - 1);
+        setActiveStepIndex(nextIdx);
+        setTimeout(() => {
+          stepRefs.current[nextIdx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+
+        const nextStep = updatedSteps[nextIdx];
+        const announcement = `Step ${step.stepNumber} failed. Proceeding to Step ${nextStep.stepNumber}: ${nextStep.name}. ${nextStep.instruction}`;
+        speakText(announcement);
+        toast.error(
+          `Step #${step.stepNumber} Anomaly Confirmed`,
+          `Advanced to Step #${nextStep.stepNumber}: ${nextStep.name}`
+        );
+      }
+    },
+    [autoDispatchTicketForAllFailedSteps, persistSession, speakText, toast, user]
+  );
+
+  // Execute Step Pass: Auto-scroll to next step or mark 100% verified
+  const handleExecuteStepPass = useCallback(
+    async (step: any, stepIdx: number) => {
+      const session = activeSessionRef.current;
+      if (!session) return;
+      const nowIso = new Date().toISOString();
+      const engineerName =
+        user?.fullName || (user as any)?.name || user?.email || 'Maintenance Engineer';
+
+      const updatedSteps = session.investigationSteps.map((s, idx) => {
+        if (idx === stepIdx) {
+          return {
+            ...s,
+            status: 'PASS' as const,
+            verifiedAt: nowIso,
+            verifiedBy: engineerName,
+          };
+        }
+        return s;
+      });
+
+      const isAllNowPassed =
+        updatedSteps.length > 0 && updatedSteps.every((s) => s.status === 'PASS');
+
+      const updatedSession: RcaSession = {
+        ...session,
+        investigationSteps: updatedSteps,
+        ...(isAllNowPassed
+          ? {
+              status: 'VERIFIED_CLOSED' as const,
+              isLocked: true,
+              completedAt: nowIso,
+              verifiedBy: { id: user?.id || 'eng-01', name: engineerName },
+            }
+          : {}),
+        updatedAt: nowIso,
+      };
+
+      setActiveSession(updatedSession);
+      persistSession(updatedSession);
+
+      apiFetch(`/api/v1/rca/sessions/${session.id}/steps/${step.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'PASS',
+          verifiedAt: nowIso,
+          verifiedBy: engineerName,
+        }),
+      }).catch(() => null);
+
+      if (isAllNowPassed) {
+        setVerificationCompleteModal(true);
+        speakText(
+          `All diagnostic investigation steps on ${session.assetTag} successfully passed and verified.`
+        );
+        toast.success('Investigation 100% Verified!', 'All steps verified.');
+      } else {
+        const nextIdx = Math.min(stepIdx + 1, updatedSteps.length - 1);
+        setActiveStepIndex(nextIdx);
+        setTimeout(() => {
+          stepRefs.current[nextIdx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
+        const nextStep = updatedSteps[nextIdx];
+        speakText(`Step ${step.stepNumber} passed. Next: Step ${nextStep.stepNumber}, ${nextStep.name}`);
+        toast.success(`Step #${step.stepNumber} Verified`, `Proceeding to Step #${nextStep.stepNumber}`);
+      }
+    },
+    [persistSession, speakText, toast, user]
+  );
+
+  // Read Active Step out loud (Essential-only: concise action + target reading)
+  const handleReadActiveStep = useCallback(() => {
+    const s = activeSessionRef.current;
+    const idx = activeStepIndexRef.current;
+    if (!s || !s.investigationSteps || !s.investigationSteps[idx]) {
+      speakText('No active investigation step selected.');
+      return;
+    }
+    const current = s.investigationSteps[idx];
+    const conciseAction = toShortSentence(current.name || current.instruction, 10);
+    const targetReading = current.expectedReading ? ` Target: ${current.expectedReading}.` : '';
+    speakText(`Step ${current.stepNumber}: ${conciseAction}.${targetReading}`);
+  }, [speakText]);
+
+  // Voice command handlers
+  const handleVoiceStepPass = useCallback(() => {
+    const s = activeSessionRef.current;
+    const idx = activeStepIndexRef.current;
+    if (!s || !s.investigationSteps || !s.investigationSteps[idx]) return;
+    handleExecuteStepPass(s.investigationSteps[idx], idx);
+  }, [handleExecuteStepPass]);
+
+  const handleVoiceStepFail = useCallback(() => {
+    const s = activeSessionRef.current;
+    const idx = activeStepIndexRef.current;
+    if (!s || !s.investigationSteps || !s.investigationSteps[idx]) return;
+    handleExecuteStepFail(s.investigationSteps[idx], idx);
+  }, [handleExecuteStepFail]);
+
+  // Toggle & Wake-Word Voice Control (Supports "Activate Voice" & "Stop Voice")
+  const toggleVoiceControl = useCallback(() => {
+    if (isVoiceListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      setIsVoiceListening(false);
+      isVoiceListeningRef.current = false;
+      speakText('Voice control disabled.');
+      toast.info('Voice Control', 'Hands-free voice assistant disabled.');
+      return;
+    }
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      toast.error('Voice Not Supported', 'Web Speech API is not supported in this browser.');
+      return;
+    }
+
+    try {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setIsVoiceListening(true);
+        isVoiceListeningRef.current = true;
+        toast.success(
+          'Voice Control Active',
+          'Commands: "Pass", "Confirm", "Fail", "Next", "Read Step", "Stop Voice"'
+        );
+        speakText('Hands-free voice control activated.');
+      };
+
+      recognition.onresult = (event: any) => {
+        const last = event.results.length - 1;
+        const transcript = (event.results[last][0].transcript || '').trim().toLowerCase();
+        console.log('Voice Command Received:', transcript);
+
+        // 1. Wake-Word Activation commands
+        if (transcript.includes('activate voice') || transcript.includes('start voice')) {
+          setIsVoiceListening(true);
+          isVoiceListeningRef.current = true;
+          speakText('Hands-free voice control activated.');
+          toast.success(
+            'Voice Control Active',
+            'Listening: "Pass", "Confirm", "Fail", "Next", "Read Step", "Stop Voice"'
+          );
+          return;
+        }
+
+        // 2. Wake-Word Deactivation commands
+        if (
+          transcript.includes('stop voice') ||
+          transcript.includes('disable voice') ||
+          transcript.includes('deactivate voice') ||
+          transcript.includes('turn off voice')
+        ) {
+          setIsVoiceListening(false);
+          isVoiceListeningRef.current = false;
+          speakText('Voice control disabled.');
+          toast.info('Voice Control', 'Hands-free voice assistant disabled.');
+          return;
+        }
+
+        // 3. Execution Commands
+        if (isVoiceListeningRef.current) {
+          if (
+            transcript.includes('pass') ||
+            transcript.includes('confirm') ||
+            transcript.includes('verify') ||
+            transcript.includes('clear')
+          ) {
+            handleVoiceStepPass();
+          } else if (
+            transcript.includes('fail') ||
+            transcript.includes('failed') ||
+            transcript.includes('anomaly')
+          ) {
+            handleVoiceStepFail();
+          } else if (transcript.includes('next')) {
+            handleVoiceStepPass();
+          } else if (
+            transcript.includes('read step') ||
+            transcript.includes('read') ||
+            transcript.includes('repeat') ||
+            transcript.includes('speak')
+          ) {
+            handleReadActiveStep();
+          }
+        }
+      };
+
+      recognition.onerror = (err: any) => {
+        console.warn('Speech recognition error:', err);
+        if (err.error === 'not-allowed') {
+          setIsVoiceListening(false);
+          isVoiceListeningRef.current = false;
+          toast.error(
+            'Microphone Blocked',
+            'Please allow microphone access in your browser to use Hands-Free Voice Control.'
+          );
+        }
+      };
+
+      recognition.onend = () => {
+        if (isVoiceListeningRef.current && recognitionRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch {}
+        }
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err: any) {
+      toast.error('Voice Error', err.message || 'Could not start speech recognition.');
+      setIsVoiceListening(false);
+      isVoiceListeningRef.current = false;
+    }
+  }, [handleReadActiveStep, handleVoiceStepFail, handleVoiceStepPass, isVoiceListening, speakText, toast]);
+
   // Reload Previous RCA Session
   const handleLoadSession = useCallback((session: RcaSession) => {
     setActiveSession(session);
@@ -172,6 +689,7 @@ export const TroubleshootingView: React.FC<{
     setSymptom(session.symptom);
     setActiveTab('rca');
     setIsHistoryDropdownOpen(false);
+    setAutoRaisedTicket(null);
     toast.info('Session Loaded', `Loaded previous RCA investigation for ${session.assetTag}.`);
   }, [persistSession, toast]);
 
@@ -191,6 +709,17 @@ export const TroubleshootingView: React.FC<{
     setEscalationBanner(null);
     setFailedStepForEscalation(null);
     setSelectedWhyStep(null);
+    setAutoRaisedTicket(null);
+    setActiveStepIndex(0);
+    if (isVoiceListening && recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      setIsVoiceListening(false);
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
   };
 
   // Delete RCA Record Confirmation State (Requirement 2)
@@ -323,6 +852,12 @@ export const TroubleshootingView: React.FC<{
         !historyDropdownRef.current.contains(e.target as Node)
       ) {
         setIsHistoryDropdownOpen(false);
+      }
+      if (
+        moreRecentDropdownRef.current &&
+        !moreRecentDropdownRef.current.contains(e.target as Node)
+      ) {
+        setIsMoreRecentOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -709,67 +1244,7 @@ export const TroubleshootingView: React.FC<{
     }
   };
 
-  // Helper: Verify sequential step gating and downstream lock state
-  const getStepGateStatus = (stepIndex: number, session: RcaSession | null) => {
-    if (!session || !session.investigationSteps) {
-      return { allowed: false, reason: 'No active session' };
-    }
-    const steps = session.investigationSteps;
 
-    // Check if any prior step failed
-    const failedIdx = steps.findIndex((s) => s.status === 'FAIL');
-    if (failedIdx !== -1 && stepIndex > failedIdx) {
-      return {
-        allowed: false,
-        blockedByFailure: true,
-        failedStepNumber: steps[failedIdx].stepNumber,
-        failedStepName: steps[failedIdx].name,
-        reason: `Blocked — Halted at Step #${steps[failedIdx].stepNumber}`,
-      };
-    }
-
-    // Check if previous step has passed
-    if (stepIndex > 0) {
-      const prevStep = steps[stepIndex - 1];
-      if (prevStep.status !== 'PASS') {
-        return {
-          allowed: false,
-          blockedBySequence: true,
-          prevStepNumber: prevStep.stepNumber,
-          reason: `Awaiting Step #${prevStep.stepNumber} Pass`,
-        };
-      }
-    }
-
-    return { allowed: true };
-  };
-
-  // Initiate Step Pass: Launch Confirmation 1 (Field Check Verification) with Sequential Gating
-  const handleInitiateStepPass = (step: any) => {
-    if (
-      step.isLocked ||
-      step.status === 'PASS' ||
-      activeSession?.isLocked ||
-      activeSession?.status === 'VERIFIED_CLOSED'
-    ) {
-      toast.info('Step Locked', 'This verified step is locked and cannot be changed.');
-      return;
-    }
-
-    const gate = getStepGateStatus(step.stepNumber - 1, activeSession);
-    if (!gate.allowed) {
-      toast.warning('Step Gated', gate.reason || 'Complete previous steps sequentially.');
-      return;
-    }
-
-    setPassConfirmation({
-      isOpen: true,
-      stepId: step.id,
-      stepNumber: step.stepNumber,
-      stepName: step.name,
-      stage: 1,
-    });
-  };
 
   // Final Sign-Off (2/2): Lock Step and if 100% Passed, Permanently Lock Investigation & Save to Maintenance History
   const handleFinalConfirmPass = async (stepId: string) => {
@@ -1038,30 +1513,6 @@ export const TroubleshootingView: React.FC<{
     );
   };
 
-  // Initiate Step Fail: Launch Failure Confirmation Modal
-  const handleInitiateStepFail = (step: any) => {
-    if (
-      step.isLocked ||
-      step.status === 'PASS' ||
-      step.status === 'FAIL' ||
-      activeSession?.isLocked ||
-      activeSession?.status === 'VERIFIED_CLOSED'
-    ) {
-      toast.info('Step Locked', 'This step is locked and cannot be modified.');
-      return;
-    }
-
-    const gate = getStepGateStatus(step.stepNumber - 1, activeSession);
-    if (!gate.allowed) {
-      toast.warning('Step Gated', gate.reason || 'Complete previous steps sequentially.');
-      return;
-    }
-
-    setFailConfirmation({
-      isOpen: true,
-      step,
-    });
-  };
 
   // Confirm Step Failure: Halt Investigation, Lock Failed Step & Lock all Subsequent Steps
   const handleConfirmFail = async () => {
@@ -1718,21 +2169,31 @@ export const TroubleshootingView: React.FC<{
     <div className="flex-1 min-h-0 min-w-0 w-full h-full flex flex-col bg-[#F8FAFC]">
       {/* Top Banner Toolbar */}
       {!activeSession ? (
-        <div className="py-3 px-4 md:px-6 bg-white border-b border-[#E2E8F0] flex items-center justify-between w-full shrink-0">
+        <div className="py-3 px-4 md:px-6 bg-white border-b border-[#E2E8F0] flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap w-full shrink-0">
           <div>
             <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide whitespace-nowrap shrink-0">
-              RCA & Diagnostic Copilot
+              ROOT CAUSE ANALYSIS & DIAGNOSTIC COPILOT
             </h2>
             <p className="text-xs text-[#64748B] mt-0.5 font-sans">
               Diagnostic reasoning grounded in Knowledge Hub manuals, maintenance engineer field notes, and failure logs.
             </p>
+          </div>
+
+          {/* Interactive Navbar Status Pills (Hidden Recent RCAs when !activeSession) */}
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-xs font-mono font-semibold flex items-center gap-1.5 shadow-2xs">
+              ✨ AI Engine Online
+            </span>
+            <span className="px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/80 text-xs font-mono font-semibold flex items-center gap-1.5 shadow-2xs">
+              📚 Manuals & Field Notes Synced
+            </span>
           </div>
         </div>
       ) : (
         <div className="py-2.5 px-4 bg-white border-b border-[#E2E8F0] flex items-center justify-between gap-3 flex-wrap xl:flex-nowrap w-full shrink-0">
           <div className="flex items-center gap-2 min-w-0 shrink-0">
             <h2 className="text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide whitespace-nowrap shrink-0">
-              RCA & Diagnostic Copilot
+              ROOT CAUSE ANALYSIS & DIAGNOSTIC COPILOT
             </h2>
             <span className="hidden xl:inline-block text-[11px] text-[#64748B] font-sans truncate">
               — Machine: <strong className="text-slate-800 font-mono">{activeSession.assetTag}</strong>
@@ -1740,15 +2201,15 @@ export const TroubleshootingView: React.FC<{
           </div>
 
           <div className="flex items-center gap-2 flex-wrap xl:flex-nowrap shrink-0">
-            {/* Start New Investigation Button */}
+            {/* Start New Investigation Button (Fixed single icon + interactive indigo pill) */}
             <button
               type="button"
               onClick={handleStartNewInvestigation}
-              className="px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-xs font-mono font-bold text-blue-700 flex items-center gap-1.5 transition shadow-2xs whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-600 hover:text-white text-xs font-mono font-bold text-indigo-700 flex items-center gap-1.5 transition-all shadow-2xs whitespace-nowrap shrink-0 cursor-pointer group"
               title="Reset active investigation to clean empty state"
             >
-              <Plus className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span className="whitespace-nowrap">+ New</span>
+              <Plus className="w-3.5 h-3.5 text-indigo-600 group-hover:text-white transition-colors shrink-0" />
+              <span className="whitespace-nowrap">New Investigation</span>
             </button>
 
             {/* Recent RCAs Dropdown Selector */}
@@ -2016,16 +2477,16 @@ export const TroubleshootingView: React.FC<{
             <button
               onClick={handleRunAnalysis}
               disabled={isAnalyzing || !symptom.trim() || hasNoDocuments || machines.length === 0}
-              className="w-full py-2 bg-[#0F172A] hover:bg-black disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-sm border border-slate-800 cursor-pointer"
+              className="w-full py-2 bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all shadow-md hover:shadow-lg border-0 cursor-pointer"
             >
               {isAnalyzing ? (
                 <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
                   <span>Synthesizing Equipment Records...</span>
                 </>
               ) : (
                 <>
-                  <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
                   <span>Run AI Root Cause Analysis</span>
                 </>
               )}
@@ -2054,10 +2515,13 @@ export const TroubleshootingView: React.FC<{
         {/* Right Pane: Ranked Root Causes (Matrix) or Investigation Steps */}
         <div className="flex-1 min-h-0 min-w-0 p-5 md:p-6 overflow-y-auto space-y-6 w-full flex flex-col">
           {!activeSession ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 bg-white rounded-xl border border-dashed border-[#CBD5E1] space-y-6 max-w-3xl mx-auto my-auto shadow-sm w-full">
+            <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 bg-gradient-to-b from-white via-indigo-50/20 to-white rounded-xl border border-indigo-100/90 hover:border-indigo-300 space-y-6 max-w-3xl mx-auto my-auto shadow-sm hover:shadow-md transition-all duration-200 w-full relative overflow-hidden group">
+              {/* Top gradient accent strip */}
+              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-600 to-cyan-400" />
+
               <div className="flex flex-col items-center text-center space-y-3 max-w-lg">
-                <div className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 shadow-xs">
-                  <HelpCircle className="w-7 h-7 text-slate-500" />
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 flex items-center justify-center text-indigo-600 shadow-xs">
+                  <HelpCircle className="w-7 h-7 text-indigo-600" />
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">No Active RCA Investigation</h3>
@@ -2069,12 +2533,68 @@ export const TroubleshootingView: React.FC<{
 
               {/* Recent / Past RCA Investigations inside Empty State */}
               <div className="w-full pt-4 border-t border-slate-200 space-y-3">
-                <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-500 uppercase tracking-wider">
-                  <span className="flex items-center gap-1.5">
-                    <History className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Recent / Past RCA Investigations</span>
-                  </span>
-                  <span className="text-[11px] px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-500 uppercase tracking-wider relative">
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="flex items-center gap-1.5 text-slate-800">
+                      <History className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Recent / Past RCA Investigations</span>
+                    </span>
+
+                    {/* More Recent RCAs Dropdown if > 2 */}
+                    {recentSessions.length > 2 && (
+                      <div className="relative" ref={moreRecentDropdownRef}>
+                        <button
+                          type="button"
+                          onClick={() => setIsMoreRecentOpen(!isMoreRecentOpen)}
+                          className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-mono font-semibold flex items-center gap-1.5 transition shadow-2xs cursor-pointer whitespace-nowrap"
+                        >
+                          <span>📂 More Recent RCAs (+{recentSessions.length - 2})</span>
+                          <ChevronDown className="w-3 h-3 text-indigo-500" />
+                        </button>
+
+                        {isMoreRecentOpen && (
+                          <div className="absolute left-0 mt-1.5 w-84 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 text-xs normal-case font-normal animate-in fade-in slide-in-from-top-1">
+                            <div className="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between font-mono font-bold text-[10px] uppercase text-slate-400">
+                              <span>Additional Investigations</span>
+                              <span>{recentSessions.length - 2} older</span>
+                            </div>
+                            <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
+                              {recentSessions.slice(2).map((session) => (
+                                <div
+                                  key={session.id}
+                                  onClick={() => {
+                                    handleLoadSession(session);
+                                    setIsMoreRecentOpen(false);
+                                  }}
+                                  className="w-full text-left p-2.5 hover:bg-indigo-50/70 transition flex items-center justify-between gap-2 group cursor-pointer"
+                                >
+                                  <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                                    <div className="flex items-center justify-between">
+                                      <span className="font-mono font-bold text-indigo-700">
+                                        {session.assetTag}
+                                      </span>
+                                      <span className="text-[10px] font-mono text-slate-400">
+                                        {session.createdAt?.split('T')[0]}
+                                      </span>
+                                    </div>
+                                    {session.detectedFaultCode && (
+                                      <span className="text-[10px] font-mono font-semibold text-rose-600 truncate">
+                                        {session.detectedFaultCode}
+                                      </span>
+                                    )}
+                                    <p className="text-slate-600 text-[11px] truncate">{session.symptom}</p>
+                                  </div>
+                                  <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 transition-transform shrink-0" />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <span className="text-[11px] px-2 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
                     {recentSessions.length} total
                   </span>
                 </div>
@@ -2089,8 +2609,8 @@ export const TroubleshootingView: React.FC<{
                     No recent investigations recorded. Select an equipment asset and run analysis to begin.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
-                    {recentSessions.map((s) => {
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-left">
+                    {recentSessions.slice(0, 2).map((s) => {
                       const allPassed =
                         s.status === 'VERIFIED_CLOSED' ||
                         s.isLocked ||
@@ -2102,8 +2622,11 @@ export const TroubleshootingView: React.FC<{
                         <div
                           key={s.id}
                           onClick={() => handleLoadSession(s)}
-                          className="p-3.5 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50/60 hover:bg-white text-xs space-y-2 transition text-left shadow-sm hover:shadow group cursor-pointer relative"
+                          className="p-3.5 rounded-xl border border-indigo-100/90 hover:border-indigo-400 bg-white hover:bg-gradient-to-br hover:from-white hover:to-indigo-50/30 text-xs space-y-2 transition-all duration-200 text-left shadow-2xs hover:shadow-md hover:-translate-y-0.5 group cursor-pointer relative overflow-hidden"
                         >
+                          {/* Top gradient accent strip on card */}
+                          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-indigo-600 to-cyan-400 opacity-80 group-hover:opacity-100 transition-opacity" />
+
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-mono font-bold text-blue-700 text-sm group-hover:underline">
                               {s.assetTag}
@@ -2143,9 +2666,9 @@ export const TroubleshootingView: React.FC<{
                           </div>
 
                           {s.detectedFaultCode && (
-                            <div className="text-[11px] font-mono font-bold text-rose-600 flex items-center gap-1 truncate">
-                              <Zap className="w-3 h-3 text-rose-500 shrink-0" />
-                              <span className="truncate">{s.detectedFaultCode}</span>
+                            <div className="text-[11px] font-mono font-bold text-rose-600 flex items-start gap-1.5 leading-snug">
+                              <Zap className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                              <span className="break-words">{s.detectedFaultCode}</span>
                             </div>
                           )}
 
@@ -2169,44 +2692,21 @@ export const TroubleshootingView: React.FC<{
           ) : (
             <div className="space-y-6 flex-1">
               {/* Active Case Top Summary - Deep Navy-to-Indigo Gradient Header */}
-              <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 rounded-xl shadow-sm border border-indigo-950/60 overflow-hidden">
-                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
-                  {/* Left: Machine Tag & Name + Inline Pills */}
-                  <div className="flex-1 min-w-0 flex flex-col gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono font-bold text-base text-white tracking-wide">
-                        {activeSession.assetTag}
+              <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 rounded-xl shadow-sm border border-indigo-950/60 overflow-hidden space-y-2.5">
+                {/* Row 1: Machine Tag & Name (Left) and Action Buttons (Right) */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                    <span className="font-mono font-bold text-base text-white tracking-wide">
+                      {activeSession.assetTag}
+                    </span>
+                    {activeSession.machineName && activeSession.machineName !== activeSession.assetTag && (
+                      <span className="text-xs text-indigo-200/90 font-sans font-medium">
+                        • {activeSession.machineName}
                       </span>
-                      {activeSession.machineName && activeSession.machineName !== activeSession.assetTag && (
-                        <span className="text-xs text-indigo-200/90 font-sans font-medium">
-                          • {activeSession.machineName}
-                        </span>
-                      )}
-                      <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700 font-medium">
-                        State: {activeSession.machineStatus || 'Running'}
-                      </span>
-                      {activeSession.detectedFaultCode && (
-                        <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold">
-                          Alarm: {activeSession.detectedFaultCode.replace(/^FAULT\s*\/\s*ALARM\s*CODE:\s*/i, '')}
-                        </span>
-                      )}
-                      {activeSession.symptom && (
-                        <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 font-medium truncate max-w-xs md:max-w-md" title={activeSession.symptom}>
-                          Symptom: {toShortSentence(activeSession.symptom, 8)}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Clean un-truncated symptom description */}
-                    {activeSession.symptom && (
-                      <p className="text-xs text-slate-300 font-sans leading-relaxed line-clamp-2">
-                        <strong className="text-indigo-300 font-mono text-[10px] uppercase tracking-wider mr-1">Observed Field Symptom:</strong>
-                        <span className="text-slate-200">{activeSession.symptom}</span>
-                      </p>
                     )}
                   </div>
 
-                  {/* Right: Glassmorphism Buttons */}
+                  {/* Right: Action Buttons without double icons */}
                   <div className="flex flex-row flex-wrap items-center gap-2 shrink-0">
                     <button
                       type="button"
@@ -2215,7 +2715,7 @@ export const TroubleshootingView: React.FC<{
                       title="View OSHA 1910.147 LOTO & PPE Isolation Points"
                     >
                       <ShieldAlert className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                      <span>🛡️ LOTO & PPE Checklist</span>
+                      <span>LOTO & PPE Checklist</span>
                     </button>
 
                     <button
@@ -2225,9 +2725,29 @@ export const TroubleshootingView: React.FC<{
                       title="Download professional PDF RCA summary report"
                     >
                       <FileText className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
-                      <span>📄 Export RCA Summary</span>
+                      <span>Export RCA Summary</span>
                     </button>
                   </div>
+                </div>
+
+                {/* Row 2: All 3 Telemetry Pills Inline on One Single Row */}
+                <div className="flex items-center gap-2 flex-wrap text-xs pt-1 border-t border-indigo-900/40">
+                  <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-slate-800/90 text-slate-200 border border-slate-700 font-medium whitespace-nowrap shrink-0">
+                    State: {activeSession.machineStatus || 'Running'}
+                  </span>
+                  {activeSession.detectedFaultCode && (
+                    <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold whitespace-nowrap shrink-0">
+                      Alarm: {activeSession.detectedFaultCode.replace(/^FAULT\s*\/\s*ALARM\s*CODE:\s*/i, '')}
+                    </span>
+                  )}
+                  {activeSession.symptom && (
+                    <span
+                      className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 font-medium whitespace-nowrap truncate max-w-md"
+                      title={activeSession.symptom}
+                    >
+                      Symptom: {activeSession.symptom}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -2241,91 +2761,96 @@ export const TroubleshootingView: React.FC<{
                   </div>
 
                   <div className="space-y-3.5">
-                    {activeSession.hypotheses.map((hyp, index) => {
-                      const isWhyOpen = !!expandedWhyCards[hyp.id];
-                      const isToolsOpen = !!expandedToolsCards[hyp.id];
-                      const chain =
-                        hyp.fiveWhyChain && hyp.fiveWhyChain.length > 0
-                          ? hyp.fiveWhyChain
-                          : [
-                              `Why 1: Operational load deviation on ${activeSession.assetTag}`,
-                              'Why 2: Boundary fluid starvation & dynamic cavitation',
-                              'Why 3: Thermal stress erosion on silicon carbide seal faces',
-                              'Why 4: Dynamic O-ring extrusion and seal leakage',
-                              `Observed Symptom: ${activeSession.symptom}`,
-                            ];
-                      const toolsCount = (hyp.requiredTools?.length || 4);
-                      const partsCount = (hyp.spareParts?.length || 3);
+                    {(() => {
+                      const hasConfirmedHypothesis = activeSession.hypotheses.some(
+                        (h) => h.status === 'CONFIRMED'
+                      );
+                      return activeSession.hypotheses.map((hyp, index) => {
+                        const isWhyOpen = !!expandedWhyCards[hyp.id];
+                        const isToolsOpen = !!expandedToolsCards[hyp.id];
+                        const chain =
+                          hyp.fiveWhyChain && hyp.fiveWhyChain.length > 0
+                            ? hyp.fiveWhyChain
+                            : [
+                                `Why 1: Operational load deviation on ${activeSession.assetTag}`,
+                                'Why 2: Boundary fluid starvation & dynamic cavitation',
+                                'Why 3: Thermal stress erosion on silicon carbide seal faces',
+                                'Why 4: Dynamic O-ring extrusion and seal leakage',
+                                `Observed Symptom: ${activeSession.symptom}`,
+                              ];
+                        const toolsCount = (hyp.requiredTools?.length || 4);
+                        const partsCount = (hyp.spareParts?.length || 3);
 
-                      return (
-                        <div
-                          key={hyp.id}
-                          className={`rounded-xl border p-3.5 transition bg-white shadow-xs space-y-2.5 ${
-                            hyp.status === 'CONFIRMED'
-                              ? 'ring-2 ring-indigo-600 bg-gradient-to-br from-white to-indigo-50/30 border-indigo-500 shadow-md'
-                              : hyp.status === 'RULED_OUT'
-                              ? 'opacity-60 border-slate-200 bg-slate-50'
-                              : 'border-[#E2E8F0] hover:border-indigo-300'
-                          }`}
-                        >
-                          {/* Top Row: Rank Badge (Gradient), Title, Severity, Confidence Progress Bar & Confirm / Rule Out */}
-                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="w-5 h-5 rounded-full bg-gradient-to-r from-slate-900 to-indigo-900 text-white flex items-center justify-center text-[10px] font-mono font-bold shrink-0 shadow-2xs">
-                                #{index + 1}
-                              </span>
-                              <h4 className="text-sm font-bold text-slate-900 truncate">
-                                {hyp.title}
-                              </h4>
-                            </div>
-
-                            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                              {/* Severity Pill */}
-                              <span
-                                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase ${
-                                  hyp.severity === 'CRITICAL'
-                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                    : hyp.severity === 'HIGH'
-                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                    : 'bg-blue-50 text-blue-700 border-blue-200'
-                                }`}
-                              >
-                                {hyp.severity}
-                              </span>
-
-                              {/* Confidence Progress */}
-                              <div className="flex items-center gap-1.5 font-mono text-xs">
-                                <div className="w-14 h-1.5 rounded-full bg-slate-200 overflow-hidden">
-                                  <div
-                                    className={`h-full rounded-full ${
-                                      hyp.probability >= 80
-                                        ? 'bg-gradient-to-r from-indigo-500 to-blue-500'
-                                        : hyp.probability >= 60
-                                        ? 'bg-amber-500'
-                                        : 'bg-blue-500'
-                                    }`}
-                                    style={{ width: `${hyp.probability}%` }}
-                                  />
-                                </div>
-                                <span className="font-bold text-slate-700">{hyp.probability}%</span>
+                        return (
+                          <div
+                            key={hyp.id}
+                            className={`rounded-xl border p-3.5 transition-all duration-200 bg-white shadow-xs space-y-2.5 ${
+                              hyp.status === 'CONFIRMED'
+                                ? 'ring-2 ring-indigo-600 bg-gradient-to-br from-white to-indigo-50/40 border-indigo-500 shadow-md'
+                                : hasConfirmedHypothesis
+                                ? 'blur-[1.5px] opacity-45 hover:blur-none hover:opacity-95 border-slate-200 bg-slate-50/80'
+                                : hyp.status === 'RULED_OUT'
+                                ? 'opacity-60 border-slate-200 bg-slate-50'
+                                : 'border-[#E2E8F0] hover:border-indigo-300'
+                            }`}
+                          >
+                            {/* Top Row: Rank Badge (Gradient), Title, Severity, Confidence Progress Bar & Confirm / Rule Out */}
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="w-5 h-5 rounded-full bg-gradient-to-r from-slate-900 to-indigo-900 text-white flex items-center justify-center text-[10px] font-mono font-bold shrink-0 shadow-2xs">
+                                  #{index + 1}
+                                </span>
+                                <h4 className="text-sm font-bold text-slate-900 truncate">
+                                  {hyp.title}
+                                </h4>
                               </div>
 
-                              {/* Confirm / Rule Out Action Buttons */}
-                              <div className="flex items-center gap-1 font-mono text-xs">
-                                {hyp.status === 'CONFIRMED' ? (
-                                  <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-indigo-600 to-blue-600 text-white border border-indigo-500 text-[10px] font-mono font-bold flex items-center gap-1 shadow-xs">
-                                    <CheckCircle2 className="w-3 h-3 text-white" />
-                                    <span>✓ CONFIRMED PRIMARY CAUSE</span>
-                                  </span>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => setHypothesisStatus(hyp.id, 'CONFIRMED')}
-                                    className="px-2 py-0.5 rounded border transition bg-white text-slate-700 border-slate-300 hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 text-[11px] font-semibold cursor-pointer active:scale-95 shadow-2xs"
-                                  >
-                                    Confirm
-                                  </button>
-                                )}
+                              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                                {/* Severity Pill */}
+                                <span
+                                  className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase ${
+                                    hyp.severity === 'CRITICAL'
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : hyp.severity === 'HIGH'
+                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                      : 'bg-blue-50 text-blue-700 border-blue-200'
+                                  }`}
+                                >
+                                  {hyp.severity}
+                                </span>
+
+                                {/* Confidence Progress */}
+                                <div className="flex items-center gap-1.5 font-mono text-xs">
+                                  <div className="w-14 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${
+                                        hyp.probability >= 80
+                                          ? 'bg-gradient-to-r from-indigo-500 to-blue-500'
+                                          : hyp.probability >= 60
+                                          ? 'bg-amber-500'
+                                          : 'bg-blue-500'
+                                      }`}
+                                      style={{ width: `${hyp.probability}%` }}
+                                    />
+                                  </div>
+                                  <span className="font-bold text-slate-700">{hyp.probability}%</span>
+                                </div>
+
+                                {/* Confirm / Rule Out Action Buttons (Fixed clean single checkmark) */}
+                                <div className="flex items-center gap-1 font-mono text-xs">
+                                  {hyp.status === 'CONFIRMED' ? (
+                                    <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-indigo-600 to-blue-600 text-white border border-indigo-500 text-[10px] font-mono font-bold flex items-center shadow-xs">
+                                      <span>✓ CONFIRMED PRIMARY CAUSE</span>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setHypothesisStatus(hyp.id, 'CONFIRMED')}
+                                      className="px-2 py-0.5 rounded border transition bg-white text-slate-700 border-slate-300 hover:bg-emerald-50 hover:text-emerald-800 hover:border-emerald-300 text-[11px] font-semibold cursor-pointer active:scale-95 shadow-2xs"
+                                    >
+                                      Confirm
+                                    </button>
+                                  )}
                                 <button
                                   type="button"
                                   onClick={() => setHypothesisStatus(hyp.id, 'RULED_OUT')}
@@ -2601,7 +3126,8 @@ export const TroubleshootingView: React.FC<{
                           )}
                         </div>
                       );
-                    })}
+                    });
+                  })()}
                   </div>
                 </div>
               )}
@@ -2609,229 +3135,253 @@ export const TroubleshootingView: React.FC<{
               {/* Investigation Steps Checklist Tab */}
               {activeTab === 'steps' && (
                 <div className="space-y-4">
-                  {/* Investigation Progress Bar */}
-                  <div className="bg-white rounded-xl border border-[#E2E8F0] p-4 shadow-sm space-y-2">
-                    <div className="flex items-center justify-between text-xs font-mono">
-                      <span className="font-bold text-slate-700 uppercase">
-                        Investigation Verification Progress
-                      </span>
-                      <span className="font-bold text-blue-700">
-                        {passedStepsCount} of {totalStepsCount} Passed ({progressPercent}%)
-                      </span>
+                  {/* Hands-Free Voice Assistant Command Bar & Connected Timeline (Deep Navy-to-Indigo Gradient) */}
+                  <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white rounded-xl mb-4 border border-indigo-950/60 shadow-md overflow-hidden">
+                    {/* Top Row: Protocol Title, Connected Pill Timeline, Progress Count, Voice Button */}
+                    <div className="p-3 sm:px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar whitespace-nowrap">
+                      {/* Left: Diagnostic Protocol Title */}
+                      <div className="flex items-center gap-2 font-mono font-bold text-xs uppercase tracking-wide text-indigo-200 shrink-0">
+                        <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+                        <span>Diagnostic Verification Protocol</span>
+                      </div>
+
+                      {/* Center: Single-Row Connected Pill Timeline */}
+                      <div className="flex items-center gap-1.5 font-mono text-xs shrink-0">
+                        {activeSession.investigationSteps.map((step, idx) => {
+                          const isPassed = step.status === 'PASS';
+                          const isFailed = step.status === 'FAIL';
+                          const isActive = idx === activeStepIndex;
+                          return (
+                            <React.Fragment key={step.id}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveStepIndex(idx);
+                                  stepRefs.current[idx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }}
+                                className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                                  isPassed
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 shadow-2xs'
+                                    : isFailed
+                                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50 shadow-2xs'
+                                    : isActive
+                                    ? 'bg-gradient-to-r from-indigo-500 to-blue-500 text-white ring-2 ring-indigo-400 shadow-xs'
+                                    : 'bg-slate-800/90 text-slate-400 border border-slate-700 hover:text-white'
+                                }`}
+                                title={`Step ${step.stepNumber}: ${step.name}`}
+                              >
+                                <span>{step.stepNumber < 10 ? `0${step.stepNumber}` : step.stepNumber}</span>
+                                {isPassed && <Check className="w-3 h-3 text-emerald-400" />}
+                                {isFailed && <X className="w-3 h-3 text-rose-400" />}
+                              </button>
+                              {idx < activeSession.investigationSteps.length - 1 && (
+                                <span className="w-3 h-0.5 bg-slate-700 shrink-0" />
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
+
+                      {/* Right: Progress Count & Hands-Free Voice Control Button */}
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <span className="font-mono text-xs font-bold text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 px-2.5 py-1 rounded-full whitespace-nowrap">
+                          {passedStepsCount}/{totalStepsCount} Passed ({progressPercent}%)
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={toggleVoiceControl}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer whitespace-nowrap ${
+                            isVoiceListening
+                              ? 'bg-rose-600 text-white hover:bg-rose-700 animate-pulse ring-2 ring-rose-400'
+                              : 'bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white border border-indigo-400/40'
+                          }`}
+                          title="Hands-Free Voice Control: Say 'Activate Voice', 'Pass', 'Fail', 'Next', 'Read Step', 'Stop Voice'"
+                        >
+                          <Mic className={`w-3.5 h-3.5 ${isVoiceListening ? 'text-white' : 'text-cyan-300'}`} />
+                          <span>{isVoiceListening ? 'Listening (Active)' : 'Hands-Free Voice Control'}</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
+
+                    {/* Integrated Horizontal Progress Bar */}
+                    <div className="w-full h-1 bg-slate-800/80">
                       <div
-                        className={`h-full rounded-full transition-all duration-300 ${
-                          progressPercent === 100 ? 'bg-gradient-to-r from-indigo-500 to-blue-500' : 'bg-blue-600'
+                        className={`h-full transition-all duration-300 ${
+                          progressPercent === 100
+                            ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
+                            : 'bg-gradient-to-r from-cyan-400 via-indigo-400 to-blue-500'
                         }`}
                         style={{ width: `${progressPercent}%` }}
                       />
                     </div>
+
+                    {/* Bottom Strip: Voice Command Cheat-Sheet Strip */}
+                    <div className="px-4 py-1.5 bg-slate-900/95 border-t border-indigo-950/80 flex items-center justify-between text-[11px] font-mono text-slate-300 overflow-x-auto no-scrollbar whitespace-nowrap">
+                      <div className="flex items-center gap-1.5 text-cyan-300 font-semibold">
+                        <Mic className="w-3 h-3 text-cyan-400 shrink-0" />
+                        <span>Voice Commands:</span>
+                        <span className="text-slate-300 font-normal">
+                          Say <strong className="text-white">"Activate Voice"</strong> • <strong className="text-white">"Pass"</strong> / <strong className="text-white">"Confirm"</strong> • <strong className="text-white">"Fail"</strong> • <strong className="text-white">"Next"</strong> • <strong className="text-white">"Read Step"</strong> • <strong className="text-white">"Stop Voice"</strong>
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 ml-3">
+                        {isVoiceListening ? '🎙️ Listening for commands' : '💤 Say "Activate Voice" or click to start'}
+                      </span>
+                    </div>
                   </div>
 
+                  {/* Step Cards List */}
                   <div className="space-y-3">
                     {activeSession.investigationSteps.map((step, sIdx) => {
-                      const failedStep = activeSession.investigationSteps.find((s) => s.status === 'FAIL');
-                      const failedIdx = failedStep ? activeSession.investigationSteps.indexOf(failedStep) : -1;
                       const isFailed = step.status === 'FAIL';
                       const isPassed = step.status === 'PASS';
-                      const isBlockedByPriorFailure = failedIdx !== -1 && sIdx > failedIdx;
-                      const isPreviousPassed = sIdx === 0 || activeSession.investigationSteps[sIdx - 1].status === 'PASS';
-                      const isAwaitingPrevious = !failedStep && !isPassed && !isFailed && !isPreviousPassed;
-                      const isAllPassed = totalStepsCount > 0 && passedStepsCount === totalStepsCount;
-                      const isStepLocked =
-                        step.isLocked ||
-                        isPassed ||
-                        activeSession.status === 'VERIFIED_CLOSED' ||
-                        activeSession.isLocked ||
-                        isAllPassed;
+                      const isActive = sIdx === activeStepIndex;
+                      const hypTools =
+                        step.requiredTools && step.requiredTools.length > 0
+                          ? step.requiredTools
+                          : activeSession.hypotheses[0]?.requiredTools && activeSession.hypotheses[0].requiredTools.length > 0
+                          ? activeSession.hypotheses[0].requiredTools
+                          : ['Calibrated Torque Wrench (60 Nm)', 'CAT IV Multimeter', 'Laser Tachometer', 'IR Pyrometer'];
 
                       return (
                         <div
                           key={step.id}
-                          className={`rounded-xl border p-3.5 bg-white shadow-xs transition space-y-2 ${
+                          ref={(el) => (stepRefs.current[sIdx] = el)}
+                          className={`rounded-xl border p-4 bg-white shadow-xs transition-all duration-200 space-y-3 ${
                             isPassed
-                              ? 'border-l-4 border-l-indigo-600 bg-gradient-to-r from-indigo-50/20 to-white border-slate-200'
+                              ? 'border-l-4 border-l-emerald-500 bg-gradient-to-r from-emerald-50/20 to-white border-slate-200'
                               : isFailed
-                              ? 'border-rose-400 bg-rose-50/30'
-                              : isBlockedByPriorFailure
-                              ? 'border-slate-200 bg-slate-50/70 opacity-75'
-                              : isAwaitingPrevious
-                              ? 'border-slate-200 bg-slate-50/50 opacity-85'
+                              ? 'border-l-4 border-l-rose-500 bg-rose-50/60 border-rose-300 ring-1 ring-rose-200'
+                              : isActive
+                              ? 'border-l-4 border-l-indigo-600 bg-gradient-to-r from-indigo-50/30 to-white border-indigo-200 shadow-sm ring-1 ring-indigo-200'
                               : 'border-slate-200'
                           }`}
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-start gap-2.5">
-                              <span
-                                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono font-bold shrink-0 mt-0.5 ${
-                                  isPassed
-                                    ? 'bg-indigo-600 text-white'
-                                    : isFailed
-                                    ? 'bg-rose-600 text-white'
-                                    : 'bg-slate-800 text-white'
-                                }`}
-                              >
-                                {step.stepNumber}
+                          {/* Top Row: Step Pill Badge + Title + LOTO Required (Left) and Verification Status/Buttons (Right) */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
+                              <span className="bg-gradient-to-r from-indigo-600 to-blue-600 text-white px-2.5 py-0.5 rounded-md text-xs font-bold font-mono shadow-xs shrink-0 whitespace-nowrap">
+                                STEP {step.stepNumber < 10 ? `0${step.stepNumber}` : step.stepNumber}
                               </span>
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2">
-                                  <h4 className="text-sm font-bold text-slate-900">{step.name}</h4>
-                                  {step.requiresLoto && (
-                                    <span className="text-[10px] font-mono px-2 py-0.2 bg-rose-100 text-rose-800 font-bold rounded border border-rose-200 uppercase">
-                                      LOTO Required
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-slate-700 font-sans leading-relaxed">
-                                  {step.instruction}
-                                </p>
-                              </div>
+                              <h4 className="text-sm font-bold text-slate-900">{step.name}</h4>
+                              {step.requiresLoto && (
+                                <span className="text-[10px] font-mono px-2 py-0.5 bg-rose-100 text-rose-800 font-bold rounded border border-rose-200 uppercase whitespace-nowrap shrink-0">
+                                  LOTO REQUIRED
+                                </span>
+                              )}
                             </div>
 
-                            {/* Verification Buttons or Locked / Gated Badge */}
-                            <div className="flex items-center gap-1.5 shrink-0 font-mono text-xs">
-                              {isBlockedByPriorFailure ? (
-                                <span className="px-2.5 py-1 rounded-md bg-rose-100 text-rose-800 border border-rose-300 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs">
-                                  <Lock className="w-3 h-3 text-rose-700" />
-                                  <span>🔒 Blocked — Halted at Step #{failedStep?.stepNumber}</span>
+                            {/* Verification Buttons / Badges (Zero Duplicate Icons) */}
+                            <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+                              {isPassed ? (
+                                <span className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs">
+                                  <Check className="w-3.5 h-3.5 text-emerald-700" />
+                                  <span>PASSED & VERIFIED</span>
                                 </span>
                               ) : isFailed ? (
-                                <span className="px-2.5 py-1 rounded-md bg-rose-600 text-white border border-rose-700 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs animate-pulse">
-                                  <AlertCircle className="w-3.5 h-3.5" />
-                                  <span>🚨 FAILED (Anomaly Confirmed)</span>
-                                </span>
-                              ) : isStepLocked ? (
-                                <span className="px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold text-[11px] flex items-center gap-1.5 select-none shadow-xs">
-                                  <Check className="w-3.5 h-3.5 text-indigo-600" />
-                                  <span>✓ Verified & Locked</span>
-                                </span>
-                              ) : isAwaitingPrevious ? (
-                                <span
-                                  className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-500 border border-slate-300 text-[11px] flex items-center gap-1.5 select-none"
-                                  title="Awaiting preceding check verification"
-                                >
-                                  <span>⏳ Awaiting previous step...</span>
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="px-3 py-1 rounded-lg bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs">
+                                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                                    <span>FAILED (Anomaly Confirmed)</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleExecuteStepPass(step, sIdx)}
+                                    className="text-[11px] font-mono text-slate-500 hover:text-emerald-700 underline px-1 py-0.5 cursor-pointer"
+                                    title="Re-verify as Pass"
+                                  >
+                                    Re-test
+                                  </button>
+                                </div>
                               ) : (
                                 <>
                                   <button
                                     type="button"
-                                    onClick={() => handleInitiateStepPass(step)}
-                                    className="px-2.5 py-1 rounded border flex items-center gap-1 transition bg-white text-slate-700 border-slate-300 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 font-semibold cursor-pointer active:scale-95 shadow-xs"
+                                    onClick={() => handleExecuteStepPass(step, sIdx)}
+                                    className="px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-600 hover:text-white font-bold cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
                                   >
-                                    <Check className="w-3 h-3 text-emerald-600" /> Pass
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Pass</span>
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => handleInitiateStepFail(step)}
-                                    className="px-2.5 py-1 rounded border flex items-center gap-1 transition bg-white text-slate-600 border-slate-300 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 font-semibold cursor-pointer active:scale-95 shadow-xs"
+                                    onClick={() => handleExecuteStepFail(step, sIdx)}
+                                    className="px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition bg-white text-rose-700 border-rose-300 hover:bg-rose-600 hover:text-white font-bold cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
                                   >
-                                    <X className="w-3 h-3 text-rose-600" /> Fail
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleResolveTicketAndSaveRecord(step)}
-                                    className="px-2.5 py-1 rounded border flex items-center gap-1 transition bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 font-bold cursor-pointer active:scale-95 shadow-xs"
-                                    title="Fault resolved at this step — mark resolved and log record to Maintenance History"
-                                  >
-                                    <CheckCircle2 className="w-3 h-3" /> Resolve Ticket & Save Record
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>Fail</span>
                                   </button>
                                 </>
                               )}
                             </div>
                           </div>
 
-                          {/* Failed Step Anomaly Highlight Banner with Direct Technician Escalation */}
-                          {isFailed && (
-                            <div className="ml-8 mt-2.5 p-3 rounded-lg bg-rose-100/80 border border-rose-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in">
-                              <div className="text-xs text-rose-950 font-sans">
-                                <strong className="font-mono text-rose-800 uppercase">Critical Anomaly Confirmed:</strong> Expected reading <span className="font-mono font-bold">"{step.expectedReading || 'In-spec baseline'}"</span> was not met. Subsequent checks halted.
-                              </div>
-                              <Button
-                                type="button"
-                                variant="primary"
-                                size="sm"
-                                onClick={() => handleOpenEscalateForFailedStep(step)}
-                                className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm flex items-center gap-1.5 shrink-0 py-1.5 px-3 cursor-pointer active:scale-95"
-                              >
-                                <Send className="w-3.5 h-3.5 shrink-0" />
-                                <span>Escalate Ticket to Technician →</span>
-                              </Button>
-                            </div>
-                          )}
+                          {/* Step Instruction */}
+                          <p className="text-xs text-slate-700 font-sans leading-relaxed">
+                            {step.instruction}
+                          </p>
 
-                        {/* Safety Warning */}
-                        {step.safetyWarning && (
-                          <div className="ml-8 mt-2 p-2 rounded bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-center gap-2 font-sans">
-                            <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                            <span>
-                              <strong>Safety Notice:</strong> {step.safetyWarning}
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Expected Reading & Tools */}
-                        <div className="ml-8 mt-2.5 flex flex-wrap items-center gap-4 text-xs font-mono text-slate-500 pt-2 border-t border-slate-100">
-                          {step.expectedReading && (
-                            <div>
-                              <strong className="text-slate-700">Expected:</strong>{' '}
-                              {step.expectedReading}
-                            </div>
-                          )}
-                          {step.requiredTools && step.requiredTools.length > 0 && (
-                            <div className="flex items-center gap-1">
-                              <strong className="text-slate-700">Tools:</strong>
-                              <span>{step.requiredTools.join(', ')}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  </div>
-
-                  {/* Persistent Bottom Summary Bar: Failed Step Anomaly Alert (Compact) */}
-                  {(() => {
-                    const failedStep = activeSession.investigationSteps.find((s) => s.status === 'FAIL');
-                    if (!failedStep) return null;
-
-                    return (
-                      <div className="rounded-xl border border-rose-300 bg-rose-50/90 p-3 shadow-2xs animate-in fade-in">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="w-6 h-6 rounded-md bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
-                              <ShieldAlert className="w-3.5 h-3.5" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-rose-600 text-white uppercase">
-                                  Critical Anomaly
-                                </span>
-                                <span className="text-xs font-mono font-bold text-rose-950 truncate">
-                                  Step #{failedStep.stepNumber} ({failedStep.name}) Verification Failed
-                                </span>
-                              </div>
-                              <p className="text-[11px] text-rose-800 font-sans truncate mt-0.5">
-                                Physical anomaly confirmed. Expected condition <strong className="font-mono text-rose-900">{failedStep.expectedReading || 'In-spec tolerance'}</strong> failed. Downstream steps locked.
+                          {/* 2-Column Mini Grid for Expected Reading & Required Diagnostic Tools (Zero Gap Tightened) */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mt-3">
+                            {/* Left Box: Expected Reading */}
+                            <div className="bg-slate-50 border border-slate-200/80 p-2.5 rounded-lg flex flex-col justify-center gap-1">
+                              <span className="text-[10px] font-mono font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                                🎯 EXPECTED READING / CONDITION
+                              </span>
+                              <p className="text-xs text-slate-800 font-mono font-semibold">
+                                {step.expectedReading || 'In-spec baseline operational tolerance (DCS / OEM specs)'}
                               </p>
                             </div>
-                          </div>
 
-                          <Button
-                            type="button"
-                            variant="primary"
-                            size="sm"
-                            onClick={() => handleOpenEscalateForFailedStep(failedStep)}
-                            className="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-2xs flex items-center justify-center gap-1.5 shrink-0 py-1.5 px-3 cursor-pointer active:scale-95 transition"
-                          >
-                            <Send className="w-3.5 h-3.5 shrink-0" />
-                            <span>Escalate Ticket to Technician →</span>
-                          </Button>
+                            {/* Right Box: Required Diagnostic Tools */}
+                            <div className="bg-indigo-50/40 border border-indigo-100 p-2.5 rounded-lg flex flex-col justify-center gap-1">
+                              <span className="text-[10px] font-mono font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                                🧰 REQUIRED DIAGNOSTIC TOOLS
+                              </span>
+                              <div className="flex flex-wrap gap-1 text-[10px] font-mono text-slate-700">
+                                {hypTools.map((tool: string, tIdx: number) => (
+                                  <span key={tIdx} className="px-1.5 py-0.5 rounded bg-white border border-indigo-100 text-slate-800">
+                                    {tool}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Auto-Dispatched Confirmation Banner (Shown when all 5 steps fail) */}
+                  {(autoRaisedTicket ||
+                    (activeSession.investigationSteps.length > 0 &&
+                      activeSession.investigationSteps.every((s) => s.status === 'FAIL'))) && (
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-rose-950 via-slate-900 to-indigo-950 text-white border-2 border-rose-500/80 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in duration-200">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                          <Send className="w-5 h-5 text-white animate-bounce" />
+                        </div>
+                        <div>
+                          <h4 className="font-mono font-bold text-xs uppercase tracking-wider text-rose-300">
+                            🚀 All 5 Diagnostic Steps Failed — Ticket Automatically Raised & Dispatched
+                          </h4>
+                          <p className="text-xs text-slate-200 mt-0.5 font-sans">
+                            Ticket <strong className="font-mono text-white">#{autoRaisedTicket?.ticketId || escalatedTicketId || 'AUTO-ESC'}</strong> auto-assigned to{' '}
+                            <strong className="text-indigo-200 font-semibold">{autoRaisedTicket?.techName || 'Specialist Lead'}</strong> and logged to Raised Tickets.
+                          </p>
                         </div>
                       </div>
-                    );
-                  })()}
+
+                      <button
+                        type="button"
+                        onClick={() => handleNavigateToRaisedTickets(autoRaisedTicket?.ticketId || escalatedTicketId || undefined)}
+                        className="px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white font-mono font-bold text-xs flex items-center gap-1.5 shadow-md hover:shadow-lg transition cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <span>View in Raised Tickets →</span>
+                      </button>
+                    </div>
+                  )}
 
                   {/* Persistent Bottom Summary Bar: 100% Investigation Verified & Closed Audit Record (Signature Deep Navy-to-Indigo Gradient) */}
                   {(activeSession.status === 'VERIFIED_CLOSED' ||

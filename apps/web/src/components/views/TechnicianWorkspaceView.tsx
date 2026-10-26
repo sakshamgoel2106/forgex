@@ -27,7 +27,6 @@ import {
   Lock,
   Lightbulb,
   Mic,
-  Radio,
   Users,
   Printer,
   Timer,
@@ -43,8 +42,26 @@ export interface TechStep {
   title: string;
   instruction: string;
   requiresLoto: boolean;
-  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  targetSpec?: string;
 }
+
+export const getStepTargetSpec = (stepNumber: number): string => {
+  switch (stepNumber) {
+    case 1:
+      return '0.0 VAC • 0.0 PSI LOTO Verified';
+    case 2:
+      return 'Flange Runout ≤ 0.05 mm';
+    case 3:
+      return 'Seal Flatness ≤ 3 Light Bands';
+    case 4:
+      return 'Star-Pattern Torque: 45 Nm ± 2 Nm';
+    case 5:
+      return 'Vibration RMS ≤ 1.8 mm/s • Temp < 65°C';
+    default:
+      return 'Tolerance ISO 2768-m';
+  }
+};
 
 export interface TechProfile {
   id: string;
@@ -176,11 +193,12 @@ export interface TechTask {
   assetName: string;
   title: string;
   faultCode?: string;
+  alarmCode?: string;
   symptomDescription: string;
   topRootCause?: string;
   probability?: number;
   priority: 'Critical' | 'High' | 'Medium';
-  status: 'In Progress' | 'Assigned' | 'Pending Parts' | 'Resolved';
+  status: 'In Progress' | 'Assigned' | 'Pending Parts' | 'Resolved' | 'Failed';
   dueTime: string;
   sopDocument: string;
   lotoRequired: boolean;
@@ -656,68 +674,82 @@ export const TechnicianWorkspaceView: React.FC<{
                         status:
                           s.status === 'COMPLETED'
                             ? 'COMPLETED'
+                            : s.status === 'FAILED'
+                            ? 'FAILED'
                             : s.status === 'IN_PROGRESS'
                             ? 'IN_PROGRESS'
                             : 'PENDING',
+                        targetSpec: s.targetSpec || getStepTargetSpec(s.stepNumber || idx + 1),
                       }))
                     : [
                         {
                           id: 'step-1',
                           stepNumber: 1,
-                          title: 'Vision LOTO & Zero-Energy Isolation',
+                          title: 'Vision LOTO & Zero-Energy Isolation Gate',
                           instruction:
-                            'Lock out main breaker, bleed line pressure to 0 PSI, and tag out per OSHA 1910.147.',
+                            'Lock out main breaker, bleed line pressure to 0.0 PSI, and tag out per OSHA 1910.147.',
                           requiresLoto: hasLoto,
                           status: 'PENDING',
+                          targetSpec: '0.0 VAC • 0.0 PSI LOTO Verified',
                         },
                         {
                           id: 'step-2',
                           stepNumber: 2,
-                          title: 'Access Cover & Guard Disassembly',
+                          title: 'Flange Runout & Casing Alignment Verification',
                           instruction:
-                            'Remove safety shroud and unbolt casing cover; check flange gap uniformity.',
+                            'Remove safety shroud, unbolt casing cover, and verify flange runout tolerance within ≤ 0.05 mm.',
                           requiresLoto: false,
                           status: 'PENDING',
+                          targetSpec: 'Flange Runout ≤ 0.05 mm',
                         },
                         {
                           id: 'step-3',
                           stepNumber: 3,
-                          title: 'Internal Component & Seal Inspection',
+                          title: 'Mechanical Seal Face & Helium Light Band QA',
                           instruction:
-                            'Inspect seal faces, bearings, and shaft runout for wear or pitting under 3 helium light bands.',
+                            'Inspect seal faces, bearings, and shaft runout for pitting under monochromatic helium light (≤ 3 bands).',
                           requiresLoto: false,
                           status: 'PENDING',
+                          targetSpec: 'Seal Flatness ≤ 3 Light Bands',
                         },
                         {
                           id: 'step-4',
                           stepNumber: 4,
-                          title: 'Precision Reassembly & Torque',
+                          title: 'Precision Reassembly & Star-Pattern Torque',
                           instruction:
-                            'Install new seals/bearings and torque M12 studs in star-pattern to 45 Nm ± 2 Nm.',
+                            'Install new seals/bearings and torque M12 studs in cross-star pattern to 45 Nm ± 2 Nm.',
                           requiresLoto: false,
                           status: 'PENDING',
+                          targetSpec: 'Star-Pattern Torque: 45 Nm ± 2 Nm',
                         },
                         {
                           id: 'step-5',
                           stepNumber: 5,
-                          title: 'Recommissioning & Baseline Run Test',
+                          title: 'Dynamic Recommissioning & Vibration Telemetry',
                           instruction:
-                            'Clear work zone, re-energize equipment, and run a 15-minute vibration & thermal baseline check.',
+                            'Energize machinery, establish baseline, and verify overall velocity RMS ≤ 1.8 mm/s and bearing temp < 65°C.',
                           requiresLoto: false,
                           status: 'PENDING',
+                          targetSpec: 'Vibration RMS ≤ 1.8 mm/s • Temp < 65°C',
                         },
                       ];
 
                 const taskId = c.caseNumber || (c.id ? c.id.slice(0, 8).toUpperCase() : `CASE-${index + 1}`);
                 const stored = loadStoredExecution(taskId, c.id);
 
-                // Merge steps: Keep any step completed in local storage OR backend (Strict Persistence)
+                // Merge steps: Keep any step completed or failed in local storage OR backend (Strict Persistence)
                 const mergedSteps: TechStep[] = defaultSteps.map((step) => {
                   const storedStep = stored.steps ? stored.steps.find((s) => s.id === step.id || s.stepNumber === step.stepNumber) : null;
                   if (storedStep && storedStep.status === 'COMPLETED') {
                     return { ...step, status: 'COMPLETED' };
                   }
+                  if (storedStep && storedStep.status === 'FAILED') {
+                    return { ...step, status: 'FAILED' };
+                  }
                   if (step.status === 'COMPLETED') {
+                    return step;
+                  }
+                  if (step.status === 'FAILED') {
                     return step;
                   }
                   if (storedStep && storedStep.status === 'IN_PROGRESS') {
@@ -809,47 +841,52 @@ export const TechnicianWorkspaceView: React.FC<{
                   {
                     id: 'step-1',
                     stepNumber: 1,
-                    title: 'Vision LOTO & Zero-Energy Isolation',
+                    title: 'Vision LOTO & Zero-Energy Isolation Gate',
                     instruction:
-                      'Lock out main breaker, bleed line pressure to 0 PSI, and tag out per OSHA 1910.147.',
+                      'Lock out main breaker, bleed line pressure to 0.0 PSI, and tag out per OSHA 1910.147.',
                     requiresLoto: hasLoto,
                     status: 'PENDING',
+                    targetSpec: '0.0 VAC • 0.0 PSI LOTO Verified',
                   },
                   {
                     id: 'step-2',
                     stepNumber: 2,
-                    title: 'Access Cover & Guard Disassembly',
+                    title: 'Flange Runout & Casing Alignment Verification',
                     instruction:
-                      'Remove safety shroud and unbolt casing cover; check flange gap uniformity.',
+                      'Remove safety shroud, unbolt casing cover, and verify flange runout tolerance within ≤ 0.05 mm.',
                     requiresLoto: false,
                     status: 'PENDING',
+                    targetSpec: 'Flange Runout ≤ 0.05 mm',
                   },
                   {
                     id: 'step-3',
                     stepNumber: 3,
-                    title: 'Internal Component & Seal Inspection',
+                    title: 'Mechanical Seal Face & Helium Light Band QA',
                     instruction:
-                      'Inspect seal faces, bearings, and shaft runout for wear or pitting under 3 helium light bands.',
+                      'Inspect seal faces, bearings, and shaft runout for pitting under monochromatic helium light (≤ 3 bands).',
                     requiresLoto: false,
                     status: 'PENDING',
+                    targetSpec: 'Seal Flatness ≤ 3 Light Bands',
                   },
                   {
                     id: 'step-4',
                     stepNumber: 4,
-                    title: 'Precision Reassembly & Torque',
+                    title: 'Precision Reassembly & Star-Pattern Torque',
                     instruction:
-                      'Install new seals/bearings and torque M12 studs in star-pattern to 45 Nm ± 2 Nm.',
+                      'Install new seals/bearings and torque M12 studs in cross-star pattern to 45 Nm ± 2 Nm.',
                     requiresLoto: false,
                     status: 'PENDING',
+                    targetSpec: 'Star-Pattern Torque: 45 Nm ± 2 Nm',
                   },
                   {
                     id: 'step-5',
                     stepNumber: 5,
-                    title: 'Recommissioning & Baseline Run Test',
+                    title: 'Dynamic Recommissioning & Vibration Telemetry',
                     instruction:
-                      'Clear work zone, re-energize equipment, and run a 15-minute vibration & thermal baseline check.',
+                      'Energize machinery, establish baseline, and verify overall velocity RMS ≤ 1.8 mm/s and bearing temp < 65°C.',
                     requiresLoto: false,
                     status: 'PENDING',
+                    targetSpec: 'Vibration RMS ≤ 1.8 mm/s • Temp < 65°C',
                   },
                 ];
 
@@ -862,6 +899,15 @@ export const TechnicianWorkspaceView: React.FC<{
                   const storedStep = stored.steps ? stored.steps.find((s) => s.id === step.id || s.stepNumber === step.stepNumber) : null;
                   if (storedStep && storedStep.status === 'COMPLETED') {
                     return { ...step, status: 'COMPLETED' };
+                  }
+                  if (storedStep && storedStep.status === 'FAILED') {
+                    return { ...step, status: 'FAILED' };
+                  }
+                  if (step.status === 'COMPLETED') {
+                    return step;
+                  }
+                  if (step.status === 'FAILED') {
+                    return step;
                   }
                   if (storedStep && storedStep.status === 'IN_PROGRESS') {
                     return { ...step, status: 'IN_PROGRESS' };
@@ -930,7 +976,135 @@ export const TechnicianWorkspaceView: React.FC<{
               })
           : [];
 
-      const allTasks = [...mappedFromCases, ...mappedFromTickets];
+      // Merge locally escalated tickets from shared store (bulletproof instant cross-module sync)
+      const mappedFromShared: TechTask[] = [];
+      try {
+        const sharedRaw = localStorage.getItem('forgex_shared_raised_tickets');
+        if (sharedRaw) {
+          const sharedTickets = JSON.parse(sharedRaw);
+          if (Array.isArray(sharedTickets)) {
+            sharedTickets.forEach((st: any, index: number) => {
+              const taskId = st.caseNumber || st.id || `CASE-SH-${index + 1}`;
+              if (!existingIds.has(taskId) && !existingIds.has(st.id)) {
+                existingIds.add(taskId);
+                existingIds.add(st.id);
+                const prio: 'Critical' | 'High' | 'Medium' =
+                  st.severity === 'CRITICAL' ? 'Critical' : st.severity === 'HIGH' ? 'High' : 'Medium';
+                const hasLoto = Boolean(st.lotoApplied);
+                const defaultSteps: TechStep[] = Array.isArray(st.checklist) && st.checklist.length > 0
+                  ? st.checklist.map((s: any, idx: number) => ({
+                      id: s.id || `step-${idx + 1}`,
+                      stepNumber: s.stepNumber || idx + 1,
+                      title: s.title || `Step ${idx + 1}`,
+                      instruction: s.instruction || 'Execute procedure according to certified maintenance manual.',
+                      requiresLoto: Boolean(s.requiresLoto),
+                      status: s.status === 'COMPLETED' ? 'COMPLETED' : s.status === 'FAILED' ? 'FAILED' : 'PENDING',
+                      targetSpec: s.targetSpec || getStepTargetSpec(s.stepNumber || idx + 1),
+                    }))
+                  : [
+                      {
+                        id: 'step-1',
+                        stepNumber: 1,
+                        title: 'Vision LOTO & Zero-Energy Isolation Gate',
+                        instruction: 'Lock out main breaker, bleed line pressure to 0.0 PSI, and tag out per OSHA 1910.147.',
+                        requiresLoto: hasLoto,
+                        status: 'PENDING',
+                        targetSpec: '0.0 VAC • 0.0 PSI LOTO Verified',
+                      },
+                      {
+                        id: 'step-2',
+                        stepNumber: 2,
+                        title: 'Flange Runout & Casing Alignment Verification',
+                        instruction: 'Remove safety shroud, unbolt casing cover, and verify flange runout tolerance within ≤ 0.05 mm.',
+                        requiresLoto: false,
+                        status: 'PENDING',
+                        targetSpec: 'Flange Runout ≤ 0.05 mm',
+                      },
+                      {
+                        id: 'step-3',
+                        stepNumber: 3,
+                        title: 'Mechanical Seal Face & Helium Light Band QA',
+                        instruction: 'Inspect seal faces, bearings, and shaft runout for pitting under monochromatic helium light (≤ 3 bands).',
+                        requiresLoto: false,
+                        status: 'PENDING',
+                        targetSpec: 'Seal Flatness ≤ 3 Light Bands',
+                      },
+                      {
+                        id: 'step-4',
+                        stepNumber: 4,
+                        title: 'Precision Reassembly & Star-Pattern Torque',
+                        instruction: 'Install new seals/bearings and torque M12 studs in cross-star pattern to 45 Nm ± 2 Nm.',
+                        requiresLoto: false,
+                        status: 'PENDING',
+                        targetSpec: 'Star-Pattern Torque: 45 Nm ± 2 Nm',
+                      },
+                      {
+                        id: 'step-5',
+                        stepNumber: 5,
+                        title: 'Dynamic Recommissioning & Vibration Telemetry',
+                        instruction: 'Energize machinery, establish baseline, and verify overall velocity RMS ≤ 1.8 mm/s and bearing temp < 65°C.',
+                        requiresLoto: false,
+                        status: 'PENDING',
+                        targetSpec: 'Vibration RMS ≤ 1.8 mm/s • Temp < 65°C',
+                      },
+                    ];
+
+                const stored = loadStoredExecution(taskId, st.id);
+                const mergedSteps: TechStep[] = defaultSteps.map((step) => {
+                  const storedStep = stored.steps ? stored.steps.find((s) => s.id === step.id || s.stepNumber === step.stepNumber) : null;
+                  if (storedStep && storedStep.status === 'COMPLETED') return { ...step, status: 'COMPLETED' };
+                  if (storedStep && storedStep.status === 'FAILED') return { ...step, status: 'FAILED' };
+                  if (storedStep && storedStep.status === 'IN_PROGRESS') return { ...step, status: 'IN_PROGRESS' };
+                  return step;
+                });
+
+                const isStarted = stored.isStarted || mergedSteps.some((s) => s.status !== 'PENDING');
+                const completedCount = mergedSteps.filter((s) => s.status === 'COMPLETED').length;
+
+                const assignedName = st.assignedTechnicianName || TECHNICIAN_ROSTER[0].name;
+                const matchedProfile = TECHNICIAN_ROSTER.find((p) => p.name === assignedName) || TECHNICIAN_ROSTER[0];
+                const cleanAssetTag = formatCleanAssetTag(st.assetId || st.machineAssetTag || st.assetTag, st.title, st.assetName);
+                const cleanAssetName = isUUID(st.assetName) ? 'Helical Industrial Gearbox' : (st.assetName || cleanAssetTag);
+
+                mappedFromShared.push({
+                  id: taskId,
+                  rawCaseId: st.id,
+                  assetTag: cleanAssetTag,
+                  assetName: cleanAssetName,
+                  createdAtFormatted: st.createdAtFormatted || formatDt(st.createdAt),
+                  rcaSessionId: st.rcaSessionId,
+                  title: st.title || `Emergency Repair: [${cleanAssetTag}]`,
+                  faultCode: st.faultCode || 'FC-DIAG-01',
+                  symptomDescription: st.symptomDescription || st.description || 'Observed failure across diagnostic checks',
+                  topRootCause: st.topRootCause || 'Mechanical Breakdown',
+                  probability: st.probability || 92,
+                  priority: prio,
+                  status: completedCount === mergedSteps.length && mergedSteps.length > 0 ? 'Resolved' : isStarted ? 'In Progress' : 'Assigned',
+                  dueTime: 'Today',
+                  sopDocument: st.sopDocument || `SOP-REPAIR-${cleanAssetTag}`,
+                  lotoRequired: hasLoto,
+                  specialistDiscipline: st.specialistDiscipline || matchedProfile.role,
+                  assignedTechnicianName: matchedProfile.name,
+                  assignedTechnicianRating: matchedProfile.rating,
+                  assignedTechnicianTier: matchedProfile.tier,
+                  plantName: st.plantName || organization?.name || 'Plant Sector Alpha',
+                  reportedBy: st.reportedByName || 'AI Diagnostic Copilot',
+                  recommendedFix: st.recommendedFix || 'Execute immediate component overhaul.',
+                  investigationProgress: st.investigationProgress || 'Ready for Execution',
+                  stepsCount: mergedSteps.length,
+                  completedSteps: completedCount,
+                  steps: mergedSteps,
+                  isStarted,
+                });
+              }
+            });
+          }
+        }
+      } catch (errShared) {
+        console.warn('Error reading forgex_shared_raised_tickets in tech desk:', errShared);
+      }
+
+      const allTasks = [...mappedFromShared, ...mappedFromCases, ...mappedFromTickets];
       setTasks(allTasks);
 
       // Deep-link auto-selection: check initialTicketId prop, sessionStorage, and URL ?ticketId= param
@@ -967,6 +1141,19 @@ export const TechnicianWorkspaceView: React.FC<{
 
   useEffect(() => {
     fetchQueue(false);
+  }, [fetchQueue]);
+
+  // Real-time synchronization when a ticket/case is created from RCA or RaisedTickets
+  useEffect(() => {
+    const handleTicketCreated = () => {
+      fetchQueue(true);
+    };
+    window.addEventListener('forgex:case-created', handleTicketCreated);
+    window.addEventListener('forgex:ticket-created', handleTicketCreated);
+    return () => {
+      window.removeEventListener('forgex:case-created', handleTicketCreated);
+      window.removeEventListener('forgex:ticket-created', handleTicketCreated);
+    };
   }, [fetchQueue]);
 
   // Listen for navigation deep-links to specific tickets
@@ -1215,6 +1402,97 @@ export const TechnicianWorkspaceView: React.FC<{
         }).catch(() => null);
       } catch (err) {
         console.warn('Backend step advance sync notice:', err);
+      }
+    }
+  };
+
+  // Step Failure Handling (Voice command "Fail" or "✕ Step Failed" button)
+  const handleFailStep = async (task: TechTask, failedStepItem?: TechStep) => {
+    const failedStep =
+      failedStepItem ||
+      task.steps.find((s) => s.status === 'IN_PROGRESS') ||
+      task.steps[0];
+    if (!failedStep) return;
+
+    let targetTask: TechTask | undefined;
+
+    setTasks((prevTasks) =>
+      prevTasks.map((t) => {
+        if (t.id !== task.id) return t;
+        targetTask = t;
+
+        const updatedSteps = t.steps.map((step) => {
+          if (step.id === failedStep.id || step.stepNumber === failedStep.stepNumber) {
+            return { ...step, status: 'FAILED' as const };
+          }
+          return step;
+        });
+
+        saveStoredExecution(t, updatedSteps, true);
+
+        const updatedTask: TechTask = {
+          ...t,
+          steps: updatedSteps,
+          status: 'Failed',
+        };
+
+        if (selectedTask?.id === task.id) {
+          setSelectedTask(updatedTask);
+        }
+
+        window.dispatchEvent(
+          new CustomEvent('forgex:ticket-progress-sync', {
+            detail: {
+              ticketId: t.id,
+              rawCaseId: t.rawCaseId,
+              status: 'FAILED',
+              isFailed: true,
+              isSolved: false,
+              completedSteps: t.completedSteps,
+              totalSteps: updatedSteps.length,
+              technicianName: t.assignedTechnicianName,
+            },
+          })
+        );
+
+        return updatedTask;
+      })
+    );
+
+    toast.error(
+      'Procedure Step Failed',
+      `Step #${failedStep.stepNumber} (${failedStep.title}) marked as FAILED / BLOCKED. Export Failure Dossier or Escalate to OEM.`
+    );
+
+    // Persist failure to backend database if connected
+    if (token && targetTask) {
+      const caseRef = (targetTask as TechTask).rawCaseId || targetTask.id;
+      try {
+        const headers: Record<string, string> = {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        };
+        if (organization?.id) headers['x-organization-id'] = organization.id;
+
+        await fetch(`/api/v1/maintenance/cases/${caseRef}/steps/${failedStep.id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            status: 'FAILED',
+            technicianNotes: 'Step failed during execution - procedure blocked',
+          }),
+        }).catch(() => null);
+
+        await fetch(`/api/v1/maintenance/cases/${caseRef}/status`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            status: 'BLOCKED',
+            reason: `Step #${failedStep.stepNumber} (${failedStep.title}) failed during field execution.`,
+          }),
+        }).catch(() => null);
+      } catch (err) {
+        console.warn('Backend step failure sync notice:', err);
       }
     }
   };
@@ -1749,10 +2027,22 @@ export const TechnicianWorkspaceView: React.FC<{
     }
   };
 
-  // Web Speech API / Hands-free recognition hookup
-  useEffect(() => {
-    if (!isVoiceActive) return;
+  // Speech Synthesis Speaker Helper
+  const speakText = useCallback((text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('Voice speech error:', e);
+    }
+  }, []);
 
+  // Web Speech API / Hands-free continuous recognition with "Hey Copilot" Wake-Word
+  useEffect(() => {
     let recognition: any = null;
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -1767,27 +2057,54 @@ export const TechnicianWorkspaceView: React.FC<{
         recognition.onresult = (event: any) => {
           const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
           setLastVoiceCommand(transcript);
+          console.log('Voice Command Received:', transcript);
 
-          if (transcript.includes('confirm') || transcript.includes('next') || transcript.includes('done')) {
-            if (selectedTask) {
-              const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
-              if (activeStep) {
-                handleCompleteAndNext(selectedTask.id, activeStep.id);
-                toast.success('Voice Command Executed', `Step ${activeStep.stepNumber} confirmed by voice.`);
+          // 1. Wake-word activation
+          if (transcript.includes('hey copilot') || transcript.includes('activate voice') || transcript.includes('start voice')) {
+            setIsVoiceActive(true);
+            speakText('Copilot listening, state your command.');
+            toast.success('Copilot Listening', 'Say "Confirm Step", "Next", "Fail Step", "Solved", or "SOS"');
+            return;
+          }
+
+          // 2. Standby / Cancel
+          if (transcript.includes('stop voice') || transcript.includes('disable voice') || transcript.includes('cancel')) {
+            setIsVoiceActive(false);
+            speakText('Copilot voice standby.');
+            toast.info('Voice Standby', 'Say "Hey Copilot" to reactivate.');
+            return;
+          }
+
+          // 3. Execution Commands
+          if (isVoiceActive) {
+            if (transcript.includes('fail') || transcript.includes('block') || transcript.includes('abort')) {
+              if (selectedTask) {
+                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+                if (activeStep) {
+                  handleFailStep(selectedTask, activeStep);
+                }
               }
-            }
-          } else if (transcript.includes('copilot') || transcript.includes('spec')) {
-            if (selectedTask) {
-              const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
-              handleAskCopilot(selectedTask, activeStep);
-            }
-          } else if (transcript.includes('sos') || transcript.includes('buddy') || transcript.includes('help')) {
-            setIsBuddyModalOpen(true);
-          } else if (transcript.includes('solved') || transcript.includes('finish')) {
-            if (selectedTask) {
-              const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
-              if (activeStep) {
-                handleMarkTaskSolved(selectedTask, activeStep);
+            } else if (transcript.includes('confirm') || transcript.includes('next') || transcript.includes('done')) {
+              if (selectedTask) {
+                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+                if (activeStep) {
+                  handleCompleteAndNext(selectedTask.id, activeStep.id);
+                  toast.success('Voice Command Executed', `Step ${activeStep.stepNumber} confirmed by voice.`);
+                }
+              }
+            } else if (transcript.includes('copilot') || transcript.includes('spec')) {
+              if (selectedTask) {
+                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+                handleAskCopilot(selectedTask, activeStep);
+              }
+            } else if (transcript.includes('sos') || transcript.includes('buddy') || transcript.includes('help')) {
+              setIsBuddyModalOpen(true);
+            } else if (transcript.includes('solved') || transcript.includes('finish')) {
+              if (selectedTask) {
+                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+                if (activeStep) {
+                  handleMarkTaskSolved(selectedTask, activeStep);
+                }
               }
             }
           }
@@ -1795,6 +2112,12 @@ export const TechnicianWorkspaceView: React.FC<{
 
         recognition.onerror = () => {
           // Graceful fallback
+        };
+
+        recognition.onend = () => {
+          try {
+            recognition.start();
+          } catch {}
         };
 
         recognition.start();
@@ -1810,26 +2133,7 @@ export const TechnicianWorkspaceView: React.FC<{
         } catch {}
       }
     };
-  }, [isVoiceActive, selectedTask]);
-
-  const handleVoiceTrigger = (action: 'CONFIRM_STEP' | 'COPILOT' | 'SOS' | 'SOLVED') => {
-    if (!selectedTask) return;
-    const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
-    if (action === 'CONFIRM_STEP') {
-      if (activeStep) {
-        handleCompleteAndNext(selectedTask.id, activeStep.id);
-        toast.success('Voice Trigger: "Confirm Step"', `Step ${activeStep.stepNumber} confirmed.`);
-      }
-    } else if (action === 'COPILOT') {
-      handleAskCopilot(selectedTask, activeStep);
-    } else if (action === 'SOS') {
-      setIsBuddyModalOpen(true);
-    } else if (action === 'SOLVED') {
-      if (activeStep) {
-        handleMarkTaskSolved(selectedTask, activeStep);
-      }
-    }
-  };
+  }, [isVoiceActive, selectedTask, speakText, toast]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F8FAFC] text-[#0F172A] font-sans antialiased">
@@ -1935,8 +2239,8 @@ export const TechnicianWorkspaceView: React.FC<{
       ) : (
         /* Main Split: Left Compact Field Task List (380px) + Right Detail View */
         <div className="flex-1 min-h-0 h-[calc(100vh-4rem)] overflow-hidden flex flex-col lg:flex-row">
-          {/* Left: Compact Field Task List */}
-          <div className="w-full lg:w-[380px] h-full border-b lg:border-b-0 lg:border-r border-slate-200 bg-white p-2.5 space-y-2 shrink-0 shadow-xs flex flex-col rounded-b-lg lg:rounded-none overflow-hidden">
+          {/* Left: Compact Field Task List (290px/310px - Requirement 1) */}
+          <div className="w-full lg:w-[290px] xl:w-[310px] h-full border-b lg:border-b-0 lg:border-r border-slate-200 bg-white p-2.5 space-y-2 shrink-0 shadow-xs flex flex-col rounded-b-lg lg:rounded-none overflow-hidden">
             {/* 1. Left Panel Search Input */}
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -1994,7 +2298,7 @@ export const TechnicianWorkspaceView: React.FC<{
                     <div
                       key={task.id}
                       onClick={() => setSelectedTask((prev) => (prev?.id === task.id ? null : task))}
-                      className={`p-2.5 rounded-lg border transition cursor-pointer text-xs space-y-1.5 group relative ${
+                      className={`p-2.5 rounded-lg border transition cursor-pointer text-xs space-y-2 group relative ${
                         task.priority === 'Critical'
                           ? 'border-l-4 border-l-rose-500'
                           : task.priority === 'High'
@@ -2006,19 +2310,14 @@ export const TechnicianWorkspaceView: React.FC<{
                           : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
                       }`}
                     >
-                      {/* Row 1 (Header Strip): Case ID + Asset Tag Pill on left; Priority Badge + Delete icon on right */}
+                      {/* Row 1: Ticket ID on the left, Priority Badge + Delete icon on the right */}
                       <div className="flex items-center justify-between gap-1.5">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="font-mono font-bold text-blue-600 text-xs truncate">
-                            {task.id}
-                          </span>
-                          <span className="font-mono font-semibold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded text-[10px] shrink-0 truncate max-w-[140px]">
-                            {cleanAssetTag}
-                          </span>
-                        </div>
+                        <span className="font-mono font-bold text-blue-600 text-xs shrink-0">
+                          {task.id}
+                        </span>
                         <div className="flex items-center gap-1 shrink-0">
                           <span
-                            className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-bold border ${
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-bold border whitespace-nowrap ${
                               task.priority === 'Critical'
                                 ? 'bg-red-50 text-red-700 border-red-200'
                                 : task.priority === 'High'
@@ -2046,20 +2345,30 @@ export const TechnicianWorkspaceView: React.FC<{
                         </div>
                       </div>
 
-                      {/* Row 2 (Issue & Footer Strip): 1-line truncated Issue Title on left; Tech Name (⭐4.9) + Steps (4/4) + Status Pill on right */}
-                      <div className="flex items-center justify-between gap-2 text-[11px]">
-                        <p className="text-slate-700 font-medium truncate flex-1 min-w-0" title={task.title}>
+                      {/* Row 2: Full untruncated Machine Tag pill + 2-line Clean Wrapping Issue Title */}
+                      <div className="space-y-1">
+                        <span className="inline-flex items-center gap-1 font-mono font-bold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] break-words">
+                          ⚙️ {cleanAssetTag}
+                        </span>
+                        <p className="text-slate-800 font-medium text-xs leading-snug line-clamp-2 break-words" title={task.title}>
                           {task.title}
                         </p>
-                        <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
-                          <span className="text-slate-600 font-semibold truncate max-w-[90px]" title={task.assignedTechnicianName}>
-                            👤 {task.assignedTechnicianName.split(' ')[0]} <span className="text-amber-700 font-bold">⭐{task.assignedTechnicianRating.toFixed(1)}</span>
-                          </span>
-                          <span className="text-slate-300">•</span>
+                      </div>
+
+                      {/* Row 3 (Footer Strip): Full Tech Name (⭐4.9) + Steps (X/5) + Status Pill */}
+                      <div className="flex items-center justify-between gap-1.5 text-[10px] font-mono pt-1 border-t border-slate-100">
+                        <span className="text-slate-600 font-semibold truncate" title={task.assignedTechnicianName}>
+                          👤 {task.assignedTechnicianName} <span className="text-amber-700 font-bold">⭐{task.assignedTechnicianRating.toFixed(1)}</span>
+                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
                           <span className="font-bold text-slate-800">
                             {task.completedSteps}/{task.stepsCount}
                           </span>
-                          {task.completedSteps === task.stepsCount && task.stepsCount > 0 ? (
+                          {task.status === 'Failed' || task.steps.some((s) => s.status === 'FAILED') ? (
+                            <span className="font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1 py-0.2 rounded text-[9px]">
+                              FAILED
+                            </span>
+                          ) : task.completedSteps === task.stepsCount && task.stepsCount > 0 ? (
                             <span className="font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded text-[9px]">
                               RESOLVED
                             </span>
@@ -2164,16 +2473,41 @@ export const TechnicianWorkspaceView: React.FC<{
                       </span>
                     </span>
 
-                    {/* Export Job Sheet */}
-                    <button
-                      type="button"
-                      onClick={() => handleExportJobSheet(selectedTask)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-lg text-xs font-semibold transition shadow-2xs cursor-pointer whitespace-nowrap"
-                      title="Export official printable compliance job sheet summary"
-                    >
-                      <Printer className="w-3.5 h-3.5 text-slate-600" />
-                      <span>Export Job Sheet</span>
-                    </button>
+                    {/* Conditional Export Job Sheet: Only when Solved or Failed */}
+                    {(() => {
+                      const isTaskSolved = selectedTask.status === 'Resolved' || (selectedTask.completedSteps === selectedTask.stepsCount && selectedTask.stepsCount > 0);
+                      const isTaskFailed = selectedTask.status === 'Failed' || (selectedTask.steps && selectedTask.steps.some((s) => s.status === 'FAILED'));
+
+                      if (isTaskSolved) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => handleExportJobSheet(selectedTask)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-semibold transition shadow-2xs cursor-pointer whitespace-nowrap"
+                            title="Export official printable compliance job sheet summary"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>📄 Export Job Sheet</span>
+                          </button>
+                        );
+                      }
+
+                      if (isTaskFailed) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => handleExportJobSheet(selectedTask)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 rounded-lg text-xs font-semibold transition shadow-2xs cursor-pointer whitespace-nowrap"
+                            title="Export failure dossier & OEM diagnostic summary"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-rose-700" />
+                            <span>📄 Export Job Sheet (Failure Dossier)</span>
+                          </button>
+                        );
+                      }
+
+                      return null;
+                    })()}
 
                     {/* Delete Button (Role-guarded) */}
                     {(isSupervisorOrAdmin || selectedTask.status === 'Resolved') && (
@@ -2241,7 +2575,25 @@ export const TechnicianWorkspaceView: React.FC<{
                   </button>
 
                   {showDiagnostics && (() => {
-                    const symptom = selectedTask.symptomDescription || selectedTask.title;
+                    const rawSymptom = selectedTask.symptomDescription || selectedTask.title;
+                    let cleanSymptom = rawSymptom;
+                    let extractedAlarm = selectedTask.alarmCode || '';
+
+                    if (rawSymptom.includes('|')) {
+                      const parts = rawSymptom.split('|').map((p) => p.trim());
+                      const nonMetadataParts: string[] = [];
+                      for (const part of parts) {
+                        if (/^alarm\s*code\s*:/i.test(part)) {
+                          if (!extractedAlarm) extractedAlarm = part.replace(/^alarm\s*code\s*:\s*/i, '');
+                        } else if (/^(machine\s*status|shift\s*\/?\s*area|facility|loto\s*mandatory)/i.test(part)) {
+                          // Filter out noisy status concatenation
+                        } else if (part.length > 0) {
+                          nonMetadataParts.push(part);
+                        }
+                      }
+                      cleanSymptom = nonMetadataParts.join(' • ') || selectedTask.title;
+                    }
+
                     const rcaHypothesis =
                       selectedTask.topRootCause || 'Dynamic seal degradation & fluid cavitation';
                     const probability = selectedTask.probability || 94;
@@ -2251,18 +2603,25 @@ export const TechnicianWorkspaceView: React.FC<{
 
                     return (
                       <div className="p-3 border-t border-slate-200 bg-white">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-slate-50/90 rounded-xl border border-slate-200 text-xs">
-                          {/* Col 1: Field Symptom (Wrap cleanly, no cut-off) */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-3.5 bg-slate-50/90 rounded-xl border border-slate-200 text-xs">
+                          {/* Col 1: Clean Observed Symptom & Alarm Code (Cleanly Stacked) */}
                           <div className="space-y-1.5 flex flex-col justify-between">
                             <div>
-                              <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block tracking-wider">
-                                ⚠️ FIELD SYMPTOM
-                              </span>
+                              <div className="flex flex-col items-start gap-1 mb-1.5">
+                                <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block tracking-wider">
+                                  ⚠️ FIELD SYMPTOM
+                                </span>
+                                {extractedAlarm && (
+                                  <span className="text-[9px] font-mono font-bold bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded w-fit max-w-full break-words">
+                                    ALARM: {extractedAlarm}
+                                  </span>
+                                )}
+                              </div>
                               <p
-                                className="text-slate-800 font-medium text-xs leading-snug mt-1 break-words"
-                                title={symptom}
+                                className="text-slate-800 font-medium text-xs leading-relaxed mt-1 break-words"
+                                title={cleanSymptom}
                               >
-                                {symptom}
+                                {cleanSymptom}
                               </p>
                             </div>
                           </div>
@@ -2360,166 +2719,128 @@ export const TechnicianWorkspaceView: React.FC<{
                     </div>
                   </div>
                 ) : (
-                              <div className="space-y-3.5">
-                    {/* Execution Board Header Bar - Upgraded to Deep Navy-to-Indigo Gradient (Requirement 4) */}
-                    <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-3.5 rounded-xl shadow-sm border border-indigo-900/40 flex flex-col md:flex-row md:items-center justify-between gap-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-white tracking-wide">Execution Board</span>
-                            <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30 flex items-center gap-1 shadow-xs">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                              ACTIVE RUN
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-300 mt-0.5 font-mono">
-                            Procedure: <span className="text-slate-100 font-medium">{selectedTask.sopDocument}</span>
-                          </p>
-                        </div>
+                  <div className="space-y-3.5">
+                    {/* Execution Board Header Bar - Sleek Single-Line Navy-Indigo Bar (Requirement 3) */}
+                    {(() => {
+                      const isTaskSolved = selectedTask.status === 'Resolved' || (selectedTask.completedSteps === selectedTask.stepsCount && selectedTask.stepsCount > 0);
+                      const isTaskFailed = selectedTask.status === 'Failed' || (selectedTask.steps && selectedTask.steps.some((s) => s.status === 'FAILED'));
 
-                        {/* Interactive 5-Step Mini-Pills (Requirement 4) */}
-                        {selectedTask.steps && selectedTask.steps.length > 0 && (
-                          <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-lg border border-white/10 shrink-0">
-                            {selectedTask.steps.map((step, idx) => {
-                              const completedStepsCount = selectedTask.steps.filter((s) => s.status === 'COMPLETED').length;
-                              const isCompleted = idx < completedStepsCount;
-                              const isActive = idx === completedStepsCount;
-                              return (
-                                <button
-                                  key={step.id || step.stepNumber}
-                                  type="button"
-                                  onClick={() => {
-                                    const el = document.getElementById(`step-card-${step.stepNumber}`);
-                                    if (el) {
-                                      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                    }
-                                  }}
-                                  title={`Step ${step.stepNumber}: ${step.title} (${isCompleted ? 'Verified' : isActive ? 'Active' : 'Locked'})`}
-                                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
-                                    isCompleted
-                                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 shadow-xs hover:bg-emerald-500/30'
-                                      : isActive
-                                      ? 'bg-indigo-500/40 text-cyan-200 border border-cyan-400/60 ring-1 ring-cyan-400/40 animate-pulse hover:bg-indigo-500/50'
-                                      : 'bg-white/5 text-slate-400 border border-white/10 hover:bg-white/15 hover:text-slate-200'
-                                  }`}
-                                >
-                                  {String(step.stepNumber).padStart(2, '0')}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        {/* 🎙️ AI Voice Command Toggle (Sleek Dark Glass) */}
-                        <button
-                          type="button"
-                          onClick={() => setIsVoiceActive((prev) => !prev)}
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer backdrop-blur-md ${
-                            isVoiceActive
-                              ? 'bg-rose-500/30 text-rose-200 border border-rose-400/40 ring-1 ring-rose-400/50 font-bold'
-                              : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'
-                          }`}
-                          title="Hands-free voice recognition for greasy hands or heavy safety gloves"
-                        >
-                          {isVoiceActive ? (
-                            <>
-                              <span className="relative flex h-2 w-2">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500" />
+                      return (
+                        <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-4 py-3 rounded-xl shadow-sm border border-indigo-900/40 flex items-center justify-between gap-4 flex-wrap lg:flex-nowrap">
+                          {/* Left: Execution Board title + Active/Failed/Solved status */}
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            <span className="text-sm font-bold text-white tracking-wide whitespace-nowrap">Execution Board</span>
+                            {isTaskSolved ? (
+                              <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
+                                <Check className="w-2.5 h-2.5 text-emerald-400" />
+                                SOLVED
                               </span>
-                              <Mic className="w-3.5 h-3.5 text-rose-400" />
-                              <span>🎙️ AI Voice Command: ON</span>
-                            </>
-                          ) : (
-                            <>
-                              <Mic className="w-3.5 h-3.5 text-indigo-300" />
-                              <span>🎙️ AI Voice Command</span>
-                            </>
-                          )}
-                        </button>
+                            ) : isTaskFailed ? (
+                              <span className="text-[10px] font-mono font-bold text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-full border border-rose-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
+                                <X className="w-2.5 h-2.5 text-rose-400" />
+                                FAILED / BLOCKED
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                ACTIVE RUN
+                              </span>
+                            )}
+                          </div>
 
-                        <div className="text-right">
-                          <span className="text-xs font-mono font-bold text-slate-200">
-                            {selectedTask.completedSteps} / {selectedTask.stepsCount} Steps
-                          </span>
-                          <div className="w-28 sm:w-36 h-2 bg-slate-800/80 rounded-full overflow-hidden mt-1 border border-white/10">
+                          {/* Center: Interactive 5-Step Mini-Pills */}
+                          {selectedTask.steps && selectedTask.steps.length > 0 && (
+                            <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-lg border border-white/10 shrink-0">
+                              {selectedTask.steps.map((step) => {
+                                const isCompleted = step.status === 'COMPLETED';
+                                const isStepFailed = step.status === 'FAILED';
+                                const isActive = step.status === 'IN_PROGRESS';
+                                return (
+                                  <button
+                                    key={step.id || step.stepNumber}
+                                    type="button"
+                                    onClick={() => {
+                                      const el = document.getElementById(`step-card-${step.stepNumber}`);
+                                      if (el) {
+                                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                      }
+                                    }}
+                                    title={`Step ${step.stepNumber}: ${step.title} (${isCompleted ? 'Verified' : isStepFailed ? 'Failed' : isActive ? 'Active' : 'Locked'})`}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer whitespace-nowrap inline-flex items-center gap-0.5 ${
+                                      isCompleted
+                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 shadow-xs hover:bg-emerald-500/30'
+                                        : isStepFailed
+                                        ? 'bg-rose-500/30 text-rose-300 border border-rose-400/60 shadow-xs hover:bg-rose-500/40'
+                                        : isActive
+                                        ? 'bg-indigo-500/40 text-cyan-200 border border-cyan-400/60 ring-1 ring-cyan-400/40 animate-pulse hover:bg-indigo-500/50'
+                                        : 'bg-white/5 text-slate-400 border border-white/10 hover:bg-white/15 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    {isCompleted ? '✓' : isStepFailed ? '✕' : ''} {String(step.stepNumber).padStart(2, '0')}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* Right: Glowing Hey Copilot Status Pill + Step progress + Server sync */}
+                          <div className="flex items-center gap-3 shrink-0">
+                            {/* 🎙️ Glowing Status Pill for "Hey Copilot" Wake-Word */}
                             <div
-                              className="h-full bg-gradient-to-r from-indigo-500 to-blue-500 transition-all duration-300 rounded-full"
-                              style={{
-                                width: `${
-                                  (selectedTask.completedSteps /
-                                    Math.max(1, selectedTask.stepsCount)) *
-                                  100
-                                }%`,
-                              }}
-                            />
+                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all shadow-xs whitespace-nowrap ${
+                                isVoiceActive
+                                  ? 'bg-rose-600/90 text-white animate-pulse ring-2 ring-rose-400'
+                                  : 'bg-indigo-950/80 text-cyan-300 border border-indigo-700/60'
+                              }`}
+                              title="Hands-free Voice: Say 'Hey Copilot' to state command"
+                            >
+                              <Mic className={`w-3.5 h-3.5 ${isVoiceActive ? 'text-white animate-pulse' : 'text-cyan-400'}`} />
+                              <span className="whitespace-nowrap">
+                                {isVoiceActive
+                                  ? (lastVoiceCommand ? `🎙️ Heard: "${lastVoiceCommand}"` : '🎙️ Copilot Listening • State Command...')
+                                  : '🎙️ Say "Hey Copilot" • Commands: "Confirm Step", "Next", "Fail Step", "Solved", "SOS"'}
+                              </span>
+                            </div>
+
+                            <div className="text-right whitespace-nowrap">
+                              <span className="text-xs font-mono font-bold text-slate-200">
+                                {selectedTask.completedSteps} / {selectedTask.stepsCount} Steps
+                              </span>
+                              <div className="w-24 sm:w-28 h-1.5 bg-slate-800/80 rounded-full overflow-hidden mt-1 border border-white/10">
+                                <div
+                                  className="h-full bg-gradient-to-r from-indigo-500 to-blue-500 transition-all duration-300 rounded-full"
+                                  style={{
+                                    width: `${
+                                      (selectedTask.completedSteps /
+                                        Math.max(1, selectedTask.stepsCount)) *
+                                      100
+                                    }%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Server Sync Button */}
+                            <button
+                              onClick={() => fetchQueue(true)}
+                              disabled={syncing}
+                              title="Sync latest progress from server (Never resets completed steps)"
+                              className="p-1.5 text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg transition cursor-pointer shrink-0"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-indigo-300' : ''}`} />
+                            </button>
                           </div>
                         </div>
+                      );
+                    })()}
 
-                        {/* Server Sync Button */}
-                        <button
-                          onClick={() => fetchQueue(true)}
-                          disabled={syncing}
-                          title="Sync latest progress from server (Never resets completed steps)"
-                          className="p-1.5 text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg transition cursor-pointer"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-indigo-300' : ''}`} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Glove-Safe Voice Active Assistant Strip */}
-                    {isVoiceActive && (
-                      <div className="px-3 py-2 rounded-lg bg-indigo-50/90 border border-indigo-200 text-indigo-950 text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs font-mono">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Radio className="w-3.5 h-3.5 text-indigo-600 animate-pulse shrink-0" />
-                          <span className="font-bold text-[11px] text-indigo-900">
-                            🎙️ Glove-Safe Voice Active:
-                          </span>
-                          <span className="text-[10px] text-indigo-700 truncate">
-                            Say <strong>"Confirm Step"</strong>, <strong>"Next"</strong>, <strong>"Copilot"</strong>, <strong>"SOS Assist"</strong>, or <strong>"Solved"</strong>
-                          </span>
-                          {lastVoiceCommand && (
-                            <span className="text-[9px] bg-indigo-200/80 px-1.5 py-0.5 rounded text-indigo-900">
-                              Heard: "{lastVoiceCommand}"
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <span className="text-[9px] text-indigo-500 mr-1 font-sans">Quick trigger:</span>
-                          <button
-                            type="button"
-                            onClick={() => handleVoiceTrigger('CONFIRM_STEP')}
-                            className="px-2 py-0.5 rounded bg-white hover:bg-indigo-100 text-indigo-800 border border-indigo-300 text-[10px] font-bold cursor-pointer transition shadow-2xs"
-                          >
-                            "Confirm"
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleVoiceTrigger('COPILOT')}
-                            className="px-2 py-0.5 rounded bg-white hover:bg-indigo-100 text-indigo-800 border border-indigo-300 text-[10px] font-bold cursor-pointer transition shadow-2xs"
-                          >
-                            "Copilot"
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleVoiceTrigger('SOS')}
-                            className="px-2 py-0.5 rounded bg-white hover:bg-indigo-100 text-indigo-800 border border-indigo-300 text-[10px] font-bold cursor-pointer transition shadow-2xs"
-                          >
-                            "SOS"
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 2x2 Grid of Execution Steps with Left Indigo Accent & Clean Strikethrough-Free Titles (Requirement 4) */}
+                    {/* 2x2 Grid of Execution Steps with Target Engineering Specs & Fail Step Button */}
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
-                      {selectedTask.steps.map((step, idx) => {
-                        const completedStepsCount = selectedTask.steps.filter((s) => s.status === 'COMPLETED').length;
-                        const isCompleted = idx < completedStepsCount;
-                        const isActive = idx === completedStepsCount;
+                      {selectedTask.steps.map((step) => {
+                        const isCompleted = step.status === 'COMPLETED';
+                        const isStepFailed = step.status === 'FAILED';
+                        const isActive = step.status === 'IN_PROGRESS';
+                        const targetSpec = step.targetSpec || getStepTargetSpec(step.stepNumber);
 
                         if (isCompleted) {
                           return (
@@ -2538,14 +2859,77 @@ export const TechnicianWorkspaceView: React.FC<{
                                     {step.title}
                                   </h4>
                                 </div>
-                                <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded shadow-2xs shrink-0">
-                                  <Check className="w-2.5 h-2.5 stroke-[3] text-indigo-600" />
-                                  <span>Verified</span>
-                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-cyan-300 border border-cyan-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
+                                    <span className="text-amber-400">🎯 SPEC:</span>
+                                    <span>{targetSpec}</span>
+                                  </div>
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded shadow-2xs">
+                                    <Check className="w-2.5 h-2.5 stroke-[3] text-indigo-600" />
+                                    <span>Verified</span>
+                                  </span>
+                                </div>
                               </div>
                               <p className="line-clamp-1 text-xs text-slate-500 pl-6" title={step.instruction}>
                                 {step.instruction}
                               </p>
+                            </div>
+                          );
+                        }
+
+                        if (isStepFailed) {
+                          return (
+                            <div
+                              key={step.id}
+                              id={`step-card-${step.stepNumber}`}
+                              className="p-3 rounded-lg border-2 border-rose-500 bg-rose-50/30 shadow-xs space-y-2 transition"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-start gap-2 flex-1 min-w-0">
+                                  <div className="mt-0.5 w-4 h-4 rounded bg-rose-600 text-white flex items-center justify-center shrink-0">
+                                    <X className="w-3 h-3 stroke-[3]" />
+                                  </div>
+                                  <div className="space-y-1 flex-1 min-w-0">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-mono text-[10px] font-bold text-white bg-rose-600 px-1.5 py-0.5 rounded">
+                                        STEP {step.stepNumber.toString().padStart(2, '0')}
+                                      </span>
+                                      <h4 className="text-xs font-bold text-rose-950 leading-tight">
+                                        {step.title}
+                                      </h4>
+                                      <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold text-rose-800 bg-rose-100 border border-rose-300 px-1.5 py-0.5 rounded">
+                                        ● FAILED / BLOCKED
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-rose-900 leading-relaxed font-sans">
+                                      {step.instruction}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-rose-300 border border-rose-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs shrink-0 whitespace-nowrap">
+                                  <span className="text-amber-400">🎯 SPEC:</span>
+                                  <span>{targetSpec}</span>
+                                </div>
+                              </div>
+
+                              <div className="pt-2 border-t border-rose-200 flex flex-wrap items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleStep(selectedTask.id, step.id)}
+                                  className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold rounded-lg inline-flex items-center gap-1 transition shadow-2xs cursor-pointer"
+                                >
+                                  <RefreshCw className="w-3 h-3 text-slate-500" />
+                                  <span>Retry Step</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenOemModal(selectedTask)}
+                                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                                >
+                                  <Building2 className="w-3.5 h-3.5" />
+                                  <span>🏭 Escalate to OEM</span>
+                                </button>
+                              </div>
                             </div>
                           );
                         }
@@ -2592,12 +2976,18 @@ export const TechnicianWorkspaceView: React.FC<{
                                     )}
                                   </div>
                                 </div>
-                                <span className="text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded shrink-0">
-                                  ACTIVE STEP
-                                </span>
+                                <div className="flex flex-col items-end gap-1 shrink-0">
+                                  <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-cyan-300 border border-cyan-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
+                                    <span className="text-amber-400">🎯 SPEC:</span>
+                                    <span>{targetSpec}</span>
+                                  </div>
+                                  <span className="text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+                                    ACTIVE STEP
+                                  </span>
+                                </div>
                               </div>
 
-                              {/* Active Step Dedicated Actions */}
+                              {/* Active Step Dedicated Actions: Confirm, Solved, and Fail Step */}
                               <div className="pt-2 border-t border-indigo-100 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <button
@@ -2613,11 +3003,21 @@ export const TechnicianWorkspaceView: React.FC<{
                                   <button
                                     type="button"
                                     onClick={() => handleMarkTaskSolved(selectedTask, step)}
-                                    className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap active:scale-95"
+                                    className="px-2.5 py-1.5 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 active:scale-95 text-white font-bold text-xs rounded-lg inline-flex items-center gap-1 transition shadow-xs cursor-pointer whitespace-nowrap"
                                     title="Fault resolved at this procedure step — complete ticket and log to Maintenance History"
                                   >
                                     <CheckCircle2 className="w-3.5 h-3.5" />
                                     <span>Issue Solved Here</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFailStep(selectedTask, step)}
+                                    className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-600 text-rose-700 hover:text-white border border-rose-200 hover:border-rose-600 font-bold text-xs rounded-lg inline-flex items-center gap-1 transition shadow-2xs cursor-pointer whitespace-nowrap active:scale-95"
+                                    title="Mark this step as failed / blocked — unlocks Failure Dossier export and OEM escalation"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>Step Failed</span>
                                   </button>
                                 </div>
 
@@ -2692,94 +3092,133 @@ export const TechnicianWorkspaceView: React.FC<{
                                   </p>
                                 </div>
                               </div>
-                              <span className="text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded shrink-0">
-                                🔒 LOCKED
-                              </span>
+                              <div className="flex flex-col items-end gap-1 shrink-0">
+                                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
+                                  <span className="text-slate-400">🎯 SPEC:</span>
+                                  <span>{targetSpec}</span>
+                                </div>
+                                <span className="text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
+                                  🔒 LOCKED
+                                </span>
+                              </div>
                             </div>
                           </div>
                         );
                       })}
                     </div>
 
-                    {/* Fallback Unresolved Action if technician is blocked / hardware beyond in-house repair */}
-                    {selectedTask.completedSteps < selectedTask.stepsCount && (
-                      <div className="p-2.5 bg-amber-50/80 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
-                        <div className="flex items-center gap-2 text-amber-900 font-medium">
-                          <Building2 className="w-4 h-4 text-amber-700 shrink-0" />
-                          <span>
-                            Technician blocked or internal sub-assembly requires OEM factory intervention?
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenOemModal(selectedTask)}
-                          className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-md inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer shrink-0"
-                        >
-                          <Building2 className="w-3.5 h-3.5" />
-                          <span>🏭 Issue Unresolved — Escalate to OEM / Manufacturer</span>
-                        </button>
-                      </div>
-                    )}
+                    {/* Conditional Bottom Banners (Requirement 1 & 3):
+                        - In Progress: HIDE completely
+                        - Problem Solved: Display Resolved & Archive Banner + Export Job Sheet
+                        - Problem Failed: Display Problem Unresolved — Escalate to OEM Banner + Export Job Sheet (Failure Dossier)
+                    */}
+                    {(() => {
+                      const isTaskSolved = selectedTask.status === 'Resolved' || (selectedTask.completedSteps === selectedTask.stepsCount && selectedTask.stepsCount > 0);
+                      const isTaskFailed = selectedTask.status === 'Failed' || (selectedTask.steps && selectedTask.steps.some((s) => s.status === 'FAILED'));
 
-                    {/* Completion Banner when all steps are done (Deep Slate-Indigo Enterprise Banner) */}
-                    {selectedTask.completedSteps === selectedTask.stepsCount &&
-                      selectedTask.stepsCount > 0 && (
-                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white border border-indigo-500/30 rounded-xl shadow-md">
-                          {/* Left side: Clean completion message and status text */}
-                          <div className="flex items-center gap-2.5 text-white min-w-0">
-                            <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center shrink-0">
-                              <CheckCircle2 className="w-4 h-4 text-indigo-300" />
-                            </div>
-                            <div className="space-y-0.5 min-w-0">
-                              <div className="font-bold text-xs sm:text-sm text-white flex items-center gap-2 flex-wrap">
-                                <span>All {selectedTask.stepsCount}/{selectedTask.stepsCount} Execution Steps Completed</span>
-                                <span className="font-mono text-[10px] font-bold bg-indigo-500/30 text-indigo-200 border border-indigo-400/40 px-2 py-0.5 rounded">
-                                  100% VERIFIED
-                                </span>
+                      if (isTaskFailed) {
+                        return (
+                          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-rose-950 via-slate-900 to-rose-950 text-white border border-rose-500/40 rounded-xl shadow-md">
+                            <div className="flex items-center gap-2.5 text-white min-w-0">
+                              <div className="w-8 h-8 rounded-full bg-rose-500/20 border border-rose-400/40 flex items-center justify-center shrink-0">
+                                <AlertTriangle className="w-4 h-4 text-rose-400" />
                               </div>
-                              <p className="text-slate-300 text-xs">
-                                Field maintenance verified &amp; baseline operational clearance restored.
-                              </p>
+                              <div className="space-y-0.5 min-w-0">
+                                <div className="font-bold text-xs sm:text-sm text-white flex items-center gap-2 flex-wrap">
+                                  <span>Field Repair Failed or Blocked</span>
+                                  <span className="font-mono text-[10px] font-bold bg-rose-500/30 text-rose-200 border border-rose-400/40 px-2 py-0.5 rounded">
+                                    FAILED / BLOCKED
+                                  </span>
+                                </div>
+                                <p className="text-rose-200/80 text-xs">
+                                  Internal assembly tolerance exceeded or requires specialized manufacturer factory tooling.
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                              <button
+                                type="button"
+                                onClick={() => handleExportJobSheet(selectedTask)}
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                                title="Export failure dossier & OEM diagnostic summary"
+                              >
+                                <Printer className="w-3.5 h-3.5 text-white" />
+                                <span>📄 Export Job Sheet (Failure Dossier)</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleOpenOemModal(selectedTask)}
+                                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
+                                title="Direct factory escalation to machine OEM"
+                              >
+                                <Building2 className="w-3.5 h-3.5 text-white" />
+                                <span>🏭 Escalate to OEM</span>
+                              </button>
                             </div>
                           </div>
+                        );
+                      }
 
-                          {/* Right side: High-contrast button group */}
-                          <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
-                            {/* Action: Export Job Sheet */}
-                            <button
-                              type="button"
-                              onClick={() => handleExportJobSheet(selectedTask)}
-                              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
-                              title="Print or export compliance job summary"
-                            >
-                              <Printer className="w-3.5 h-3.5 text-white" />
-                              <span>Export Job Sheet</span>
-                            </button>
+                      if (isTaskSolved) {
+                        return (
+                          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white border border-indigo-500/30 rounded-xl shadow-md">
+                            <div className="flex items-center gap-2.5 text-white min-w-0">
+                              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center shrink-0">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                              </div>
+                              <div className="space-y-0.5 min-w-0">
+                                <div className="font-bold text-xs sm:text-sm text-white flex items-center gap-2 flex-wrap">
+                                  <span>All {selectedTask.stepsCount}/{selectedTask.stepsCount} Execution Steps Completed</span>
+                                  <span className="font-mono text-[10px] font-bold bg-emerald-500/30 text-emerald-200 border border-emerald-400/40 px-2 py-0.5 rounded">
+                                    ✅ VERIFIED SOLVED
+                                  </span>
+                                </div>
+                                <p className="text-slate-300 text-xs">
+                                  Field maintenance verified &amp; baseline operational clearance restored.
+                                </p>
+                              </div>
+                            </div>
 
-                            {/* Secondary Action: Add Tip to Expert Knowledge */}
-                            <button
-                              type="button"
-                              onClick={() => handleAddTipToExpertKnowledge(selectedTask)}
-                              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
-                              title="Capture field insights and tricks directly into Expert Knowledge"
-                            >
-                              <Lightbulb className="w-3.5 h-3.5 text-amber-300 fill-amber-300/30" />
-                              <span>Add Tip to Knowledge</span>
-                            </button>
+                            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                              <button
+                                type="button"
+                                onClick={() => handleExportJobSheet(selectedTask)}
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                                title="Print or export compliance job summary"
+                              >
+                                <Printer className="w-3.5 h-3.5 text-white" />
+                                <span>📄 Export Job Sheet</span>
+                              </button>
 
-                            {/* Primary Action: Archive to Maintenance History */}
-                            <button
-                              type="button"
-                              onClick={() => handleArchiveTaskToHistory(selectedTask)}
-                              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
-                              title="Archive verified repair record to Maintenance History and clear from active queue"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                              <span>Archive to History</span>
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => handleAddTipToExpertKnowledge(selectedTask)}
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                                title="Capture field insights and tricks directly into Expert Knowledge"
+                              >
+                                <Lightbulb className="w-3.5 h-3.5 text-amber-300 fill-amber-300/30" />
+                                <span>Add Tip to Knowledge</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleArchiveTaskToHistory(selectedTask)}
+                                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
+                                title="Archive verified repair record to Maintenance History and clear from active queue"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                                <span>✅ Mark Resolved & Archive to History</span>
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        );
+                      }
+
+                      // While ticket is In Progress / Pending: HIDE completion banner completely
+                      return null;
+                    })()}
                   </div>
                 )}
             </div>
@@ -3114,7 +3553,7 @@ export const TechnicianWorkspaceView: React.FC<{
       {/* Field Workforce & Dispatch Matrix Modal (12+ Technicians Popover/Modal) */}
       {isWorkforceModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Header */}
             <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-2.5">
@@ -3154,7 +3593,7 @@ export const TechnicianWorkspaceView: React.FC<{
             </div>
 
             {/* Cards Grid */}
-            <div className="p-4 overflow-y-auto flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-slate-50/50">
+            <div className="p-5 overflow-y-auto flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50/50">
               {technicianStats
                 .filter((t) => {
                   if (!workforceSearchTerm.trim()) return true;
@@ -3173,11 +3612,12 @@ export const TechnicianWorkspaceView: React.FC<{
                   const activeMachineTag = hasActiveWork
                     ? tech.activeTickets[0].assetTag || tech.activeTickets[0].assetName || 'Equipment'
                     : '';
+                  const isBusy = hasActiveWork || tech.assignedCount > 0;
 
                   return (
                     <div
                       key={tech.id}
-                      className={`p-3 rounded-xl border bg-white shadow-2xs space-y-2 transition ${
+                      className={`p-3.5 rounded-xl border bg-white shadow-2xs space-y-2.5 transition ${
                         isSelected
                           ? 'ring-2 ring-blue-500 border-blue-400'
                           : 'border-slate-200 hover:border-slate-300'
@@ -3193,35 +3633,47 @@ export const TechnicianWorkspaceView: React.FC<{
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between gap-1 text-[10px] font-mono pt-1 border-t border-slate-100">
+                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono pt-1 border-t border-slate-100 flex-wrap">
                         {hasActiveWork ? (
-                          <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold truncate max-w-[140px]">
+                          <span
+                            className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold whitespace-nowrap"
+                            title={activeMachineTag}
+                          >
                             🟡 {activeMachineTag}
                           </span>
                         ) : isOnShift ? (
-                          <span className="px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-semibold">
+                          <span className="px-2 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-semibold whitespace-nowrap">
                             🟢 Available
                           </span>
                         ) : (
-                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200 font-semibold">
+                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200 font-semibold whitespace-nowrap">
                             ⚪ On Break
                           </span>
                         )}
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const next = isOnShift ? 'ON_BREAK' : 'ON_SHIFT';
-                            setTechnicianShiftStatus(tech.name, next);
-                          }}
-                          className={`px-2 py-0.5 rounded border text-[10px] font-bold cursor-pointer transition ${
-                            isOnShift
-                              ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
-                              : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border-emerald-300'
-                          }`}
-                        >
-                          {isOnShift ? 'Mark Break' : 'Set On Shift'}
-                        </button>
+                        {isBusy ? (
+                          <span
+                            className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold cursor-not-allowed select-none shadow-2xs whitespace-nowrap inline-flex items-center gap-1"
+                            title="Cannot take break while executing an active shop-floor task"
+                          >
+                            🔒 Busy on Task
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = isOnShift ? 'ON_BREAK' : 'ON_SHIFT';
+                              setTechnicianShiftStatus(tech.name, next);
+                            }}
+                            className={`px-2 py-0.5 rounded border text-[10px] font-bold cursor-pointer transition whitespace-nowrap ${
+                              isOnShift
+                                ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-300'
+                                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border-emerald-300'
+                            }`}
+                          >
+                            {isOnShift ? 'Mark Break' : 'Set On Shift'}
+                          </button>
+                        )}
                       </div>
 
                       <div className="flex items-center justify-between text-[10px] font-mono text-slate-600 pt-1">
