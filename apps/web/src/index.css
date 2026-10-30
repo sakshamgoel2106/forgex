@@ -280,3 +280,50 @@
   }
 }
 
+/* ForgeX AI Neural Thinking Animations */
+@keyframes laserScan {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(100%); }
+  100% { transform: translateX(300%); }
+}
+
+@keyframes pulseHalo {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.08); opacity: 0.95; }
+}
+
+@keyframes eqBar1 {
+  0%, 100% { height: 4px; }
+  50% { height: 16px; }
+}
+
+@keyframes eqBar2 {
+  0%, 100% { height: 14px; }
+  50% { height: 6px; }
+}
+
+@keyframes eqBar3 {
+  0%, 100% { height: 8px; }
+  50% { height: 18px; }
+}
+
+.animate-laser-scan {
+  animation: laserScan 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.animate-pulse-halo {
+  animation: pulseHalo 2s ease-in-out infinite;
+}
+
+.animate-eq-1 {
+  animation: eqBar1 0.8s ease-in-out infinite;
+}
+
+.animate-eq-2 {
+  animation: eqBar2 0.9s ease-in-out 0.2s infinite;
+}
+
+.animate-eq-3 {
+  animation: eqBar3 0.7s ease-in-out 0.4s infinite;
+}
+

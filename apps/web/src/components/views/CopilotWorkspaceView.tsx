@@ -57,6 +57,7 @@ import { AcousticDiagnosticsModal } from '../copilot/AcousticDiagnosticsModal';
 import { VisionDiagnosticsModal } from '../copilot/VisionDiagnosticsModal';
 import { LotoSafetyRunnerModal } from '../copilot/LotoSafetyRunnerModal';
 import { RcaTicketModal } from '../copilot/RcaTicketModal';
+import { ForgeXAiThinkingAnimation } from '../copilot/ForgeXAiThinkingAnimation';
 
 /**
  * Clean, safe Markdown renderer for assistant messages:
@@ -2003,24 +2004,15 @@ export const CopilotWorkspaceView: React.FC = () => {
             </div>
           ))}
 
-          {/* Real-time ForgeX Thinking Indicator */}
+          {/* Real-time ForgeX Neural Thinking Indicator */}
           {isQuerying && (
-            <div className="p-4 rounded-xl bg-gradient-to-r from-blue-50/90 via-white to-blue-50/50 border border-[#2563EB]/40 flex items-center gap-3.5 text-xs font-sans max-w-lg shadow-xs">
-              <div className="relative flex items-center justify-center shrink-0">
-                <RotateCw className="w-4 h-4 text-[#2563EB] animate-spin" />
-                <span className="absolute -top-1 -right-1 flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600"></span>
-                </span>
-              </div>
-              <div className="space-y-0.5 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#1A202C] text-xs">ForgeX Thinking...</span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">FAST RAG</span>
-                </div>
-                <p className="text-[11px] text-[#475569] font-mono truncate">{queryStep || 'Synthesizing verified engineering specs...'}</p>
-              </div>
-            </div>
+            <ForgeXAiThinkingAnimation
+              queryStep={queryStep}
+              targetMachineTag={selectedMachine?.assetTag}
+              targetMachineName={selectedMachine?.name}
+              hasAcousticData={Boolean(latestAcousticTelemetry)}
+              hasVisionData={Boolean(latestVisionDiagnostic)}
+            />
           )}
 
           {/* Query Error Notification */}
@@ -2135,10 +2127,23 @@ export const CopilotWorkspaceView: React.FC = () => {
             <button
               onClick={() => handleSendQuery()}
               disabled={isQuerying || !queryInput.trim()}
-              className="px-5 py-2.5 bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl flex items-center gap-2 transition shadow-sm shrink-0 cursor-pointer"
+              className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition shadow-sm shrink-0 ${
+                isQuerying
+                  ? 'bg-blue-600/80 text-white cursor-wait animate-pulse'
+                  : 'bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white cursor-pointer'
+              }`}
             >
-              <Send className="w-3.5 h-3.5" />
-              Query Copilot
+              {isQuerying ? (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                  <span>Thinking...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Query Copilot</span>
+                </>
+              )}
             </button>
           </div>
         </div>
