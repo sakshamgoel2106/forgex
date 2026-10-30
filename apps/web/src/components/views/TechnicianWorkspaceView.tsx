@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
 import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill } from '../modals/ExpertKnowledgeCaptureModal';
@@ -2041,7 +2041,21 @@ export const TechnicianWorkspaceView: React.FC<{
     }
   }, []);
 
-  // Web Speech API / Hands-free continuous recognition with "Hey Copilot" Wake-Word
+  const isVoiceActiveRef = useRef(isVoiceActive);
+  isVoiceActiveRef.current = isVoiceActive;
+
+  // 1-Click / Voice Read Active Step Helper
+  const handleReadActiveStep = useCallback(() => {
+    if (!selectedTask) return;
+    const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS') || selectedTask.steps[0];
+    if (activeStep) {
+      const textToSpeak = `Step ${activeStep.stepNumber}: ${activeStep.title}. Target spec: ${activeStep.targetSpec || (activeStep as any).tolerance || 'Verify visual alignment and compliance'}.`;
+      speakText(textToSpeak);
+      toast.info(`Reading Step ${activeStep.stepNumber}`, activeStep.title);
+    }
+  }, [selectedTask, speakText, toast]);
+
+  // Web Speech API / Hands-free continuous recognition with "Activate Voice" Wake-Word
   useEffect(() => {
     let recognition: any = null;
     const SpeechRecognition =
@@ -2051,73 +2065,141 @@ export const TechnicianWorkspaceView: React.FC<{
       try {
         recognition = new SpeechRecognition();
         recognition.continuous = true;
-        recognition.interimResults = false;
+        recognition.interimResults = true;
         recognition.lang = 'en-US';
 
         recognition.onresult = (event: any) => {
-          const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+          let transcript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          transcript = transcript.trim().toLowerCase();
+          if (!transcript) return;
           setLastVoiceCommand(transcript);
-          console.log('Voice Command Received:', transcript);
 
-          // 1. Wake-word activation
-          if (transcript.includes('hey copilot') || transcript.includes('activate voice') || transcript.includes('start voice')) {
+          // 1. Wake-word activation: "activate voice", "start voice", "hey copilot"
+          if (
+            transcript.includes('activate voice') ||
+            transcript.includes('start voice') ||
+            transcript.includes('hey copilot') ||
+            transcript.includes('enable voice')
+          ) {
             setIsVoiceActive(true);
-            speakText('Copilot listening, state your command.');
-            toast.success('Copilot Listening', 'Say "Confirm Step", "Next", "Fail Step", "Solved", or "SOS"');
+            isVoiceActiveRef.current = true;
+            speakText('Voice assistant activated.');
+            toast.success('Voice Assistant Activated', 'Listening: Confirm, Next, Fail, Read Step, Solved, SOS, Stop Voice');
             return;
           }
 
-          // 2. Standby / Cancel
-          if (transcript.includes('stop voice') || transcript.includes('disable voice') || transcript.includes('cancel')) {
+          // 2. Standby / Cancel: "stop voice", "disable voice", "cancel"
+          if (
+            transcript.includes('stop voice') ||
+            transcript.includes('disable voice') ||
+            transcript.includes('turn off voice') ||
+            transcript.includes('deactivate voice') ||
+            transcript.includes('cancel voice')
+          ) {
             setIsVoiceActive(false);
-            speakText('Copilot voice standby.');
-            toast.info('Voice Standby', 'Say "Hey Copilot" to reactivate.');
+            isVoiceActiveRef.current = false;
+            speakText('Voice assistant disabled.');
+            toast.info('Voice Standby', 'Say "Activate Voice" or click to resume.');
             return;
           }
 
-          // 3. Execution Commands
-          if (isVoiceActive) {
-            if (transcript.includes('fail') || transcript.includes('block') || transcript.includes('abort')) {
+          // 3. Execution Commands when voice mode is active
+          if (isVoiceActiveRef.current) {
+            // Fail command
+            if (
+              transcript.includes('fail') ||
+              transcript.includes('failed') ||
+              transcript.includes('fail step') ||
+              transcript.includes('block') ||
+              transcript.includes('abort')
+            ) {
               if (selectedTask) {
                 const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
                 if (activeStep) {
                   handleFailStep(selectedTask, activeStep);
+                  speakText('Step failed. Repair blocked.');
                 }
               }
-            } else if (transcript.includes('confirm') || transcript.includes('next') || transcript.includes('done')) {
+            }
+            // Confirm / Pass / Done command
+            else if (
+              transcript.includes('confirm') ||
+              transcript.includes('confirm step') ||
+              transcript.includes('pass') ||
+              transcript.includes('pass step') ||
+              transcript.includes('done') ||
+              transcript.includes('complete')
+            ) {
               if (selectedTask) {
                 const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
                 if (activeStep) {
                   handleCompleteAndNext(selectedTask.id, activeStep.id);
+                  speakText(`Step ${activeStep.stepNumber} confirmed.`);
                   toast.success('Voice Command Executed', `Step ${activeStep.stepNumber} confirmed by voice.`);
                 }
               }
-            } else if (transcript.includes('copilot') || transcript.includes('spec')) {
-              if (selectedTask) {
-                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
-                handleAskCopilot(selectedTask, activeStep);
-              }
-            } else if (transcript.includes('sos') || transcript.includes('buddy') || transcript.includes('help')) {
-              setIsBuddyModalOpen(true);
-            } else if (transcript.includes('solved') || transcript.includes('finish')) {
+            }
+            // Next command
+            else if (transcript.includes('next') || transcript.includes('next step') || transcript.includes('forward')) {
               if (selectedTask) {
                 const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
                 if (activeStep) {
-                  handleMarkTaskSolved(selectedTask, activeStep);
+                  handleCompleteAndNext(selectedTask.id, activeStep.id);
+                  speakText('Advancing to next step.');
                 }
               }
+            }
+            // Read / Read Step command
+            else if (
+              transcript.includes('read step') ||
+              transcript.includes('read') ||
+              transcript.includes('repeat') ||
+              transcript.includes('speak step')
+            ) {
+              handleReadActiveStep();
+            }
+            // Solved / Finish command
+            else if (
+              transcript.includes('solve') ||
+              transcript.includes('solved') ||
+              transcript.includes('resolved') ||
+              transcript.includes('finish')
+            ) {
+              if (selectedTask) {
+                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS') || selectedTask.steps[selectedTask.steps.length - 1];
+                if (activeStep) {
+                  handleMarkTaskSolved(selectedTask, activeStep);
+                  speakText('Task marked resolved.');
+                }
+              }
+            }
+            // SOS / Copilot / Spec Help command
+            else if (
+              transcript.includes('sos') ||
+              transcript.includes('help') ||
+              transcript.includes('buddy') ||
+              transcript.includes('copilot') ||
+              transcript.includes('spec')
+            ) {
+              setIsBuddyModalOpen(true);
+              speakText('Opening Copilot SOS assistance.');
             }
           }
         };
 
-        recognition.onerror = () => {
-          // Graceful fallback
+        recognition.onerror = (err: any) => {
+          console.warn('SpeechRecognition error:', err);
         };
 
         recognition.onend = () => {
-          try {
-            recognition.start();
-          } catch {}
+          if (isVoiceActiveRef.current) {
+            try {
+              recognition.start();
+            } catch {}
+          }
         };
 
         recognition.start();
@@ -2133,7 +2215,7 @@ export const TechnicianWorkspaceView: React.FC<{
         } catch {}
       }
     };
-  }, [isVoiceActive, selectedTask, speakText, toast]);
+  }, [handleCompleteAndNext, handleFailStep, handleMarkTaskSolved, handleReadActiveStep, isVoiceActive, selectedTask, speakText, toast]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F8FAFC] text-[#0F172A] font-sans antialiased">
@@ -2487,7 +2569,7 @@ export const TechnicianWorkspaceView: React.FC<{
                             title="Export official printable compliance job sheet summary"
                           >
                             <Printer className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>📄 Export Job Sheet</span>
+                            <span>Export Job Sheet</span>
                           </button>
                         );
                       }
@@ -2501,7 +2583,7 @@ export const TechnicianWorkspaceView: React.FC<{
                             title="Export failure dossier & OEM diagnostic summary"
                           >
                             <Printer className="w-3.5 h-3.5 text-rose-700" />
-                            <span>📄 Export Job Sheet (Failure Dossier)</span>
+                            <span>Export Job Sheet (Failure Dossier)</span>
                           </button>
                         );
                       }
@@ -2726,109 +2808,177 @@ export const TechnicianWorkspaceView: React.FC<{
                       const isTaskFailed = selectedTask.status === 'Failed' || (selectedTask.steps && selectedTask.steps.some((s) => s.status === 'FAILED'));
 
                       return (
-                        <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-4 py-3 rounded-xl shadow-sm border border-indigo-900/40 flex items-center justify-between gap-4 flex-wrap lg:flex-nowrap">
-                          {/* Left: Execution Board title + Active/Failed/Solved status */}
-                          <div className="flex items-center gap-2.5 shrink-0">
-                            <span className="text-sm font-bold text-white tracking-wide whitespace-nowrap">Execution Board</span>
-                            {isTaskSolved ? (
-                              <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
-                                <Check className="w-2.5 h-2.5 text-emerald-400" />
-                                SOLVED
-                              </span>
-                            ) : isTaskFailed ? (
-                              <span className="text-[10px] font-mono font-bold text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-full border border-rose-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
-                                <X className="w-2.5 h-2.5 text-rose-400" />
-                                FAILED / BLOCKED
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                ACTIVE RUN
-                              </span>
-                            )}
+                        <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-4 py-3 rounded-xl shadow-sm border border-indigo-900/40 flex flex-col gap-2.5 overflow-hidden">
+                          {/* Top Row: Left: Title + Status + 5-step Pills | Right: Voice Status Pill + Steps Progress + Sync */}
+                          <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+                            {/* Left: Execution Board title + Active/Failed/Solved status */}
+                            <div className="flex items-center gap-2.5 shrink-0 flex-wrap sm:flex-nowrap">
+                              <span className="text-sm font-bold text-white tracking-wide whitespace-nowrap">Execution Board</span>
+                              {isTaskSolved ? (
+                                <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
+                                  <Check className="w-2.5 h-2.5 text-emerald-400" />
+                                  SOLVED
+                                </span>
+                              ) : isTaskFailed ? (
+                                <span className="text-[10px] font-mono font-bold text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-full border border-rose-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
+                                  <X className="w-2.5 h-2.5 text-rose-400" />
+                                  FAILED / BLOCKED
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-400/30 flex items-center gap-1 shadow-xs whitespace-nowrap">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                  ACTIVE RUN
+                                </span>
+                              )}
+
+                              {/* Interactive 5-Step Mini-Pills */}
+                              {selectedTask.steps && selectedTask.steps.length > 0 && (
+                                <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-lg border border-white/10 shrink-0">
+                                  {selectedTask.steps.map((step) => {
+                                    const isCompleted = step.status === 'COMPLETED';
+                                    const isStepFailed = step.status === 'FAILED';
+                                    const isActive = step.status === 'IN_PROGRESS';
+                                    return (
+                                      <button
+                                        key={step.id || step.stepNumber}
+                                        type="button"
+                                        onClick={() => {
+                                          const el = document.getElementById(`step-card-${step.stepNumber}`);
+                                          if (el) {
+                                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                          }
+                                        }}
+                                        title={`Step ${step.stepNumber}: ${step.title} (${isCompleted ? 'Verified' : isStepFailed ? 'Failed' : isActive ? 'Active' : 'Locked'})`}
+                                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer whitespace-nowrap inline-flex items-center gap-0.5 ${
+                                          isCompleted
+                                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 shadow-xs hover:bg-emerald-500/30'
+                                            : isStepFailed
+                                            ? 'bg-rose-500/30 text-rose-300 border border-rose-400/60 shadow-xs hover:bg-rose-500/40'
+                                            : isActive
+                                            ? 'bg-indigo-500/40 text-cyan-200 border border-cyan-400/60 ring-1 ring-cyan-400/40 animate-pulse hover:bg-indigo-500/50'
+                                            : 'bg-white/5 text-slate-400 border border-white/10 hover:bg-white/15 hover:text-slate-200'
+                                        }`}
+                                      >
+                                        {isCompleted ? '✓' : isStepFailed ? '✕' : ''} {String(step.stepNumber).padStart(2, '0')}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Right: Clickable Voice Pill + Progress + Sync */}
+                            <div className="flex items-center gap-2.5 shrink-0 ml-auto">
+                              {/* 🎙️ Clickable / Voice Status Pill (No double mic icon, Reliable Activate Voice) */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsVoiceActive((prev) => {
+                                    const next = !prev;
+                                    if (next) {
+                                      speakText('Voice assistant activated.');
+                                      toast.success('Voice Assistant Activated', 'Listening: Confirm, Next, Fail, Read Step, Solved, SOS');
+                                    } else {
+                                      speakText('Voice assistant disabled.');
+                                      toast.info('Voice Assistant Disabled', 'Say "Activate Voice" or click to start');
+                                    }
+                                    return next;
+                                  });
+                                }}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all shadow-xs whitespace-nowrap cursor-pointer ${
+                                  isVoiceActive
+                                    ? 'bg-emerald-600/90 hover:bg-emerald-500 text-white animate-pulse ring-2 ring-emerald-400'
+                                    : 'bg-indigo-950/80 hover:bg-indigo-900 text-cyan-300 border border-indigo-700/60'
+                                }`}
+                                title="Click to start/stop hands-free voice assistant"
+                              >
+                                <Mic className={`w-3.5 h-3.5 ${isVoiceActive ? 'text-white animate-bounce' : 'text-cyan-400'}`} />
+                                <span className="whitespace-nowrap">
+                                  {isVoiceActive
+                                    ? (lastVoiceCommand ? `🟢 Heard: "${lastVoiceCommand}"` : '🟢 Voice Active — Listening')
+                                    : 'Say "Activate Voice"'}
+                                </span>
+                              </button>
+
+                              <div className="text-right whitespace-nowrap hidden sm:block">
+                                <span className="text-xs font-mono font-bold text-slate-200">
+                                  {selectedTask.completedSteps} / {selectedTask.stepsCount} Steps
+                                </span>
+                                <div className="w-20 sm:w-24 h-1.5 bg-slate-800/80 rounded-full overflow-hidden mt-0.5 border border-white/10">
+                                  <div
+                                    className="h-full bg-gradient-to-r from-indigo-500 to-blue-500 transition-all duration-300 rounded-full"
+                                    style={{
+                                      width: `${(selectedTask.completedSteps / Math.max(1, selectedTask.stepsCount)) * 100}%`,
+                                    }}
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Server Sync Button */}
+                              <button
+                                onClick={() => fetchQueue(true)}
+                                disabled={syncing}
+                                title="Sync latest progress from server (Never resets completed steps)"
+                                className="p-1.5 text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg transition cursor-pointer shrink-0"
+                              >
+                                <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+                              </button>
+                            </div>
                           </div>
 
-                          {/* Center: Interactive 5-Step Mini-Pills */}
-                          {selectedTask.steps && selectedTask.steps.length > 0 && (
-                            <div className="flex items-center gap-1.5 bg-black/40 p-1 rounded-lg border border-white/10 shrink-0">
-                              {selectedTask.steps.map((step) => {
-                                const isCompleted = step.status === 'COMPLETED';
-                                const isStepFailed = step.status === 'FAILED';
-                                const isActive = step.status === 'IN_PROGRESS';
-                                return (
-                                  <button
-                                    key={step.id || step.stepNumber}
-                                    type="button"
-                                    onClick={() => {
-                                      const el = document.getElementById(`step-card-${step.stepNumber}`);
-                                      if (el) {
-                                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                      }
-                                    }}
-                                    title={`Step ${step.stepNumber}: ${step.title} (${isCompleted ? 'Verified' : isStepFailed ? 'Failed' : isActive ? 'Active' : 'Locked'})`}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer whitespace-nowrap inline-flex items-center gap-0.5 ${
-                                      isCompleted
-                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 shadow-xs hover:bg-emerald-500/30'
-                                        : isStepFailed
-                                        ? 'bg-rose-500/30 text-rose-300 border border-rose-400/60 shadow-xs hover:bg-rose-500/40'
-                                        : isActive
-                                        ? 'bg-indigo-500/40 text-cyan-200 border border-cyan-400/60 ring-1 ring-cyan-400/40 animate-pulse hover:bg-indigo-500/50'
-                                        : 'bg-white/5 text-slate-400 border border-white/10 hover:bg-white/15 hover:text-slate-200'
-                                    }`}
-                                  >
-                                    {isCompleted ? '✓' : isStepFailed ? '✕' : ''} {String(step.stepNumber).padStart(2, '0')}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* Right: Glowing Hey Copilot Status Pill + Step progress + Server sync */}
-                          <div className="flex items-center gap-3 shrink-0">
-                            {/* 🎙️ Glowing Status Pill for "Hey Copilot" Wake-Word */}
-                            <div
-                              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all shadow-xs whitespace-nowrap ${
-                                isVoiceActive
-                                  ? 'bg-rose-600/90 text-white animate-pulse ring-2 ring-rose-400'
-                                  : 'bg-indigo-950/80 text-cyan-300 border border-indigo-700/60'
-                              }`}
-                              title="Hands-free Voice: Say 'Hey Copilot' to state command"
-                            >
-                              <Mic className={`w-3.5 h-3.5 ${isVoiceActive ? 'text-white animate-pulse' : 'text-cyan-400'}`} />
-                              <span className="whitespace-nowrap">
-                                {isVoiceActive
-                                  ? (lastVoiceCommand ? `🎙️ Heard: "${lastVoiceCommand}"` : '🎙️ Copilot Listening • State Command...')
-                                  : '🎙️ Say "Hey Copilot" • Commands: "Confirm Step", "Next", "Fail Step", "Solved", "SOS"'}
-                              </span>
-                            </div>
-
-                            <div className="text-right whitespace-nowrap">
-                              <span className="text-xs font-mono font-bold text-slate-200">
-                                {selectedTask.completedSteps} / {selectedTask.stepsCount} Steps
-                              </span>
-                              <div className="w-24 sm:w-28 h-1.5 bg-slate-800/80 rounded-full overflow-hidden mt-1 border border-white/10">
-                                <div
-                                  className="h-full bg-gradient-to-r from-indigo-500 to-blue-500 transition-all duration-300 rounded-full"
-                                  style={{
-                                    width: `${
-                                      (selectedTask.completedSteps /
-                                        Math.max(1, selectedTask.stepsCount)) *
-                                      100
-                                    }%`,
-                                  }}
-                                />
-                              </div>
-                            </div>
-
-                            {/* Server Sync Button */}
-                            <button
-                              onClick={() => fetchQueue(true)}
-                              disabled={syncing}
-                              title="Sync latest progress from server (Never resets completed steps)"
-                              className="p-1.5 text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg transition cursor-pointer shrink-0"
-                            >
-                              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-indigo-300' : ''}`} />
-                            </button>
+                          {/* Wrapped Second Sub-Row: Supported Command Chips strictly inside dark card boundary */}
+                          <div className="flex items-center gap-1.5 flex-wrap pt-2 mt-0.5 border-t border-white/10 text-[11px] font-mono text-slate-300">
+                            <span className="text-[10px] uppercase font-bold text-cyan-400 tracking-wider flex items-center gap-1 mr-1 shrink-0">
+                              <Mic className="w-3 h-3" /> Commands:
+                            </span>
+                            {[
+                              {
+                                label: '"Confirm Step"',
+                                action: () => {
+                                  const a = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+                                  if (a) handleCompleteAndNext(selectedTask.id, a.id);
+                                },
+                              },
+                              {
+                                label: '"Next"',
+                                action: () => {
+                                  const a = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+                                  if (a) handleCompleteAndNext(selectedTask.id, a.id);
+                                },
+                              },
+                              {
+                                label: '"Fail Step"',
+                                action: () => {
+                                  const a = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+                                  if (a) handleFailStep(selectedTask, a);
+                                },
+                              },
+                              { label: '"Read Step"', action: handleReadActiveStep },
+                              {
+                                label: '"Solved"',
+                                action: () => {
+                                  const a = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS') || selectedTask.steps[selectedTask.steps.length - 1];
+                                  if (a) handleMarkTaskSolved(selectedTask, a);
+                                },
+                              },
+                              { label: '"SOS"', action: () => setIsBuddyModalOpen(true) },
+                              {
+                                label: '"Stop Voice"',
+                                action: () => {
+                                  setIsVoiceActive(false);
+                                  speakText('Voice assistant disabled.');
+                                },
+                              },
+                            ].map((cmd, cIdx) => (
+                              <button
+                                key={cIdx}
+                                type="button"
+                                onClick={cmd.action}
+                                className="px-2 py-0.5 rounded-md bg-white/10 hover:bg-white/20 border border-white/10 text-slate-200 hover:text-white text-[10px] transition cursor-pointer"
+                              >
+                                {cmd.label}
+                              </button>
+                            ))}
                           </div>
                         </div>
                       );
@@ -3119,14 +3269,14 @@ export const TechnicianWorkspaceView: React.FC<{
                       if (isTaskFailed) {
                         return (
                           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-rose-950 via-slate-900 to-rose-950 text-white border border-rose-500/40 rounded-xl shadow-md">
-                            <div className="flex items-center gap-2.5 text-white min-w-0">
+                            <div className="flex items-center gap-2.5 text-white flex-1 min-w-[260px]">
                               <div className="w-8 h-8 rounded-full bg-rose-500/20 border border-rose-400/40 flex items-center justify-center shrink-0">
                                 <AlertTriangle className="w-4 h-4 text-rose-400" />
                               </div>
                               <div className="space-y-0.5 min-w-0">
                                 <div className="font-bold text-xs sm:text-sm text-white flex items-center gap-2 flex-wrap">
                                   <span>Field Repair Failed or Blocked</span>
-                                  <span className="font-mono text-[10px] font-bold bg-rose-500/30 text-rose-200 border border-rose-400/40 px-2 py-0.5 rounded">
+                                  <span className="font-mono text-[10px] font-bold bg-rose-500/30 text-rose-200 border border-rose-400/40 px-2 py-0.5 rounded whitespace-nowrap">
                                     FAILED / BLOCKED
                                   </span>
                                 </div>
@@ -3136,25 +3286,25 @@ export const TechnicianWorkspaceView: React.FC<{
                               </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                            <div className="shrink-0 flex items-center gap-2.5 flex-wrap w-full sm:w-auto justify-end">
                               <button
                                 type="button"
                                 onClick={() => handleExportJobSheet(selectedTask)}
-                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs whitespace-nowrap"
                                 title="Export failure dossier & OEM diagnostic summary"
                               >
                                 <Printer className="w-3.5 h-3.5 text-white" />
-                                <span>📄 Export Job Sheet (Failure Dossier)</span>
+                                <span>Export Job Sheet (Failure Dossier)</span>
                               </button>
 
                               <button
                                 type="button"
                                 onClick={() => handleOpenOemModal(selectedTask)}
-                                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
+                                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95 whitespace-nowrap"
                                 title="Direct factory escalation to machine OEM"
                               >
                                 <Building2 className="w-3.5 h-3.5 text-white" />
-                                <span>🏭 Escalate to OEM</span>
+                                <span>Escalate to OEM</span>
                               </button>
                             </div>
                           </div>
@@ -3164,15 +3314,15 @@ export const TechnicianWorkspaceView: React.FC<{
                       if (isTaskSolved) {
                         return (
                           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white border border-indigo-500/30 rounded-xl shadow-md">
-                            <div className="flex items-center gap-2.5 text-white min-w-0">
+                            <div className="flex items-center gap-2.5 text-white flex-1 min-w-[260px]">
                               <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center shrink-0">
                                 <CheckCircle2 className="w-4 h-4 text-emerald-300" />
                               </div>
                               <div className="space-y-0.5 min-w-0">
                                 <div className="font-bold text-xs sm:text-sm text-white flex items-center gap-2 flex-wrap">
                                   <span>All {selectedTask.stepsCount}/{selectedTask.stepsCount} Execution Steps Completed</span>
-                                  <span className="font-mono text-[10px] font-bold bg-emerald-500/30 text-emerald-200 border border-emerald-400/40 px-2 py-0.5 rounded">
-                                    ✅ VERIFIED SOLVED
+                                  <span className="font-mono text-[10px] font-bold bg-emerald-500/30 text-emerald-200 border border-emerald-400/40 px-2 py-0.5 rounded whitespace-nowrap">
+                                    ✓ VERIFIED &amp; SOLVED
                                   </span>
                                 </div>
                                 <p className="text-slate-300 text-xs">
@@ -3181,21 +3331,21 @@ export const TechnicianWorkspaceView: React.FC<{
                               </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+                            <div className="shrink-0 flex items-center gap-2.5 flex-wrap w-full sm:w-auto justify-end">
                               <button
                                 type="button"
                                 onClick={() => handleExportJobSheet(selectedTask)}
-                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs whitespace-nowrap"
                                 title="Print or export compliance job summary"
                               >
                                 <Printer className="w-3.5 h-3.5 text-white" />
-                                <span>📄 Export Job Sheet</span>
+                                <span>Export Job Sheet</span>
                               </button>
 
                               <button
                                 type="button"
                                 onClick={() => handleAddTipToExpertKnowledge(selectedTask)}
-                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs"
+                                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer text-xs whitespace-nowrap"
                                 title="Capture field insights and tricks directly into Expert Knowledge"
                               >
                                 <Lightbulb className="w-3.5 h-3.5 text-amber-300 fill-amber-300/30" />
@@ -3205,11 +3355,11 @@ export const TechnicianWorkspaceView: React.FC<{
                               <button
                                 type="button"
                                 onClick={() => handleArchiveTaskToHistory(selectedTask)}
-                                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs active:scale-95"
+                                className="px-3.5 py-1.5 bg-gradient-to-r from-indigo-600 to-emerald-600 hover:from-indigo-500 hover:to-emerald-500 text-white font-bold rounded-lg inline-flex items-center justify-center gap-1.5 transition shadow-md cursor-pointer text-xs active:scale-95 whitespace-nowrap border border-emerald-400/30"
                                 title="Archive verified repair record to Maintenance History and clear from active queue"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                                <span>✅ Mark Resolved & Archive to History</span>
+                                <span>Mark Resolved &amp; Archive to History</span>
                               </button>
                             </div>
                           </div>

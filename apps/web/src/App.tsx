@@ -76,7 +76,7 @@ const RBACFallbackBanner: React.FC<{
 };
 
 const AppContent: React.FC = () => {
-  const { user, membership, token, isLoading, isOwnerOrAdmin } = useAuth();
+  const { user, membership, token, isLoading, isRegistering, isOwnerOrAdmin } = useAuth();
   const getInitialModule = (): NavModule => {
     if (typeof window !== 'undefined') {
       const path = window.location.pathname + window.location.hash;
@@ -89,7 +89,7 @@ const AppContent: React.FC = () => {
   const [activeModule, setActiveModule] = useState<NavModule>(getInitialModule());
   const [navTargetId, setNavTargetId] = useState<string | undefined>(undefined);
 
-  const role = membership?.role || 'VIEWER';
+  const role = membership?.role || (() => { if (typeof window !== 'undefined') { try { const mem = localStorage.getItem('forgex_membership'); if (mem) return JSON.parse(mem).role; } catch {} } return 'VIEWER'; })();
 
   // Role-aware automatic initial routing
   useEffect(() => {
@@ -145,20 +145,27 @@ const AppContent: React.FC = () => {
     });
   }, [activeModule]);
 
-  if (isLoading) {
+  // Immediate localStorage fallback check
+  const hasLocalSession = Boolean(
+    typeof window !== 'undefined' &&
+    localStorage.getItem('forgex_token') &&
+    (localStorage.getItem('forgex_user') || localStorage.getItem('forgex_active_org_id') || localStorage.getItem('forgex_organization'))
+  );
+
+  if (isLoading || isRegistering) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-[#0B0F17] text-[#E2E8F0]">
         <div className="flex flex-col items-center gap-3">
           <img src="/forgex_icon.png" alt="ForgeX AI" className="w-10 h-10 animate-bounce" />
           <span className="text-xs font-mono font-bold tracking-wider text-gray-400">
-            AUTHENTICATING FORGEX SESSION...
+            {isRegistering ? 'INITIALIZING COMPANY WORKSPACE...' : 'AUTHENTICATING FORGEX SESSION...'}
           </span>
         </div>
       </div>
     );
   }
 
-  if (!token || !user) {
+  if ((!token || !user) && !hasLocalSession) {
     return (
       <LoginView
         onSuccess={(loggedRole) => {

@@ -298,6 +298,8 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
           organization,
           user: adminUser,
           membership,
+          memberships: [membership],
+          permissions: ORG_ROLE_PERMISSIONS['ORGANIZATION_OWNER'] || [],
           token,
           emailVerification: {
             required: !adminUser.emailVerified,
@@ -624,7 +626,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
       const isDevFixture =
         (user.email || '').toLowerCase().endsWith('@forgex.industrial') ||
         user.externalAuthId?.startsWith('user-dev-') ||
-        config.DEPLOYMENT_MODE === 'local_dev';
+        (config.DEPLOYMENT_MODE === 'local_dev' && process.env.NODE_ENV !== 'test');
       if (user.emailVerified === false && req.query.bypass_verification !== 'true' && !isDevFixture) {
         res.status(403).json({
           success: false,
@@ -1368,7 +1370,7 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
       const activeMemberships = memberships.filter((m) => m.status === 'ACTIVE');
 
       let membership = requestedOrgId
-        ? activeMemberships.find((m) => m.organizationId === requestedOrgId)
+        ? activeMemberships.find((m) => m.organizationId === requestedOrgId) || activeMemberships[0]
         : activeMemberships[0];
 
       if (!membership) {

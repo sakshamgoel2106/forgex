@@ -63,10 +63,13 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
 
   // Handle unauthorized session expiration
   if (response.status === 401 && typeof window !== 'undefined') {
-    const isAuthRoute = url.includes('/api/v1/auth/login') || url.includes('/api/v1/auth/register-org');
+    const isAuthRoute = url.includes('/api/v1/auth/');
     if (!isAuthRoute) {
-      localStorage.removeItem(TOKEN_KEY);
-      window.dispatchEvent(new CustomEvent('forgex:unauthorized'));
+      const hasActiveSession = Boolean(localStorage.getItem('forgex_user') && localStorage.getItem('forgex_organization'));
+      if (!hasActiveSession) {
+        localStorage.removeItem(TOKEN_KEY);
+        window.dispatchEvent(new CustomEvent('forgex:unauthorized'));
+      }
     }
   }
 

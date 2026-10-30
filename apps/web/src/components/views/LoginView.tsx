@@ -71,6 +71,10 @@ type ViewMode =
 
 export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
   const {
+    user,
+    token,
+    membership,
+    setAuthSession,
     login,
     registerOrg,
     forgotPassword,
@@ -107,6 +111,22 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
   };
 
   const [mode, setMode] = useState<ViewMode>(getInitialMode);
+
+  // Auto-redirect if authenticated session exists
+  useEffect(() => {
+    const hasLocal =
+      typeof window !== 'undefined' &&
+      localStorage.getItem('forgex_token') &&
+      (localStorage.getItem('forgex_user') || localStorage.getItem('forgex_active_org_id') || localStorage.getItem('forgex_organization'));
+    if ((token || hasLocal) && (user || hasLocal)) {
+      const activeRole = membership?.role || 'ORGANIZATION_OWNER';
+      onSuccess?.(activeRole);
+      if (typeof window !== 'undefined') {
+        window.history.pushState(null, '', '/dashboard');
+        window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'overview' } }));
+      }
+    }
+  }, [token, user, membership?.role, onSuccess]);
   // Unified Login Form Fields
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -720,6 +740,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       });
 
       if (res.success) {
+        if (res.user && res.organization) {
+          await setAuthSession(res.user, res.organization, res.token, res.membership);
+        }
         toast.success('Registration Complete!', 'Welcome to ForgeX. Your company workspace is initialized.');
         if (deploymentType === 'enterprise') {
           setEnterpriseSetupData({
@@ -730,7 +753,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
           });
           setMode('enterprise-setup');
         } else {
-          onSuccess?.(res.role || 'ORGANIZATION_OWNER');
+          const targetRole = res.role || 'ORGANIZATION_OWNER';
+          onSuccess?.(targetRole);
+          if (typeof window !== 'undefined') {
+            window.history.pushState(null, '', '/dashboard');
+            window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'overview' } }));
+          }
         }
       } else {
         const msg = res.error || 'Failed to register company with Google identity.';
@@ -819,6 +847,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       } else {
         if (res.error && res.error.toLowerCase().includes('verify')) {
           setUnverifiedEmailNotice(identifier.trim());
+          setRegisteredEmail(identifier.trim());
           toast.warning('Email Verification Required', 'Please verify your work email address before signing in.');
         } else {
           toast.error('Authentication Failed', res.error || 'Invalid credentials. Please verify your work email and password.');
@@ -892,17 +921,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       return;
     }
 
-    // Corporate Work Email Verification via OTP
-    if (!regOtpSent) {
-      await handleSendRegOtp();
-      const msg = 'A 6-digit verification code has been dispatched to your work email. Please enter the code below to complete registration.';
-      setError(msg);
-      toast.info('Verification Required', msg);
-      return;
-    }
+    // Optional Corporate Work Email Verification via OTP
     const otpCode = regOtpDigits.join('');
-    if (otpCode.length !== 6) {
-      const msg = 'Please enter the 6-digit verification code sent to your work email.';
+    if (regOtpSent && !regOtpVerified && otpCode.length > 0 && otpCode.length !== 6) {
+      const msg = 'Please enter the 6-digit verification code sent to your work email, or clear it to proceed.';
       setError(msg);
       toast.warning('Incomplete Code', msg);
       const firstEmpty = regOtpDigits.findIndex((d) => !d);
@@ -962,11 +984,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       });
 
       if (res.success) {
+        if (res.user && res.organization) {
+          await setAuthSession(res.user, res.organization, res.token, res.membership);
+        }
+        setRegisteredEmail(adminWorkEmail.trim().toLowerCase());
         toast.success('Registration Complete!', 'Welcome to ForgeX. Your company workspace is initialized.');
-        if (res.verificationRequired) {
-          setRegisteredEmail(res.email || adminWorkEmail);
-          setMode('verification-pending');
-        } else if (deploymentType === 'enterprise') {
+        if (deploymentType === 'enterprise') {
           setEnterpriseSetupData({
             orgName: companyName.trim(),
             slug: companySlug.trim() || companyName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
@@ -975,7 +998,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
           });
           setMode('enterprise-setup');
         } else {
-          onSuccess?.(res.role || 'ORGANIZATION_OWNER');
+          const targetRole = res.role || 'ORGANIZATION_OWNER';
+          onSuccess?.(targetRole);
+          if (typeof window !== 'undefined') {
+            window.history.pushState(null, '', '/dashboard');
+            window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'overview' } }));
+          }
         }
       } else {
         const msg = res.error || 'Registration failed. The workspace identifier or email may already be in use.';
@@ -2508,6 +2536,10 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
                         type="button"
                         onClick={() => {
                           onSuccess?.(enterpriseSetupData.role || 'ORGANIZATION_OWNER');
+                          if (typeof window !== 'undefined') {
+                            window.history.pushState(null, '', '/dashboard');
+                            window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'overview' } }));
+                          }
                         }}
                         className="flex-1 py-2.5 bg-[#151C24] hover:bg-black text-white font-semibold text-xs rounded-lg flex items-center justify-center gap-2 transition shadow-sm"
                       >

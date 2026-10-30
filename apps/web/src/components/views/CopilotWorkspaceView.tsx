@@ -994,7 +994,7 @@ export const CopilotWorkspaceView: React.FC = () => {
         subtitle: 'Zero Energy State Verification',
         prompt: `What is the step-by-step LOTO and energy isolation procedure for ${tag}?`,
         category: 'OSHA 1910.147 Compliance',
-        categoryColor: 'text-amber-700 bg-amber-50 border-amber-200',
+        categoryColor: 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border-transparent shadow-2xs',
       },
       {
         id: 'limits',
@@ -1003,7 +1003,7 @@ export const CopilotWorkspaceView: React.FC = () => {
         subtitle: 'MAWP, Temperatures & Torques',
         prompt: `Show verified MAWP, operating temperature, voltage, and critical fastener torque limits for ${tag}.`,
         category: 'Operating Tolerances',
-        categoryColor: 'text-blue-700 bg-blue-50 border-blue-200',
+        categoryColor: 'bg-gradient-to-r from-indigo-600 to-blue-500 text-white border-transparent shadow-2xs',
       },
       {
         id: 'rca',
@@ -1012,7 +1012,7 @@ export const CopilotWorkspaceView: React.FC = () => {
         subtitle: 'Vibration, Abnormal Pressure & RCA',
         prompt: `What are the primary failure modes, abnormal vibration/pressure causes, and troubleshooting steps for ${tag}?`,
         category: 'Diagnostic RCA',
-        categoryColor: 'text-rose-700 bg-rose-50 border-rose-200',
+        categoryColor: 'bg-gradient-to-r from-rose-600 to-pink-600 text-white border-transparent shadow-2xs',
       },
       {
         id: 'pm',
@@ -1021,7 +1021,7 @@ export const CopilotWorkspaceView: React.FC = () => {
         subtitle: 'OEM Schedule & Spares',
         prompt: `Generate the preventive maintenance checklist and recommended OEM spare parts for ${tag}.`,
         category: 'OEM Maintenance',
-        categoryColor: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+        categoryColor: 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white border-transparent shadow-2xs',
       },
     ];
   }, [selectedMachine]);
@@ -1034,7 +1034,7 @@ export const CopilotWorkspaceView: React.FC = () => {
         <div className="p-3 border-b border-[#E2E8F0] bg-white shrink-0">
           <button
             onClick={handleStartNewConversation}
-            className="w-full py-2 px-3 bg-[#151C24] hover:bg-black text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-xs hover:shadow-sm cursor-pointer"
+            className="w-full py-2 px-3 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 hover:from-indigo-950 hover:to-blue-950 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-sm cursor-pointer"
           >
             <PlusCircle className="w-3.5 h-3.5 text-white" />
             <span>New Consultation Thread</span>
@@ -1049,11 +1049,11 @@ export const CopilotWorkspaceView: React.FC = () => {
               EQUIPMENT SCOPE
             </span>
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 text-slate-700 border border-indigo-200/80 shadow-2xs">
                 {machines.length} Units
               </span>
-              <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold uppercase tracking-wider flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+              <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 text-indigo-700 border border-indigo-200/80 font-bold uppercase tracking-wider flex items-center gap-1 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-indigo-600 to-blue-600" />
                 Single Factory
               </span>
             </div>
@@ -1065,8 +1065,8 @@ export const CopilotWorkspaceView: React.FC = () => {
             onClick={() => setIsEquipmentSelectorOpen(!isEquipmentSelectorOpen)}
             className={`w-full text-left p-2.5 rounded-lg border text-xs transition shadow-2xs hover:shadow-xs cursor-pointer ${
               selectedMachine
-                ? 'bg-blue-50/70 border-blue-300 text-blue-900'
-                : 'bg-white border-[#CBD5E1] hover:border-blue-400 text-[#1A202C]'
+                ? 'bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 border-indigo-300 text-indigo-900'
+                : 'bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 border-indigo-200/80 hover:border-indigo-400 text-[#1A202C]'
             }`}
           >
             <div className="flex items-center justify-between gap-2">
@@ -1074,8 +1074,8 @@ export const CopilotWorkspaceView: React.FC = () => {
                 <div
                   className={`w-7 h-7 rounded-md flex items-center justify-center font-mono font-bold text-[10px] shrink-0 border ${
                     selectedMachine
-                      ? 'bg-blue-600 text-white border-blue-700'
-                      : 'bg-slate-100 text-slate-700 border-slate-200'
+                      ? 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white border-indigo-700'
+                      : 'bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 text-indigo-700 border-indigo-200/80'
                   }`}
                 >
                   {selectedMachine ? selectedMachine.assetTag.slice(0, 4) : <Layers className="w-3.5 h-3.5 text-[#2563EB]" />}
@@ -1152,15 +1152,15 @@ export const CopilotWorkspaceView: React.FC = () => {
                   }}
                   className={`w-full text-left p-2 rounded-md text-xs transition border flex items-center justify-between cursor-pointer ${
                     !selectedMachineId && !selectedMachine
-                      ? 'bg-blue-50 border-blue-300 text-blue-900 font-semibold shadow-2xs'
-                      : 'bg-[#F8FAFC] border-[#E2E8F0] hover:bg-slate-100 text-[#475569]'
+                      ? 'bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 border-indigo-300 text-indigo-900 font-semibold shadow-2xs'
+                      : 'bg-gradient-to-r from-slate-50 via-white to-slate-50 border-[#E2E8F0] hover:bg-slate-100 text-[#475569]'
                   }`}
                 >
                   <div className="flex items-center gap-2 truncate">
                     <Layers className="w-3.5 h-3.5 text-[#2563EB] shrink-0" />
                     <span className="truncate font-medium">All Factory Equipment</span>
                   </div>
-                  <span className="text-[9px] font-mono font-bold text-[#64748B] bg-slate-200/60 px-1.5 py-0.5 rounded uppercase">
+                  <span className="text-[9px] font-mono font-bold text-white bg-gradient-to-r from-indigo-600 to-blue-600 px-1.5 py-0.5 rounded uppercase shadow-2xs">
                     FACTORY-WIDE
                   </span>
                 </button>
@@ -1290,7 +1290,7 @@ export const CopilotWorkspaceView: React.FC = () => {
                 >
                   <div className="flex-1 min-w-0 pr-2">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-mono text-[10px] px-1.5 py-0.2 rounded font-bold bg-blue-100/70 text-[#1E40AF] border border-blue-200 truncate">
+                      <span className="font-mono text-[10px] px-1.5 py-0.2 rounded font-bold bg-gradient-to-r from-indigo-600 to-blue-600 text-white border border-indigo-600/30 truncate shadow-2xs">
                         {c.assetId || 'FACTORY-WIDE'}
                       </span>
                       <span className="text-[10px] text-slate-400">·</span>
@@ -1317,18 +1317,18 @@ export const CopilotWorkspaceView: React.FC = () => {
         </div>
 
         {/* Security & Sovereign Footer */}
-        <div className="p-3 border-t border-[#E2E8F0] bg-[#F8FAFC] text-[11px] font-sans space-y-1 text-[#64748B] shrink-0">
+        <div className="p-3 border-t border-indigo-100/80 bg-gradient-to-r from-indigo-50/90 via-blue-50/60 to-cyan-50/80 text-[11px] font-sans space-y-1 text-[#64748B] shrink-0">
           <div className="flex justify-between">
-            <span>INFERENCE:</span>
-            <span className="text-[#0F766E] font-bold">Gemini Cloud SaaS + RAG</span>
+            <span className="font-semibold text-slate-600">INFERENCE:</span>
+            <span className="bg-gradient-to-r from-indigo-600 to-cyan-600 bg-clip-text text-transparent font-bold">Gemini Cloud SaaS + RAG</span>
           </div>
           <div className="flex justify-between">
-            <span>TENANT ISOLATION:</span>
-            <span className="text-[#0F766E] font-bold">PostgreSQL Strict RLS</span>
+            <span className="font-semibold text-slate-600">TENANT ISOLATION:</span>
+            <span className="bg-gradient-to-r from-indigo-600 to-cyan-600 bg-clip-text text-transparent font-bold">PostgreSQL Strict RLS</span>
           </div>
           <div className="flex justify-between">
-            <span>EVIDENCE TRACE:</span>
-            <span className="text-[#2563EB] font-bold">100% Page Verified</span>
+            <span className="font-semibold text-slate-600">EVIDENCE TRACE:</span>
+            <span className="bg-gradient-to-r from-indigo-600 to-cyan-600 bg-clip-text text-transparent font-bold">100% Page Verified</span>
           </div>
         </div>
       </div>
@@ -1341,8 +1341,8 @@ export const CopilotWorkspaceView: React.FC = () => {
             <Sparkles className="w-4 h-4 text-[#2563EB]" />
             <span className="font-bold text-[#1A202C] tracking-wide">AI INDUSTRIAL COPILOT</span>
             <span className="text-slate-300">|</span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />
               Single-Factory Mode
             </span>
           </div>
@@ -1352,7 +1352,7 @@ export const CopilotWorkspaceView: React.FC = () => {
             {/* 1-Click Auto-Filled RCA Ticket Generator Trigger */}
             <button
               onClick={() => setIsRcaModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white font-bold text-xs shadow-xs hover:shadow-md transition cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white font-bold text-xs shadow-xs hover:shadow-md transition cursor-pointer"
               title="Synthesize conversation into an enterprise RCA Work Order"
             >
               <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
@@ -1541,17 +1541,17 @@ export const CopilotWorkspaceView: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="px-4 py-2 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#64748B] text-[11px] flex items-center justify-between shrink-0">
+          <div className="px-4 py-2 bg-gradient-to-r from-indigo-50/80 via-white to-blue-50/80 border-b border-indigo-100 text-[#64748B] text-[11px] flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2">
               <Layers className="w-3.5 h-3.5 text-[#2563EB]" />
-              <span>Context Scope: <strong className="text-[#1A202C]">Factory-Wide SOPs &amp; All Authorized Equipment</strong></span>
+              <span>Context Scope: <strong className="bg-gradient-to-r from-indigo-950 via-slate-900 to-blue-950 bg-clip-text text-transparent font-bold">Factory-Wide SOPs &amp; All Authorized Equipment</strong></span>
             </div>
             <button
               type="button"
               onClick={() => setIsEquipmentSelectorOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-700 text-[11px] font-semibold text-slate-700 transition shadow-2xs cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gradient-to-r from-white to-indigo-50/40 border border-indigo-200/80 hover:border-indigo-400 hover:text-indigo-700 text-[11px] font-semibold text-slate-700 transition shadow-2xs cursor-pointer"
             >
-              <Filter className="w-3 h-3 text-blue-600" />
+              <Filter className="w-3 h-3 text-indigo-600" />
               <span>Filter by Specific Machine ▾</span>
             </button>
           </div>
@@ -1592,7 +1592,7 @@ export const CopilotWorkspaceView: React.FC = () => {
                     <button
                       key={card.id}
                       onClick={() => handleSendQuery(card.prompt)}
-                      className="p-4 rounded-xl bg-white hover:bg-blue-50/50 border border-[#CBD5E1] hover:border-[#2563EB] text-left transition shadow-xs hover:shadow-sm group flex flex-col justify-between space-y-3 cursor-pointer"
+                      className="p-4 rounded-xl bg-gradient-to-br from-white via-white to-indigo-50/35 hover:to-indigo-50/70 border border-slate-200/90 hover:border-indigo-300 text-left transition-colors shadow-xs hover:shadow-sm group flex flex-col justify-between space-y-3 cursor-pointer"
                     >
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
@@ -1608,9 +1608,9 @@ export const CopilotWorkspaceView: React.FC = () => {
                           &ldquo;{card.prompt}&rdquo;
                         </p>
                       </div>
-                      <div className="flex items-center justify-between pt-2 border-t border-[#F1F5F9] text-[10px] text-[#2563EB] font-semibold">
-                        <span>Click to execute grounded query &rarr;</span>
-                        <ChevronRight className="w-3.5 h-3.5 text-[#2563EB] group-hover:translate-x-0.5 transition" />
+                      <div className="flex items-center justify-between pt-2 border-t border-[#F1F5F9] text-[10px]">
+                        <span className="bg-gradient-to-r from-indigo-600 to-blue-600 bg-clip-text text-transparent font-semibold">Click to execute grounded query &rarr;</span>
+                        <ChevronRight className="w-3.5 h-3.5 text-indigo-600 group-hover:translate-x-0.5 transition" />
                       </div>
                     </button>
                   );
@@ -2064,8 +2064,8 @@ export const CopilotWorkspaceView: React.FC = () => {
               onClick={handleTogglePushToTalk}
               className={`p-2.5 rounded-xl border transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer ${
                 isListening
-                  ? 'bg-rose-50 border-rose-300 text-rose-600 animate-pulse ring-2 ring-rose-400'
-                  : 'bg-[#F8FAFC] hover:bg-[#F1F5F9] border-[#CBD5E1] text-[#1A202C]'
+                  ? 'bg-gradient-to-r from-rose-50 to-red-100 border-rose-300 text-rose-600 animate-pulse ring-2 ring-rose-400'
+                  : 'bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 border-indigo-200/70 text-slate-700'
               }`}
               title={
                 isListening
@@ -2094,7 +2094,7 @@ export const CopilotWorkspaceView: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsVisionModalOpen(true)}
-              className="p-2.5 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
+              className="p-2.5 rounded-xl border border-indigo-200/70 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 text-slate-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
               title="Multimodal Vision Scan: Inspect analog pressure gauges, mechanical seal wear & nameplates with Gemini Vision"
             >
               <Camera className="w-4 h-4 text-blue-600" />
@@ -2107,7 +2107,7 @@ export const CopilotWorkspaceView: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsAcousticModalOpen(true)}
-              className="p-2.5 rounded-xl border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 text-indigo-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
+              className="p-2.5 rounded-xl border border-indigo-200/70 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 text-slate-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
               title="Acoustic Diagnostics: Real-time FFT spectrum scan & anomaly diagnosis (Shazam for Machines)"
             >
               <Activity className="w-4 h-4 text-indigo-600 animate-pulse" />
@@ -2136,7 +2136,7 @@ export const CopilotWorkspaceView: React.FC = () => {
             <button
               onClick={() => handleSendQuery()}
               disabled={isQuerying || !queryInput.trim()}
-              className="px-5 py-2.5 bg-[#151C24] hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl flex items-center gap-2 transition shadow-sm shrink-0"
+              className="px-5 py-2.5 bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl flex items-center gap-2 transition shadow-sm shrink-0 cursor-pointer"
             >
               <Send className="w-3.5 h-3.5" />
               Query Copilot
