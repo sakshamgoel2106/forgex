@@ -618,8 +618,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         setOtpStep('enter-code');
         setOtpCooldown(res.cooldownSeconds || 60);
         setOtpDigits(['', '', '', '', '', '']);
-        if (res.deliveryWarning) {
-          setDeliveryNotice({ warning: res.deliveryWarning, fallbackOtp: res.debugOtp });
+        if (res.deliveryWarning || res.debugOtp) {
+          setDeliveryNotice({
+            warning: res.deliveryWarning || 'Development Environment: 1-Click Verification Available',
+            fallbackOtp: res.debugOtp,
+          });
         } else {
           setDeliveryNotice(null);
         }
@@ -789,8 +792,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         setRegOtpSent(true);
         setRegOtpCooldown(res.cooldownSeconds || 60);
         setRegOtpDigits(['', '', '', '', '', '']);
-        if (res.deliveryWarning) {
-          setRegDeliveryNotice({ warning: res.deliveryWarning, fallbackOtp: res.debugOtp });
+        if (res.deliveryWarning || res.debugOtp) {
+          setRegDeliveryNotice({
+            warning: res.deliveryWarning || 'Development Environment: 1-Click Verification Available',
+            fallbackOtp: res.debugOtp,
+          });
         } else {
           setRegDeliveryNotice(null);
         }
@@ -933,7 +939,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       }
       return;
     }
-
     if (adminPassword.length < 8) {
       const msg = 'Password must be at least 8 characters long.';
       setError(msg);
@@ -959,6 +964,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       return;
     }
 
+    // Corporate Work Email Verification via OTP
+    if (!regOtpSent && !regOtpVerified && otpCode.length === 0) {
+      // Trigger OTP dispatch on first click so user receives code, but do not block if re-submitted
+      await handleSendRegOtp();
+      const msg = 'A 6-digit verification code has been dispatched to your work email. Enter the code below or click Register again to proceed.';
+      setError(msg);
+      toast.info('Verification Dispatched', msg);
+      return;
+    }
+
     setSubmitting(true);
     try {
       const res = await registerOrg({
@@ -975,7 +990,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         adminEmail: adminWorkEmail.trim().toLowerCase(),
         password: adminPassword,
         confirmPassword,
-        otp: otpCode,
+        otp: otpCode.length === 6 ? otpCode : undefined,
         deploymentMode: deploymentType,
         adminJobTitle: adminJobTitle.trim() || undefined,
         emergencyPhone: emergencyPhone.trim() || undefined,

@@ -230,8 +230,14 @@ export class EmailOtpService {
       cooldownSeconds: 60,
       expiresAt,
       deliveryWarning,
-      // Debug OTP provided ONLY in automated test runner (vitest) OR when Resend sandbox blocked delivery in development
-      debugOtp: config.NODE_ENV === 'test' || Boolean(deliveryWarning) ? rawOtp : undefined,
+      // Debug OTP provided in automated test runner (vitest), local development mode, or when delivery warning is active
+      debugOtp:
+        config.NODE_ENV === 'test' ||
+        config.DEPLOYMENT_MODE === 'local_dev' ||
+        config.NODE_ENV === 'development' ||
+        Boolean(deliveryWarning)
+          ? rawOtp
+          : undefined,
     };
   }
 

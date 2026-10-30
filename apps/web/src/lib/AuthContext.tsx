@@ -376,7 +376,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await fetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ identifier: email, email, password, pin: password }),
       });
 
       const json = await res.json();
@@ -480,6 +480,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } catch (loginErr) {
             console.warn('[ForgeX Auth] Auto-login fallback error:', loginErr);
           }
+
         }
 
         // If session token or objects are still null, construct immediate authenticated local session

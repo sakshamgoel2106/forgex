@@ -321,5 +321,60 @@ describe('Phase 2 & Phase 3: Engineering 3D CAD & P&ID PDF Pipeline Integration 
       const buffer = Buffer.from(res.body);
       expect(buffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
     });
+
+    it('auto-heals and renders missing drawings on the fly for any file format (PDF, SVG) without 404', async () => {
+      // 1. Missing PDF drawing
+      const pdfDwg = await dataStore.createEngineeringDrawing(testOrgId, {
+        plantId: 'PLANT-TX-04',
+        drawingTitle: 'Industrial_Air_Compressor_PID.pdf',
+        uniqueDrawingNumber: 'PID-PUMP-204-T',
+        drawingType: 'PID',
+        discipline: 'Process',
+        revision: '1.0',
+        storageKey: 'schematics/missing-test-schematic-' + Date.now() + '.pdf',
+        originalFileName: 'Industrial_Air_Compressor_PID.pdf',
+        fileFormat: 'PDF',
+        fileSizeBytes: 1413150,
+        fileHashSha256: 'missing_hash',
+        uploadedByUserId: 'usr_1',
+      });
+
+      const pdfRes = await request(app)
+        .get(`/api/v1/engineering/drawings/${pdfDwg.id}/content`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(pdfRes.status).toBe(200);
+      expect(pdfRes.headers['content-type']).toBe('application/pdf');
+      const pdfBuf = Buffer.from(pdfRes.body);
+      expect(pdfBuf.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+
+      // 2. Missing SVG drawing
+      const svgDwg = await dataStore.createEngineeringDrawing(testOrgId, {
+        plantId: 'PLANT-TX-04',
+        drawingTitle: 'Booster_Pump_Schematic.svg',
+        uniqueDrawingNumber: 'PID-PUMP-204-B',
+        drawingType: 'PID',
+        discipline: 'Process',
+        revision: '2.0',
+        storageKey: 'schematics/missing-test-schematic-' + Date.now() + '.svg',
+        originalFileName: 'Booster_Pump_Schematic.svg',
+        fileFormat: 'SVG',
+        fileSizeBytes: 89012,
+        fileHashSha256: 'missing_hash',
+        uploadedByUserId: 'usr_1',
+      });
+
+      const svgRes = await request(app)
+        .get(`/api/v1/engineering/drawings/${svgDwg.id}/content`)
+        .set('Authorization', `Bearer ${ownerToken}`);
+
+      expect(svgRes.status).toBe(200);
+      expect(svgRes.headers['content-type']).toContain('image/svg+xml');
+      const svgText = Buffer.isBuffer(svgRes.body)
+        ? svgRes.body.toString('utf-8')
+        : (svgRes.text || (svgRes.body ? String(svgRes.body) : ''));
+      expect(svgText).toContain('<svg');
+      expect(svgText).toContain('PID-PUMP-204-B');
+    });
   });
 });

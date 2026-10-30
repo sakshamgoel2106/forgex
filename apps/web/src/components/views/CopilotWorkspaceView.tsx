@@ -860,33 +860,6 @@ export const CopilotWorkspaceView: React.FC = () => {
     }
   };
 
-  const handleRaiseTicketForRca = (msg: CopilotMessage) => {
-    const userInquiry = messages.slice().reverse().find((m) => m.senderType === 'USER')?.content || queryInput || 'Abnormal Machinery Condition';
-    const activeAsset = selectedMachine?.assetTag || (machines.length > 0 ? machines[0].assetTag : 'PUMP-001');
-
-    const rcaTicketPayload = {
-      assetTag: activeAsset,
-      symptom: userInquiry,
-      query: userInquiry,
-      copilotSummary: msg.content.slice(0, 350),
-      timestamp: Date.now(),
-      reportedBy: user?.fullName || 'Technician',
-    };
-
-    try {
-      sessionStorage.setItem('forgex_rca_ticket', JSON.stringify(rcaTicketPayload));
-    } catch {}
-
-    toast.warning(
-      'RCA Ticket Raised',
-      `Anomaly on ${activeAsset} routed to Troubleshooting & RCA for Higher Officer / Engineer evaluation.`
-    );
-
-    window.history.pushState({}, '', '/troubleshooting');
-    window.dispatchEvent(
-      new CustomEvent('forgex:navigate', { detail: { module: 'troubleshooting' } })
-    );
-  };
 
   const handleSubmitFeedback = async () => {
     if (!feedbackMessageId) return;
@@ -1961,43 +1934,69 @@ export const CopilotWorkspaceView: React.FC = () => {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {/* Vision-Guided LOTO Quick Launcher */}
-                      <button
-                        type="button"
-                        onClick={() => setIsLotoModalOpen(true)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-300 text-emerald-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                        title="OSHA 1910.147 Vision-Locked Lockout/Tagout protocol with camera zero-energy verification"
-                      >
-                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        <span>Start Vision-Guided LOTO</span>
-                      </button>
+                    {/* Actionable Engineering Solution Controls (Hidden for general questions or insufficient evidence) */}
+                    {(() => {
+                      const hasActionableSolution =
+                        !msg.isInsufficientEvidence &&
+                        msg.confidence !== 'INSUFFICIENT_EVIDENCE' &&
+                        msg.questionMode !== 'GENERAL' &&
+                        (
+                          Boolean(selectedMachine) ||
+                          Boolean(msg.acousticTelemetry) ||
+                          Boolean(msg.visionDiagnostic) ||
+                          (Boolean(msg.safetyAlerts) && (msg.safetyAlerts?.length ?? 0) > 0) ||
+                          msg.questionMode === 'MACHINE_SPECIFIC' ||
+                          msg.questionMode === 'RESTRICTED_SAFETY_CRITICAL' ||
+                          (Boolean(msg.citations) && (msg.citations?.length ?? 0) > 0 && Boolean(selectedMachine))
+                        );
 
-                      {/* 1-Click Auto-Filled RCA Ticket Button */}
-                      <button
-                        type="button"
-                        onClick={() => setIsRcaModalOpen(true)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                        title="Generate enterprise Root Cause Analysis Work Order from this diagnostic session"
-                      >
-                        <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
-                        <span>⚡ Generate 1-Click RCA Ticket</span>
-                      </button>
+                      if (!hasActionableSolution) {
+                        return (
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-[#64748B] font-mono">
+                              ID: {msg.id.slice(0, 16)}...
+                            </span>
+                          </div>
+                        );
+                      }
 
-                      <button
-                        type="button"
-                        onClick={() => handleRaiseTicketForRca(msg)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-300 text-amber-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                        title="Unresolved issue? Raise ticket and route to Troubleshooting & RCA for Higher Officer / Engineer"
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                        <span>🚨 Unresolved? Raise Ticket for RCA</span>
-                      </button>
+                      const isLotoRelevant =
+                        msg.questionMode === 'RESTRICTED_SAFETY_CRITICAL' ||
+                        ((msg.safetyAlerts?.length ?? 0) > 0) ||
+                        /loto|lockout|tagout|isolation|zero-energy/i.test(msg.content);
 
-                      <span className="text-[10px] text-[#64748B] font-mono">
-                        ID: {msg.id.slice(0, 16)}...
-                      </span>
-                    </div>
+                      return (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {/* Vision-Guided LOTO Quick Launcher (only when safety / isolation is involved) */}
+                          {isLotoRelevant && (
+                            <button
+                              type="button"
+                              onClick={() => setIsLotoModalOpen(true)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-300 text-emerald-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                              title="OSHA 1910.147 Vision-Locked Lockout/Tagout protocol with camera zero-energy verification"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Start Vision-Guided LOTO</span>
+                            </button>
+                          )}
+
+                          {/* Unified 1-Click Auto-Filled RCA Ticket Button */}
+                          <button
+                            type="button"
+                            onClick={() => setIsRcaModalOpen(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                            title="Generate verified Root Cause Analysis Work Order from this engineering solution"
+                          >
+                            <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
+                            <span>⚡ 1-Click RCA Ticket</span>
+                          </button>
+
+                          <span className="text-[10px] text-[#64748B] font-mono">
+                            ID: {msg.id.slice(0, 16)}...
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}

@@ -16,8 +16,6 @@ import {
   ChevronDown,
   Upload,
   FileAudio,
-  MonitorUp,
-  Radio,
   HardDrive,
 } from 'lucide-react';
 import type {
@@ -72,11 +70,6 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
   const filePlaybackOffsetRef = useRef<number>(0);
   const filePlaybackTimerRef = useRef<any>(null);
 
-  // Mode 3: Display Media (Tab/System Audio) State
-  const [isCapturingSystemAudio, setIsCapturingSystemAudio] = useState(false);
-  const [systemAudioTrackLabel, setSystemAudioTrackLabel] = useState<string | null>(null);
-  const [systemAudioError, setSystemAudioError] = useState<string | null>(null);
-  const displayStreamRef = useRef<MediaStream | null>(null);
 
   // Scanning & Recording State
   const [isScanning, setIsScanning] = useState(false);
@@ -116,7 +109,6 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const systemSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const monitorGainRef = useRef<GainNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -230,21 +222,6 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     }
   }, []);
 
-  // Stop system / tab audio capture stream safely
-  const stopSystemStream = useCallback(() => {
-    if (displayStreamRef.current) {
-      displayStreamRef.current.getTracks().forEach((track) => track.stop());
-      displayStreamRef.current = null;
-    }
-    if (systemSourceNodeRef.current) {
-      try {
-        systemSourceNodeRef.current.disconnect();
-      } catch {}
-      systemSourceNodeRef.current = null;
-    }
-    setIsCapturingSystemAudio(false);
-    setSystemAudioTrackLabel(null);
-  }, []);
 
   // Stop file playback stream safely
   const stopFilePlayback = useCallback(() => {
@@ -273,7 +250,6 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       scanTimerRef.current = null;
     }
     stopMicStream();
-    stopSystemStream();
     stopFilePlayback();
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -296,14 +272,13 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       recordedAudioElementRef.current.pause();
       setIsPlayingRecordedAudio(false);
     }
-  }, [stopMicStream, stopSystemStream, stopFilePlayback]);
+  }, [stopMicStream, stopFilePlayback]);
 
   // =========================================================================
   // MODE 1: SETUP LIVE HARDWARE DESKTOP MICROPHONE
   // =========================================================================
   const setupHardwareAudio = useCallback(async (deviceIdToUse?: string) => {
     stopMicStream();
-    stopSystemStream();
     stopFilePlayback();
     setMicPermissionError(null);
 
@@ -347,7 +322,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
         `Microphone Access Error: ${err?.message || 'Permission denied or audio device is locked by another program'}. Please allow microphone access in your browser address bar.`
       );
     }
-  }, [selectedDeviceId, getOrCreateAudioContext, stopMicStream, stopSystemStream, stopFilePlayback]);
+  }, [selectedDeviceId, getOrCreateAudioContext, stopMicStream, stopFilePlayback]);
 
   // Handle changing input device from dropdown
   const handleSelectDevice = async (device: MediaDeviceInfo) => {
@@ -366,7 +341,6 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     setUploadedFile(file);
     stopFilePlayback();
     stopMicStream();
-    stopSystemStream();
 
     try {
       const { ctx } = await getOrCreateAudioContext();
@@ -467,69 +441,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     }
   };
 
-  // =========================================================================
-  // MODE 3: CAPTURE DESKTOP TAB / SYSTEM AUDIO (getDisplayMedia)
-  // =========================================================================
-  const handleStartCaptureSystemAudio = async () => {
-    stopMicStream();
-    stopFilePlayback();
-    stopSystemStream();
-    setSystemAudioError(null);
-
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
-      setSystemAudioError('Desktop tab/system audio capture is not supported by your browser.');
-      return;
-    }
-
-    try {
-      const { ctx, analyser, monitorGain } = await getOrCreateAudioContext();
-
-      // Request screen/tab sharing with audio
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true,
-      });
-
-      const audioTracks = displayStream.getAudioTracks();
-      if (audioTracks.length === 0) {
-        displayStream.getTracks().forEach((t) => t.stop());
-        setSystemAudioError(
-          'No audio stream captured. Please select a browser tab or screen and ensure you check "Also share tab audio" in the browser prompt.'
-        );
-        return;
-      }
-
-      // Stop unused video track immediately to conserve GPU/CPU
-      displayStream.getVideoTracks().forEach((t) => t.stop());
-
-      displayStreamRef.current = displayStream;
-      setIsCapturingSystemAudio(true);
-      setSystemAudioTrackLabel(audioTracks[0].label || 'Active Tab Audio');
-
-      // Listen for when technician stops screen sharing via browser native bar
-      audioTracks[0].onended = () => {
-        stopSystemStream();
-      };
-
-      const source = ctx.createMediaStreamSource(new MediaStream([audioTracks[0]]));
-      systemSourceNodeRef.current = source;
-      source.connect(analyser);
-
-      if (monitorGain) {
-        source.connect(monitorGain);
-      }
-    } catch (err: any) {
-      if (err?.name !== 'NotAllowedError') {
-        console.error('System audio capture error:', err);
-        setSystemAudioError(
-          `System Audio Error: ${err?.message || 'Access denied or canceled'}. Ensure you check "Share tab audio" in the prompt.`
-        );
-      }
-      setIsCapturingSystemAudio(false);
-    }
-  };
-
-  // Switch between 3 Real Modes
+  // Switch between Live Physical Sensor and PC Audio File
   const handleSwitchMode = (mode: AcousticSourceMode) => {
     if (mode === sourceMode) return;
     setSourceMode(mode);
@@ -540,11 +452,6 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       setupHardwareAudio();
     } else if (mode === 'FILE_UPLOAD') {
       stopMicStream();
-      stopSystemStream();
-    } else if (mode === 'TAB_SYSTEM_AUDIO') {
-      stopMicStream();
-      stopFilePlayback();
-      handleStartCaptureSystemAudio();
     }
   };
 
@@ -586,13 +493,8 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
         playUploadedAudio(fileCurrentTime >= fileDuration ? 0 : fileCurrentTime);
       }
     } else {
-      // Live Mic or Tab System Audio: Record via MediaRecorder
-      const activeStream =
-        sourceMode === 'LIVE_MIC'
-          ? micStreamRef.current
-          : displayStreamRef.current && displayStreamRef.current.getAudioTracks().length > 0
-          ? new MediaStream(displayStreamRef.current.getAudioTracks())
-          : null;
+      // Live Sensor / Microphone: Record via MediaRecorder
+      const activeStream = micStreamRef.current;
 
       if (activeStream) {
         try {
@@ -702,9 +604,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     const sourceName =
       sourceMode === 'LIVE_MIC'
         ? selectedDeviceLabel
-        : sourceMode === 'FILE_UPLOAD'
-        ? `Field Recording (${uploadedFile?.name || 'PC Audio'})`
-        : `Desktop Tab Audio (${systemAudioTrackLabel || 'SCADA Feed'})`;
+        : `Field Recording (${uploadedFile?.name || 'PC Audio'})`;
 
     const telemetry: AcousticTelemetry = {
       dominantFrequencyHz: avgDomHz,
@@ -816,6 +716,18 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
       };
     }
   }, [enumerateHardwareMics]);
+
+  // Close modal on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        teardownAudio();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose, teardownAudio]);
 
   // =========================================================================
   // 60FPS REAL-TIME DSP TELEMETRY & FFT CANVAS ANIMATION LOOP
@@ -1038,40 +950,60 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
     };
   }, [isOpen, isScanning]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        teardownAudio();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
-      <div className="bg-[#0B111E] border border-[#23334D] rounded-2xl w-full max-w-5xl shadow-2xl overflow-hidden flex flex-col max-h-[94vh]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          teardownAudio();
+          onClose();
+        }
+      }}
+    >
+      <div className="bg-white border border-[#E2E8F0] rounded-2xl w-full max-w-5xl shadow-2xl overflow-hidden flex flex-col max-h-[96vh] sm:max-h-[92vh]">
         {/* Modal Top Control Bar */}
-        <div className="px-6 py-4 bg-[#111A2E] border-b border-[#23334D] flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-              <Activity className="w-5 h-5 animate-pulse" />
+        <div className="px-4 sm:px-6 py-3 sm:py-4 bg-white border-b border-[#E2E8F0] flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600 shrink-0">
+              <Activity className="w-4 h-4 sm:w-5 sm:h-5 animate-pulse" />
             </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-sm font-bold text-white tracking-wide font-sans">
-                  DESKTOP ACOUSTIC DSP ANALYZER &amp; TELEMETRY
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <h2 className="text-xs sm:text-sm font-bold text-slate-900 tracking-wide font-sans truncate">
+                  ACOUSTIC DSP ANALYZER &amp; TELEMETRY
                 </h2>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-950 text-indigo-300 border border-indigo-700/60">
+                <span className="px-1.5 sm:px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
                   FFT 4096 · 48 kHz
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-700/60 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                <span className="hidden md:inline-flex px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
                   REAL DESKTOP AUDIO DSP
                 </span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                <span className="px-1.5 sm:px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200">
                   {currentLanguage}
                 </span>
               </div>
-              <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
-                <span>Scoped Machine:</span>
+              <div className="flex items-center gap-1.5 sm:gap-2 mt-1 text-[10px] sm:text-[11px] text-slate-500">
+                <span className="shrink-0">Scoped Machine:</span>
                 {machines && machines.length > 0 ? (
                   <select
                     value={targetMachine.id}
                     onChange={(e) => onSelectMachine(e.target.value)}
-                    className="bg-slate-900 border border-slate-700 text-white text-[11px] rounded px-2 py-0.5 focus:outline-none focus:border-indigo-500 font-mono font-bold cursor-pointer"
+                    className="max-w-[150px] sm:max-w-[280px] md:max-w-md truncate bg-white border border-[#CBD5E1] text-slate-900 text-[10px] sm:text-[11px] rounded px-2 py-0.5 focus:outline-none focus:border-indigo-500 font-mono font-bold cursor-pointer shadow-2xs"
                   >
                     {machines.map((m) => (
                       <option key={m.id} value={m.id}>
@@ -1080,80 +1012,70 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                     ))}
                   </select>
                 ) : (
-                  <strong className="text-white">{targetMachine.assetTag}</strong>
+                  <strong className="text-slate-900">{targetMachine.assetTag}</strong>
                 )}
               </div>
             </div>
           </div>
 
           <button
+            type="button"
             onClick={() => {
               teardownAudio();
               onClose();
             }}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs transition cursor-pointer shrink-0"
+            title="Close Acoustic Diagnostics (Esc)"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4 text-slate-500" />
+            <span className="hidden sm:inline">Close</span>
           </button>
         </div>
 
-        {/* 3 Real Desktop Audio Input Mode Tabs */}
-        <div className="px-6 pt-3 pb-0 bg-[#0E1626] border-b border-[#23334D] flex items-center gap-2 overflow-x-auto">
+        {/* 2 Real Desktop Audio Input Mode Tabs */}
+        <div className="px-4 sm:px-6 pt-2 sm:pt-3 pb-0 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center gap-2 overflow-x-auto">
           <button
             type="button"
             onClick={() => handleSwitchMode('LIVE_MIC')}
-            className={`px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono flex items-center gap-2 border-t-2 transition cursor-pointer shrink-0 ${
+            className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-t-xl text-xs font-bold font-mono flex items-center gap-2 border-t-2 transition cursor-pointer shrink-0 ${
               sourceMode === 'LIVE_MIC'
-                ? 'bg-[#142036] text-white border-indigo-500 shadow-md'
-                : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/40'
+                ? 'bg-white text-indigo-700 border-indigo-600 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
           >
-            <Mic className="w-3.5 h-3.5 text-rose-400" />
-            <span>1. Live Desktop Mic</span>
+            <Mic className="w-3.5 h-3.5 text-rose-500" />
+            <span>1. Live Sensor / Microphone</span>
           </button>
 
           <button
             type="button"
             onClick={() => handleSwitchMode('FILE_UPLOAD')}
-            className={`px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono flex items-center gap-2 border-t-2 transition cursor-pointer shrink-0 ${
+            className={`px-3 sm:px-4 py-2 sm:py-2.5 rounded-t-xl text-xs font-bold font-mono flex items-center gap-2 border-t-2 transition cursor-pointer shrink-0 ${
               sourceMode === 'FILE_UPLOAD'
-                ? 'bg-[#142036] text-white border-blue-500 shadow-md'
-                : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/40'
+                ? 'bg-white text-blue-700 border-blue-600 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 border-transparent hover:bg-slate-200/60'
             }`}
           >
-            <FileAudio className="w-3.5 h-3.5 text-blue-400" />
-            <span>2. Upload PC Recording (.wav/.mp3)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSwitchMode('TAB_SYSTEM_AUDIO')}
-            className={`px-4 py-2.5 rounded-t-xl text-xs font-bold font-mono flex items-center gap-2 border-t-2 transition cursor-pointer shrink-0 ${
-              sourceMode === 'TAB_SYSTEM_AUDIO'
-                ? 'bg-[#142036] text-white border-emerald-500 shadow-md'
-                : 'text-slate-400 hover:text-slate-200 border-transparent hover:bg-slate-900/40'
-            }`}
-          >
-            <MonitorUp className="w-3.5 h-3.5 text-emerald-400" />
-            <span>3. Capture Tab / System Audio</span>
+            <FileAudio className="w-3.5 h-3.5 text-blue-500" />
+            <span>2. Upload Audio File (.wav/.mp3)</span>
           </button>
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 space-y-5 overflow-y-auto flex-1 bg-[#0B111E]">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1 bg-[#F8FAFC]">
           {/* Mode 1 Controls: Hardware Microphone */}
           {sourceMode === 'LIVE_MIC' && (
-            <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-[#131D30] border border-[#23334D]">
-              <div className="flex items-center gap-2.5 flex-1 min-w-[280px]">
-                <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-white border border-[#E2E8F0] shadow-2xs">
+              <div className="flex items-center gap-2.5 flex-1 min-w-[240px]">
+                <div className="w-8 h-8 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-500 shrink-0">
                   <Mic className="w-4 h-4 animate-pulse" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500 font-bold">
                       Active Physical Input:
                     </span>
-                    <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-rose-950 text-rose-300 border border-rose-800 font-bold">
+                    <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200 font-bold">
                       RAW UNFILTERED DSP
                     </span>
                   </div>
@@ -1163,18 +1085,18 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                     <button
                       type="button"
                       onClick={() => setIsDeviceMenuOpen(!isDeviceMenuOpen)}
-                      className="w-full text-left bg-slate-900 border border-slate-700 hover:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-white flex items-center justify-between gap-2 transition cursor-pointer"
+                      className="w-full text-left bg-slate-50 hover:bg-slate-100 border border-[#CBD5E1] hover:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 flex items-center justify-between gap-2 transition cursor-pointer shadow-2xs"
                     >
                       <span className="truncate font-mono font-medium">
                         {selectedDeviceLabel}
                       </span>
-                      <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                     </button>
 
                     {isDeviceMenuOpen && (
-                      <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-800">
+                      <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-[#CBD5E1] rounded-lg shadow-xl z-30 max-h-52 overflow-y-auto divide-y divide-slate-100">
                         {audioDevices.length === 0 ? (
-                          <div className="p-3 text-xs text-slate-400 font-mono">
+                          <div className="p-3 text-xs text-slate-500 font-mono">
                             No physical audio input devices detected.
                           </div>
                         ) : (
@@ -1185,19 +1107,19 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                                 key={dev.deviceId || idx}
                                 type="button"
                                 onClick={() => handleSelectDevice(dev)}
-                                className={`w-full text-left p-2.5 text-xs font-mono transition flex items-center justify-between ${
+                                className={`w-full text-left p-2.5 text-xs font-mono transition flex items-center justify-between cursor-pointer ${
                                   isSelected
-                                    ? 'bg-indigo-950/70 text-indigo-300 font-bold'
-                                    : 'text-slate-300 hover:bg-slate-800'
+                                    ? 'bg-indigo-50 text-indigo-700 font-bold'
+                                    : 'text-slate-700 hover:bg-slate-50'
                                 }`}
                               >
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <Mic className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-slate-500'}`} />
+                                  <Mic className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-indigo-600' : 'text-slate-400'}`} />
                                   <span className="truncate">
                                     {dev.label || `Microphone #${idx + 1}`}
                                   </span>
                                 </div>
-                                {isSelected && <span className="text-[10px] text-emerald-400 font-bold shrink-0">ACTIVE</span>}
+                                {isSelected && <span className="text-[10px] text-emerald-600 font-bold shrink-0">ACTIVE</span>}
                               </button>
                             );
                           })
@@ -1212,7 +1134,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                 <button
                   type="button"
                   onClick={() => enumerateHardwareMics(true)}
-                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs transition cursor-pointer"
+                  className="p-2 rounded-lg bg-white hover:bg-slate-50 border border-[#CBD5E1] text-slate-700 text-xs transition cursor-pointer shadow-2xs"
                   title="Refresh physical audio input devices"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -1221,16 +1143,16 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                 <button
                   type="button"
                   onClick={toggleAudioMonitor}
-                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-2xs ${
                     audioMonitorEnabled
-                      ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                      ? 'bg-amber-50 border-amber-300 text-amber-800'
+                      : 'bg-white border-[#CBD5E1] text-slate-600 hover:text-slate-800'
                   }`}
                   title="Monitor microphone audio through speakers/headphones"
                 >
                   {audioMonitorEnabled ? (
                     <>
-                      <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                      <Volume2 className="w-3.5 h-3.5 text-amber-600" />
                       <span>Monitor: ON</span>
                     </>
                   ) : (
@@ -1246,16 +1168,16 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
 
           {/* Mode 2 Controls: Upload PC Audio File */}
           {sourceMode === 'FILE_UPLOAD' && (
-            <div className="p-4 rounded-xl bg-[#131D30] border border-[#23334D] space-y-3">
+            <div className="p-4 rounded-xl bg-white border border-[#E2E8F0] shadow-2xs space-y-3">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
-                  <HardDrive className="w-4 h-4 text-blue-400" />
-                  <span className="text-xs font-bold text-white font-mono">
+                  <HardDrive className="w-4 h-4 text-blue-600" />
+                  <span className="text-xs font-bold text-slate-900 font-mono">
                     REAL FIELD RECORDING FROM PC (.wav, .mp3, .webm, .ogg)
                   </span>
                 </div>
                 {uploadedFile && (
-                  <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/70 border border-emerald-800 px-2 py-0.5 rounded font-bold">
+                  <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded font-bold">
                     DECODED: {uploadedAudioBuffer?.sampleRate || 48000} Hz · {fileDuration.toFixed(1)}s
                   </span>
                 )}
@@ -1277,26 +1199,26 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                   onClick={() => fileInputRef.current?.click()}
                   className={`p-6 rounded-xl border-2 border-dashed transition-all cursor-pointer text-center ${
                     isDraggingFile
-                      ? 'border-blue-500 bg-blue-950/40 scale-[1.01]'
-                      : 'border-slate-700 bg-slate-900/50 hover:bg-slate-900 hover:border-slate-600'
+                      ? 'border-blue-500 bg-blue-50/50 scale-[1.01]'
+                      : 'border-slate-300 bg-slate-50/70 hover:bg-slate-100 hover:border-slate-400'
                   }`}
                 >
-                  <Upload className="w-7 h-7 text-blue-400 mx-auto mb-2 animate-bounce" />
-                  <p className="text-xs font-bold text-white">
+                  <Upload className="w-7 h-7 text-blue-600 mx-auto mb-2 animate-bounce" />
+                  <p className="text-xs font-bold text-slate-850">
                     Drop real machine audio file here, or click to browse
                   </p>
-                  <p className="text-[10px] text-slate-400 mt-1 font-mono">
+                  <p className="text-[10px] text-slate-500 mt-1 font-mono">
                     Decodes real binary audio via Web Audio decodeAudioData into 4096-bin FFT spectrum
                   </p>
                 </div>
               ) : (
-                <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-700 space-y-2.5">
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <button
                         type="button"
                         onClick={togglePlayUploadedAudio}
-                        className="w-9 h-9 rounded-xl bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition cursor-pointer shadow-lg shadow-blue-600/30 shrink-0"
+                        className="w-9 h-9 rounded-xl bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center transition cursor-pointer shadow-md shadow-blue-600/20 shrink-0"
                       >
                         {isFilePlaying ? (
                           <Pause className="w-4 h-4 fill-current" />
@@ -1305,10 +1227,10 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                         )}
                       </button>
                       <div className="min-w-0">
-                        <span className="text-xs font-mono font-bold text-white truncate block">
+                        <span className="text-xs font-mono font-bold text-slate-900 truncate block">
                           {uploadedFile.name}
                         </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
+                        <span className="text-[10px] text-slate-500 font-mono">
                           {fileCurrentTime.toFixed(1)}s / {fileDuration.toFixed(1)}s · Playing into Analyser &amp; Speakers
                         </span>
                       </div>
@@ -1318,7 +1240,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-[11px] font-mono transition cursor-pointer"
+                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 text-[11px] font-mono transition cursor-pointer shadow-2xs"
                       >
                         Change File
                       </button>
@@ -1333,7 +1255,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                     step={0.1}
                     value={fileCurrentTime}
                     onChange={handleSeekScrubber}
-                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
                   />
                 </div>
               )}
@@ -1348,123 +1270,52 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
             </div>
           )}
 
-          {/* Mode 3 Controls: Capture Tab / System Audio */}
-          {sourceMode === 'TAB_SYSTEM_AUDIO' && (
-            <div className="p-4 rounded-xl bg-[#131D30] border border-[#23334D] space-y-3">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <MonitorUp className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-bold text-white font-mono">
-                    DESKTOP BROWSER TAB OR SCADA SYSTEM AUDIO CAPTURE
-                  </span>
-                </div>
-                {isCapturingSystemAudio && (
-                  <span className="text-[10px] font-mono text-emerald-300 bg-emerald-950 border border-emerald-700 px-2 py-0.5 rounded font-bold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                    LIVE TAB AUDIO STREAMING
-                  </span>
-                )}
-              </div>
-
-              {!isCapturingSystemAudio ? (
-                <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-slate-900/60 border border-slate-700 flex-wrap">
-                  <div className="space-y-1">
-                    <p className="text-xs font-semibold text-white">
-                      Stream audio from another browser tab, video feed, or SCADA software
-                    </p>
-                    <p className="text-[10px] text-slate-400 font-mono">
-                      Click the button below and check <strong>&quot;Also share tab audio&quot;</strong> in the browser share dialog.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleStartCaptureSystemAudio}
-                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold font-mono flex items-center gap-2 transition cursor-pointer shadow-lg shadow-emerald-600/30"
-                  >
-                    <Radio className="w-3.5 h-3.5" />
-                    <span>Select Tab / System Audio</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-900 border border-emerald-500/40 flex-wrap">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-                      <Radio className="w-4 h-4 animate-pulse" />
-                    </div>
-                    <div>
-                      <span className="text-xs font-mono font-bold text-white block">
-                        {systemAudioTrackLabel || 'Active Desktop Tab Audio Stream'}
-                      </span>
-                      <span className="text-[10px] font-mono text-slate-400">
-                        Piped directly into AnalyserNode &amp; 48 kHz MediaRecorder
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={stopSystemStream}
-                    className="px-3 py-1.5 rounded-lg bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs font-mono font-bold transition cursor-pointer"
-                  >
-                    Disconnect Stream
-                  </button>
-                </div>
-              )}
-
-              {systemAudioError && (
-                <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span>{systemAudioError}</span>
-                </div>
-              )}
-            </div>
-          )}
-
           {micPermissionError && (
-            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2.5">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
               <span>{micPermissionError}</span>
             </div>
           )}
 
           {/* Real-time Hardware FFT 4096 Scope Display */}
-          <div className="relative rounded-2xl overflow-hidden border border-[#23334D] shadow-inner bg-[#060A12]">
+          <div className="relative rounded-2xl overflow-hidden border border-slate-300 shadow-md bg-[#060A12]">
             <canvas
               ref={canvasRef}
               width={960}
               height={260}
-              className="w-full h-64 block cursor-crosshair"
+              className="w-full h-48 sm:h-64 block cursor-crosshair"
             />
 
-            {/* Live Overlay Metrics (Top-Right HUD) */}
-            <div className="absolute top-3 right-3 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-700 text-[11px] font-mono shadow-md">
+            {/* Live Overlay Metrics (Top HUD) */}
+            <div className="absolute top-2 left-2 right-2 sm:left-auto sm:right-3 sm:top-3 flex flex-wrap items-center justify-between sm:justify-start gap-1.5 sm:gap-2 bg-slate-900/90 backdrop-blur-md px-2.5 py-1.5 sm:px-3 sm:py-1.5 rounded-xl border border-slate-700 text-[10px] sm:text-[11px] font-mono shadow-md text-white">
               <div className="flex items-center gap-1 text-slate-300">
-                <Gauge className="w-3.5 h-3.5 text-indigo-400" />
+                <Gauge className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-indigo-400" />
                 <span>Peak:</span>
                 <strong className="text-white">{livePeakDb} dB</strong>
               </div>
-              <span className="text-slate-600">|</span>
+              <span className="text-slate-600 hidden sm:inline">|</span>
               <div className="flex items-center gap-1 text-slate-300">
                 <span>RMS:</span>
                 <strong className="text-white">{liveRmsDbfs} dBFS</strong>
               </div>
-              <span className="text-slate-600">|</span>
+              <span className="text-slate-600 hidden sm:inline">|</span>
               <div className="flex items-center gap-1 text-slate-300">
                 <span>Dominant:</span>
                 <strong className="text-indigo-400">{liveDominantHz} Hz</strong>
               </div>
-              <span className="text-slate-600">|</span>
+              <span className="text-slate-600 hidden sm:inline">|</span>
               <div className="flex items-center gap-1 text-amber-300">
                 <span>Crest:</span>
                 <strong className="text-amber-400">{liveCrestFactorDb} dB ({liveCrestCategory})</strong>
               </div>
-              <span className="text-slate-600">|</span>
+              <span className="text-slate-600 hidden sm:inline">|</span>
               <div className="flex items-center gap-1 text-cyan-300">
                 <span>Centroid:</span>
                 <strong className="text-cyan-400">{liveCentroidHz} Hz</strong>
               </div>
               {livePattern !== 'NOMINAL' && (
                 <>
-                  <span className="text-slate-600">|</span>
+                  <span className="text-slate-600 hidden sm:inline">|</span>
                   <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-950 text-rose-300 border border-rose-800 animate-pulse">
                     {livePattern.replace(/_/g, ' ')}
                   </span>
@@ -1476,79 +1327,79 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
           {/* Physical Band Energy Distribution Cards (Low, Mid, High) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {/* Low Band: 20–500 Hz */}
-            <div className="p-3.5 rounded-xl bg-[#131D30] border border-amber-500/30 space-y-1.5">
+            <div className="p-3.5 rounded-xl bg-white border border-amber-200 shadow-2xs space-y-1.5">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-amber-400 font-bold uppercase tracking-wider text-[10px] font-mono">
+                <span className="text-amber-800 font-bold uppercase tracking-wider text-[10px] font-mono">
                   Low Band (20–500 Hz)
                 </span>
-                <span className="font-mono font-bold text-white text-xs">
+                <span className="font-mono font-bold text-slate-900 text-xs">
                   {Math.round(liveBandEnergy.low * 100)}%
                 </span>
               </div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                 <div
-                  className="bg-amber-400 h-full transition-all duration-150"
+                  className="bg-amber-500 h-full transition-all duration-150"
                   style={{ width: `${Math.min(100, liveBandEnergy.low * 100)}%` }}
                 />
               </div>
-              <p className="text-[10px] text-slate-400 pt-0.5">
+              <p className="text-[10px] text-slate-500 pt-0.5">
                 Mechanical Unbalance, Shaft Misalignment, Motor 1X/2X Hum
               </p>
             </div>
 
             {/* Mid Band: 500–2,500 Hz */}
-            <div className="p-3.5 rounded-xl bg-[#131D30] border border-indigo-500/40 space-y-1.5 ring-1 ring-indigo-500/20">
+            <div className="p-3.5 rounded-xl bg-white border border-indigo-200 shadow-2xs space-y-1.5 ring-1 ring-indigo-200/50">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-indigo-400 font-bold uppercase tracking-wider text-[10px] font-mono">
+                <span className="text-indigo-800 font-bold uppercase tracking-wider text-[10px] font-mono">
                   Mid Band (500–2,500 Hz)
                 </span>
-                <span className="font-mono font-bold text-indigo-300 text-xs">
+                <span className="font-mono font-bold text-indigo-900 text-xs">
                   {Math.round(liveBandEnergy.mid * 100)}%
                 </span>
               </div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                 <div
-                  className="bg-indigo-500 h-full transition-all duration-150"
+                  className="bg-indigo-600 h-full transition-all duration-150"
                   style={{ width: `${Math.min(100, liveBandEnergy.mid * 100)}%` }}
                 />
               </div>
-              <p className="text-[10px] text-indigo-300/80 pt-0.5">
+              <p className="text-[10px] text-indigo-700/80 pt-0.5">
                 Cavitation Bubble Collapse, Fluid Recirculation, Blade Pass
               </p>
             </div>
 
             {/* High Band: 2,500–12,000 Hz */}
-            <div className="p-3.5 rounded-xl bg-[#131D30] border border-rose-500/30 space-y-1.5">
+            <div className="p-3.5 rounded-xl bg-white border border-rose-200 shadow-2xs space-y-1.5">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-rose-400 font-bold uppercase tracking-wider text-[10px] font-mono">
+                <span className="text-rose-800 font-bold uppercase tracking-wider text-[10px] font-mono">
                   High Band (2,500–12,000 Hz)
                 </span>
-                <span className="font-mono font-bold text-white text-xs">
+                <span className="font-mono font-bold text-slate-900 text-xs">
                   {Math.round(liveBandEnergy.high * 100)}%
                 </span>
               </div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                 <div
                   className="bg-rose-500 h-full transition-all duration-150"
                   style={{ width: `${Math.min(100, liveBandEnergy.high * 100)}%` }}
                 />
               </div>
-              <p className="text-[10px] text-slate-400 pt-0.5">
+              <p className="text-[10px] text-slate-500 pt-0.5">
                 Bearing Raceway Spalling, Metal Friction, High-Hz Harmonics
               </p>
             </div>
           </div>
 
-          {/* 5-Second Sampling & Audio Dispatch Area */}
-          <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 to-[#142036] border border-slate-700/80 space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-4">
+          {/* 5-Second Live Capture & Audio Dispatch Area */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-white border border-[#E2E8F0] shadow-2xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
               <div>
-                <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 font-mono">
-                  <Cpu className="w-4 h-4 text-indigo-400" />
-                  <span>5-Second Hardware DSP Sampling &amp; Recording Window</span>
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2 font-mono">
+                  <Cpu className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span>5-Second Live Acoustic Capture &amp; Recording Window</span>
                 </h4>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Computes RMS level (dBFS), Crest factor (dB), and Spectral Centroid while capturing real audio buffer for Gemini Multimodal Audio.
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Computes RMS level (dBFS), Crest factor (dB), and Spectral Centroid while capturing real physical audio for Gemini Multimodal Audio.
                 </p>
               </div>
 
@@ -1556,38 +1407,38 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                 <button
                   type="button"
                   onClick={handleStartScan}
-                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold font-mono flex items-center gap-2 transition shadow-lg shadow-indigo-600/30 cursor-pointer"
+                  className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold font-mono flex items-center justify-center gap-2 transition shadow-md shadow-indigo-600/20 cursor-pointer"
                 >
                   <Play className="w-4 h-4 fill-current" />
-                  <span>Start 5s Sample Window</span>
+                  <span>Start 5s Live Acoustic Capture</span>
                 </button>
               )}
 
               {isScanning && (
                 <div className="flex items-center gap-3">
                   <div className="text-right font-mono">
-                    <span className="text-xs font-bold text-white">{timeRemainingSec.toFixed(1)}s</span>
-                    <span className="text-[10px] text-slate-400 block">Sampling {sourceMode.replace(/_/g, ' ')}...</span>
+                    <span className="text-xs font-bold text-slate-900">{timeRemainingSec.toFixed(1)}s</span>
+                    <span className="text-[10px] text-slate-500 block">Recording Live Machine Audio ({sourceMode.replace(/_/g, ' ')})...</span>
                   </div>
-                  <div className="w-8 h-8 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+                  <div className="w-8 h-8 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
                 </div>
               )}
 
               {isScanComplete && capturedTelemetry && (
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap w-full sm:w-auto">
                   <button
                     type="button"
                     onClick={handleResetScan}
-                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                    className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-2xs"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Re-Sample</span>
+                    <span>Re-Capture Audio</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleDispatchToCopilot}
-                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold font-mono flex items-center gap-2 transition shadow-lg shadow-emerald-600/30 cursor-pointer"
+                    className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold font-mono flex items-center justify-center gap-2 transition shadow-md shadow-emerald-600/20 cursor-pointer"
                   >
                     <Sparkles className="w-4 h-4" />
                     <span>Diagnose with Gemini Multimodal Audio</span>
@@ -1599,13 +1450,13 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
             {/* Progress Bar during Scanning */}
             {isScanning && (
               <div className="space-y-1.5">
-                <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                   <div
                     className="bg-gradient-to-r from-indigo-500 to-rose-500 h-full transition-all duration-100 ease-out"
                     style={{ width: `${scanProgress}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-[10px] font-mono text-slate-400">
+                <div className="flex justify-between text-[10px] font-mono text-slate-500">
                   <span>Capturing real 48 kHz acoustic spectrum across {sourceMode}...</span>
                   <span>{scanProgress}%</span>
                 </div>
@@ -1614,21 +1465,21 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
 
             {/* Diagnostic Result Card & Audio Player when scan completes */}
             {isScanComplete && capturedTelemetry && (
-              <div className="p-4 rounded-xl bg-slate-950/80 border border-emerald-500/40 space-y-3">
+              <div className="p-4 rounded-xl bg-emerald-50/40 border border-emerald-200 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span className="text-xs font-bold text-white font-mono">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span className="text-xs font-bold text-slate-900 font-mono">
                       PHYSICAL ACOUSTIC TELEMETRY VERIFIED
                     </span>
                   </div>
                   <span
                     className={`px-2.5 py-1 rounded-md text-[11px] font-bold font-mono uppercase ${
                       capturedTelemetry.detectedPattern === 'CAVITATION_SUSPECTED'
-                        ? 'bg-rose-950 text-rose-300 border border-rose-700/60'
+                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
                         : capturedTelemetry.detectedPattern === 'BEARING_WEAR_SUSPECTED'
-                        ? 'bg-amber-950 text-amber-300 border border-amber-700/60'
-                        : 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
+                        ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                        : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                     }`}
                   >
                     {capturedTelemetry.detectedPattern.replace(/_/g, ' ')}
@@ -1637,7 +1488,7 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
 
                 {/* Recorded Real Machine Audio Scrubber Bar */}
                 {(recordedAudioUrl || uploadedAudioUrl) && (
-                  <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-3 flex-wrap">
+                  <div className="p-3 rounded-lg bg-white border border-slate-200 flex items-center justify-between gap-3 flex-wrap shadow-2xs">
                     <div className="flex items-center gap-2.5">
                       <button
                         type="button"
@@ -1652,15 +1503,15 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
                         )}
                       </button>
                       <div>
-                        <span className="text-[11px] font-mono text-white font-bold block">
+                        <span className="text-[11px] font-mono text-slate-900 font-bold block">
                           Real Machine Audio Recording (5.0s)
                         </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
+                        <span className="text-[10px] text-slate-500 font-mono">
                           Source: {capturedTelemetry.inputDeviceName}
                         </span>
                       </div>
                     </div>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-300 border border-slate-700">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
                       48 kHz · MULTIMODAL INLINE PAYLOAD READY
                     </span>
                   </div>
@@ -1668,32 +1519,64 @@ export const AcousticDiagnosticsModal: React.FC<AcousticDiagnosticsModalProps> =
 
                 {/* Telemetry Summary 5-Col Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs font-mono">
-                  <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block">Dominant Peak</span>
-                    <strong className="text-white text-xs">{capturedTelemetry.dominantFrequencyHz} Hz</strong>
+                  <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] text-slate-500 block">Dominant Peak</span>
+                    <strong className="text-slate-900 text-xs">{capturedTelemetry.dominantFrequencyHz} Hz</strong>
                   </div>
-                  <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block">Peak Energy</span>
-                    <strong className="text-white text-xs">{capturedTelemetry.peakDecibels} dB</strong>
+                  <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] text-slate-500 block">Peak Energy</span>
+                    <strong className="text-slate-900 text-xs">{capturedTelemetry.peakDecibels} dB</strong>
                   </div>
-                  <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block">RMS Level</span>
-                    <strong className="text-white text-xs">{capturedTelemetry.rmsLevelDbfs ?? -42.0} dBFS</strong>
+                  <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] text-slate-500 block">RMS Level</span>
+                    <strong className="text-slate-900 text-xs">{capturedTelemetry.rmsLevelDbfs ?? -42.0} dBFS</strong>
                   </div>
-                  <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block">Crest Factor</span>
-                    <strong className="text-amber-400 text-xs">
+                  <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] text-slate-500 block">Crest Factor</span>
+                    <strong className="text-amber-700 text-xs">
                       {capturedTelemetry.crestFactorDb ?? 12.0} dB ({capturedTelemetry.crestFactor})
                     </strong>
                   </div>
-                  <div className="p-2 rounded-lg bg-slate-900 border border-slate-800">
-                    <span className="text-[10px] text-slate-400 block">Spectral Centroid</span>
-                    <strong className="text-cyan-400 text-xs">
+                  <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] text-slate-500 block">Spectral Centroid</span>
+                    <strong className="text-blue-700 text-xs">
                       {capturedTelemetry.spectralCentroidHz ?? 450} Hz
                     </strong>
                   </div>
                 </div>
               </div>
+            )}
+          </div>
+        </div>
+
+        {/* Modal Bottom Responsive Action / Footer Bar */}
+        <div className="px-4 sm:px-6 py-3 bg-white border-t border-[#E2E8F0] flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="hidden sm:inline">48 kHz Sampling · 4096-bin FFT DSP Engine</span>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                teardownAudio();
+                onClose();
+              }}
+              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 active:bg-slate-100 border border-slate-300 text-slate-700 text-xs font-semibold transition cursor-pointer shadow-2xs"
+            >
+              Close
+            </button>
+
+            {isScanComplete && capturedTelemetry && (
+              <button
+                type="button"
+                onClick={handleDispatchToCopilot}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold font-mono flex items-center gap-1.5 transition shadow-md shadow-emerald-600/20 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Diagnose with Gemini</span>
+              </button>
             )}
           </div>
         </div>

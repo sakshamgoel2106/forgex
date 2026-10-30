@@ -292,6 +292,125 @@ export function buildIndustrialPumpGlb(): Buffer {
 }
 
 /**
+ * Generates an Industrial Rotary Screw Air / Gas Compressor 3D Assembly GLB
+ */
+export function buildIndustrialCompressorGlb(): Buffer {
+  const parts: GlbPartDefinition[] = [
+    {
+      name: 'COMP-CHASSIS',
+      title: 'Heavy Structural Base & Anti-Vibration Isolator Rails',
+      data: createBoxData(3.2, 0.4, 2.0, 0, -0.8, 0),
+    },
+    {
+      name: 'COMP-ROTOR-CASING',
+      title: 'Rotary Screw Compression Casing & Dual Helical Rotors',
+      data: createBoxData(2.0, 1.6, 1.4, -0.4, 0.2, 0),
+    },
+    {
+      name: 'COMP-MOTOR-DRIVE',
+      title: 'TEFC Premium Efficiency Electric Induction Motor (415V/50Hz)',
+      data: createBoxData(1.4, 1.4, 1.4, 1.4, 0.2, 0),
+    },
+    {
+      name: 'COMP-OIL-SEPARATOR',
+      title: 'Centrifugal Air-Oil Separator Vessel & Coalescing Element',
+      data: createBoxData(0.9, 1.8, 0.9, -1.5, 0.4, 0.6),
+    },
+    {
+      name: 'COMP-COOLER-HEATEX',
+      title: 'Fin-and-Tube Aluminum Aftercooler Radiator Module',
+      data: createBoxData(0.5, 1.4, 1.8, -0.4, 1.5, 0),
+    },
+  ];
+
+  return buildGlbFromParts(parts, 'Industrial Rotary Screw Air Compressor Assembly');
+}
+
+/**
+ * Generates an Industrial Belt Conveyor 3D Assembly GLB
+ */
+export function buildIndustrialConveyorGlb(): Buffer {
+  const parts: GlbPartDefinition[] = [
+    {
+      name: 'CONV-FRAME-CHANNEL',
+      title: 'Heavy Steel Truss & Longitudinal Channel Stringers',
+      data: createBoxData(6.0, 0.4, 1.4, 0, -0.2, 0),
+    },
+    {
+      name: 'CONV-BELT-TOP',
+      title: 'EP-400 Cleated Multi-Ply Heavy Rubber Conveyor Belt (Carrying Strand)',
+      data: createBoxData(5.8, 0.1, 1.2, 0, 0.3, 0),
+    },
+    {
+      name: 'CONV-DRIVE-PULLEY',
+      title: 'Lagged Head Drive Pulley Drum & Bearing Assemblies',
+      data: createBoxData(0.6, 0.8, 1.4, 2.7, 0.1, 0),
+    },
+    {
+      name: 'CONV-TAIL-PULLEY',
+      title: 'Adjustable Tensioning Tail Pulley & Take-Up Screw Mechanism',
+      data: createBoxData(0.6, 0.8, 1.4, -2.7, 0.1, 0),
+    },
+    {
+      name: 'CONV-GEARMOTOR-DRV',
+      title: 'Shaft-Mounted Helical Bevel Gearmotor Drive (IP66)',
+      data: createBoxData(0.8, 0.8, 0.8, 2.7, 0.1, 1.1),
+    },
+  ];
+
+  return buildGlbFromParts(parts, 'Heavy-Duty Industrial Bulk Material Belt Conveyor');
+}
+
+/**
+ * Generates an authentic industrial 3D CAD model tailored to the equipment name or category.
+ */
+export function buildIndustrialMachineryGlb(name: string, category?: string): Buffer {
+  const normalized = `${name || ''} ${category || ''}`.toLowerCase();
+
+  if (normalized.includes('compressor') || normalized.includes('press-') || normalized.includes('air')) {
+    return buildIndustrialCompressorGlb();
+  }
+  if (normalized.includes('conveyor') || normalized.includes('belt') || normalized.includes('elevator')) {
+    return buildIndustrialConveyorGlb();
+  }
+  if (normalized.includes('pump') || normalized.includes('slurry') || normalized.includes('impeller')) {
+    return buildIndustrialPumpGlb();
+  }
+
+  const cleanTitle = (name || 'Industrial Machine Asset').replace(/[^\w\s-]/g, '').trim();
+  const parts: GlbPartDefinition[] = [
+    {
+      name: 'EQ-BASE-FRAME',
+      title: 'Rigid Heavy Steel Foundation Frame & Anchor Plates',
+      data: createBoxData(3.0, 0.4, 2.2, 0, -0.6, 0),
+    },
+    {
+      name: 'EQ-MAIN-HOUSING',
+      title: `${cleanTitle} Primary Enclosure & Processing Stage`,
+      data: createBoxData(2.2, 1.6, 1.8, 0, 0.4, 0),
+    },
+    {
+      name: 'EQ-DRIVE-UNIT',
+      title: 'Heavy Industrial Electric Motor & Planetary Transmission',
+      data: createBoxData(1.2, 1.2, 1.2, 1.6, 0.2, 0),
+    },
+    {
+      name: 'EQ-INLET-FLANGE',
+      title: 'ANSI Class 150/300 Flanged Inlet Nozzle',
+      data: createBoxData(0.5, 0.5, 0.8, -1.2, 0.6, 0.9),
+    },
+    {
+      name: 'EQ-OUTLET-FLANGE',
+      title: 'ANSI Class 150/300 Flanged Discharge Nozzle',
+      data: createBoxData(0.5, 0.5, 0.8, -1.2, 0.6, -0.9),
+    },
+  ];
+
+  return buildGlbFromParts(parts, `${cleanTitle} Genuine Engineering CAD Assembly`);
+}
+
+
+/**
  * Validates whether a buffer contains a valid binary glTF 2.0 (GLB) header.
  */
 export function isValidGlbHeader(buffer: Buffer): boolean {

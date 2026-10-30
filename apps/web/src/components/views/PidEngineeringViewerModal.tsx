@@ -614,14 +614,15 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     plantId: drawingRecord?.plantId || initialDrawing?.plantId || 'PLANT-DEFAULT',
   } as Machine);
 
-  if (!isOpen || (!machine && !drawingRecord && !initialDrawing && !initialDrawingId)) return null;
-
   // Auto-select the first tag if none selected yet
   useEffect(() => {
+    if (!isOpen) return;
     if (effectiveTags.length > 0 && !selectedTag) {
       setSelectedTag(activeTag || effectiveTags[0]);
     }
-  }, [effectiveTags, selectedTag, activeTag]);
+  }, [isOpen, effectiveTags, selectedTag, activeTag]);
+
+  if (!isOpen || (!machine && !drawingRecord && !initialDrawing && !initialDrawingId)) return null;
 
   const filteredTags = effectiveTags.filter((tag) => {
     const q = tagSearchQuery.trim().toLowerCase();

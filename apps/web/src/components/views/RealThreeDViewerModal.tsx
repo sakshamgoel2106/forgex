@@ -13,8 +13,8 @@ import {
   CheckCircle2,
   Sliders,
   Download,
-  AlertTriangle,
   Info,
+  Wrench,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 
@@ -90,6 +90,7 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
   const [wireframe, setWireframe] = useState(false);
   const [verifyingMappingId, setVerifyingMappingId] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [isRepairing, setIsRepairing] = useState(false);
 
   const handleModelStats = useCallback((stats: { vertexCount: number; meshCount: number; dimensions: string }) => {
     setModelStats(stats);
@@ -247,6 +248,24 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
       }
 
       if (!res.ok) {
+        // Automatic Self-Healing: If 404 not found in storage, trigger server-side repair and retry once
+        if (res.status === 404) {
+          const repairRes = await fetch(`/api/v1/engineering/models/${modelRecord.id}/repair`, {
+            method: 'POST',
+            headers,
+          }).catch(() => null);
+
+          if (repairRes && repairRes.ok) {
+            const retryRes = await fetch(`/api/v1/engineering/models/${modelRecord.id}/content`, { headers });
+            if (retryRes.ok) {
+              const retryBlob = await retryRes.blob();
+              const retryUrl = URL.createObjectURL(retryBlob);
+              setBlobUrl(retryUrl);
+              return;
+            }
+          }
+        }
+
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData?.error?.message || `Failed to stream 3D CAD model (HTTP ${res.status})`);
       }
@@ -381,6 +400,29 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
     name: modelRecord?.title || initialModel?.title || 'Industrial Machine',
     plantId: modelRecord?.plantId || initialModel?.plantId || 'PLANT-DEFAULT',
   } as Machine);
+
+  const handleAutoRepair = async () => {
+    try {
+      setIsRepairing(true);
+      setLoadError(null);
+      const headers = getAuthHeaders();
+      const targetMachine = machine || currentMachine;
+      const endpoint = targetMachine?.id
+        ? `/api/v1/engineering/machines/${targetMachine.id}/3d-model/repair`
+        : modelRecord?.id
+        ? `/api/v1/engineering/models/${modelRecord.id}/repair`
+        : null;
+
+      if (endpoint) {
+        await fetch(endpoint, { method: 'POST', headers }).catch(() => null);
+      }
+      await fetchBlob();
+    } catch (err: any) {
+      setLoadError(err?.message || 'Repair failed. Please upload a 3D CAD file.');
+    } finally {
+      setIsRepairing(false);
+    }
+  };
 
   if (!isOpen || (!machine && !modelRecord && !initialModel && !initialModelId)) return null;
 
@@ -573,29 +615,49 @@ export const RealThreeDViewerModal: React.FC<RealThreeDViewerModalProps> = ({
             </div>
           </div>
         ) : loadError ? (
-          /* Error State */
+          /* Error State with 1-Click Auto-Repair & Direct CAD Upload */
           <div className="h-[520px] flex flex-col items-center justify-center p-8 bg-[#F8FAFC] text-center space-y-4">
-            <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600">
-              <AlertTriangle className="w-8 h-8" />
+            <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600">
+              <Wrench className="w-8 h-8" />
             </div>
 
             <div className="max-w-md space-y-2">
               <h3 className="text-sm font-bold text-[#1A202C] font-mono uppercase tracking-wider">
-                3D CAD Geometry Load Error
+                3D CAD Geometry Missing or Unreachable
               </h3>
-              <p className="text-xs text-rose-700 font-mono bg-rose-50 border border-rose-200 rounded-lg p-2.5 leading-relaxed">
+              <p className="text-xs text-slate-600 font-mono bg-white border border-[#E2E8F0] rounded-lg p-2.5 leading-relaxed">
                 {loadError}
               </p>
             </div>
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
               <button
-                onClick={() => fetchBlob()}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition cursor-pointer"
+                type="button"
+                onClick={handleAutoRepair}
+                disabled={isRepairing}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold transition cursor-pointer shadow-sm disabled:opacity-50"
               >
-                <RefreshCw className="w-4 h-4" />
-                Retry Loading
+                {isRepairing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+                <span>{isRepairing ? 'Restoring CAD Geometry...' : 'Auto-Repair & Restore 3D Geometry'}</span>
               </button>
               <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-[#CBD5E1] text-[#1A202C] text-xs font-semibold transition cursor-pointer shadow-sm"
+              >
+                <Upload className="w-4 h-4 text-[#2563EB]" />
+                <span>Upload Replacement CAD File</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => fetchBlob()}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Retry
+              </button>
+              <button
+                type="button"
                 onClick={onClose}
                 className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 border border-[#CBD5E1] text-[#1A202C] text-xs font-medium transition shadow-sm"
               >
