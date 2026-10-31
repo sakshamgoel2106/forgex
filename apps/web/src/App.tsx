@@ -173,6 +173,8 @@ const AppContent: React.FC = () => {
     (localStorage.getItem('forgex_user') || localStorage.getItem('forgex_active_org_id') || localStorage.getItem('forgex_organization'))
   );
 
+  const isAuthenticated = Boolean((token && user) || hasLocalSession);
+
   if (isLoading || isRegistering) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-[#0B0F17] text-[#E2E8F0]">
@@ -186,7 +188,7 @@ const AppContent: React.FC = () => {
     );
   }
 
-  if ((!token || !user) && !hasLocalSession) {
+  if (!isAuthenticated) {
     return (
       <LoginView
         onSuccess={(loggedRole) => {

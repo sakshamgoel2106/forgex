@@ -298,6 +298,7 @@ export const CopilotWorkspaceView: React.FC = () => {
   const [feedbackSubmittedMsg, setFeedbackSubmittedMsg] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Selected Machine Details
   const selectedMachine = useMemo(() => {
@@ -400,9 +401,14 @@ export const CopilotWorkspaceView: React.FC = () => {
     loadConversations();
   }, [loadMachines, loadConversations]);
 
-  // Auto-scroll to latest message
+  // Auto-scroll to latest message inside chat container only (prevents window scrolling)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatScrollContainerRef.current) {
+      chatScrollContainerRef.current.scrollTo({
+        top: chatScrollContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
   }, [messages, isQuerying]);
 
 
@@ -1533,7 +1539,7 @@ export const CopilotWorkspaceView: React.FC = () => {
 
 
         {/* Chat Message Scrollable Container */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div ref={chatScrollContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Dynamic 2x2 Smart Prompt Grid (Empty State) */}
           {messages.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-6 max-w-2xl mx-auto">

@@ -852,7 +852,9 @@ export class InMemoryDataStore implements IDataStore {
     if (dto.passwordHash) {
       user.passwordHash = dto.passwordHash;
     }
-    if (dto.verificationTokenHash) {
+    if (user.emailVerified) {
+      // keep already verified
+    } else if (dto.verificationTokenHash) {
       user.verificationTokenHash = dto.verificationTokenHash;
       user.verificationExpiresAt = dto.verificationExpiresAt;
       user.emailVerified = false;
@@ -869,16 +871,16 @@ export class InMemoryDataStore implements IDataStore {
       status: 'ACTIVE',
     });
 
-    // 5. Optionally create initial site/plant if specified
-    if (dto.initialSiteName) {
-      try {
-        await this.createPlant(org.id, {
-          code: `SITE-${org.slug.toUpperCase().slice(0, 8)}`,
-          name: dto.initialSiteName,
-          location: dto.country || 'Primary Manufacturing Facility',
-        });
-      } catch {}
-    }
+    // 5. Create initial site/plant if specified or default site
+    const siteName = dto.initialSiteName?.trim() || `${org.name} Primary Site`;
+    const cleanSlug = org.slug.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '01';
+    try {
+      await this.createPlant(org.id, {
+        code: `SITE-${cleanSlug}`,
+        name: siteName,
+        location: dto.country || 'Primary Manufacturing Facility',
+      });
+    } catch {}
 
     return {
       organization: org,

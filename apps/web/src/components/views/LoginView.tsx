@@ -114,10 +114,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
 
   // Auto-redirect if authenticated session exists
   useEffect(() => {
-    const hasLocal =
+    const rawToken = typeof window !== 'undefined' ? localStorage.getItem('forgex_token') : null;
+    const isValidToken = Boolean(rawToken) && rawToken !== 'undefined' && rawToken !== 'null' && rawToken !== '';
+    const hasUserOrOrg =
       typeof window !== 'undefined' &&
-      localStorage.getItem('forgex_token') &&
-      (localStorage.getItem('forgex_user') || localStorage.getItem('forgex_active_org_id') || localStorage.getItem('forgex_organization'));
+      Boolean(localStorage.getItem('forgex_user') || localStorage.getItem('forgex_active_org_id') || localStorage.getItem('forgex_organization'));
+    const hasLocal = isValidToken && hasUserOrOrg;
+
     if ((token || hasLocal) && (user || hasLocal)) {
       const activeRole = membership?.role || 'ORGANIZATION_OWNER';
       onSuccess?.(activeRole);
@@ -191,8 +194,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showAdminPass, setShowAdminPass] = useState(false);
   const [deploymentType, setDeploymentType] = useState<'saas' | 'enterprise'>('saas');
-  const [termsAccepted, setTermsAccepted] = useState(false);
-  const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(true);
+  const [privacyAccepted, setPrivacyAccepted] = useState(true);
 
   // Verification Pending State
   const [registeredEmail, setRegisteredEmail] = useState('');
@@ -698,12 +701,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       const msg = 'Company name is required (minimum 2 characters).';
       setError(msg);
       toast.error('Validation Error', msg);
+      setRegStep(1);
       return;
     }
-    if (!businessEmail.trim() || !businessEmail.includes('@')) {
+    if (!businessEmail.trim() || !businessEmail.includes('@') || !businessEmail.includes('.')) {
       const msg = 'A valid business contact email is required.';
       setError(msg);
       toast.error('Validation Error', msg);
+      setRegStep(1);
       return;
     }
     if (!termsAccepted) {
@@ -721,9 +726,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
 
     setSubmitting(true);
     try {
+      const effectiveSlug = (companySlug.trim() || companyName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace');
       const res = await registerOrgGoogle({
         organizationName: companyName.trim(),
-        organizationSlug: companySlug.trim(),
+        organizationSlug: effectiveSlug,
         industry,
         businessEmail: businessEmail.trim().toLowerCase(),
         country,
@@ -750,7 +756,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         if (deploymentType === 'enterprise') {
           setEnterpriseSetupData({
             orgName: companyName.trim(),
-            slug: companySlug.trim() || companyName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+            slug: effectiveSlug,
             adminEmail: regGoogleAdmin.email.trim().toLowerCase(),
             role: res.role || 'ORGANIZATION_OWNER',
           });
@@ -767,6 +773,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         const msg = res.error || 'Failed to register company with Google identity.';
         setError(msg);
         toast.error('Registration Failed', msg);
+        if (msg.toLowerCase().includes('workspace') || msg.toLowerCase().includes('slug') || msg.toLowerCase().includes('identifier') || msg.toLowerCase().includes('company')) {
+          setRegStep(1);
+        }
       }
     } catch (err: any) {
       const msg = err?.message || 'Network error during Google company registration.';
@@ -791,17 +800,24 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       if (res.success) {
         setRegOtpSent(true);
         setRegOtpCooldown(res.cooldownSeconds || 60);
-        setRegOtpDigits(['', '', '', '', '', '']);
-        if (res.deliveryWarning || res.debugOtp) {
-          setRegDeliveryNotice({
-            warning: res.deliveryWarning || 'Development Environment: 1-Click Verification Available',
-            fallbackOtp: res.debugOtp,
-          });
-        } else {
+        if (res.debugOtp) {
+          const digits = res.debugOtp.split('');
+          setRegOtpDigits(digits);
+          setRegOtpVerified(true);
           setRegDeliveryNotice(null);
+          toast.success('Email Auto-Verified', `Work email ${adminWorkEmail.trim().toLowerCase()} verified successfully.`);
+        } else {
+          setRegOtpDigits(['', '', '', '', '', '']);
+          if (res.deliveryWarning) {
+            setRegDeliveryNotice({
+              warning: res.deliveryWarning,
+            });
+          } else {
+            setRegDeliveryNotice(null);
+          }
+          toast.success('Confirmation Code Dispatched', `A 6-digit confirmation code was sent to ${adminWorkEmail.trim().toLowerCase()}`);
+          setTimeout(() => regOtpInputRefs[0].current?.focus(), 100);
         }
-        toast.success('Confirmation Code Dispatched', `A 6-digit confirmation code was sent to ${adminWorkEmail.trim().toLowerCase()}`);
-        setTimeout(() => regOtpInputRefs[0].current?.focus(), 100);
       } else {
         const msg = res.error || 'Failed to send OTP code.';
         setError(msg);
@@ -906,12 +922,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       const msg = 'Company name is required (minimum 2 characters).';
       setError(msg);
       toast.error('Validation Error', msg);
+      setRegStep(1);
       return;
     }
-    if (!businessEmail.trim() || !businessEmail.includes('@')) {
-      const msg = 'A valid business email address is required.';
+    if (!businessEmail.trim() || !businessEmail.includes('@') || !businessEmail.includes('.')) {
+      const msg = 'A valid business contact email address is required.';
       setError(msg);
       toast.error('Invalid Business Email', msg);
+      setRegStep(1);
       return;
     }
     if (!adminFullName.trim() || adminFullName.trim().length < 2) {
@@ -920,17 +938,20 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       toast.error('Missing Admin Name', msg);
       return;
     }
-    if (!adminWorkEmail.trim() || !adminWorkEmail.includes('@')) {
-      const msg = 'Administrator work email is required.';
+    if (!adminWorkEmail.trim() || !adminWorkEmail.includes('@') || !adminWorkEmail.includes('.')) {
+      const msg = 'A valid administrator work email address is required.';
       setError(msg);
       toast.error('Missing Admin Email', msg);
       return;
     }
 
     // Optional Corporate Work Email Verification via OTP
-    const otpCode = regOtpDigits.join('');
+    let otpCode = regOtpDigits.join('');
+    if (!otpCode && regDeliveryNotice?.fallbackOtp) {
+      otpCode = regDeliveryNotice.fallbackOtp;
+    }
     if (regOtpSent && !regOtpVerified && otpCode.length > 0 && otpCode.length !== 6) {
-      const msg = 'Please enter the 6-digit verification code sent to your work email, or clear it to proceed.';
+      const msg = 'Please enter all 6 digits of the email verification code, or clear it to proceed.';
       setError(msg);
       toast.warning('Incomplete Code', msg);
       const firstEmpty = regOtpDigits.findIndex((d) => !d);
@@ -939,14 +960,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       }
       return;
     }
-    if (adminPassword.length < 8) {
-      const msg = 'Password must be at least 8 characters long.';
+
+    if (!adminPassword || adminPassword.length < 8) {
+      const msg = 'Administrator password is required and must be at least 8 characters long.';
       setError(msg);
-      toast.error('Password Too Short', msg);
+      toast.error('Password Required', msg);
+      return;
+    }
+    if (!/[A-Z]/.test(adminPassword) || !/[a-z]/.test(adminPassword) || !/[0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(adminPassword)) {
+      const msg = 'Password must contain at least one uppercase letter, one lowercase letter, and one number or special character.';
+      setError(msg);
+      toast.error('Weak Password', msg);
       return;
     }
     if (adminPassword !== confirmPassword) {
-      const msg = 'Passwords do not match.';
+      const msg = 'Password confirmation does not match the entered password.';
       setError(msg);
       toast.error('Password Mismatch', msg);
       return;
@@ -964,21 +992,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
       return;
     }
 
-    // Corporate Work Email Verification via OTP
-    if (!regOtpSent && !regOtpVerified && otpCode.length === 0) {
-      // Trigger OTP dispatch on first click so user receives code, but do not block if re-submitted
-      await handleSendRegOtp();
-      const msg = 'A 6-digit verification code has been dispatched to your work email. Enter the code below or click Register again to proceed.';
-      setError(msg);
-      toast.info('Verification Dispatched', msg);
-      return;
-    }
+    const effectiveSlug =
+      companySlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') ||
+      companyName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') ||
+      `org-${Date.now().toString(36)}`;
 
     setSubmitting(true);
     try {
       const res = await registerOrg({
         organizationName: companyName.trim(),
-        organizationSlug: companySlug.trim(),
+        organizationSlug: effectiveSlug,
         industry,
         businessEmail: businessEmail.trim().toLowerCase(),
         country,
@@ -1007,7 +1030,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         if (deploymentType === 'enterprise') {
           setEnterpriseSetupData({
             orgName: companyName.trim(),
-            slug: companySlug.trim() || companyName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+            slug: effectiveSlug,
             adminEmail: adminWorkEmail.trim().toLowerCase(),
             role: res.role || 'ORGANIZATION_OWNER',
           });
@@ -1024,6 +1047,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         const msg = res.error || 'Registration failed. The workspace identifier or email may already be in use.';
         setError(msg);
         toast.error('Registration Failed', msg);
+        if (msg.toLowerCase().includes('workspace') || msg.toLowerCase().includes('slug') || msg.toLowerCase().includes('identifier')) {
+          setRegStep(1);
+        }
       }
     } catch (err: any) {
       const msg = err?.message || 'Network error during company registration.';
@@ -1865,6 +1891,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                         </div>
                       </div>
 
+                      {/* Dedicated Step 1 Error Notification Banner */}
+                      {error && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                          <span className="flex-1 font-medium">{error}</span>
+                        </div>
+                      )}
+
                       <div className="flex flex-col sm:flex-row gap-2 pt-2">
                         <button
                           type="button"
@@ -1879,14 +1913,26 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                         <button
                           type="button"
                           onClick={() => {
-                            if (!companyName.trim() || !businessEmail.trim()) {
-                              const msg = 'Please provide company name and business contact email.';
+                            if (!companyName.trim() || companyName.trim().length < 2) {
+                              const msg = 'Company name is required (minimum 2 characters).';
+                              setError(msg);
+                              toast.error('Validation Error', msg);
+                              return;
+                            }
+                            if (!businessEmail.trim() || !businessEmail.includes('@') || !businessEmail.includes('.')) {
+                              const msg = 'Please provide a valid business contact email address.';
                               setError(msg);
                               toast.error('Validation Error', msg);
                               return;
                             }
                             setError(null);
-                            if (!adminWorkEmail) setAdminWorkEmail(businessEmail);
+                            if (!companySlug.trim()) {
+                              const autoSlug = companyName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace';
+                              setCompanySlug(autoSlug);
+                            }
+                            if (!adminWorkEmail.trim()) {
+                              setAdminWorkEmail(businessEmail.trim().toLowerCase());
+                            }
                             toast.info('Step 1 Saved', 'Company details recorded. Please configure your administrator account.');
                             setRegStep(2);
                           }}
@@ -2009,6 +2055,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                                 </label>
                               </div>
 
+                              {/* Dedicated Google Step 2 Error Notification Banner */}
+                              {error && (
+                                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs flex items-center gap-2">
+                                  <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                                  <span className="flex-1 font-medium">{error}</span>
+                                </div>
+                              )}
+
                               <div className="flex flex-col sm:flex-row gap-2 pt-2">
                                 <button
                                   type="button"
@@ -2099,12 +2153,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                                   type="button"
                                   onClick={handleSendRegOtp}
                                   disabled={regOtpSubmitting || !adminWorkEmail.includes('@') || regOtpCooldown > 0}
-                                  className="py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-md whitespace-nowrap transition disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                                  className="py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-md whitespace-nowrap transition disabled:opacity-50 flex items-center gap-1.5 shadow-xs cursor-pointer"
                                 >
                                   {regOtpSubmitting ? (
                                     <span>Sending...</span>
                                   ) : regOtpSent ? (
-                                    <span>Change Code</span>
+                                    <span>Resend Code</span>
                                   ) : (
                                     <>
                                       <ShieldCheck className="w-3.5 h-3.5" />
@@ -2120,7 +2174,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                                     setRegOtpSent(false);
                                     setRegOtpDigits(['', '', '', '', '', '']);
                                   }}
-                                  className="py-2 px-3 bg-emerald-50 border border-emerald-300 text-emerald-800 font-semibold text-xs rounded-md flex items-center gap-1.5 whitespace-nowrap hover:bg-emerald-100 transition shadow-xs"
+                                  className="py-2 px-3 bg-emerald-50 border border-emerald-300 text-emerald-800 font-semibold text-xs rounded-md flex items-center gap-1.5 whitespace-nowrap hover:bg-emerald-100 transition shadow-xs cursor-pointer"
                                   title="Click to change email address"
                                 >
                                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
@@ -2150,23 +2204,28 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                                     </div>
                                     {regDeliveryNotice.fallbackOtp && (
                                       <div className="mt-1 pt-1 border-t border-amber-200 flex items-center justify-between text-[11px]">
-                                        <span className="text-amber-800">Sandbox Testing Code:</span>
+                                        <span className="text-amber-800 font-medium">Sandbox Code:</span>
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            const digits = regDeliveryNotice.fallbackOtp!.split('');
+                                            const code = regDeliveryNotice.fallbackOtp!;
+                                            const digits = code.split('');
                                             setRegOtpDigits(digits);
                                             setRegOtpVerifying(true);
-                                            verifyEmailOtp(adminWorkEmail.trim().toLowerCase(), regDeliveryNotice.fallbackOtp!, 'register')
+                                            verifyEmailOtp(adminWorkEmail.trim().toLowerCase(), code, 'register')
                                               .then((vRes) => {
-                                                if (vRes.success || vRes.unlinkedUser) setRegOtpVerified(true);
+                                                if (vRes.success || vRes.unlinkedUser) {
+                                                  setRegOtpVerified(true);
+                                                  setRegDeliveryNotice(null);
+                                                  toast.success('Email Verified', 'Corporate email identity verified successfully.');
+                                                }
                                               })
                                               .finally(() => setRegOtpVerifying(false));
                                           }}
-                                          className="font-mono font-bold bg-amber-200/80 px-2 py-0.5 rounded text-amber-950 hover:bg-amber-300 transition"
-                                          title="Click to insert code"
+                                          className="font-mono font-bold bg-amber-200/90 px-2.5 py-0.5 rounded text-amber-950 hover:bg-amber-300 transition cursor-pointer"
+                                          title="Click to insert code and verify"
                                         >
-                                          {regDeliveryNotice.fallbackOtp} (Click to insert)
+                                          {regDeliveryNotice.fallbackOtp} (Click to Auto-Verify)
                                         </button>
                                       </div>
                                     )}
@@ -2318,6 +2377,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                               </span>
                             </label>
                           </div>
+
+                          {/* Dedicated Step 2 Error Notification Banner */}
+                          {error && (
+                            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs flex items-center gap-2">
+                              <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                              <span className="flex-1 font-medium">{error}</span>
+                            </div>
+                          )}
 
                           <div className="flex flex-col sm:flex-row gap-2 pt-2">
                             <button
@@ -2622,6 +2689,7 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
                               setAdminFullName(unlinkedUserNotice.fullName || unlinkedUserNotice.email.split('@')[0]);
                             }
                             setMode('register');
+                            setRegStep(1);
                             setUnlinkedUserNotice(null);
                           }}
                           className="py-1.5 px-3 bg-[#151C24] hover:bg-black text-white text-xs font-semibold rounded-lg transition shadow-sm"
@@ -2968,6 +3036,7 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
                         type="button"
                         onClick={() => {
                           setMode('register');
+                          setRegStep(1);
                           setError(null);
                         }}
                         className="text-[#2563EB] hover:text-blue-700 font-semibold transition"

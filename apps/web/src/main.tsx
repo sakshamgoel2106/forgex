@@ -75,7 +75,14 @@ class RootErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundar
   }
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+const rootElement = document.getElementById('root') as HTMLElement;
+let reactRoot = (window as any).__forgex_react_root__;
+if (!reactRoot) {
+  reactRoot = ReactDOM.createRoot(rootElement);
+  (window as any).__forgex_react_root__ = reactRoot;
+}
+
+reactRoot.render(
   <React.StrictMode>
     <RootErrorBoundary>
       <App />

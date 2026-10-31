@@ -1438,9 +1438,9 @@ export class PgDataStore implements IDataStore {
       );
 
       let adminUser: User;
-      const emailVerified = dto.verificationTokenHash ? false : true;
       if (userRes.rows.length > 0) {
         const uRow = userRes.rows[0];
+        const emailVerified = Boolean(uRow.email_verified) || (dto.verificationTokenHash ? false : true);
         if (dto.passwordHash || dto.verificationTokenHash) {
           await client.query(
             `UPDATE users
@@ -1470,6 +1470,7 @@ export class PgDataStore implements IDataStore {
           updatedAt: uRow.updated_at.toISOString(),
         };
       } else {
+        const emailVerified = dto.verificationTokenHash ? false : true;
         const insUser = await client.query(
           `INSERT INTO users (external_auth_id, email, full_name, password_hash, email_verified, verification_token_hash, verification_expires_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1517,16 +1518,16 @@ export class PgDataStore implements IDataStore {
         user: adminUser,
       };
 
-      // 5. Create initial site if specified
-      if (dto.initialSiteName) {
-        const plantCode = `SITE-${organization.slug.toUpperCase().slice(0, 8)}`;
-        await client.query(
-          `INSERT INTO plants (organization_id, code, name, location, air_gapped_mode)
-           VALUES ($1, $2, $3, $4, FALSE)
-           ON CONFLICT DO NOTHING`,
-          [organization.id, plantCode, dto.initialSiteName, dto.country || 'Primary Manufacturing Facility']
-        );
-      }
+      // 5. Create initial site if specified or default facility
+      const siteName = dto.initialSiteName?.trim() || `${organization.name} Primary Site`;
+      const cleanSlug = organization.slug.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '01';
+      const plantCode = `SITE-${cleanSlug}`;
+      await client.query(
+        `INSERT INTO plants (organization_id, code, name, location, air_gapped_mode)
+         VALUES ($1, $2, $3, $4, FALSE)
+         ON CONFLICT (organization_id, code) DO NOTHING`,
+        [organization.id, plantCode, siteName, dto.country || 'Primary Manufacturing Facility']
+      );
 
       await client.query('COMMIT');
       return { organization, adminUser, membership };

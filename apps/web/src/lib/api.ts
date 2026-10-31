@@ -65,7 +65,10 @@ export async function apiFetch(url: string, options: ApiFetchOptions = {}): Prom
   if (response.status === 401 && typeof window !== 'undefined') {
     const isAuthRoute = url.includes('/api/v1/auth/');
     if (!isAuthRoute) {
-      const hasActiveSession = Boolean(localStorage.getItem('forgex_user') && localStorage.getItem('forgex_organization'));
+      const hasActiveSession = Boolean(
+        localStorage.getItem('forgex_user') &&
+        (localStorage.getItem('forgex_organization') || localStorage.getItem('forgex_active_org_id'))
+      );
       if (!hasActiveSession) {
         localStorage.removeItem(TOKEN_KEY);
         window.dispatchEvent(new CustomEvent('forgex:unauthorized'));

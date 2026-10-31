@@ -320,7 +320,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Root Cause 3 Fix: If a newly registered user & company exist in state/localStorage,
         // preserve that active session! Never wipe the user or company profile.
         const localUser = typeof window !== 'undefined' ? localStorage.getItem(USER_KEY) : null;
-        const localOrg = typeof window !== 'undefined' ? localStorage.getItem(ORG_KEY) : null;
+        const localOrg = typeof window !== 'undefined' ? (localStorage.getItem(ORG_KEY) || localStorage.getItem(ORG_ID_KEY)) : null;
         if (localUser && localOrg) {
           console.warn('[ForgeX Auth] Background /me returned status', res.status, '— preserving active registered session.');
           return;
@@ -373,13 +373,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password?: string): Promise<{ success: boolean; error?: string; role?: OrgRole }> => {
     try {
       setIsLoading(true);
+      const cleanEmail = (email || '').trim();
       const res = await fetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: email, email, password, pin: password }),
+        body: JSON.stringify({ identifier: cleanEmail, email: cleanEmail, password, pin: password }),
       });
 
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (res.ok && json.success && json.data) {
         const receivedToken = json.data.token;
         await setAuthSession({
@@ -395,7 +396,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         fetchCurrentUser(receivedToken, json.data.organization?.id).catch(() => {});
         return { success: true, role: json.data.membership?.role };
       }
-      return { success: false, error: json.error?.message || 'Invalid credentials or inactive membership.' };
+      return { success: false, error: json.error?.message || json.message || 'Invalid credentials or inactive membership.' };
     } catch (err: any) {
       console.error('Login error:', err);
       return { success: false, error: err?.message || 'Network connection failed.' };
@@ -551,97 +552,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       }
 
-      // Root Cause 2 Fix: If the backend / DB insert fails or RLS error occurs,
-      // create immediate authenticated local session with role ORGANIZATION_OWNER
       if (!res.ok) {
-        // If conflict error from same owner, auto-login
-        if ((json.error?.code === 'FORGEX_ORG_SLUG_CONFLICT' || json.error?.code === 'FORGEX_USER_EXISTS') && data.password) {
-          try {
-            const loginRes = await fetch('/api/v1/auth/login', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: data.adminEmail, password: data.password }),
-            });
-            const loginJson = await loginRes.json();
-            if (loginJson.success && loginJson.data?.token) {
-              await setAuthSession({
-                user: loginJson.data.user,
-                organization: loginJson.data.organization,
-                membership: loginJson.data.membership,
-                memberships: loginJson.data.memberships,
-                token: loginJson.data.token,
-                permissions: loginJson.data.permissions,
-              });
-              return {
-                success: true,
-                verificationRequired: false,
-                email: data.adminEmail,
-                role: loginJson.data.membership?.role || 'ORGANIZATION_OWNER',
-                user: loginJson.data.user,
-                organization: loginJson.data.organization,
-                membership: loginJson.data.membership,
-                token: loginJson.data.token,
-              };
-            }
-          } catch {}
-        }
-
-        if (res.status >= 500) {
-          console.warn('[ForgeX Auth] Backend registration failure, creating resilient authenticated local session.');
-          const fallbackOrg: Organization = {
-            id: `org-resilient-${Date.now()}`,
-            name: data.organizationName,
-            slug: data.organizationSlug || data.organizationName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-            industry: data.industry,
-            country: data.country,
-            timezone: data.timezone,
-            website: data.website,
-            companySize: data.companySize,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          const fallbackUser: User = {
-            id: `user-resilient-${Date.now()}`,
-            externalAuthId: `auth-ext-resilient-${Date.now()}`,
-            email: data.adminEmail,
-            fullName: data.adminFullName,
-            emailVerified: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          const fallbackMembership: OrganizationMembership = {
-            id: `mem-resilient-${Date.now()}`,
-            organizationId: fallbackOrg.id,
-            userId: fallbackUser.id,
-            role: 'ORGANIZATION_OWNER',
-            status: 'ACTIVE',
-            assignedPlantIds: [],
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            user: fallbackUser,
-          };
-          const fallbackToken = `resilient_session_${Date.now()}`;
-
-          await setAuthSession({
-            user: fallbackUser,
-            organization: fallbackOrg,
-            membership: fallbackMembership,
-            memberships: [fallbackMembership],
-            token: fallbackToken,
-            permissions: ORG_ROLE_PERMISSIONS['ORGANIZATION_OWNER'],
-          });
-
-          return {
-            success: true,
-            verificationRequired: false,
-            email: fallbackUser.email,
-            role: 'ORGANIZATION_OWNER',
-          };
-        }
-
         return {
           success: false,
-          error: json.error?.message || 'Company registration failed. Please review the form and try again.',
+          error: json.error?.message || json.message || 'Company registration failed. Please review the form and try again.',
         };
       }
 
@@ -650,55 +564,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error: json.error?.message || 'Company registration failed.',
       };
     } catch (err: any) {
-      console.error('[ForgeX Auth] Registration exception, establishing authenticated session fallback:', err);
-      const fallbackOrg: Organization = {
-        id: `org-resilient-${Date.now()}`,
-        name: data.organizationName,
-        slug: data.organizationSlug || data.organizationName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-        industry: data.industry,
-        country: data.country,
-        timezone: data.timezone,
-        website: data.website,
-        companySize: data.companySize,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      const fallbackUser: User = {
-        id: `user-resilient-${Date.now()}`,
-        externalAuthId: `auth-ext-resilient-${Date.now()}`,
-        email: data.adminEmail,
-        fullName: data.adminFullName,
-        emailVerified: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      const fallbackMembership: OrganizationMembership = {
-        id: `mem-resilient-${Date.now()}`,
-        organizationId: fallbackOrg.id,
-        userId: fallbackUser.id,
-        role: 'ORGANIZATION_OWNER',
-        status: 'ACTIVE',
-        assignedPlantIds: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        user: fallbackUser,
-      };
-      const fallbackToken = `resilient_session_${Date.now()}`;
-
-      await setAuthSession({
-        user: fallbackUser,
-        organization: fallbackOrg,
-        membership: fallbackMembership,
-        memberships: [fallbackMembership],
-        token: fallbackToken,
-        permissions: ORG_ROLE_PERMISSIONS['ORGANIZATION_OWNER'],
-      });
-
+      console.error('[ForgeX Auth] Registration exception:', err);
       return {
-        success: true,
-        verificationRequired: false,
-        email: fallbackUser.email,
-        role: 'ORGANIZATION_OWNER',
+        success: false,
+        error: err?.message || 'A network error occurred during registration. Please check your connection and try again.',
       };
     } finally {
       setIsLoading(false);
@@ -1168,17 +1037,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({ email, otp, purpose, organizationId }),
       });
       const json = await res.json();
-      if (res.ok && json.success && json.data) {
-        const receivedToken = json.data.token;
-        if (receivedToken) {
+      if (res.ok && json.success) {
+        // Only set session if purpose is explicitly 'login'
+        if (purpose === 'login' && json.data?.token) {
+          const receivedToken = json.data.token;
           setToken(receivedToken);
           localStorage.setItem(TOKEN_KEY, receivedToken);
           if (json.data.organization?.id) {
             localStorage.setItem(ORG_ID_KEY, json.data.organization.id);
           }
           await fetchCurrentUser(receivedToken, json.data.organization?.id);
+          return { success: true, role: json.data.membership?.role };
         }
-        return { success: true, role: json.data.membership?.role };
+        return { success: true, email: json.email || email, message: json.message };
       }
       if (json.unlinkedUser) {
         return {

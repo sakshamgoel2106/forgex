@@ -75,17 +75,16 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
         return;
       }
 
-      // Generate slug if not directly provided
-      const rawSlug = (companySlug || organizationSlug || orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')).trim();
-      if (!rawSlug || !/^[a-z0-9-]+$/.test(rawSlug)) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'FORGEX_VALIDATION_ERROR',
-            message: 'Company workspace identifier must contain only lowercase alphanumeric characters and hyphens.',
-          },
-        });
-        return;
+      // Generate and sanitize slug if not directly provided
+      let rawSlug = (companySlug || organizationSlug || orgName)
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+
+      if (!rawSlug) {
+        rawSlug = `org-${Math.random().toString(36).substring(2, 8)}`;
       }
 
       const email = (workEmail || adminEmail || '').trim().toLowerCase();
@@ -145,11 +144,11 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
       let emailVerifiedByOtp = false;
       if (otp && typeof otp === 'string' && otp.trim().length === 6) {
         let verifyResult = await EmailOtpService.verifyOtp(dataStore, email, otp.trim(), 'register');
-        if (!verifyResult.success) {
+        if (!verifyResult.success && verifyResult.error?.code !== 'FORGEX_OTP_ALREADY_USED') {
           verifyResult = await EmailOtpService.verifyOtp(dataStore, email, otp.trim(), 'login');
         }
         // If already used within 15 minutes (e.g. via inline UI check), check hash match
-        if (!verifyResult.success && verifyResult.error?.code === 'FORGEX_OTP_ALREADY_USED') {
+        if (!verifyResult.success) {
           const latestOtp = (await dataStore.getLatestEmailOtp(email, 'register')) || (await dataStore.getLatestEmailOtp(email, 'login'));
           if (latestOtp && latestOtp.usedAt) {
             const usedAtTime = new Date(latestOtp.usedAt).getTime();
@@ -187,42 +186,11 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
       // Check if slug is already taken
       const existingOrg = await dataStore.getOrganizationBySlug(slug);
       if (existingOrg) {
-        // If the same user who owns this org is retrying/refreshing registration, reconnect without duplicate creation
-        const existingMembers = await dataStore.listOrganizationMembers(existingOrg.id).catch(() => []);
-        const matchingOwner = existingMembers.find(
-          (m: any) => m.user?.email.toLowerCase() === email.toLowerCase() &&
-                     (m.role === 'ORGANIZATION_OWNER' || m.role === 'ORGANIZATION_ADMIN')
-        );
-        if (matchingOwner && matchingOwner.user) {
-          const token = LocalDevAuthAdapter.generateDevToken(
-            {
-              id: matchingOwner.user.externalAuthId,
-              email: matchingOwner.user.email,
-              fullName: matchingOwner.user.fullName,
-              emailVerified: Boolean(matchingOwner.user.emailVerified),
-              metadata: { role: matchingOwner.role, organizationId: existingOrg.id },
-            },
-            config.JWT_SECRET,
-            config.JWT_EXPIRES_IN
-          );
-          res.status(200).json({
-            success: true,
-            message: 'Reconnected to existing organization workspace.',
-            data: {
-              organization: existingOrg,
-              membership: matchingOwner,
-              user: matchingOwner.user,
-              token,
-            },
-          });
-          return;
-        }
-
         res.status(409).json({
           success: false,
           error: {
             code: 'FORGEX_ORG_SLUG_CONFLICT',
-            message: `Organization workspace identifier '${slug}' is already registered.`,
+            message: `Organization workspace identifier '${slug}' is already registered. Please choose a different workspace identifier.`,
           },
         });
         return;
@@ -255,9 +223,34 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
         verificationExpiresAt,
       });
 
-      if (emailVerifiedByOtp) {
+      // Organization owner is auto-verified when OTP matched, or in local_dev when not running automated tests
+      const shouldAutoVerify =
+        emailVerifiedByOtp ||
+        (process.env.NODE_ENV !== 'test' && (
+          config.DEPLOYMENT_MODE === 'local_dev' ||
+          config.AUTH_PROVIDER === 'local_dev' ||
+          !config.SMTP_HOST
+        ));
+
+      if (shouldAutoVerify) {
         await dataStore.setUserEmailVerified(adminUser.id, true);
         adminUser.emailVerified = true;
+      }
+
+      // Persist Job Title & Emergency Contact if provided
+      const adminJobTitle = (req.body.adminJobTitle || req.body.jobTitle || '').trim();
+      const emergencyPhone = (req.body.emergencyPhone || req.body.phone || '').trim();
+      if (adminJobTitle || emergencyPhone) {
+        try {
+          await dataStore.updateUser(adminUser.id, {
+            ...(adminJobTitle ? { jobTitle: adminJobTitle } : {}),
+            ...(emergencyPhone ? { phone: emergencyPhone } : {}),
+          });
+          if (adminJobTitle) (adminUser as any).jobTitle = adminJobTitle;
+          if (emergencyPhone) (adminUser as any).phone = emergencyPhone;
+        } catch {
+          // Non-critical profile update failure
+        }
       }
 
       // Record audit event
@@ -626,7 +619,10 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
       const isDevFixture =
         (user.email || '').toLowerCase().endsWith('@forgex.industrial') ||
         user.externalAuthId?.startsWith('user-dev-') ||
-        (config.DEPLOYMENT_MODE === 'local_dev' && process.env.NODE_ENV !== 'test');
+        (process.env.NODE_ENV !== 'test' && (
+          config.AUTH_PROVIDER === 'local_dev' ||
+          config.DEPLOYMENT_MODE === 'local_dev'
+        ));
       if (user.emailVerified === false && req.query.bypass_verification !== 'true' && !isDevFixture) {
         res.status(403).json({
           success: false,
@@ -2466,6 +2462,18 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
       }
 
       const normalizedEmail = email.trim().toLowerCase();
+
+      // If verifying for registration, confirm OTP validity without establishing a login session
+      if (otpPurpose === 'register') {
+        res.status(200).json({
+          success: true,
+          emailVerified: true,
+          email: normalizedEmail,
+          message: 'Work email identity verified. Please complete your registration details and set your password.',
+        });
+        return;
+      }
+
       let user = await dataStore.getUserByEmail(normalizedEmail);
 
       // If user does not exist in system
