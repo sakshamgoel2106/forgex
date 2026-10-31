@@ -31,8 +31,11 @@ import {
 import type { ExpertNoteReview, ReviewOutcome } from '@forgex/shared-types';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
+import { ConfirmActionModal } from '../modals/ConfirmActionModal';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
 import { useToast } from '../../lib/ToastContext';
+import { getTenantData } from '../../utils/tenantStorage';
 import { apiFetch } from '../../lib/api';
 import {
   formatCleanMachineName,
@@ -332,6 +335,7 @@ export interface ExpertKnowledgeViewProps {
 export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavigateToCopilot }) => {
   const { toast } = useToast();
   const { user, organization, membership, isOwnerOrAdmin } = useAuth();
+  const { activePlant } = usePlant();
 
   const userRole = membership?.role;
   const isAdminOrOwner = Boolean(
@@ -394,6 +398,20 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
   const [editSymptom, setEditSymptom] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  // Reusable 2-Step Confirmation Modal State (🛡️ Confirm Confidential Action)
+  const [confirmModalState, setConfirmModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    subtitle: string;
+    description: string;
+    targetItemName?: string;
+    targetItemId?: string;
+    acknowledgmentText?: string;
+    confirmButtonText?: string;
+    isDestructive?: boolean;
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
 
   // Multi-Note Modal
   const [isSubmitOpen, setIsSubmitOpen] = useState(false);
@@ -497,16 +515,13 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           combinedNotes = data.data;
         }
       }
-      // Merge with locally published notes in localStorage
+      // Merge with locally published notes in tenant storage
       try {
-        const stored = localStorage.getItem('forgex_expert_notes');
-        if (stored) {
-          const localNotes = JSON.parse(stored);
-          if (Array.isArray(localNotes)) {
-            const serverIds = new Set(combinedNotes.map((n) => n.id));
-            const newLocals = localNotes.filter((n) => !serverIds.has(n.id));
-            combinedNotes = [...newLocals, ...combinedNotes];
-          }
+        const localNotes = getTenantData<any[]>('forgex_expert_notes', activePlant, []);
+        if (Array.isArray(localNotes)) {
+          const serverIds = new Set(combinedNotes.map((n) => n.id));
+          const newLocals = localNotes.filter((n) => !serverIds.has(n.id));
+          combinedNotes = [...newLocals, ...combinedNotes];
         }
       } catch {}
       setNotes(combinedNotes);
@@ -514,26 +529,31 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
       console.error('Error fetching expert knowledge notes:', err);
       // Fallback to local notes if server fails
       try {
-        const stored = localStorage.getItem('forgex_expert_notes');
-        if (stored) {
-          const localNotes = JSON.parse(stored);
-          if (Array.isArray(localNotes)) setNotes(localNotes);
-        }
+        const localNotes = getTenantData<any[]>('forgex_expert_notes', activePlant, []);
+        if (Array.isArray(localNotes)) setNotes(localNotes);
       } catch {}
       toast.error('Repository Connection Error', 'Could not load expert notes from server.');
     } finally {
       if (showLoading) setIsLoading(false);
     }
-  }, [toast]);
+  }, [toast, activePlant, organization?.id]);
 
-  // Listen to new notes published in real-time from RCA or modals
+  useEffect(() => {
+    fetchNotes(true);
+  }, [fetchNotes, activePlant, organization?.id]);
+
+  // Listen to new notes published in real-time from RCA or modals, and tenant switches
   useEffect(() => {
     const handleNewNote = () => {
       fetchNotes(false);
     };
     window.addEventListener('forgex:expert-note-created', handleNewNote);
+    window.addEventListener('forgex:tenant_changed', handleNewNote);
+    window.addEventListener('forgex:tenant_data_updated', handleNewNote);
     return () => {
       window.removeEventListener('forgex:expert-note-created', handleNewNote);
+      window.removeEventListener('forgex:tenant_changed', handleNewNote);
+      window.removeEventListener('forgex:tenant_data_updated', handleNewNote);
     };
   }, [fetchNotes]);
 
@@ -906,8 +926,8 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     onNavigateToCopilot?.(cleanMachine);
   };
 
-  // Delete Handler (Restricted to Admin/Owner only)
-  const handleDelete = async (note: ExpertNote, e?: React.MouseEvent) => {
+  // Delete Handler with 2-Step Confidential Action Confirmation
+  const handleDelete = (note: ExpertNote, e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -917,25 +937,34 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
       return;
     }
 
-    if (!window.confirm(`Are you sure you want to delete "${note.title}"? This will remove it from both repository and AI vector search.`)) {
-      return;
-    }
-
-    // Optimistic delete
-    setNotes((prev) => prev.filter((n) => n.id !== note.id));
-
-    try {
-      const res = await apiFetch(`/api/v1/recovery/expert-library/${note.id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        throw new Error('Failed to delete expert note');
-      }
-      toast.success('Note Deleted', 'Expert knowledge note removed from repository and vector index.');
-    } catch (err: any) {
-      toast.error('Delete Failed', err.message || 'Could not delete note.');
-      fetchNotes(false);
-    }
+    setConfirmModalState({
+      isOpen: true,
+      title: '🛡️ Confirm Confidential Action: Delete Expert Note',
+      subtitle: 'Knowledge Base De-indexing & Permanent Removal',
+      targetItemId: note.id,
+      targetItemName: `${note.assetTag || 'PLANT'} — ${note.title}`,
+      description: `You are deleting this expert knowledge note from both the plant repository and the AI vector embedding database. Technicians will no longer receive AI Copilot suggestions referencing this note.`,
+      acknowledgmentText: 'I acknowledge and verify that I want to permanently delete this engineering note from the knowledge base.',
+      confirmButtonText: 'Permanently Delete Note',
+      isDestructive: true,
+      onConfirm: async () => {
+        setConfirmModalState(null);
+        // Optimistic delete
+        setNotes((prev) => prev.filter((n) => n.id !== note.id));
+        try {
+          const res = await apiFetch(`/api/v1/recovery/expert-library/${note.id}`, {
+            method: 'DELETE',
+          });
+          if (!res.ok) {
+            throw new Error('Failed to delete expert note');
+          }
+          toast.success('Note Deleted', 'Expert knowledge note removed from repository and vector index.');
+        } catch (err: any) {
+          toast.error('Delete Failed', err.message || 'Could not delete note.');
+          fetchNotes(false);
+        }
+      },
+    });
   };
 
   // Multi-Note Form Helpers
@@ -1192,7 +1221,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
       <div
         key={note.id}
         onClick={() => setSelectedNoteForModal(note)}
-        className="rounded-xl border border-slate-200/90 bg-white hover:border-indigo-500 hover:shadow-lg transition-all duration-200 overflow-hidden group cursor-pointer flex flex-col justify-between shadow-2xs"
+        className="rounded-2xl border border-indigo-200/70 bg-white hover:border-indigo-400 hover:shadow-xl transition-all duration-200 overflow-hidden group cursor-pointer flex flex-col justify-between shadow-sm"
       >
         {/* Top Mini-Header Strip: Dynamic Auto-Height Flex Container */}
         <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-3.5 py-2.5 flex items-start justify-between gap-2 h-auto">
@@ -1202,13 +1231,13 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               <span className="break-words">Machine: {cleanMachine}</span>
             </span>
             {note.category && (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-indigo-400/30 bg-indigo-500/20 text-indigo-200 font-bold uppercase tracking-wider shrink-0">
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-cyan-400/40 bg-gradient-to-r from-indigo-500/30 to-cyan-500/30 text-cyan-200 font-bold uppercase tracking-wider shrink-0">
                 {note.category}
               </span>
             )}
           </div>
           <div className="shrink-0 flex items-center gap-1.5 ml-auto">
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-400/30 bg-emerald-500/20 text-emerald-300 font-bold flex items-center gap-1 whitespace-nowrap shrink-0">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-400/40 bg-gradient-to-r from-emerald-500/25 to-teal-500/25 text-emerald-300 font-bold flex items-center gap-1 whitespace-nowrap shrink-0">
               <Zap className="w-2.5 h-2.5 text-emerald-400" />
               <span>{getEstTimeSaved(note).replace(' MTTR Saved', ' Saved')}</span>
             </span>
@@ -1225,8 +1254,8 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           </div>
         </div>
 
-        {/* Card Body */}
-        <div className="p-3.5 space-y-2 flex-1 flex flex-col justify-between">
+        {/* Card Body with Subtle Vertical Gradient */}
+        <div className="p-4 space-y-3 flex-1 flex flex-col justify-between bg-gradient-to-b from-white via-white to-indigo-50/30">
           {/* Crisp Note Title */}
           <h4
             className="font-bold text-slate-900 text-sm line-clamp-2 break-words group-hover:text-indigo-600 transition-colors leading-snug"
@@ -1235,40 +1264,56 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
             {cleanTitle}
           </h4>
 
-          {/* Structured 2-row visual summary box */}
-          <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-2.5 space-y-1.5 text-xs">
-            <div className="flex items-start gap-1.5 text-amber-900">
-              <span className="font-mono text-[10px] font-bold text-amber-600 uppercase shrink-0 mt-0.5">⚡ When to Apply:</span>
-              <span className="line-clamp-2 text-slate-700 font-medium break-words leading-relaxed">
+          {/* Structured Multi-Tint Gradient Visual Summary Box */}
+          <div className="bg-gradient-to-br from-indigo-50/60 via-slate-50/50 to-cyan-50/40 border border-indigo-200/70 rounded-xl p-3.5 space-y-2.5 text-xs shadow-2xs">
+            {/* Block 1: WHEN TO APPLY */}
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5">
+                <span className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-2xs font-mono">
+                  ⚡ WHEN TO APPLY
+                </span>
+              </div>
+              <p className="text-slate-700 font-medium break-words leading-relaxed pl-0.5">
                 {cleanTrigger}
-              </span>
+              </p>
             </div>
-            <div className="flex items-start gap-1.5 text-slate-700">
-              <span className="font-mono text-[10px] font-bold text-indigo-600 uppercase shrink-0 mt-0.5">🔧 Field Fix:</span>
-              <span className="line-clamp-2 text-slate-800 font-medium break-words leading-relaxed">
+
+            {/* Block 2: FIELD FIX */}
+            <div className="space-y-1 pt-1.5 border-t border-indigo-100/70">
+              <div className="flex items-center gap-1.5">
+                <span className="bg-gradient-to-r from-indigo-600 to-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-2xs font-mono">
+                  🔧 FIELD FIX
+                </span>
+              </div>
+              <p className="text-slate-800 font-medium break-words leading-relaxed pl-0.5">
                 {cleanFix || displayContent}
-              </span>
+              </p>
             </div>
           </div>
 
-          {/* Card Footer */}
-          <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-slate-900 to-indigo-700 text-white flex items-center justify-center text-[9px] font-mono font-bold shrink-0 shadow-2xs">
+          {/* Card Footer: Stacked Author & Date on Left, Vibrant Gradient Button on Right */}
+          <div className="pt-3 mt-auto border-t border-indigo-100/80 flex items-center justify-between gap-2 w-full">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="bg-gradient-to-br from-indigo-600 to-cyan-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-mono font-bold shrink-0 shadow-xs">
                 {getInitials(displayAuthor)}
               </div>
-              <span className="text-slate-800 font-semibold truncate max-w-[180px] shrink-0" title={displayAuthor}>
-                By: {displayAuthor}
-              </span>
-              <span className="text-slate-400 font-mono whitespace-nowrap">
-                • 📅 {formatCompactDate(note.observedAt || note.createdAt || note.date)}
-              </span>
+              <div className="flex flex-col min-w-0">
+                <span className="text-xs font-bold text-slate-800 truncate" title={displayAuthor}>
+                  By: {displayAuthor}
+                </span>
+                <span className="text-[11px] font-medium text-slate-500">
+                  📅 {formatCompactDate(note.observedAt || note.createdAt || note.date)}
+                </span>
+              </div>
             </div>
 
-            <span className="bg-indigo-50 text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white px-2.5 py-1 rounded-md font-semibold transition-all duration-150 whitespace-nowrap flex items-center gap-1 shrink-0 shadow-2xs">
+            <button
+              type="button"
+              className="bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-semibold px-3.5 py-2 rounded-lg shadow-sm whitespace-nowrap shrink-0 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+            >
               <span>View Note</span>
-              <ExternalLink className="w-3 h-3" />
-            </span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </div>
@@ -1276,141 +1321,142 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
   };
 
   return (
-    <div className="flex-1 min-h-0 min-w-0 w-full h-full p-4 md:p-5 overflow-y-auto bg-[#F8FAFC] space-y-3.5">
-      {/* Top Banner Toolbar with KPI Pills */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2.5 border-b border-[#E2E8F0] gap-3">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-50 text-[#2563EB] flex items-center justify-center border border-blue-100 shadow-sm shrink-0">
-              <GraduationCap className="w-4.5 h-4.5 text-[#2563EB]" />
-            </div>
-            <div>
-              <h2 className="text-sm sm:text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide flex flex-wrap items-center gap-2 leading-snug">
-                <span>Tribal & Expert Knowledge Repository</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-slate-100 text-slate-600 border border-slate-200 font-semibold">
-                  {notes.length} Active Notes
-                </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                  {verifiedCount} Verified Tips
-                </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-amber-50 text-amber-700 border border-amber-200 font-semibold flex items-center gap-1">
-                  <AlertTriangle className="w-3 h-3 text-amber-600" />
-                  {criticalCount} Critical Warnings
-                </span>
-              </h2>
-              <p className="text-xs text-[#64748B] leading-tight mt-0.5 font-sans">
-                Frontline senior technician wisdom, undocumented field tricks & startup protocols for{' '}
-                <span className="font-semibold text-slate-700">{organization?.name || 'Your Plant'}</span>
-              </p>
+    <div className="flex-1 min-h-0 min-w-0 w-full h-full overflow-y-auto bg-[#F0F2F5]">
+      <div className="w-full max-w-7xl mx-auto p-4 md:p-6 space-y-5">
+        {/* Top Banner Toolbar with KPI Pills */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2.5 border-b border-[#E2E8F0] gap-3">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-blue-50 text-[#2563EB] flex items-center justify-center border border-blue-100 shadow-sm shrink-0">
+                <GraduationCap className="w-4.5 h-4.5 text-[#2563EB]" />
+              </div>
+              <div>
+                <h2 className="text-sm sm:text-base font-bold font-mono text-[#0F172A] uppercase tracking-wide flex flex-wrap items-center gap-2 leading-snug">
+                  <span>Tribal & Expert Knowledge Repository</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-slate-100 text-slate-600 border border-slate-200 font-semibold">
+                    {notes.length} Active Notes
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    {verifiedCount} Verified Tips
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-amber-50 text-amber-700 border border-amber-200 font-semibold flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-amber-600" />
+                    {criticalCount} Critical Warnings
+                  </span>
+                </h2>
+                <p className="text-xs text-[#64748B] leading-tight mt-0.5 font-sans">
+                  Frontline senior technician wisdom, undocumented field tricks & startup protocols for{' '}
+                  <span className="font-semibold text-slate-700">{organization?.name || 'Your Plant'}</span>
+                </p>
+              </div>
             </div>
           </div>
+
+          <Button
+            variant="primary"
+            size="sm"
+            type="button"
+            onClick={() => {
+              setFormNotes([createDefaultNoteItem()]);
+              setIsSubmitOpen(true);
+            }}
+            leftIcon={<Plus className="w-3.5 h-3.5" />}
+            className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold rounded-xl shadow-sm border-0 shrink-0 transition cursor-pointer"
+          >
+            Submit Field Note(s)
+          </Button>
         </div>
 
-        <Button
-          variant="primary"
-          size="sm"
-          type="button"
-          onClick={() => {
-            setFormNotes([createDefaultNoteItem()]);
-            setIsSubmitOpen(true);
-          }}
-          leftIcon={<Plus className="w-3.5 h-3.5" />}
-          className="bg-[#0F172A] hover:bg-black text-white font-semibold rounded-lg shadow-sm border border-slate-800 shrink-0"
-        >
-          Submit Field Note(s)
-        </Button>
-      </div>
+        {/* Filter Toolbar - Responsive Grid with Zero Overflow */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 p-2.5 bg-white border border-slate-200/90 rounded-xl items-center w-full shadow-xs">
+          {/* 1) Search Input: lg:col-span-4 sm:col-span-2 min-w-0 */}
+          <div className="relative lg:col-span-4 sm:col-span-2 min-w-0">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Search by equipment, task, symptom, author..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-7 py-2 bg-slate-50 hover:bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1E293B] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:bg-white transition"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
 
-      {/* Filter Toolbar - 12-Column Grid with zero overflow */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 p-2.5 bg-white border border-slate-200 rounded-xl items-center w-full overflow-hidden shadow-xs">
-        {/* 1) Search Input: md:col-span-4 min-w-0 */}
-        <div className="relative md:col-span-4 min-w-0">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search by equipment, task, symptom, author..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-7 py-1.5 bg-slate-50 hover:bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#1E293B] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:bg-white transition"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch('')}
-              className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
-              title="Clear search"
+          {/* 2) Uploaded Machine Filter: lg:col-span-2 min-w-0 */}
+          <div className="lg:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-2 text-xs overflow-hidden">
+            <Cpu className="w-3 h-3 text-slate-500 shrink-0" />
+            <select
+              value={machineFilter}
+              onChange={(e) => setMachineFilter(e.target.value)}
+              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
             >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
+              <option value="ALL">All Machines</option>
+              {uploadedMachines.map((m) => (
+                <option key={m.assetTag} value={m.assetTag}>
+                  {m.assetTag}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        {/* 2) Uploaded Machine Filter: md:col-span-2 min-w-0 */}
-        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
-          <Cpu className="w-3 h-3 text-slate-500 shrink-0" />
-          <select
-            value={machineFilter}
-            onChange={(e) => setMachineFilter(e.target.value)}
-            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
-          >
-            <option value="ALL">All Machines</option>
-            {uploadedMachines.map((m) => (
-              <option key={m.assetTag} value={m.assetTag}>
-                {m.assetTag}
-              </option>
-            ))}
-          </select>
-        </div>
+          {/* 3) Category Filter: lg:col-span-2 min-w-0 */}
+          <div className="lg:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-2 text-xs overflow-hidden">
+            <Filter className="w-3 h-3 text-slate-500 shrink-0" />
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
+            >
+              <option value="ALL">All Categories</option>
+              {availableCategories.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        {/* 3) Category Filter: md:col-span-2 min-w-0 */}
-        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
-          <Filter className="w-3 h-3 text-slate-500 shrink-0" />
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
-          >
-            <option value="ALL">All Categories</option>
-            {availableCategories.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
-        </div>
+          {/* 4) Severity Filter: lg:col-span-2 min-w-0 */}
+          <div className="lg:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-2 text-xs overflow-hidden">
+            <Sparkles className="w-3 h-3 text-slate-500 shrink-0" />
+            <select
+              value={severityFilter}
+              onChange={(e) => setSeverityFilter(e.target.value)}
+              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
+            >
+              <option value="ALL">All Severities</option>
+              {PRACTICAL_SEVERITIES.map((sev) => (
+                <option key={sev} value={sev}>
+                  {sev}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        {/* 4) Severity Filter: md:col-span-2 min-w-0 */}
-        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
-          <Sparkles className="w-3 h-3 text-slate-500 shrink-0" />
-          <select
-            value={severityFilter}
-            onChange={(e) => setSeverityFilter(e.target.value)}
-            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
-          >
-            <option value="ALL">All Severities</option>
-            {PRACTICAL_SEVERITIES.map((sev) => (
-              <option key={sev} value={sev}>
-                {sev}
-              </option>
-            ))}
-          </select>
+          {/* 5) Sort Dropdown: lg:col-span-2 min-w-0 */}
+          <div className="lg:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-2 text-xs overflow-hidden">
+            <Layers className="w-3 h-3 text-slate-500 shrink-0" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
+            >
+              <option value="NEWEST">Sort: Newest First</option>
+              <option value="HELPFUL">Sort: Most Helpful (👍)</option>
+              <option value="RATING">Sort: Highest Rated (⭐)</option>
+            </select>
+          </div>
         </div>
-
-        {/* 5) Sort Dropdown: md:col-span-2 min-w-0 */}
-        <div className="md:col-span-2 min-w-0 flex items-center gap-1.5 bg-slate-50 border border-[#CBD5E1] rounded-lg px-2.5 py-1.5 text-xs overflow-hidden">
-          <Layers className="w-3 h-3 text-slate-500 shrink-0" />
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-            className="bg-transparent text-xs font-mono text-slate-700 focus:outline-none cursor-pointer w-full truncate"
-          >
-            <option value="NEWEST">Sort: Newest First</option>
-            <option value="HELPFUL">Sort: Most Helpful (👍)</option>
-            <option value="RATING">Sort: Highest Rated (⭐)</option>
-          </select>
-        </div>
-      </div>
 
       {/* Active Filter Indicator & Reset */}
       {(search || categoryFilter !== 'ALL' || severityFilter !== 'ALL' || machineFilter !== 'ALL') && (
@@ -1457,7 +1503,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               setIsSubmitOpen(true);
             }}
             leftIcon={<Plus className="w-3.5 h-3.5" />}
-            className="bg-[#0F172A] hover:bg-black text-white font-semibold rounded-lg shadow-sm"
+            className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold rounded-xl shadow-sm border-0"
           >
             Submit First Field Note
           </Button>
@@ -1955,7 +2001,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               {formNotes.length > 1 && (
                 <div className="flex items-center justify-between pb-1.5 border-b border-slate-200">
                   <div className="flex items-center gap-1.5">
-                    <span className="w-4 h-4 rounded-full bg-[#0F172A] text-white flex items-center justify-center text-[10px] font-mono font-bold">
+                    <span className="w-4 h-4 rounded-full bg-gradient-to-r from-indigo-600 to-blue-600 text-white flex items-center justify-center text-[10px] font-mono font-bold shadow-2xs">
                       {index + 1}
                     </span>
                     <span className="text-xs font-mono font-bold uppercase text-slate-700 tracking-wider">
@@ -2352,7 +2398,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                 size="sm"
                 type="submit"
                 disabled={isSubmitting}
-                className="bg-[#0F172A] text-white hover:bg-black font-semibold rounded-lg shadow-sm whitespace-nowrap px-3.5 text-xs py-1.5 shrink-0 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
+                className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold rounded-lg shadow-sm whitespace-nowrap px-3.5 text-xs py-1.5 shrink-0 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 border-0"
               >
                 {isSubmitting
                   ? 'Publishing...'
@@ -2439,13 +2485,31 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               size="sm"
               type="submit"
               disabled={isSavingEdit}
-              className="bg-[#0F172A] text-white hover:bg-black font-semibold rounded-lg shadow-sm text-xs px-4 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95"
+              className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold rounded-lg shadow-sm text-xs px-4 transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:scale-95 border-0"
             >
               {isSavingEdit ? 'Saving...' : 'Save Changes'}
             </Button>
           </div>
         </form>
       </Modal>
+
+      {/* Reusable 2-Step Confirmation Modal (🛡️ Confirm Confidential Action) */}
+      {confirmModalState && (
+        <ConfirmActionModal
+          isOpen={confirmModalState.isOpen}
+          onClose={() => setConfirmModalState(null)}
+          title={confirmModalState.title}
+          subtitle={confirmModalState.subtitle}
+          targetItemId={confirmModalState.targetItemId}
+          targetItemName={confirmModalState.targetItemName}
+          description={confirmModalState.description}
+          acknowledgmentText={confirmModalState.acknowledgmentText}
+          confirmButtonText={confirmModalState.confirmButtonText}
+          isDestructive={confirmModalState.isDestructive}
+          onConfirm={confirmModalState.onConfirm}
+        />
+      )}
+      </div>
     </div>
   );
 };

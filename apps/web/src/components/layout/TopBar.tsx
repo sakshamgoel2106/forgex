@@ -4,7 +4,6 @@ import {
   Bell,
   ChevronDown,
   Clock,
-  Building2,
   Menu,
   Settings,
   ShieldCheck,
@@ -64,7 +63,7 @@ const MODULE_LABELS: Record<NavModule, string> = {
 
 export const TopBar: React.FC<TopBarProps> = ({
   activeModule,
-  plantSite,
+  plantSite: _plantSite,
   onPlantChange,
   onOpenSearch,
   onOpenNotifications,
@@ -86,10 +85,6 @@ export const TopBar: React.FC<TopBarProps> = ({
       onPlantChange?.(plants[0].id);
     }
   }, [plants, activePlant, setActivePlant, onPlantChange]);
-
-  const currentPlant =
-    plants.find((p) => p.id === (plantSite || activePlant) || p.code === (plantSite || activePlant)) ||
-    plants[0];
 
   useEffect(() => {
     if (!token || !organization?.id) return;
@@ -221,23 +216,14 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
         </div>
 
-        {/* Right: Plant + Alerts + User */}
+        {/* Right: Company Pill + Alerts + User */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Single-Factory Mode Indicator */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-white border border-gray-200 text-left shadow-sm">
-            <Building2 className="w-3.5 h-3.5 shrink-0 text-[#1D4ED8]" />
-            <div className="min-w-0 flex items-center gap-1.5 text-xs font-mono">
-              <span className="font-semibold text-gray-800 truncate max-w-[130px]">
-                {organization?.name || 'Main Facility'}
-              </span>
-              <span className="text-gray-300">|</span>
-              <span className="truncate max-w-[130px] text-gray-600 font-medium hidden sm:inline">
-                {currentPlant?.name || 'Single Factory'}
-              </span>
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-[#1D4ED8] border border-blue-100">
-                Single Factory
-              </span>
-            </div>
+          {/* Active Company Pill - Clean, Uncut & Zero Truncation */}
+          <div className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-indigo-50/80 via-white to-blue-50/60 border border-indigo-200/80 flex items-center gap-2 shadow-2xs shrink-0">
+            <span className="text-base select-none leading-none">🏢</span>
+            <span className="font-bold text-slate-800 text-sm whitespace-nowrap">
+              {organization?.name || 'JMK Tiles Modernized'}
+            </span>
           </div>
 
           {/* Notification Bell */}

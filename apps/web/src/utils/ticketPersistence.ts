@@ -132,7 +132,7 @@ export function purgeTicketFromAllStorage(target: any): string[] {
     console.warn('Failed to update forgex_deleted_ticket_ids:', err);
   }
 
-  // 2. Specific known ticket arrays
+  // 2. Specific known ticket arrays (both global and tenant-scoped)
   const arrayKeys = [
     'forgex_shared_raised_tickets',
     'forgex_tech_queue_tasks',
@@ -142,17 +142,24 @@ export function purgeTicketFromAllStorage(target: any): string[] {
     'forgex_oem_escalations',
   ];
 
-  for (const key of arrayKeys) {
-    try {
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const list = JSON.parse(raw);
-        if (Array.isArray(list)) {
-          const filtered = list.filter((item) => !isTicketDeleted(item, targetSet));
-          localStorage.setItem(key, JSON.stringify(filtered));
+  // Scrub known array keys and any tenant-scoped variants (${baseKey}__tenant_${plantId})
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+
+    const matchesArray = arrayKeys.some((base) => k === base || k.startsWith(`${base}__tenant_`));
+    if (matchesArray) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            const filtered = list.filter((item) => !isTicketDeleted(item, targetSet));
+            localStorage.setItem(k, JSON.stringify(filtered));
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
   }
 
   // 3. Scan all keys for execution state and any other custom ticket stores

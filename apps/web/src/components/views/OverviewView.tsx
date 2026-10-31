@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
+import { isDefaultDemoPlant, getTenantKey } from '../../utils/tenantStorage';
 import {
   Activity,
   AlertTriangle,
@@ -84,12 +86,100 @@ const DEFAULT_TREND = [
   { day: 'Sun', oee: 92.1, availability: 95.9 },
 ];
 
+const DEFAULT_DEMO_WORK_ORDERS = [
+  {
+    id: 'ESC-2026-9041',
+    assetTag: 'COOLING TOWER',
+    title: 'Dynamic Hydraulic Cavitation & Impeller Vane Unbalance',
+    priority: 'Critical',
+    assignee: 'Alex Rivera',
+    rating: 4.9,
+    completedSteps: 3,
+    totalSteps: 5,
+    stepsProgress: '3/5 Steps',
+    percent: 60,
+    sla: '2h SLA Left',
+  },
+  {
+    id: 'ESC-2026-8820',
+    assetTag: 'PUMP-SLURRY-002',
+    title: 'Mechanical Seal Flush Plan 53A Pressure Collapse',
+    priority: 'High',
+    assignee: 'Marcus Vance',
+    rating: 4.8,
+    completedSteps: 2,
+    totalSteps: 5,
+    stepsProgress: '2/5 Steps',
+    percent: 40,
+    sla: '4h SLA Left',
+  },
+  {
+    id: 'ESC-2026-7730',
+    assetTag: 'GEARBOX-HELICAL-305',
+    title: 'Main Drive Helical Gearbox Pinion Tooth Surface Pitting',
+    priority: 'Critical',
+    assignee: 'Elena Rostova',
+    rating: 4.9,
+    completedSteps: 4,
+    totalSteps: 5,
+    stepsProgress: '4/5 Steps',
+    percent: 80,
+    sla: '1h SLA Left',
+  },
+];
+
+const DEFAULT_DEMO_EVENTS = [
+  {
+    id: 'EVT-501',
+    code: 'ALM-VIB-501',
+    assetTag: 'COOLING TOWER',
+    severity: 'WARNING' as const,
+    message: 'Dynamic vibration surge (6.8 mm/s) detected during steady run — acoustic cavitation chatter present.',
+    time: '12m ago',
+    accentColor: 'border-l-amber-500',
+    badgeColor: 'bg-amber-100/90 text-amber-900 border-amber-300',
+  },
+  {
+    id: 'EVT-303',
+    code: 'ERR-702-HW',
+    assetTag: 'PUMP-SLURRY-002',
+    severity: 'CRITICAL' as const,
+    message: 'Boundary runout tolerance check exceeded spec (0.18 mm vs 0.05 mm target).',
+    time: '34m ago',
+    accentColor: 'border-l-rose-500',
+    badgeColor: 'bg-rose-100/90 text-rose-900 border-rose-300',
+  },
+  {
+    id: 'EVT-9024',
+    code: 'LOTO-9024',
+    assetTag: 'GEARBOX-HELICAL-305',
+    severity: 'INFO' as const,
+    message: 'Zero-energy lock verified under OSHA protocol #LOTO-9024 awaiting authorized overhaul.',
+    time: '1h ago',
+    accentColor: 'border-l-indigo-600',
+    badgeColor: 'bg-indigo-100/90 text-indigo-900 border-indigo-300',
+  },
+  {
+    id: 'EVT-1002',
+    code: 'MR-PASSED',
+    assetTag: 'KILN-001',
+    severity: 'SUCCESS' as const,
+    message: 'Dynamic shaft radial runout verified within 0.0012 in OEM limit — closed-loop audit passed.',
+    time: '2h ago',
+    accentColor: 'border-l-emerald-500',
+    badgeColor: 'bg-emerald-100/90 text-emerald-900 border-emerald-300',
+  },
+];
+
 export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
   const { user, organization, token } = useAuth();
+  const { activePlant } = usePlant();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(false);
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
+
+  const isDemo = isDefaultDemoPlant(activePlant, undefined, organization?.id, organization?.name);
 
   // Fetch API overview metrics
   const fetchOverview = useCallback(async () => {
@@ -100,6 +190,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
+          ...(organization?.id ? { 'x-organization-id': organization.id } : {}),
+          ...(activePlant ? { 'x-plant-id': activePlant } : {}),
         },
       });
       const json = await res.json();
@@ -111,15 +203,49 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, organization?.id, activePlant]);
 
   useEffect(() => {
     fetchOverview();
-  }, [fetchOverview, organization?.id]);
+  }, [fetchOverview]);
 
-  // Robust default metrics ensuring 10 assets (9 operational, 1 attention, 0 critical)
+  useEffect(() => {
+    const handleTenantUpdate = () => {
+      fetchOverview();
+    };
+    window.addEventListener('forgex:tenant_changed', handleTenantUpdate);
+    window.addEventListener('forgex:tenant_data_updated', handleTenantUpdate);
+    return () => {
+      window.removeEventListener('forgex:tenant_changed', handleTenantUpdate);
+      window.removeEventListener('forgex:tenant_data_updated', handleTenantUpdate);
+    };
+  }, [fetchOverview]);
+
+  // Robust default metrics ensuring 0 leak for new companies and 10 assets for demo facility
   const metrics = useMemo(() => {
     const raw = data?.metrics;
+
+    if (!isDemo) {
+      const totalAssets = raw?.totalAssets !== undefined ? raw.totalAssets : 0;
+      const attentionCount = raw?.attentionCount !== undefined ? raw.attentionCount : 0;
+      const criticalCount = raw?.criticalCount !== undefined ? raw.criticalCount : 0;
+      const operationalCount =
+        raw?.operationalCount !== undefined
+          ? raw.operationalCount
+          : Math.max(0, totalAssets - attentionCount - criticalCount);
+      const fleetHealthPercentage = totalAssets > 0 ? Math.round((operationalCount / totalAssets) * 100) : 100;
+      const availabilityPercentage = totalAssets > 0 ? raw?.availabilityPercentage || 98.4 : 100;
+
+      return {
+        totalAssets,
+        operationalCount,
+        attentionCount,
+        criticalCount,
+        fleetHealthPercentage,
+        availabilityPercentage,
+      };
+    }
+
     const totalAssets = Math.max(10, raw?.totalAssets || 10);
     const attentionCount = raw?.attentionCount !== undefined ? raw.attentionCount : 1;
     const criticalCount = raw?.criticalCount !== undefined ? raw.criticalCount : 0;
@@ -134,15 +260,18 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
       fleetHealthPercentage: fleetHealthPercentage || 90,
       availabilityPercentage: raw?.availabilityPercentage || 98.4,
     };
-  }, [data?.metrics]);
+  }, [data?.metrics, isDemo]);
 
   const deploymentType = data?.organization?.deploymentType || organization?.deploymentType || 'saas';
   const availableDepts = data?.departments && data.departments.length > 0
     ? data.departments
     : ['All Departments', 'Mechanical & Rotating', 'Thermal & Kilns', 'Heavy Hydraulic Press'];
 
-  // Donut chart health distribution data (9 Operational, 1 Attention, 0 Critical)
+  // Donut chart health distribution data
   const healthDistribution = useMemo(() => {
+    if (metrics.totalAssets === 0) {
+      return [{ name: 'No Assets', value: 1, color: '#94a3b8', gradientId: 'pieNoAssets' }];
+    }
     return [
       { name: 'Operational', value: metrics.operationalCount, color: '#10b981', gradientId: 'pieOperational' },
       { name: 'Attention', value: metrics.attentionCount, color: '#f59e0b', gradientId: 'pieAttention' },
@@ -155,40 +284,69 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
     if (data?.availabilityTrend && data.availabilityTrend.length > 0) {
       return data.availabilityTrend;
     }
+    if (!isDemo && metrics.totalAssets === 0) {
+      return DEFAULT_TREND.map((t) => ({ ...t, oee: 100, availability: 100 }));
+    }
     return DEFAULT_TREND;
-  }, [data?.availabilityTrend]);
+  }, [data?.availabilityTrend, isDemo, metrics.totalAssets]);
 
   // Live Machine Spotlight items inside the Fleet Health Matrix card
-  const spotlightMachines = useMemo(() => [
-    {
-      name: 'COOLING TOWER',
-      tag: 'COOLING TOWER',
-      telemetry: '44°C • High Vib',
-      gradientClass: 'bg-gradient-to-r from-amber-50 via-orange-50/60 to-white border-amber-200/90 text-amber-950 hover:border-amber-400 hover:from-amber-100/70',
-      dotClass: 'bg-amber-500 shadow-amber-400/50',
-    },
-    {
-      name: 'PRESS-004',
-      tag: 'PRESS-004',
-      telemetry: '48°C • 94% OEE',
-      gradientClass: 'bg-gradient-to-r from-emerald-50 via-teal-50/60 to-white border-emerald-200/90 text-emerald-950 hover:border-emerald-400 hover:from-emerald-100/70',
-      dotClass: 'bg-emerald-500 shadow-emerald-400/50',
-    },
-    {
-      name: 'KILN-001',
-      tag: 'KILN-001',
-      telemetry: 'Nominal • 92% OEE',
-      gradientClass: 'bg-gradient-to-r from-cyan-50 via-blue-50/60 to-white border-cyan-200/90 text-cyan-950 hover:border-cyan-400 hover:from-cyan-100/70',
-      dotClass: 'bg-cyan-500 shadow-cyan-400/50',
-    },
-    {
-      name: 'PUMP-204-T',
-      tag: 'PUMP-204-T',
-      telemetry: 'Nominal • 0.8 mm/s',
-      gradientClass: 'bg-gradient-to-r from-indigo-50 via-violet-50/60 to-white border-indigo-200/90 text-indigo-950 hover:border-indigo-400 hover:from-indigo-100/70',
-      dotClass: 'bg-indigo-500 shadow-indigo-400/50',
-    },
-  ], []);
+  const spotlightMachines = useMemo(() => {
+    if (!isDemo) {
+      const serverMachines = (data as any)?.machines;
+      if (Array.isArray(serverMachines) && serverMachines.length > 0) {
+        return serverMachines.slice(0, 4).map((m: any) => ({
+          name: formatCleanMachineName(m.name || m.assetTag),
+          tag: m.assetTag,
+          telemetry: m.telemetry || `${m.operationalState || 'Optimal'}`,
+          gradientClass:
+            m.operationalState === 'CRITICAL_FAULT'
+              ? 'bg-gradient-to-r from-rose-50 via-red-50/60 to-white border-rose-200 text-rose-950'
+              : m.operationalState === 'WARNING_MAINTENANCE_REQUIRED'
+              ? 'bg-gradient-to-r from-amber-50 via-orange-50/60 to-white border-amber-200 text-amber-950'
+              : 'bg-gradient-to-r from-emerald-50 via-teal-50/60 to-white border-emerald-200 text-emerald-950',
+          dotClass:
+            m.operationalState === 'CRITICAL_FAULT'
+              ? 'bg-rose-500 shadow-rose-400/50'
+              : m.operationalState === 'WARNING_MAINTENANCE_REQUIRED'
+              ? 'bg-amber-500 shadow-amber-400/50'
+              : 'bg-emerald-500 shadow-emerald-400/50',
+        }));
+      }
+      return [];
+    }
+
+    return [
+      {
+        name: 'COOLING TOWER',
+        tag: 'COOLING TOWER',
+        telemetry: '44°C • High Vib',
+        gradientClass: 'bg-gradient-to-r from-amber-50 via-orange-50/60 to-white border-amber-200/90 text-amber-950 hover:border-amber-400 hover:from-amber-100/70',
+        dotClass: 'bg-amber-500 shadow-amber-400/50',
+      },
+      {
+        name: 'PRESS-004',
+        tag: 'PRESS-004',
+        telemetry: '48°C • 94% OEE',
+        gradientClass: 'bg-gradient-to-r from-emerald-50 via-teal-50/60 to-white border-emerald-200/90 text-emerald-950 hover:border-emerald-400 hover:from-emerald-100/70',
+        dotClass: 'bg-emerald-500 shadow-emerald-400/50',
+      },
+      {
+        name: 'KILN-001',
+        tag: 'KILN-001',
+        telemetry: 'Nominal • 92% OEE',
+        gradientClass: 'bg-gradient-to-r from-cyan-50 via-blue-50/60 to-white border-cyan-200/90 text-cyan-950 hover:border-cyan-400 hover:from-cyan-100/70',
+        dotClass: 'bg-cyan-500 shadow-cyan-400/50',
+      },
+      {
+        name: 'PUMP-204-T',
+        tag: 'PUMP-204-T',
+        telemetry: 'Nominal • 0.8 mm/s',
+        gradientClass: 'bg-gradient-to-r from-indigo-50 via-violet-50/60 to-white border-indigo-200/90 text-indigo-950 hover:border-indigo-400 hover:from-indigo-100/70',
+        dotClass: 'bg-indigo-500 shadow-indigo-400/50',
+      },
+    ];
+  }, [data, isDemo]);
 
   // Jump straight to machine in Troubleshooting & RCA
   const handleSpotlightClick = (assetTag: string) => {
@@ -201,14 +359,17 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
     onNavigate('troubleshooting');
   };
 
-  // Synced live work orders from localStorage (purging tombstoned IDs)
+  // Synced live work orders strictly scoped by tenant
   const workOrders = useMemo(() => {
     const deletedSet = getDeletedTicketIds();
     const list: any[] = [];
 
-    // Read forgex_shared_raised_tickets
+    const tenantTicketsKey = getTenantKey('forgex_shared_raised_tickets', activePlant);
+    const tenantQueueKey = getTenantKey('forgex_tech_queue_tasks', activePlant);
+
+    // 1. Read tenant-scoped raised tickets
     try {
-      const raw = localStorage.getItem('forgex_shared_raised_tickets');
+      const raw = localStorage.getItem(tenantTicketsKey);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
@@ -221,9 +382,9 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
       }
     } catch {}
 
-    // Read forgex_tech_queue_tasks
+    // 2. Read tenant-scoped tech queue tasks
     try {
-      const raw = localStorage.getItem('forgex_tech_queue_tasks');
+      const raw = localStorage.getItem(tenantQueueKey);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
@@ -240,57 +401,19 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
       }
     } catch {}
 
-    // If local storage is empty, supply clean enterprise defaults
+    // If local storage is empty:
+    // If not demo plant: start 100% clean with empty array
     if (list.length === 0) {
-      return [
-        {
-          id: 'ESC-2026-9041',
-          assetTag: 'COOLING TOWER',
-          title: 'Dynamic Hydraulic Cavitation & Impeller Vane Unbalance',
-          priority: 'Critical',
-          assignee: 'Alex Rivera',
-          rating: 4.9,
-          completedSteps: 3,
-          totalSteps: 5,
-          stepsProgress: '3/5 Steps',
-          percent: 60,
-          sla: '2h SLA Left',
-        },
-        {
-          id: 'ESC-2026-8820',
-          assetTag: 'PUMP-SLURRY-002',
-          title: 'Mechanical Seal Flush Plan 53A Pressure Collapse',
-          priority: 'High',
-          assignee: 'Marcus Vance',
-          rating: 4.8,
-          completedSteps: 2,
-          totalSteps: 5,
-          stepsProgress: '2/5 Steps',
-          percent: 40,
-          sla: '4h SLA Left',
-        },
-        {
-          id: 'ESC-2026-7730',
-          assetTag: 'GEARBOX-HELICAL-305',
-          title: 'Main Drive Helical Gearbox Pinion Tooth Surface Pitting',
-          priority: 'Critical',
-          assignee: 'Elena Rostova',
-          rating: 4.9,
-          completedSteps: 4,
-          totalSteps: 5,
-          stepsProgress: '4/5 Steps',
-          percent: 80,
-          sla: '1h SLA Left',
-        },
-      ];
+      if (!isDemo) return [];
+      return DEFAULT_DEMO_WORK_ORDERS;
     }
 
     return list.slice(0, 3).map((t) => {
-      const cleanMachine = formatCleanMachineName(t.assetTag || t.assetName || t.machine || 'COOLING TOWER');
+      const cleanMachine = formatCleanMachineName(t.assetTag || t.assetName || t.machine || 'PLANT-MACHINE');
       const isCritical = t.priority === 'CRITICAL' || t.priority === 'Critical' || t.severity === 'CRITICAL';
       const isHigh = t.priority === 'HIGH' || t.priority === 'High' || t.severity === 'HIGH';
       const priority = isCritical ? 'Critical' : isHigh ? 'High' : 'Medium';
-      const assignee = t.assignedTechnicianName || t.assignee || 'Alex Rivera';
+      const assignee = t.assignedTechnicianName || t.assignee || 'Assigned Specialist';
       const rating = t.assignedTechnicianRating || 4.9;
       const completed = t.completedSteps || (Array.isArray(t.steps) ? t.steps.filter((s: any) => s.status === 'COMPLETED' || s.status === 'PASS').length : 3);
       const totalSteps = t.stepsCount || (Array.isArray(t.steps) ? t.steps.length : 5);
@@ -299,7 +422,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
       return {
         id: t.id || t.ticketNumber || 'ESC-2026-9041',
         assetTag: cleanMachine,
-        title: formatCleanNoteTitle(t.title || t.description || 'Dynamic Cavitation & Mechanical Overhaul', cleanMachine),
+        title: formatCleanNoteTitle(t.title || t.description || 'Maintenance Procedure', cleanMachine),
         priority,
         assignee,
         rating,
@@ -310,51 +433,28 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
         sla: t.sla || '2h SLA Left',
       };
     });
-  }, []);
+  }, [activePlant, isDemo]);
 
-  // Plant event feed with color-coded left gradient accent bars
-  const plantEvents = useMemo(() => [
-    {
-      id: 'EVT-501',
-      code: 'ALM-VIB-501',
-      assetTag: 'COOLING TOWER',
-      severity: 'WARNING' as const,
-      message: 'Dynamic vibration surge (6.8 mm/s) detected during steady run — acoustic cavitation chatter present.',
-      time: '12m ago',
-      accentColor: 'border-l-amber-500',
-      badgeColor: 'bg-amber-100/90 text-amber-900 border-amber-300',
-    },
-    {
-      id: 'EVT-303',
-      code: 'ERR-702-HW',
-      assetTag: 'PUMP-SLURRY-002',
-      severity: 'CRITICAL' as const,
-      message: 'Boundary runout tolerance check exceeded spec (0.18 mm vs 0.05 mm target).',
-      time: '34m ago',
-      accentColor: 'border-l-rose-500',
-      badgeColor: 'bg-rose-100/90 text-rose-900 border-rose-300',
-    },
-    {
-      id: 'EVT-9024',
-      code: 'LOTO-9024',
-      assetTag: 'GEARBOX-HELICAL-305',
-      severity: 'INFO' as const,
-      message: 'Zero-energy lock verified under OSHA protocol #LOTO-9024 awaiting authorized overhaul.',
-      time: '1h ago',
-      accentColor: 'border-l-indigo-600',
-      badgeColor: 'bg-indigo-100/90 text-indigo-900 border-indigo-300',
-    },
-    {
-      id: 'EVT-1002',
-      code: 'MR-PASSED',
-      assetTag: 'KILN-001',
-      severity: 'SUCCESS' as const,
-      message: 'Dynamic shaft radial runout verified within 0.0012 in OEM limit — closed-loop audit passed.',
-      time: '2h ago',
-      accentColor: 'border-l-emerald-500',
-      badgeColor: 'bg-emerald-100/90 text-emerald-900 border-emerald-300',
-    },
-  ], []);
+  // Plant event feed strictly isolated by tenant
+  const plantEvents = useMemo(() => {
+    if (!isDemo) {
+      if (workOrders.length === 0) {
+        return [];
+      }
+      return workOrders.slice(0, 4).map((wo, idx) => ({
+        id: `EVT-${wo.id || idx}`,
+        code: `WO-${wo.id}`,
+        assetTag: wo.assetTag,
+        severity: (wo.priority === 'Critical' ? 'CRITICAL' : wo.priority === 'High' ? 'WARNING' : 'INFO') as 'CRITICAL' | 'WARNING' | 'INFO',
+        message: `${wo.title} (${wo.stepsProgress || 'Assigned'})`,
+        time: wo.sla || 'Recent',
+        accentColor: wo.priority === 'Critical' ? 'border-l-rose-500' : wo.priority === 'High' ? 'border-l-amber-500' : 'border-l-indigo-600',
+        badgeColor: wo.priority === 'Critical' ? 'bg-rose-100/90 text-rose-900 border-rose-300' : wo.priority === 'High' ? 'bg-amber-100/90 text-amber-900 border-amber-300' : 'bg-indigo-100/90 text-indigo-900 border-indigo-300',
+      }));
+    }
+
+    return DEFAULT_DEMO_EVENTS;
+  }, [workOrders, isDemo]);
 
   return (
     <div className="flex-1 min-h-0 min-w-0 w-full h-full p-4 sm:p-5 overflow-y-auto bg-[#F8FAFC] text-[#1A202C] font-sans antialiased space-y-4">
@@ -663,7 +763,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
               </h2>
             </div>
             <span className="text-[10px] font-mono text-indigo-700 font-bold bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
-              10 Units Monitored
+              {metrics.totalAssets} {metrics.totalAssets === 1 ? 'Unit' : 'Units'} Monitored
             </span>
           </div>
 
@@ -725,36 +825,50 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
 
               {/* Donut Mini Breakdown */}
               <div className="flex items-center gap-2 text-[10px] font-mono mt-1 text-slate-600">
-                <span className="text-emerald-700 font-bold">🟢 9 Nominal</span>
+                <span className="text-emerald-700 font-bold">🟢 {metrics.operationalCount} Nominal</span>
                 <span>•</span>
-                <span className="text-amber-700 font-bold">🟠 1 Attention</span>
+                <span className="text-amber-700 font-bold">🟠 {metrics.attentionCount} Attention</span>
+                {metrics.criticalCount > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-rose-700 font-bold">🔴 {metrics.criticalCount} Critical</span>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Right 7 Cols: Live Clickable Machine Telemetry Strips */}
-            <div className="sm:col-span-7 space-y-1.5">
-              {spotlightMachines.map((m) => (
-                <button
-                  key={m.tag}
-                  type="button"
-                  onClick={() => handleSpotlightClick(m.tag)}
-                  className={`w-full p-2 rounded-xl border text-left transition flex items-center justify-between gap-1.5 cursor-pointer shadow-2xs group ${m.gradientClass}`}
-                  title={`Investigate ${m.name} in Troubleshooting & RCA`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${m.dotClass}`} />
-                      <span className="font-bold font-mono text-[11px] truncate tracking-tight text-slate-900 group-hover:text-indigo-600">
-                        {m.name}
-                      </span>
+            <div className="sm:col-span-7 space-y-1.5 flex flex-col justify-center">
+              {spotlightMachines.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-500 bg-white/70 rounded-xl border border-dashed border-indigo-200/80 space-y-1.5">
+                  <Cpu className="w-5 h-5 mx-auto text-indigo-400" />
+                  <p className="font-semibold text-slate-700">No registered machines yet</p>
+                  <p className="text-[11px] text-slate-400">Register your first plant equipment in Machine Registry.</p>
+                </div>
+              ) : (
+                spotlightMachines.map((m) => (
+                  <button
+                    key={m.tag}
+                    type="button"
+                    onClick={() => handleSpotlightClick(m.tag)}
+                    className={`w-full p-2 rounded-xl border text-left transition flex items-center justify-between gap-1.5 cursor-pointer shadow-2xs group ${m.gradientClass}`}
+                    title={`Investigate ${m.name} in Troubleshooting & RCA`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full shrink-0 ${m.dotClass}`} />
+                        <span className="font-bold font-mono text-[11px] truncate tracking-tight text-slate-900 group-hover:text-indigo-600">
+                          {m.name}
+                        </span>
+                      </div>
+                      <p className="text-[10px] font-mono text-slate-500 truncate mt-0.5 pl-3.5">
+                        {m.telemetry}
+                      </p>
                     </div>
-                    <p className="text-[10px] font-mono text-slate-500 truncate mt-0.5 pl-3.5">
-                      {m.telemetry}
-                    </p>
-                  </div>
-                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition shrink-0" />
-                </button>
-              ))}
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition shrink-0" />
+                  </button>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -792,7 +906,18 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
 
           {/* Cards Body (positioned cleanly from top with zero artificial whitespace stretch) */}
           <div className="p-4 space-y-2.5 flex-1">
-            {workOrders.map((wo) => (
+            {workOrders.length === 0 ? (
+              <div className="py-12 px-4 text-center rounded-xl border border-dashed border-slate-200 bg-slate-50/50 flex flex-col items-center justify-center space-y-2">
+                <div className="w-10 h-10 rounded-full bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-500">
+                  <Wrench className="w-5 h-5 text-indigo-500" />
+                </div>
+                <p className="text-xs font-semibold text-slate-700 font-sans">No active work orders</p>
+                <p className="text-[11px] text-slate-400 font-sans max-w-xs">
+                  All assets are operating normally with zero open technician tickets or escalations.
+                </p>
+              </div>
+            ) : (
+              workOrders.map((wo) => (
               <div
                 key={wo.id}
                 onClick={() => onNavigate('maintenance')}
@@ -866,7 +991,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
                   </div>
                 </div>
               </div>
-            ))}
+            )))}
           </div>
         </div>
 
@@ -891,25 +1016,37 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ onNavigate }) => {
 
             {/* Event Items with 4px Left Gradient Bars */}
             <div className="p-4 space-y-2.5 font-sans">
-              {plantEvents.map((evt) => (
-                <div
-                  key={evt.id}
-                  className={`p-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-blue-50/40 to-white shadow-2xs transition space-y-1.5 border-l-4 ${evt.accentColor}`}
-                >
-                  <div className="flex items-center justify-between text-xs font-mono">
-                    <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] border ${evt.badgeColor}`}>
-                      {evt.code}
-                    </span>
-                    <span className="text-slate-400 text-[10px]">{evt.time}</span>
+              {plantEvents.length === 0 ? (
+                <div className="py-12 px-4 text-center rounded-xl border border-dashed border-slate-200 bg-slate-50/50 flex flex-col items-center justify-center space-y-2">
+                  <div className="w-10 h-10 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-500">
+                    <AlertTriangle className="w-5 h-5 text-amber-500" />
                   </div>
-                  <div className="text-xs font-bold font-mono text-slate-900">
-                    {evt.assetTag}
-                  </div>
-                  <p className="text-[11px] text-slate-600 leading-snug">
-                    {evt.message}
+                  <p className="text-xs font-semibold text-slate-700 font-sans">No plant events logged</p>
+                  <p className="text-[11px] text-slate-400 font-sans max-w-xs">
+                    Telemetry stream is clean. Zero abnormal vibration, thermal, or pressure trips detected.
                   </p>
                 </div>
-              ))}
+              ) : (
+                plantEvents.map((evt) => (
+                  <div
+                    key={evt.id}
+                    className={`p-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-blue-50/40 to-white shadow-2xs transition space-y-1.5 border-l-4 ${evt.accentColor}`}
+                  >
+                    <div className="flex items-center justify-between text-xs font-mono">
+                      <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] border ${evt.badgeColor}`}>
+                        {evt.code}
+                      </span>
+                      <span className="text-slate-400 text-[10px]">{evt.time}</span>
+                    </div>
+                    <div className="text-xs font-bold font-mono text-slate-900">
+                      {evt.assetTag}
+                    </div>
+                    <p className="text-[11px] text-slate-600 leading-snug">
+                      {evt.message}
+                    </p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 

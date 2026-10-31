@@ -368,7 +368,7 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
   initialAssetTag,
 }) => {
   const { toast } = useToast();
-  const { isOwnerOrAdmin, membership } = useAuth();
+  const { organization, isOwnerOrAdmin, membership } = useAuth();
   const { activePlant, plants: plantOptions } = usePlant();
   const isAdmin = Boolean(
     isOwnerOrAdmin ||
@@ -830,10 +830,25 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
     }
   };
 
-  // Initial load
+  // Initial load & reload when switching organization or facility
   useEffect(() => {
+    setSelectedDoc(null);
     fetchDocuments();
     fetchMachines();
+  }, [activePlant, organization?.id]);
+
+  useEffect(() => {
+    const handleTenantSwitch = () => {
+      setSelectedDoc(null);
+      fetchDocuments();
+      fetchMachines();
+    };
+    window.addEventListener('forgex:tenant_changed', handleTenantSwitch);
+    window.addEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    return () => {
+      window.removeEventListener('forgex:tenant_changed', handleTenantSwitch);
+      window.removeEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    };
   }, []);
 
   // Periodic background refresh while any documents are in queued or processing state
@@ -1570,18 +1585,18 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
       {/* Main Split Layout: Document List + Detail Inspector */}
       <div className="flex-1 flex overflow-hidden">
         {/* Document Table */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-white">
-          <div className="flex-1 overflow-y-auto">
-            <table className="w-full text-left border-collapse text-xs font-sans">
+        <div className="flex-1 flex flex-col overflow-hidden bg-white min-w-0">
+          <div className="flex-1 overflow-x-auto overflow-y-auto">
+            <table className="w-full min-w-[850px] text-left border-collapse text-xs font-sans">
               <thead>
                 <tr className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white sticky top-0 z-10 text-[11px] uppercase tracking-wider border-b border-indigo-950 shadow-xs">
-                  <th className="py-2.5 px-4 font-semibold text-slate-200">DOCUMENT #</th>
-                  <th className="py-2.5 px-4 font-semibold text-slate-200">TITLE</th>
-                  <th className="py-2.5 px-4 font-semibold text-slate-200">CLASS</th>
-                  <th className="py-2.5 px-4 font-semibold text-slate-200">REV</th>
-                  <th className="py-2.5 px-4 font-semibold text-slate-200">ASSET TAG</th>
-                  <th className="py-2.5 px-4 font-semibold text-slate-200">INGESTION & SYNC STATUS</th>
-                  <th className="py-2.5 px-4 font-semibold text-right text-slate-200">ACTIONS</th>
+                  <th className="py-2.5 pl-5 pr-4 font-semibold text-slate-200 min-w-[150px] whitespace-nowrap">DOCUMENT #</th>
+                  <th className="py-2.5 px-4 font-semibold text-slate-200 min-w-[220px]">TITLE</th>
+                  <th className="py-2.5 px-4 font-semibold text-slate-200 min-w-[100px]">CLASS</th>
+                  <th className="py-2.5 px-4 font-semibold text-slate-200 min-w-[70px]">REV</th>
+                  <th className="py-2.5 px-4 font-semibold text-slate-200 min-w-[120px]">ASSET TAG</th>
+                  <th className="py-2.5 px-4 font-semibold text-slate-200 min-w-[180px]">INGESTION & SYNC STATUS</th>
+                  <th className="py-2.5 pr-5 pl-4 font-semibold text-right text-slate-200 min-w-[110px]">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E2E8F0]">
@@ -1644,17 +1659,19 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
                             : 'hover:bg-slate-50/80 text-slate-800'
                         }`}
                       >
-                        <td className="py-3.5 px-4 font-mono font-semibold text-[#2563EB] flex items-center gap-2">
-                          {is3D ? (
-                            <Boxes className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                          ) : isPID ? (
-                            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          ) : (
-                            <FileText className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
-                          )}
-                          <span className="truncate max-w-[150px]">{doc.documentNumber}</span>
+                        <td className="py-3.5 pl-5 pr-4 font-mono font-semibold text-[#2563EB] whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            {is3D ? (
+                              <Boxes className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                            ) : isPID ? (
+                              <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            ) : (
+                              <FileText className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
+                            )}
+                            <span className="truncate max-w-[150px]">{doc.documentNumber}</span>
+                          </div>
                         </td>
-                        <td className="py-3.5 px-4 font-medium max-w-sm text-slate-900 leading-snug">
+                        <td className="py-3.5 px-4 font-medium min-w-[220px] max-w-sm text-slate-900 leading-snug">
                           <div className="line-clamp-2 break-words text-xs font-semibold text-slate-900 hover:text-indigo-600 transition" title={displayInfo.title}>
                             {displayInfo.title}
                           </div>
@@ -1715,20 +1732,8 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
                             </div>
                           )}
                         </td>
-                        <td className="py-3.5 px-4 text-right">
+                        <td className="py-3.5 pr-5 pl-4 text-right">
                           <div className="flex items-center justify-end gap-1.5 flex-nowrap" onClick={(e) => e.stopPropagation()}>
-                            {/* ⚡ Inspect X-Ray Deep Intelligence Inspector - Only render on selected row */}
-                            {isSelected && (
-                              <button
-                                onClick={() => setXrayDoc(doc)}
-                                title="AI X-Ray: Inspect Operating Specs, LOTO Points & Spares"
-                                className="px-2.5 py-1 rounded-md bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-[11px] font-semibold flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer shrink-0"
-                              >
-                                <span>⚡</span>
-                                <span>Inspect X-Ray</span>
-                              </button>
-                            )}
-
                             {/* 3D CAD Launcher Button */}
                             {is3D && (
                               <button
@@ -1842,14 +1847,6 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
                   <p className="text-xs text-[#64748B] mt-0.5 leading-relaxed">{selectedDoc.title}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setXrayDoc(selectedDoc)}
-                    className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0"
-                    title="Open AI X-Ray Deep Intelligence & Audio Brief"
-                  >
-                    <span>🧠</span>
-                    <span>AI X-Ray</span>
-                  </button>
                   <StatusBadge
                     label={selectedDoc.status}
                     tone={selectedDoc.status === 'FAILED' ? 'critical' : 'healthy'}
@@ -1929,7 +1926,7 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
                       className="px-3.5 py-2 rounded-lg bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0"
                       title="Inspect Operating Specs, LOTO Points & Spares"
                     >
-                      <span>🧠</span>
+                      <span>⚡</span>
                       <span>AI X-Ray &amp; Audio Brief</span>
                     </button>
                   </div>
@@ -1946,14 +1943,6 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={() => setXrayDoc(selectedDoc)}
-                          className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1"
-                          title="Open AI X-Ray Inspector"
-                        >
-                          <span>🧠</span>
-                          <span>X-Ray</span>
-                        </button>
                         <button
                           onClick={() => handleOpen3dViewer(selectedDoc)}
                           className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-sm transition cursor-pointer"

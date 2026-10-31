@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, GraduationCap, RefreshCw, Lightbulb, X } from 'lucide-react';
 import { Modal } from '../ui/Modal';
+import { usePlant } from '../../lib/PlantContext';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
+import { getTenantData, setTenantData } from '../../utils/tenantStorage';
 import {
   formatCleanMachineName,
   formatCleanNoteTitle,
@@ -52,6 +54,7 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
   onPublishedToExpert,
 }) => {
   const { toast } = useToast();
+  const { activePlant } = usePlant();
   const [shareToExpert, setShareToExpert] = useState(true);
   const [machineAssetTag, setMachineAssetTag] = useState('');
   const [issueTitle, setIssueTitle] = useState('');
@@ -129,17 +132,15 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
         status: 'APPROVED',
       };
 
-      // 1. Immediately cache in localStorage for zero-lag instant appearance in Expert Knowledge
+      // 1. Immediately cache in tenant storage for zero-lag instant appearance in Expert Knowledge
       try {
-        const stored = localStorage.getItem('forgex_expert_notes');
-        const notes = stored ? JSON.parse(stored) : [];
+        const notes = getTenantData<any[]>('forgex_expert_notes', activePlant, []);
         const filtered = notes.filter((n: any) => n.id !== newNote.id);
         filtered.unshift(newNote);
-        localStorage.setItem('forgex_expert_notes', JSON.stringify(filtered));
-        localStorage.setItem('forgex_latest_published_note', JSON.stringify(newNote));
+        setTenantData('forgex_expert_notes', activePlant, filtered);
         window.dispatchEvent(new CustomEvent('forgex:expert-note-created', { detail: newNote }));
       } catch (e) {
-        console.warn('Could not cache note in localStorage:', e);
+        console.warn('Could not cache note in tenant storage:', e);
       }
 
       // 2. Persist to API

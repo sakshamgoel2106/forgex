@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
 import { useToast } from '../../lib/ToastContext';
+import {
+  getTenantKey,
+  getTenantData,
+  setTenantData,
+  isDefaultDemoPlant,
+} from '../../utils/tenantStorage';
 import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill } from '../modals/ExpertKnowledgeCaptureModal';
 import {
   Wrench,
@@ -45,6 +52,7 @@ import {
 import {
   formatCleanMachineName,
   formatCleanNoteTitle,
+  translateStepToHindi,
 } from '../../lib/hindiTranslator';
 
 export interface TechStep {
@@ -233,15 +241,32 @@ const isUUID = (str?: string): boolean => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 };
 
+const isTicketId = (str?: string): boolean => {
+  if (!str) return false;
+  return /^(TICK|TICKET|ESC|CASE|WO|INC|AUTO-ESC)[-_0-9]/i.test(str.trim());
+};
+
 const formatCleanAssetTag = (tag?: string, title?: string, name?: string): string => {
-  if (!tag || isUUID(tag)) {
-    const combined = `${title || ''} ${name || ''}`;
-    const codeMatch = combined.match(/\b([A-Z]{2,8}[-_]?[0-9]{2,4}[A-Z]?)\b/);
-    if (codeMatch) return codeMatch[1].toUpperCase();
-    if (name && name !== 'Industrial Machinery' && name.length <= 16 && !isUUID(name)) {
+  if (!tag || isUUID(tag) || isTicketId(tag)) {
+    const combined = `${title || ''} ${name || ''} ${tag || ''}`;
+    // Look for real machine tags like PUMP-204-B, COOLING-TOWER, GEARBOX-305, KILN-001, etc.
+    const codeMatch = combined.match(/\b([A-Z]{2,12}[-_][0-9]{2,4}[-_]?[A-Z0-9]?)\b/i);
+    if (codeMatch && !isTicketId(codeMatch[1])) {
+      return codeMatch[1].toUpperCase();
+    }
+    // Check known equipment keywords in title / name
+    if (/pump/i.test(combined)) return 'PUMP-204-B';
+    if (/cooling\s*tower/i.test(combined)) return 'COOLING-TOWER';
+    if (/kiln/i.test(combined)) return 'KILN-001';
+    if (/press/i.test(combined)) return 'PRESS-004';
+    if (/conveyor/i.test(combined)) return 'CONVEYOR-01';
+    if (/compressor/i.test(combined)) return 'COMPRESSOR-02';
+    if (/boiler/i.test(combined)) return 'BOILER-01';
+
+    if (name && name !== 'Industrial Machinery' && name.length <= 24 && !isUUID(name) && !isTicketId(name)) {
       return formatCleanMachineName(name.toUpperCase().replace(/\s+/g, '-'));
     }
-    return 'GEARBOX-305';
+    return 'PUMP-204-B';
   }
   return formatCleanMachineName(tag);
 };
@@ -249,12 +274,12 @@ const formatCleanAssetTag = (tag?: string, title?: string, name?: string): strin
 const getMachineDisplayName = (task: { assetTag: string; assetName?: string; title?: string }): string => {
   const cleanTag = formatCleanAssetTag(task.assetTag, task.title, task.assetName);
   let rawName =
-    task.assetName && task.assetName !== 'Industrial Machinery' && !isUUID(task.assetName)
+    task.assetName && task.assetName !== 'Industrial Machinery' && !isUUID(task.assetName) && !isTicketId(task.assetName)
       ? task.assetName
-      : task.title?.split(' - ')[0] || 'Helical Industrial Gearbox';
+      : task.title?.split(' - ')[0] || 'Slurry Centrifugal Pump';
 
-  if (isUUID(rawName)) {
-    rawName = 'Helical Industrial Gearbox';
+  if (isUUID(rawName) || isTicketId(rawName)) {
+    rawName = 'Slurry Centrifugal Pump';
   }
 
   rawName = formatCleanMachineName(rawName);
@@ -271,6 +296,7 @@ export const TechnicianWorkspaceView: React.FC<{
   initialTicketId?: string;
 }> = ({ onLaunchSop: _onLaunchSop, onNavigateToCopilot, initialTicketId }) => {
   const { user, token, organization } = useAuth();
+  const { activePlant } = usePlant();
   const { toast } = useToast();
   const [tasks, setTasks] = useState<TechTask[]>([]);
   const [selectedTask, setSelectedTask] = useState<TechTask | null>(null);
@@ -290,7 +316,7 @@ export const TechnicianWorkspaceView: React.FC<{
   // Persistent Solved Count per Technician (Kundli record)
   const [solvedCounts, setSolvedCounts] = useState<Record<string, number>>(() => {
     try {
-      const raw = localStorage.getItem('forgex_tech_solved_counts');
+      const raw = localStorage.getItem(getTenantKey('forgex_tech_solved_counts', activePlant));
       if (raw) return JSON.parse(raw);
     } catch {}
     return {
@@ -308,7 +334,7 @@ export const TechnicianWorkspaceView: React.FC<{
         [techName]: (prev[techName] || 25) + 1,
       };
       try {
-        localStorage.setItem('forgex_tech_solved_counts', JSON.stringify(updated));
+        localStorage.setItem(getTenantKey('forgex_tech_solved_counts', activePlant), JSON.stringify(updated));
       } catch {}
       return updated;
     });
@@ -537,9 +563,12 @@ export const TechnicianWorkspaceView: React.FC<{
   // Helper to load persisted execution state per task
   const loadStoredExecution = (taskId: string, rawCaseId?: string) => {
     try {
-      let raw = localStorage.getItem(`forgex_tech_exec_${taskId}`);
+      let raw = localStorage.getItem(getTenantKey(`forgex_tech_exec_${taskId}`, activePlant));
       if (!raw && rawCaseId) {
-        raw = localStorage.getItem(`forgex_tech_exec_${rawCaseId}`);
+        raw = localStorage.getItem(getTenantKey(`forgex_tech_exec_${rawCaseId}`, activePlant));
+      }
+      if (!raw && isDefaultDemoPlant(activePlant)) {
+        raw = localStorage.getItem(`forgex_tech_exec_${taskId}`) || (rawCaseId ? localStorage.getItem(`forgex_tech_exec_${rawCaseId}`) : null);
       }
       if (raw) {
         const parsed = JSON.parse(raw);
@@ -559,9 +588,9 @@ export const TechnicianWorkspaceView: React.FC<{
         isStarted,
         updatedAt: new Date().toISOString(),
       });
-      localStorage.setItem(`forgex_tech_exec_${task.id}`, data);
+      localStorage.setItem(getTenantKey(`forgex_tech_exec_${task.id}`, activePlant), data);
       if (task.rawCaseId) {
-        localStorage.setItem(`forgex_tech_exec_${task.rawCaseId}`, data);
+        localStorage.setItem(getTenantKey(`forgex_tech_exec_${task.rawCaseId}`, activePlant), data);
       }
     } catch {}
   };
@@ -987,10 +1016,8 @@ export const TechnicianWorkspaceView: React.FC<{
       // Merge locally escalated tickets from shared store (bulletproof instant cross-module sync)
       const mappedFromShared: TechTask[] = [];
       try {
-        const sharedRaw = localStorage.getItem('forgex_shared_raised_tickets');
-        if (sharedRaw) {
-          const sharedTickets = JSON.parse(sharedRaw);
-          if (Array.isArray(sharedTickets)) {
+        const sharedTickets = getTenantData<any[]>('forgex_shared_raised_tickets', activePlant, []);
+        if (Array.isArray(sharedTickets)) {
             sharedTickets.forEach((st: any, index: number) => {
               const taskId = st.caseNumber || st.id || `CASE-SH-${index + 1}`;
               if (!existingIds.has(taskId) && !existingIds.has(st.id)) {
@@ -1107,7 +1134,6 @@ export const TechnicianWorkspaceView: React.FC<{
               }
             });
           }
-        }
       } catch (errShared) {
         console.warn('Error reading forgex_shared_raised_tickets in tech desk:', errShared);
       }
@@ -1148,10 +1174,29 @@ export const TechnicianWorkspaceView: React.FC<{
       setLoading(false);
       setSyncing(false);
     }
-  }, [token, organization?.id, initialTicketId]);
+  }, [token, organization?.id, activePlant, initialTicketId]);
 
   useEffect(() => {
     fetchQueue(false);
+  }, [fetchQueue]);
+
+  // Reset selected task and reload queue when switching plants or companies
+  useEffect(() => {
+    setSelectedTask(null);
+    fetchQueue(false);
+  }, [activePlant, organization?.id]);
+
+  useEffect(() => {
+    const handleTenantSwitch = () => {
+      setSelectedTask(null);
+      fetchQueue(false);
+    };
+    window.addEventListener('forgex:tenant_changed', handleTenantSwitch);
+    window.addEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    return () => {
+      window.removeEventListener('forgex:tenant_changed', handleTenantSwitch);
+      window.removeEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    };
   }, [fetchQueue]);
 
   // Real-time synchronization when a ticket/case is created from RCA or RaisedTickets
@@ -1750,8 +1795,8 @@ export const TechnicianWorkspaceView: React.FC<{
       const newHistoryRecord = {
         id: `rec-mr-${Date.now().toString().slice(-6)}`,
         recordNumber: `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-        organizationId: 'org-demo',
-        plantId: 'plant-01',
+        organizationId: organization?.id || 'org-demo',
+        plantId: activePlant || 'PLANT-TX-04',
         machineId: task.assetTag,
         machineAssetTag: task.assetTag,
         ticketId: task.id,
@@ -1777,8 +1822,7 @@ export const TechnicianWorkspaceView: React.FC<{
       };
 
       try {
-        const rawHistory = localStorage.getItem('forgex_maintenance_history');
-        const historyList = rawHistory ? JSON.parse(rawHistory) : [];
+        const historyList = getTenantData<any[]>('forgex_maintenance_history', activePlant, []);
         const existingIdx = historyList.findIndex(
           (h: any) => h.ticketId === task.id || h.ticketNumber === task.id
         );
@@ -1787,7 +1831,7 @@ export const TechnicianWorkspaceView: React.FC<{
         } else {
           historyList.unshift(newHistoryRecord);
         }
-        localStorage.setItem('forgex_maintenance_history', JSON.stringify(historyList));
+        setTenantData('forgex_maintenance_history', activePlant, historyList);
       } catch {}
 
       await fetch('/api/v1/maintenance-records', {
@@ -2044,10 +2088,9 @@ export const TechnicianWorkspaceView: React.FC<{
       };
 
       try {
-        const raw = localStorage.getItem('forgex_oem_escalations');
-        const list = raw ? JSON.parse(raw) : [];
+        const list = getTenantData<any[]>('forgex_oem_escalations', activePlant, []);
         list.unshift(escalationRecord);
-        localStorage.setItem('forgex_oem_escalations', JSON.stringify(list));
+        setTenantData('forgex_oem_escalations', activePlant, list);
       } catch {}
 
       window.dispatchEvent(
@@ -2084,19 +2127,70 @@ export const TechnicianWorkspaceView: React.FC<{
     }
   };
 
-  // Speech Synthesis Speaker Helper
-  const speakText = useCallback((text: string) => {
+  // AI Voice Language ('en' | 'hi') & Speech Synthesis Voices
+  const [voiceLanguage, setVoiceLanguage] = useState<'en' | 'hi'>('en');
+  const voiceLanguageRef = useRef<'en' | 'hi'>('en');
+  voiceLanguageRef.current = voiceLanguage;
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [speakingStepId, setSpeakingStepId] = useState<string | null>(null);
+  const isSpeakingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const updateVoices = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length > 0) setAvailableVoices(v);
+    };
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+  }, []);
+
+  // Speech Synthesis Speaker Helper with bilingual support
+  const speakText = useCallback((text: string, langOverride?: 'en' | 'hi') => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
+      isSpeakingRef.current = true;
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
+      const targetLang = langOverride || voiceLanguageRef.current;
+
+      if (targetLang === 'hi') {
+        utterance.lang = 'hi-IN';
+        const hiVoice = availableVoices.find(
+          (v) =>
+            v.lang.toLowerCase().includes('hi') ||
+            v.name.toLowerCase().includes('hindi') ||
+            v.lang.toLowerCase().includes('hi-in')
+        );
+        if (hiVoice) utterance.voice = hiVoice;
+        utterance.rate = 0.95;
+      } else {
+        utterance.lang = 'en-US';
+        const enVoice = availableVoices.find(
+          (v) =>
+            v.lang.includes('en-US') ||
+            v.lang.includes('en-IN') ||
+            v.name.toLowerCase().includes('english')
+        );
+        if (enVoice) utterance.voice = enVoice;
+        utterance.rate = 1.0;
+      }
+
+      utterance.onend = () => {
+        isSpeakingRef.current = false;
+        setSpeakingStepId(null);
+      };
+      utterance.onerror = () => {
+        isSpeakingRef.current = false;
+        setSpeakingStepId(null);
+      };
+
       window.speechSynthesis.speak(utterance);
     } catch (e) {
+      isSpeakingRef.current = false;
       console.warn('Voice speech error:', e);
     }
-  }, []);
+  }, [availableVoices]);
 
   const isVoiceActiveRef = useRef(isVoiceActive);
   isVoiceActiveRef.current = isVoiceActive;
@@ -2106,11 +2200,114 @@ export const TechnicianWorkspaceView: React.FC<{
     if (!selectedTask) return;
     const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS') || selectedTask.steps[0];
     if (activeStep) {
-      const textToSpeak = `Step ${activeStep.stepNumber}: ${activeStep.title}. Target spec: ${activeStep.targetSpec || (activeStep as any).tolerance || 'Verify visual alignment and compliance'}.`;
-      speakText(textToSpeak);
+      const targetSpec = activeStep.targetSpec || getStepTargetSpec(activeStep.stepNumber);
+      if (voiceLanguageRef.current === 'hi') {
+        const hi = translateStepToHindi({
+          stepNumber: activeStep.stepNumber,
+          name: activeStep.title,
+          instruction: activeStep.instruction,
+          expectedReading: targetSpec,
+        });
+        speakText(`स्टेप ${activeStep.stepNumber}: ${hi.instruction}. अपेक्षित स्थिति: ${hi.expected}.`, 'hi');
+      } else {
+        const textToSpeak = `Step ${activeStep.stepNumber}: ${activeStep.title}. Target spec: ${targetSpec}.`;
+        speakText(textToSpeak, 'en');
+      }
       toast.info(`Reading Step ${activeStep.stepNumber}`, activeStep.title);
     }
   }, [selectedTask, speakText, toast]);
+
+  // Read Specific Step Toggle (Audio Assistant per card)
+  const handleToggleReadSpecificStep = useCallback((step: TechStep) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+
+    if (speakingStepId === step.id) {
+      window.speechSynthesis.cancel();
+      isSpeakingRef.current = false;
+      setSpeakingStepId(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    setSpeakingStepId(step.id);
+    isSpeakingRef.current = true;
+
+    const targetSpec = step.targetSpec || getStepTargetSpec(step.stepNumber);
+    let textToSpeak = '';
+    const lang = voiceLanguageRef.current;
+    if (lang === 'hi') {
+      const hi = translateStepToHindi({
+        stepNumber: step.stepNumber,
+        name: step.title,
+        instruction: step.instruction,
+        expectedReading: targetSpec,
+      });
+      textToSpeak = `स्टेप ${step.stepNumber}: ${hi.instruction}. अपेक्षित स्थिति: ${hi.expected}.`;
+    } else {
+      textToSpeak = `Step ${step.stepNumber}: ${step.title}. Instruction: ${step.instruction}. Target Specification: ${targetSpec}.`;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    if (lang === 'hi') {
+      utterance.lang = 'hi-IN';
+      const hiVoice = availableVoices.find(
+        (v) =>
+          v.lang.toLowerCase().includes('hi') ||
+          v.name.toLowerCase().includes('hindi') ||
+          v.lang.toLowerCase().includes('hi-in')
+      );
+      if (hiVoice) utterance.voice = hiVoice;
+      utterance.rate = 0.95;
+    } else {
+      utterance.lang = 'en-US';
+      const enVoice = availableVoices.find(
+        (v) =>
+          v.lang.includes('en-US') ||
+          v.lang.includes('en-IN') ||
+          v.name.toLowerCase().includes('english')
+      );
+      if (enVoice) utterance.voice = enVoice;
+      utterance.rate = 1.0;
+    }
+
+    utterance.onend = () => {
+      isSpeakingRef.current = false;
+      setSpeakingStepId((prev) => (prev === step.id ? null : prev));
+    };
+    utterance.onerror = () => {
+      isSpeakingRef.current = false;
+      setSpeakingStepId((prev) => (prev === step.id ? null : prev));
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }, [availableVoices, speakingStepId]);
+
+  // Voice Handlers Ref for fresh callbacks in speech recognition
+  const voiceHandlersRef = useRef({
+    handleCompleteAndNext: (_taskId: string, _stepId: string) => {},
+    handleFailStep: (_task: TechTask, _step: TechStep) => {},
+    handleReadActiveStep: () => {},
+    handleMarkTaskSolved: (_task: TechTask, _step: TechStep) => {},
+    setIsBuddyModalOpen: (_open: boolean) => {},
+    handleOpenOemModal: (_task: TechTask) => {},
+    setIsVoiceActive: (_val: boolean) => {},
+    setVoiceLanguage: (_lang: 'en' | 'hi') => {},
+    selectedTask: null as TechTask | null,
+  });
+
+  useEffect(() => {
+    voiceHandlersRef.current = {
+      handleCompleteAndNext,
+      handleFailStep,
+      handleReadActiveStep,
+      handleMarkTaskSolved,
+      setIsBuddyModalOpen,
+      handleOpenOemModal,
+      setIsVoiceActive,
+      setVoiceLanguage,
+      selectedTask,
+    };
+  });
 
   // Web Speech API / Hands-free continuous recognition with "Activate Voice" Wake-Word
   useEffect(() => {
@@ -2123,9 +2320,13 @@ export const TechnicianWorkspaceView: React.FC<{
         recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.lang = voiceLanguageRef.current === 'hi' ? 'hi-IN' : 'en-US';
 
         recognition.onresult = (event: any) => {
+          if (typeof window !== 'undefined' && isSpeakingRef.current) {
+            return;
+          }
+
           let transcript = '';
           for (let i = event.resultIndex; i < event.results.length; i++) {
             transcript += event.results[i][0].transcript;
@@ -2134,115 +2335,128 @@ export const TechnicianWorkspaceView: React.FC<{
           if (!transcript) return;
           setLastVoiceCommand(transcript);
 
-          // 1. Wake-word activation: "activate voice", "start voice", "hey copilot"
+          // 1. Wake-word activation
           if (
-            transcript.includes('activate voice') ||
-            transcript.includes('start voice') ||
-            transcript.includes('hey copilot') ||
-            transcript.includes('enable voice')
+            /\b(activate voice|start voice|hey copilot|enable voice|chalu karo)\b/i.test(transcript)
           ) {
-            setIsVoiceActive(true);
+            voiceHandlersRef.current.setIsVoiceActive(true);
             isVoiceActiveRef.current = true;
-            speakText('Voice assistant activated.');
-            toast.success('Voice Assistant Activated', 'Listening: Confirm, Next, Fail, Read Step, Solved, SOS, Stop Voice');
+            speakText(voiceLanguageRef.current === 'hi' ? 'वॉइस असिस्टेंट चालू हो गया है।' : 'Voice assistant activated.');
+            toast.success('Voice Control: ON', 'Listening: Pass, Fail, Next, Read Step, Hindi, Escalate, Stop Voice');
             return;
           }
 
-          // 2. Standby / Cancel: "stop voice", "disable voice", "cancel"
+          // 2. Language Switch commands
+          if (/\b(hindi|hindi mein|hindi me|hindi voice)\b/i.test(transcript)) {
+            voiceHandlersRef.current.setVoiceLanguage('hi');
+            voiceLanguageRef.current = 'hi';
+            if (recognition) recognition.lang = 'hi-IN';
+            speakText('हिंदी वॉइस एक्टिवेट हो गई है।', 'hi');
+            toast.info('Language Changed', 'AI Voice set to Hindi (हिंदी)');
+            setTimeout(() => {
+              voiceHandlersRef.current.handleReadActiveStep();
+            }, 700);
+            return;
+          }
+
+          if (/\b(english|english voice)\b/i.test(transcript)) {
+            voiceHandlersRef.current.setVoiceLanguage('en');
+            voiceLanguageRef.current = 'en';
+            if (recognition) recognition.lang = 'en-US';
+            speakText('English technical voice activated.', 'en');
+            toast.info('Language Changed', 'AI Voice set to English');
+            return;
+          }
+
+          // 3. Standby / Cancel / Stop
           if (
-            transcript.includes('stop voice') ||
-            transcript.includes('disable voice') ||
-            transcript.includes('turn off voice') ||
-            transcript.includes('deactivate voice') ||
-            transcript.includes('cancel voice')
+            /\b(stop voice|disable voice|turn off voice|deactivate voice|cancel voice|band karo|mute|stop)\b/i.test(transcript)
           ) {
-            setIsVoiceActive(false);
+            voiceHandlersRef.current.setIsVoiceActive(false);
             isVoiceActiveRef.current = false;
+            if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+              window.speechSynthesis.cancel();
+              isSpeakingRef.current = false;
+              setSpeakingStepId(null);
+            }
             speakText('Voice assistant disabled.');
-            toast.info('Voice Standby', 'Say "Activate Voice" or click to resume.');
+            toast.info('Voice Control: OFF', 'Say "Activate Voice" or click to resume.');
             return;
           }
 
-          // 3. Execution Commands when voice mode is active
+          // 4. Execution Commands when voice mode is active
           if (isVoiceActiveRef.current) {
-            // Fail command
-            if (
-              transcript.includes('fail') ||
-              transcript.includes('failed') ||
-              transcript.includes('fail step') ||
-              transcript.includes('block') ||
-              transcript.includes('abort')
-            ) {
-              if (selectedTask) {
-                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+            const task = voiceHandlersRef.current.selectedTask;
+
+            // Fail / Block command
+            if (/\b(fail|failed|fail step|block|issue|abort|galat|kharab)\b/i.test(transcript)) {
+              if (task) {
+                const activeStep = task.steps.find((s) => s.status === 'IN_PROGRESS');
                 if (activeStep) {
-                  handleFailStep(selectedTask, activeStep);
-                  speakText('Step failed. Repair blocked.');
+                  voiceHandlersRef.current.handleFailStep(task, activeStep);
+                  speakText(voiceLanguageRef.current === 'hi' ? 'स्टेप फेल मार्क किया गया।' : 'Step failed. Repair blocked.');
                 }
               }
+              return;
             }
+
             // Confirm / Pass / Done command
-            else if (
-              transcript.includes('confirm') ||
-              transcript.includes('confirm step') ||
-              transcript.includes('pass') ||
-              transcript.includes('pass step') ||
-              transcript.includes('done') ||
-              transcript.includes('complete')
-            ) {
-              if (selectedTask) {
-                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+            if (/\b(confirm|confirm step|pass|pass step|done|complete|verified|ok|yes|sahi)\b/i.test(transcript)) {
+              if (task) {
+                const activeStep = task.steps.find((s) => s.status === 'IN_PROGRESS');
                 if (activeStep) {
-                  handleCompleteAndNext(selectedTask.id, activeStep.id);
-                  speakText(`Step ${activeStep.stepNumber} confirmed.`);
+                  voiceHandlersRef.current.handleCompleteAndNext(task.id, activeStep.id);
+                  speakText(voiceLanguageRef.current === 'hi' ? `स्टेप ${activeStep.stepNumber} सत्यापित किया गया।` : `Step ${activeStep.stepNumber} confirmed.`);
                   toast.success('Voice Command Executed', `Step ${activeStep.stepNumber} confirmed by voice.`);
                 }
               }
+              return;
             }
+
             // Next command
-            else if (transcript.includes('next') || transcript.includes('next step') || transcript.includes('forward')) {
-              if (selectedTask) {
-                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
+            if (/\b(next|next step|forward|agla|skip)\b/i.test(transcript)) {
+              if (task) {
+                const activeStep = task.steps.find((s) => s.status === 'IN_PROGRESS');
                 if (activeStep) {
-                  handleCompleteAndNext(selectedTask.id, activeStep.id);
-                  speakText('Advancing to next step.');
+                  voiceHandlersRef.current.handleCompleteAndNext(task.id, activeStep.id);
+                  speakText(voiceLanguageRef.current === 'hi' ? 'अगले स्टेप पर आगे बढ़ रहे हैं।' : 'Advancing to next step.');
                 }
               }
+              return;
             }
+
             // Read / Read Step command
-            else if (
-              transcript.includes('read step') ||
-              transcript.includes('read') ||
-              transcript.includes('repeat') ||
-              transcript.includes('speak step')
-            ) {
-              handleReadActiveStep();
+            if (/\b(read|read step|speak|listen|repeat|speak step|padho|batao|sunao)\b/i.test(transcript)) {
+              voiceHandlersRef.current.handleReadActiveStep();
+              return;
             }
+
             // Solved / Finish command
-            else if (
-              transcript.includes('solve') ||
-              transcript.includes('solved') ||
-              transcript.includes('resolved') ||
-              transcript.includes('finish')
-            ) {
-              if (selectedTask) {
-                const activeStep = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS') || selectedTask.steps[selectedTask.steps.length - 1];
+            if (/\b(solve|solved|resolved|finish|theek ho gaya)\b/i.test(transcript)) {
+              if (task) {
+                const activeStep = task.steps.find((s) => s.status === 'IN_PROGRESS') || task.steps[task.steps.length - 1];
                 if (activeStep) {
-                  handleMarkTaskSolved(selectedTask, activeStep);
-                  speakText('Task marked resolved.');
+                  voiceHandlersRef.current.handleMarkTaskSolved(task, activeStep);
+                  speakText(voiceLanguageRef.current === 'hi' ? 'टास्क सफलतापूर्वक हल हो गया।' : 'Task marked resolved.');
                 }
               }
+              return;
             }
+
+            // Escalate to OEM command
+            if (/\b(escalate|dispatch|oem|vendor|bhejo)\b/i.test(transcript)) {
+              if (task) {
+                voiceHandlersRef.current.handleOpenOemModal(task);
+                speakText(voiceLanguageRef.current === 'hi' ? 'ओईएम एस्केलेशन विंडो खोली जा रही है।' : 'Opening OEM escalation.');
+              }
+              return;
+            }
+
             // SOS / Copilot / Spec Help command
-            else if (
-              transcript.includes('sos') ||
-              transcript.includes('help') ||
-              transcript.includes('buddy') ||
-              transcript.includes('copilot') ||
-              transcript.includes('spec')
-            ) {
-              setIsBuddyModalOpen(true);
+            if (/\b(sos|help|buddy|copilot|spec|madad)\b/i.test(transcript)) {
+              voiceHandlersRef.current.setIsBuddyModalOpen(true);
               speakText('Opening Copilot SOS assistance.');
+              return;
             }
           }
         };
@@ -2272,7 +2486,7 @@ export const TechnicianWorkspaceView: React.FC<{
         } catch {}
       }
     };
-  }, [handleCompleteAndNext, handleFailStep, handleMarkTaskSolved, handleReadActiveStep, isVoiceActive, selectedTask, speakText, toast]);
+  }, [speakText, toast]);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F8FAFC] text-[#0F172A] font-sans antialiased">
@@ -2924,9 +3138,32 @@ export const TechnicianWorkspaceView: React.FC<{
                               )}
                             </div>
 
-                            {/* Right: Clickable Voice Pill + Progress + Sync */}
+                            {/* Right: Bilingual Voice Pill + Progress + Sync */}
                             <div className="flex items-center gap-2.5 shrink-0 ml-auto">
-                              {/* 🎙️ Clickable / Voice Status Pill (No double mic icon, Reliable Activate Voice) */}
+                              {/* 🇺🇸 EN / 🇮🇳 हिंदी Voice Language Toggle */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setVoiceLanguage((prev) => {
+                                    const next = prev === 'en' ? 'hi' : 'en';
+                                    voiceLanguageRef.current = next;
+                                    if (next === 'hi') {
+                                      speakText('हिंदी वॉइस एक्टिवेट हो गई है।', 'hi');
+                                      toast.info('AI Voice Language', 'हिंदी (Hindi) language activated');
+                                    } else {
+                                      speakText('English technical voice activated.', 'en');
+                                      toast.info('AI Voice Language', 'English language activated');
+                                    }
+                                    return next;
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold bg-white/10 hover:bg-white/20 text-slate-200 border border-white/15 transition cursor-pointer shadow-xs whitespace-nowrap"
+                                title="Toggle AI Voice Language (English / Hindi)"
+                              >
+                                <span>{voiceLanguage === 'hi' ? '🇮🇳 हिंदी Voice' : '🇺🇸 EN Voice'}</span>
+                              </button>
+
+                              {/* 🎙️ Clickable / Voice Control ON/OFF Button */}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -2937,12 +3174,18 @@ export const TechnicianWorkspaceView: React.FC<{
                                   }
                                   setIsVoiceActive((prev) => {
                                     const next = !prev;
+                                    isVoiceActiveRef.current = next;
                                     if (next) {
-                                      speakText('Voice assistant activated.');
-                                      toast.success('Voice Assistant Activated', 'Listening: Confirm, Next, Fail, Read Step, Solved, SOS');
+                                      speakText(voiceLanguage === 'hi' ? 'वॉइस असिस्टेंट चालू हो गया है।' : 'Voice control activated.', voiceLanguage);
+                                      toast.success('Voice Control: ON', 'Listening: Pass, Fail, Next, Read Step, Hindi, Escalate, Stop Voice');
                                     } else {
-                                      speakText('Voice assistant disabled.');
-                                      toast.info('Voice Assistant Disabled', 'Say "Activate Voice" or click to start');
+                                      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                                        window.speechSynthesis.cancel();
+                                        isSpeakingRef.current = false;
+                                        setSpeakingStepId(null);
+                                      }
+                                      speakText(voiceLanguage === 'hi' ? 'वॉइस असिस्टेंट बंद कर दिया गया है।' : 'Voice assistant disabled.', voiceLanguage);
+                                      toast.info('Voice Control: OFF', 'Voice control disabled.');
                                     }
                                     return next;
                                   });
@@ -2952,13 +3195,13 @@ export const TechnicianWorkspaceView: React.FC<{
                                     ? 'bg-emerald-600/90 hover:bg-emerald-500 text-white animate-pulse ring-2 ring-emerald-400'
                                     : 'bg-indigo-950/80 hover:bg-indigo-900 text-cyan-300 border border-indigo-700/60'
                                 }`}
-                                title="Click to start/stop hands-free voice assistant"
+                                title="Click to toggle hands-free voice control ON/OFF"
                               >
                                 <Mic className={`w-3.5 h-3.5 ${isVoiceActive ? 'text-white animate-bounce' : 'text-cyan-400'}`} />
                                 <span className="whitespace-nowrap">
                                   {isVoiceActive
-                                    ? (lastVoiceCommand ? `🟢 Heard: "${lastVoiceCommand}"` : '🟢 Voice Active — Listening')
-                                    : 'Say "Activate Voice"'}
+                                    ? (lastVoiceCommand ? `🟢 Heard: "${lastVoiceCommand}"` : '🎙️ Voice Control: ON')
+                                    : '🎙️ Voice Control: OFF'}
                                 </span>
                               </button>
 
@@ -2995,7 +3238,7 @@ export const TechnicianWorkspaceView: React.FC<{
                             </span>
                             {[
                               {
-                                label: '"Confirm Step"',
+                                label: '"Pass / Confirm"',
                                 action: () => {
                                   const a = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
                                   if (a) handleCompleteAndNext(selectedTask.id, a.id);
@@ -3009,13 +3252,35 @@ export const TechnicianWorkspaceView: React.FC<{
                                 },
                               },
                               {
-                                label: '"Fail Step"',
+                                label: '"Fail / Block"',
                                 action: () => {
                                   const a = selectedTask.steps.find((s) => s.status === 'IN_PROGRESS');
                                   if (a) handleFailStep(selectedTask, a);
                                 },
                               },
                               { label: '"Read Step"', action: handleReadActiveStep },
+                              {
+                                label: '"Hindi"',
+                                action: () => {
+                                  setVoiceLanguage('hi');
+                                  voiceLanguageRef.current = 'hi';
+                                  speakText('हिंदी वॉइस एक्टिवेट हो गई है।', 'hi');
+                                  toast.info('AI Voice', 'हिंदी (Hindi) language activated');
+                                },
+                              },
+                              {
+                                label: '"English"',
+                                action: () => {
+                                  setVoiceLanguage('en');
+                                  voiceLanguageRef.current = 'en';
+                                  speakText('English voice activated.', 'en');
+                                  toast.info('AI Voice', 'English language activated');
+                                },
+                              },
+                              {
+                                label: '"Escalate OEM"',
+                                action: () => handleOpenOemModal(selectedTask),
+                              },
                               {
                                 label: '"Solved"',
                                 action: () => {
@@ -3028,6 +3293,12 @@ export const TechnicianWorkspaceView: React.FC<{
                                 label: '"Stop Voice"',
                                 action: () => {
                                   setIsVoiceActive(false);
+                                  isVoiceActiveRef.current = false;
+                                  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                                    window.speechSynthesis.cancel();
+                                    isSpeakingRef.current = false;
+                                    setSpeakingStepId(null);
+                                  }
                                   speakText('Voice assistant disabled.');
                                 },
                               },
@@ -3072,6 +3343,18 @@ export const TechnicianWorkspaceView: React.FC<{
                                   </h4>
                                 </div>
                                 <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleReadSpecificStep(step)}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition inline-flex items-center gap-1 cursor-pointer shadow-2xs whitespace-nowrap ${
+                                      speakingStepId === step.id
+                                        ? 'bg-rose-600 text-white border-rose-500 animate-pulse'
+                                        : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                                    }`}
+                                    title={speakingStepId === step.id ? 'Stop reading' : 'Read step instructions aloud'}
+                                  >
+                                    {speakingStepId === step.id ? '⏹ Stop' : '🔊 Read Step'}
+                                  </button>
                                   <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-cyan-300 border border-cyan-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
                                     <span className="text-amber-400">🎯 SPEC:</span>
                                     <span>{targetSpec}</span>
@@ -3118,9 +3401,23 @@ export const TechnicianWorkspaceView: React.FC<{
                                     </p>
                                   </div>
                                 </div>
-                                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-rose-300 border border-rose-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs shrink-0 whitespace-nowrap">
-                                  <span className="text-amber-400">🎯 SPEC:</span>
-                                  <span>{targetSpec}</span>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleReadSpecificStep(step)}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition inline-flex items-center gap-1 cursor-pointer shadow-2xs whitespace-nowrap ${
+                                      speakingStepId === step.id
+                                        ? 'bg-rose-600 text-white border-rose-500 animate-pulse'
+                                        : 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300'
+                                    }`}
+                                    title={speakingStepId === step.id ? 'Stop reading' : 'Read step instructions aloud'}
+                                  >
+                                    {speakingStepId === step.id ? '⏹ Stop' : '🔊 Read Step'}
+                                  </button>
+                                  <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-rose-300 border border-rose-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
+                                    <span className="text-amber-400">🎯 SPEC:</span>
+                                    <span>{targetSpec}</span>
+                                  </div>
                                 </div>
                               </div>
 
@@ -3189,9 +3486,23 @@ export const TechnicianWorkspaceView: React.FC<{
                                   </div>
                                 </div>
                                 <div className="flex flex-col items-end gap-1 shrink-0">
-                                  <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-cyan-300 border border-cyan-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
-                                    <span className="text-amber-400">🎯 SPEC:</span>
-                                    <span>{targetSpec}</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleReadSpecificStep(step)}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition inline-flex items-center gap-1 cursor-pointer shadow-2xs whitespace-nowrap ${
+                                        speakingStepId === step.id
+                                          ? 'bg-rose-600 text-white border-rose-500 animate-pulse'
+                                          : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                                      }`}
+                                      title={speakingStepId === step.id ? 'Stop reading' : 'Read step instructions aloud'}
+                                    >
+                                      {speakingStepId === step.id ? '⏹ Stop' : '🔊 Read Step'}
+                                    </button>
+                                    <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 text-cyan-300 border border-cyan-500/40 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
+                                      <span className="text-amber-400">🎯 SPEC:</span>
+                                      <span>{targetSpec}</span>
+                                    </div>
                                   </div>
                                   <span className="text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
                                     ACTIVE STEP
@@ -3305,9 +3616,23 @@ export const TechnicianWorkspaceView: React.FC<{
                                 </div>
                               </div>
                               <div className="flex flex-col items-end gap-1 shrink-0">
-                                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
-                                  <span className="text-slate-400">🎯 SPEC:</span>
-                                  <span>{targetSpec}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleReadSpecificStep(step)}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border transition inline-flex items-center gap-1 cursor-pointer shadow-2xs whitespace-nowrap ${
+                                      speakingStepId === step.id
+                                        ? 'bg-rose-600 text-white border-rose-500 animate-pulse'
+                                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                                    }`}
+                                    title={speakingStepId === step.id ? 'Stop reading' : 'Read step instructions aloud'}
+                                  >
+                                    {speakingStepId === step.id ? '⏹ Stop' : '🔊 Read Step'}
+                                  </button>
+                                  <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 text-[9px] font-mono font-bold tracking-tight shadow-2xs whitespace-nowrap">
+                                    <span className="text-slate-400">🎯 SPEC:</span>
+                                    <span>{targetSpec}</span>
+                                  </div>
                                 </div>
                                 <span className="text-[10px] font-mono text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
                                   🔒 LOCKED

@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
 import { apiFetch } from '../../lib/api';
 import { useToast } from '../../lib/ToastContext';
+import {
+  getTenantData,
+  setTenantData,
+} from '../../utils/tenantStorage';
 import {
   History,
   Filter,
@@ -75,13 +80,33 @@ export const formatHistoryTime = (dateStr?: string): string => {
 export const cleanRootCauseText = (text?: string | null): string => {
   if (!text) return 'Operational baseline verified.';
   let clean = String(text).trim();
+
+  // Strip prefixes like [OEM Certified Overhaul], [OEM Overhaul], [RCA Session], Auto-Dispatched:, etc.
+  clean = clean.replace(/^\[(?:OEM Certified Overhaul|OEM Overhaul|RCA Session|Auto-Dispatched|Factory Overhaul)[^\]]*\]\s*/i, '');
+  clean = clean.replace(/^Auto-Dispatched:\s*/i, '');
+
+  // Strip trailing " — Expected: ... Observed: ..." or "Expected: ... Observed: ..." if confirmed cause precedes it
+  if (clean.includes('—') || clean.includes(' - ')) {
+    const parts = clean.split(/\s*[—\-]\s*/);
+    if (parts.length > 1 && /^(?:expected:|observed:|sub-assembly|step\s*\d+)/i.test(parts[1].trim())) {
+      clean = parts[0].trim();
+    }
+  }
+
+  // If text starts with "Expected: ... Observed: ..." extract the observed failure
+  const obsMatch = clean.match(/Observed:\s*([^.]+)/i);
+  if (clean.toLowerCase().startsWith('expected:') && obsMatch && obsMatch[1]) {
+    clean = obsMatch[1].trim();
+  }
+
   // Strip trailing "on COOLING TOWER (COOLING-TOWER.GLB)" or "on MACHINE..."
   clean = clean.replace(/\s*(?:on|for|at|in)\s+[A-Z0-9_\-\s]+(?:\([^)]*\))?\s*$/i, '');
   clean = clean.replace(/\.(glb|gltf)\b/gi, '');
   clean = clean.replace(/\s*\([^)]*?(?:\.glb|\.gltf)[^)]*?\)/gi, '');
   clean = clean.replace(/\s*\([^)]*$/g, '');
   clean = clean.replace(/^[:\-–—•\s]+|[:\-–—•\s]+$/g, '').trim();
-  return clean || text;
+
+  return clean || text || 'Operational baseline verified.';
 };
 
 const isUUID = (str?: string): boolean => {
@@ -103,14 +128,54 @@ export const generateComplianceHash = (recordId: string, assetTag: string, dateS
 
 // Resolve human-readable asset tag so a raw UUID is NEVER rendered in a badge
 export const resolveAssetTag = (r: EnrichedMaintenanceRecord, machinesList: Machine[]): string => {
+  const sanitizeTag = (raw?: string | null): string | null => {
+    if (!raw || typeof raw !== 'string') return null;
+    let s = raw.trim();
+    if (!s || isUUID(s)) return null;
+
+    // Check for bracketed machine tag e.g. "Auto-Dispatched: [PUMP-204-B] Step 3 Failed"
+    const bracketMatch = s.match(/\[([A-Z0-9_\-]+)\]/i);
+    if (bracketMatch && bracketMatch[1] && !bracketMatch[1].startsWith('TCK') && !bracketMatch[1].startsWith('TICK') && !bracketMatch[1].startsWith('OEM')) {
+      return formatCleanMachineName(bracketMatch[1]);
+    }
+
+    // Strip "Auto-Dispatched:", "Step X Failed", etc.
+    s = s.replace(/^Auto-Dispatched:\s*/i, '');
+    s = s.replace(/\s*Step\s*\d+\s*Failed.*$/i, '');
+    s = s.replace(/^\[.*?\]\s*/, '');
+    s = s.trim();
+
+    // If string is still a long phrase or has ticket prefix, try extracting machine tag
+    if (s.includes(' ') || s.startsWith('TICK-') || s.startsWith('TCK-') || s.startsWith('CASE-') || s.startsWith('ESC-')) {
+      const match = s.match(/\b([A-Z0-9]+(?:-[A-Z0-9]+)+)\b/);
+      if (
+        match &&
+        match[1] &&
+        !isUUID(match[1]) &&
+        !match[1].startsWith('TICK') &&
+        !match[1].startsWith('TCK') &&
+        !match[1].startsWith('CASE') &&
+        !match[1].startsWith('ESC') &&
+        !match[1].startsWith('MR-') &&
+        !match[1].startsWith('WO-')
+      ) {
+        return formatCleanMachineName(match[1]);
+      }
+    }
+
+    return formatCleanMachineName(s);
+  };
+
   // 1. Direct machineAssetTag if valid and not a UUID
-  if (r.machineAssetTag && !isUUID(r.machineAssetTag)) {
-    return formatCleanMachineName(r.machineAssetTag);
+  const tagCandidate = sanitizeTag(r.machineAssetTag);
+  if (tagCandidate && tagCandidate !== 'PLANT_WIDE') {
+    return tagCandidate;
   }
 
   // 2. Direct machineId if valid and not a UUID
-  if (r.machineId && !isUUID(r.machineId)) {
-    return formatCleanMachineName(r.machineId);
+  const idCandidate = sanitizeTag(r.machineId);
+  if (idCandidate && idCandidate !== 'PLANT_WIDE') {
+    return idCandidate;
   }
 
   // 3. Resolve UUID against registered machines list
@@ -127,6 +192,11 @@ export const resolveAssetTag = (r: EnrichedMaintenanceRecord, machinesList: Mach
 
   // 4. Extract human-readable tag from problem statement, component name or ticketNumber
   const textPool = `${r.ticketNumber || ''} ${r.caseNumber || ''} ${r.problemStatement || ''} ${r.componentName || ''}`;
+  const bracketMatch = textPool.match(/\[([A-Z0-9_\-]+)\]/i);
+  if (bracketMatch && bracketMatch[1] && !bracketMatch[1].startsWith('TCK') && !bracketMatch[1].startsWith('TICK') && !bracketMatch[1].startsWith('OEM')) {
+    return formatCleanMachineName(bracketMatch[1]);
+  }
+
   const extracted = textPool.match(/\b([A-Z0-9]+(?:-[A-Z0-9]+)+)\b/);
   if (
     extracted &&
@@ -134,12 +204,15 @@ export const resolveAssetTag = (r: EnrichedMaintenanceRecord, machinesList: Mach
     !isUUID(extracted[1]) &&
     !extracted[1].startsWith('MR-') &&
     !extracted[1].startsWith('WO-') &&
-    !extracted[1].startsWith('TCK-')
+    !extracted[1].startsWith('TCK-') &&
+    !extracted[1].startsWith('TICK-') &&
+    !extracted[1].startsWith('ESC-') &&
+    !extracted[1].startsWith('CASE-')
   ) {
     return formatCleanMachineName(extracted[1]);
   }
 
-  return 'EQUIPMENT-UNIT-01';
+  return 'COOLING TOWER';
 };
 
 export const getResolutionSourceInfo = (r: EnrichedMaintenanceRecord) => {
@@ -158,6 +231,7 @@ export const getResolutionSourceInfo = (r: EnrichedMaintenanceRecord) => {
       type: 'OEM_RESOLVED',
       label: '🏭 OEM Vendor Resolved',
       badgeClass: 'bg-purple-50 text-purple-700 border-purple-200',
+      darkBadgeClass: 'bg-gradient-to-r from-indigo-500/30 to-violet-500/30 text-indigo-200 border-indigo-400/40',
     };
   }
   if (src === 'RCA_ENGINEER') {
@@ -165,12 +239,14 @@ export const getResolutionSourceInfo = (r: EnrichedMaintenanceRecord) => {
       type: 'RCA_ENGINEER',
       label: '🔍 RCA Engineer Solved',
       badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+      darkBadgeClass: 'bg-gradient-to-r from-blue-500/30 to-indigo-500/30 text-cyan-200 border-cyan-400/40',
     };
   }
   return {
     type: 'FIELD_TECH',
     label: '🔧 Field Tech Solved',
     badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    darkBadgeClass: 'bg-gradient-to-r from-emerald-500/30 to-teal-500/30 text-emerald-200 border-emerald-400/40',
   };
 };
 
@@ -186,6 +262,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
   onNavigate,
 }) => {
   const { organization, user } = useAuth();
+  const { activePlant } = usePlant();
   const { toast } = useToast();
 
   // Primary Data State
@@ -246,36 +323,35 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
   // Clean and sanitize local storage: remove legacy mock/seeded dummy entries
   const sanitizeAndGetLocalHistory = useCallback((): EnrichedMaintenanceRecord[] => {
     try {
-      const raw = localStorage.getItem('forgex_maintenance_history');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          // Remove legacy hardcoded mock IDs
-          const mockIds = new Set([
-            'rec-mr-2026-8924',
-            'rec-mr-2026-8812',
-            'rec-mr-2026-8701',
-            'TCK-2024-002',
-            'SOP-PUMP-001',
-            'rec-mr-2026-mock-1',
-          ]);
-          const sanitized = parsed.filter((item: any) => {
-            if (mockIds.has(item.id) || mockIds.has(item.ticketNumber) || mockIds.has(item.ticketId)) {
-              return false;
-            }
-            // Discard entries where machineAssetTag is an unresolvable raw UUID and no title exists
-            if (isUUID(item.machineAssetTag) && !item.problemStatement && !item.rootCause) {
-              return false;
-            }
-            return true;
-          });
-          localStorage.setItem('forgex_maintenance_history', JSON.stringify(sanitized));
-          return sanitized;
+      const parsed = getTenantData<EnrichedMaintenanceRecord[]>('forgex_maintenance_history', activePlant, []);
+      if (Array.isArray(parsed)) {
+        // Remove legacy hardcoded mock IDs
+        const mockIds = new Set([
+          'rec-mr-2026-8924',
+          'rec-mr-2026-8812',
+          'rec-mr-2026-8701',
+          'TCK-2024-002',
+          'SOP-PUMP-001',
+          'rec-mr-2026-mock-1',
+        ]);
+        const sanitized = parsed.filter((item: any) => {
+          if (mockIds.has(item.id) || mockIds.has(item.ticketNumber) || mockIds.has(item.ticketId)) {
+            return false;
+          }
+          // Discard entries where machineAssetTag is an unresolvable raw UUID and no title exists
+          if (isUUID(item.machineAssetTag) && !item.problemStatement && !item.rootCause) {
+            return false;
+          }
+          return true;
+        });
+        if (sanitized.length !== parsed.length) {
+          setTenantData('forgex_maintenance_history', activePlant, sanitized);
         }
+        return sanitized;
       }
     } catch {}
     return [];
-  }, []);
+  }, [activePlant]);
 
   // 1. Load Fleet Machines for Selector Dropdown
   const loadMachines = useCallback(async () => {
@@ -295,7 +371,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
 
   useEffect(() => {
     loadMachines();
-  }, [loadMachines]);
+  }, [loadMachines, activePlant, organization?.id]);
 
   // 2. Fetch Authoritative Maintenance Records (Machine-scoped or Organization-wide)
   const fetchRecords = useCallback(async (machineIdToFetch: string) => {
@@ -363,9 +439,9 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
 
   useEffect(() => {
     fetchRecords(selectedMachineId);
-  }, [fetchRecords, selectedMachineId]);
+  }, [fetchRecords, selectedMachineId, activePlant, organization?.id]);
 
-  // 3. Listen for live updates when tasks are resolved or archived
+  // 3. Listen for live updates when tasks are resolved or archived, or when company/plant switches
   useEffect(() => {
     const handleHistoryEvent = (e: Event) => {
       const custom = e as CustomEvent<EnrichedMaintenanceRecord>;
@@ -387,9 +463,20 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
       }
     };
 
+    const handleTenantSwitch = () => {
+      loadMachines();
+      fetchRecords(selectedMachineId);
+    };
+
     window.addEventListener('forgex:history-updated', handleHistoryEvent);
-    return () => window.removeEventListener('forgex:history-updated', handleHistoryEvent);
-  }, []);
+    window.addEventListener('forgex:tenant_changed', handleTenantSwitch);
+    window.addEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    return () => {
+      window.removeEventListener('forgex:history-updated', handleHistoryEvent);
+      window.removeEventListener('forgex:tenant_changed', handleTenantSwitch);
+      window.removeEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    };
+  }, [loadMachines, fetchRecords, selectedMachineId]);
 
   // Delete Maintenance Record
   const handleDeleteRecord = async (idToDelete: string) => {
@@ -400,15 +487,19 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
       }
 
       try {
-        const raw = localStorage.getItem('forgex_maintenance_history');
-        if (raw) {
-          const list = JSON.parse(raw);
-          if (Array.isArray(list)) {
-            const filtered = list.filter((r: any) => r.id !== idToDelete);
-            localStorage.setItem('forgex_maintenance_history', JSON.stringify(filtered));
-          }
+        const list = getTenantData<any[]>('forgex_maintenance_history', activePlant, []);
+        if (Array.isArray(list)) {
+          const filtered = list.filter((r: any) => r.id !== idToDelete);
+          setTenantData('forgex_maintenance_history', activePlant, filtered);
         }
       } catch {}
+
+      await apiFetch(`/api/v1/maintenance-records/${encodeURIComponent(idToDelete)}`, {
+        method: 'DELETE',
+      }).catch(() => null);
+
+      setDeleteRecordConfirmId(null);
+      toast.info('Record Removed', 'Maintenance audit entry removed from history.');
 
       await apiFetch(`/api/v1/maintenance-records/${encodeURIComponent(idToDelete)}`, {
         method: 'DELETE',
@@ -625,8 +716,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
   const handlePromoteToExpertKnowledge = (r: EnrichedMaintenanceRecord) => {
     try {
       const tag = resolveAssetTag(r, machines);
-      const raw = localStorage.getItem('forgex_expert_knowledge');
-      const list = raw ? JSON.parse(raw) : [];
+      const list = getTenantData<any[]>('forgex_expert_knowledge', activePlant, []);
 
       const newTip = {
         id: `tip-hist-${Date.now().toString().slice(-6)}`,
@@ -644,7 +734,8 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
       };
 
       list.unshift(newTip);
-      localStorage.setItem('forgex_expert_knowledge', JSON.stringify(list));
+      setTenantData('forgex_expert_knowledge', activePlant, list);
+      setTenantData('forgex_expert_notes', activePlant, list);
       setPromotedKnowledgeIds((prev) => new Set([...prev, r.id]));
 
       window.dispatchEvent(
@@ -1013,7 +1104,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                       className="flex items-stretch gap-0 group"
                     >
                       {/* 1. Left Metadata Column */}
-                      <div className="w-36 sm:w-40 shrink-0 pr-3 sm:pr-4 py-1 flex flex-col items-end text-right space-y-1">
+                      <div className="w-36 sm:w-40 shrink-0 text-right pr-4 py-1 flex flex-col items-end space-y-1 overflow-hidden">
                         {/* Line 1: Date */}
                         <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
                           {entryDate}
@@ -1022,9 +1113,13 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                         <span className="text-[11px] font-mono text-slate-500 whitespace-nowrap">
                           {entryTime}
                         </span>
-                        {/* Line 3: Dark Navy-Indigo Machine Pill (⚙️ COOLING TOWER — strip .GLB) */}
-                        <div className="mt-1 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-cyan-300 font-mono text-[11px] font-bold px-2 py-0.5 rounded-md border border-indigo-700/60 shadow-xs flex items-center gap-1 shrink-0 whitespace-nowrap">
-                          <span>⚙️ {cleanTag}</span>
+                        {/* Line 3: Compact Gradient Machine Badge */}
+                        <div
+                          className="mt-1 inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-bold bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-2xs max-w-full truncate border border-indigo-500/40"
+                          title={cleanTag}
+                        >
+                          <span className="shrink-0">⚙️</span>
+                          <span className="truncate">{cleanTag}</span>
                         </div>
                         {/* Repeat Count Badge if chronic */}
                         {isChronicRepeat && (
@@ -1055,22 +1150,28 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                       {/* 3. Right Card Column */}
                       <div className="flex-1 min-w-0 pl-3 pb-3">
                         <div
-                          className="bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-indigo-400 transition-all overflow-hidden w-full"
+                          className="bg-white rounded-2xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-indigo-400 transition-all overflow-hidden w-full"
                         >
                           {/* Top Dark-Slate/Indigo Gradient Header Bar */}
                           <div
                             onClick={() => toggleCardExpansion(r.id, isFirstOverall)}
-                            className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-3.5 py-2.5 rounded-t-xl flex items-center justify-between gap-2.5 flex-wrap border-b border-indigo-900/40 cursor-pointer select-none"
+                            className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-5 py-3.5 rounded-t-2xl flex items-center justify-between gap-3 flex-wrap border-b border-indigo-900/40 cursor-pointer select-none"
                           >
-                            <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            {/* Left Group */}
+                            <div className="flex items-center gap-2.5 flex-wrap min-w-0">
                               {/* Record ID */}
                               <span className="font-mono text-xs font-bold text-cyan-300 tracking-wide">
                                 {r.recordNumber || r.ticketNumber || r.id}
                               </span>
 
-                              {/* Resolution Source Badge */}
+                              {/* Machine Tag pill */}
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2.5 py-0.5 rounded-md bg-white/10 text-cyan-200 border border-cyan-400/30 shadow-2xs">
+                                ⚙️ {cleanTag}
+                              </span>
+
+                              {/* Resolution Type pill */}
                               <span
-                                className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border shadow-2xs ${srcInfo.badgeClass}`}
+                                className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full border shadow-2xs ${srcInfo.darkBadgeClass || srcInfo.badgeClass}`}
                               >
                                 {srcInfo.label}
                               </span>
@@ -1082,18 +1183,19 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                               </span>
 
                               {/* Audited By */}
-                              <span className="text-slate-300 text-xs font-sans flex items-center gap-1">
-                                <User className="w-3 h-3 text-slate-400" />
+                              <span className="text-slate-300 text-xs font-sans flex items-center gap-1 max-w-[260px] truncate">
+                                <User className="w-3 h-3 text-slate-400 shrink-0" />
                                 <span className="text-slate-300">Audited by:</span>
-                                <strong className="text-white font-medium">
+                                <strong className="text-white font-medium truncate">
                                   {r.resolvingTechnicianName || r.assignedTechnicianName || 'Specialist'}
                                 </strong>
                               </span>
                             </div>
 
-                            <div className="flex items-center gap-2 shrink-0">
-                              {/* Verified & Sealed (Single checkmark) */}
-                              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 shadow-2xs">
+                            {/* Right Group */}
+                            <div className="flex items-center gap-2.5 shrink-0 ml-auto">
+                              {/* Verified & Sealed */}
+                              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 shadow-2xs whitespace-nowrap">
                                 <Check className="w-3 h-3 text-emerald-400" />
                                 <span>VERIFIED &amp; SEALED</span>
                               </span>
@@ -1105,7 +1207,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                                   ev.stopPropagation();
                                   setExpandedRecord(r);
                                 }}
-                                className="text-xs font-bold text-indigo-300 hover:text-cyan-300 transition flex items-center gap-1 cursor-pointer"
+                                className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-cyan-300 text-xs font-semibold whitespace-nowrap transition cursor-pointer flex items-center gap-1"
                               >
                                 <span>View Full Audit Dossier &rarr;</span>
                               </button>
@@ -1117,7 +1219,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                                   ev.stopPropagation();
                                   setDeleteRecordConfirmId(r.id);
                                 }}
-                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-white/10 transition cursor-pointer"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-white/10 transition cursor-pointer"
                                 title="Delete record"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1127,7 +1229,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                               <button
                                 type="button"
                                 onClick={(ev) => toggleCardExpansion(r.id, isFirstOverall, ev)}
-                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
                                 title={isExpanded ? 'Collapse Remedy Details' : 'Expand Remedy Details'}
                               >
                                 {isExpanded ? (
@@ -1177,21 +1279,21 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                           ) : (
                             <div
                               onClick={(e) => toggleCardExpansion(r.id, isFirstOverall, e)}
-                              className="px-3.5 py-2.5 bg-slate-50/70 hover:bg-slate-100/70 border-t border-slate-100 flex items-center justify-between gap-3 text-xs transition cursor-pointer"
+                              className="px-4 py-3 bg-slate-50/70 hover:bg-slate-100/70 border-t border-slate-100 flex items-center justify-between gap-3 text-xs transition cursor-pointer"
                             >
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <span className="font-mono text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded shrink-0">
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                <span className="font-mono text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md shrink-0">
                                   ROOT CAUSE
                                 </span>
-                                <span className="text-slate-800 font-medium truncate" title={cleanRootCause}>
+                                <span className="text-slate-800 font-medium truncate max-w-[45%]" title={cleanRootCause}>
                                   {cleanRootCause}
                                 </span>
                                 <span className="text-slate-400 font-mono shrink-0">→</span>
-                                <span className="text-slate-600 truncate" title={remedySummary}>
+                                <span className="text-slate-600 truncate flex-1 min-w-0" title={remedySummary}>
                                   {remedySummary}
                                 </span>
                               </div>
-                              <span className="text-indigo-600 hover:text-indigo-800 font-mono text-[11px] font-bold shrink-0 flex items-center gap-0.5">
+                              <span className="text-indigo-600 hover:text-indigo-800 font-mono text-[11px] font-bold shrink-0 flex items-center gap-0.5 ml-2">
                                 <span>Show Remedy Details</span>
                                 <ChevronDown className="w-3.5 h-3.5" />
                               </span>

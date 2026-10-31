@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import { apiFetch } from './api';
+import { clearTransientSessionState } from '../utils/tenantStorage';
 
 export interface PlantOption {
   id: string;
@@ -56,6 +57,12 @@ export const PlantProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActivePlantState(site);
     if (typeof window !== 'undefined') {
       localStorage.setItem(PLANT_STORAGE_KEY, site);
+      clearTransientSessionState();
+      window.dispatchEvent(
+        new CustomEvent('forgex:tenant_changed', {
+          detail: { plantId: site },
+        })
+      );
     }
   }, []);
 
@@ -91,6 +98,12 @@ export const PlantProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const defaultPlant = loadedPlants[0]?.code || loadedPlants[0]?.id || 'PLANT-TX-04';
           if (typeof window !== 'undefined') {
             localStorage.setItem(PLANT_STORAGE_KEY, defaultPlant);
+            clearTransientSessionState();
+            window.dispatchEvent(
+              new CustomEvent('forgex:tenant_changed', {
+                detail: { plantId: defaultPlant },
+              })
+            );
           }
           return defaultPlant;
         });

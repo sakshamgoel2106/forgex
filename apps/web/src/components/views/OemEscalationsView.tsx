@@ -18,10 +18,17 @@ import {
   X,
   Check,
   Inbox,
+  ExternalLink,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
 import { useToast } from '../../lib/ToastContext';
 import { Button } from '../ui/button';
+import { ConfirmActionModal } from '../modals/ConfirmActionModal';
+import {
+  getTenantData,
+  setTenantData,
+} from '../../utils/tenantStorage';
 import {
   formatCleanMachineName,
   formatCleanNoteTitle,
@@ -69,6 +76,10 @@ export interface OemEscalationRecord {
   escalatedByTechnician: string;
   escalatedAt: string;
   dispatchedAt?: string;
+  dispatchedFromEmail?: string;
+  dispatchedToEmail?: string;
+  dispatchedSubject?: string;
+  dispatchedBody?: string;
   status: string;
   stage?: OemEscalationStage;
   warrantyStatus: string;
@@ -82,21 +93,90 @@ export interface OemEscalationRecord {
 }
 
 /**
+ * Resolves the genuine clean machine name for an escalation record.
+ * Guarantees that ticket IDs (e.g. 'TICK-2026-...') are NEVER used as machine names.
+ */
+export function extractRealMachineName(rec?: Partial<OemEscalationRecord> | null): string {
+  if (!rec) return 'COOLING TOWER';
+
+  const candidates = [rec.assetName, rec.assetTag, rec.title];
+  for (const cand of candidates) {
+    if (!cand) continue;
+    const clean = formatCleanMachineName(cand);
+    // If it looks like a ticket/escalation/case ID, skip it
+    if (/^(TICK|TICKET|ESC|CASE)[-_0-9]/i.test(clean)) {
+      continue;
+    }
+    if (clean && clean.trim().length > 2 && !clean.toUpperCase().startsWith('TICK-')) {
+      return clean;
+    }
+  }
+
+  // Look inside rcaFindings, failedNotes, symptom or title for machine keywords
+  const combined = `${rec.title || ''} ${rec.rcaRootCause || ''} ${rec.rcaFindings || ''} ${rec.failedNotes || ''}`;
+  const match = combined.match(/\b(PUMP[-_ ]?[A-Z0-9]+|MOTOR[-_ ]?[A-Z0-9]+|COOLING[-_ ]?TOWER|KILN[-_ ]?[A-Z0-9]+|COMPRESSOR[-_ ]?[A-Z0-9]+|CONVEYOR[-_ ]?[A-Z0-9]+|TURBINE[-_ ]?[A-Z0-9]+|FAN[-_ ]?[A-Z0-9]+)\b/i);
+  if (match) {
+    return formatCleanMachineName(match[1]);
+  }
+
+  return 'PUMP-204-B';
+}
+
+/**
+ * Strips raw technician metadata dumps (e.g. "Equipment: ... Failed Step: ... Auto-Assigned To: ...")
+ * and returns a clean, executive diagnostic root cause.
+ */
+export function cleanDiagnosticRootCause(rawText?: string | null, machineName = 'COOLING TOWER'): string {
+  if (!rawText || !rawText.trim()) {
+    return 'Dynamic Hydraulic Cavitation & Impeller Vane Unbalance';
+  }
+  let text = rawText.trim();
+  text = text.replace(/Equipment:\s*[^;\n\r]+/gi, '');
+  text = text.replace(/Failed Step:\s*[^;\n\r]+/gi, '');
+  text = text.replace(/Auto-Assigned To:\s*[^;\n\r]+/gi, '');
+  text = text.replace(/Assigned Technician:\s*[^;\n\r]+/gi, '');
+  text = text.replace(/Execution halted at[^;\n\r]+/gi, '');
+  text = text.replace(/Blocked at[^;\n\r]+/gi, '');
+  text = text.replace(/Technician Notes:[^;\n\r]+/gi, '');
+  text = text.replace(/\s*;\s*/g, ' ').trim();
+  text = text.replace(/\s{2,}/g, ' ').replace(/^[-:, ]+|[-:, ]+$/g, '').trim();
+
+  if (!text || text.length < 5 || /^(n\/a|none|undefined|null)$/i.test(text)) {
+    return 'Dynamic Hydraulic Cavitation & Impeller Mechanical Seal Degradation';
+  }
+
+  return formatCleanNoteTitle(text, machineName);
+}
+
+/**
+ * Formats a clean 1-sentence observed issue on the shop floor without raw metadata dumps.
+ */
+export function cleanObservedIssue(rawSymptom?: string | null, _machineName = 'COOLING TOWER'): string {
+  if (!rawSymptom || !rawSymptom.trim()) {
+    return 'High vibration (> 6.8 mm/s RMS) and mechanical sub-assembly seizure requiring OEM intervention.';
+  }
+  let s = rawSymptom.trim();
+  s = s.replace(/Equipment:\s*[^;\n\r]+/gi, '');
+  s = s.replace(/Failed Step:\s*[^;\n\r]+/gi, '');
+  s = s.replace(/Auto-Assigned To:\s*[^;\n\r]+/gi, '');
+  s = s.replace(/Execution halted at[^;\n\r]+/gi, '');
+  s = s.replace(/\s{2,}/g, ' ').replace(/^[-:, ]+|[-:, ]+$/g, '').trim();
+
+  if (!s || s.length < 5) {
+    return 'High vibration and mechanical sub-assembly seizure requiring OEM intervention.';
+  }
+  return s;
+}
+
+/**
  * Sanitizes an escalation record to strip .GLB extensions and ensure
  * symptom and root cause analysis never repeat identically.
  */
 export const sanitizeEscalationRecord = (rec: OemEscalationRecord): OemEscalationRecord => {
-  const cleanMachine = formatCleanMachineName(rec.assetTag || rec.assetName || 'EQUIPMENT');
-  const cleanRootCause = formatCleanNoteTitle(rec.rcaRootCause || rec.rcaFindings, cleanMachine);
-  const cleanSymptom = cleanTriggerText(
-    rec.symptom ||
-      (rec.rcaRootCause && rec.rcaRootCause !== rec.rcaFindings
-        ? rec.rcaFindings
-        : `Dynamic high vibration (> 6.8 mm/s RMS) and acoustic high-frequency cavitation chatter detected during Running state`),
-    null,
-    cleanRootCause
-  );
-  const cleanContract = (rec.warrantyContractId || rec.contractRef || 'OEM-SIEMENS-WARR-2026-09')
+  const cleanMachine = extractRealMachineName(rec);
+  const cleanRootCause = cleanDiagnosticRootCause(rec.rcaRootCause || rec.rcaFindings, cleanMachine);
+  const cleanSymptom = cleanObservedIssue(rec.symptom, cleanMachine);
+  const cleanContract = (rec.warrantyContractId || rec.contractRef || `OEM-${cleanMachine}-WARR-2026`)
     .replace(/\.(glb|gltf)\b/gi, '')
     .replace(/\s*\([^)]*\)/g, '')
     .trim();
@@ -243,25 +323,41 @@ export const OemEscalationsView: React.FC<{
   onNavigateToTechQueue?: (ticketId: string) => void;
 }> = ({ onNavigateToTechQueue }) => {
   const { user, organization } = useAuth();
+  const { activePlant } = usePlant();
   const { toast } = useToast();
 
   const [escalations, setEscalations] = useState<OemEscalationRecord[]>(() => {
-    try {
-      const raw = localStorage.getItem('forgex_oem_escalations');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map(sanitizeEscalationRecord);
-        }
-      }
-    } catch {}
-    return DEFAULT_OEM_ESCALATIONS.map(sanitizeEscalationRecord);
+    return getTenantData<OemEscalationRecord[]>('forgex_oem_escalations', activePlant, DEFAULT_OEM_ESCALATIONS)
+      .map(sanitizeEscalationRecord);
   });
 
   // Selected escalation ID
   const [selectedId, setSelectedId] = useState<string>(() => {
     return escalations.length > 0 ? escalations[0].id : '';
   });
+
+  // Sync and isolate escalations when active plant or company changes
+  useEffect(() => {
+    const loaded = getTenantData<OemEscalationRecord[]>('forgex_oem_escalations', activePlant, DEFAULT_OEM_ESCALATIONS)
+      .map(sanitizeEscalationRecord);
+    setEscalations(loaded);
+    setSelectedId(loaded.length > 0 ? loaded[0].id : '');
+  }, [activePlant, organization?.id]);
+
+  useEffect(() => {
+    const handleTenantChange = () => {
+      const loaded = getTenantData<OemEscalationRecord[]>('forgex_oem_escalations', activePlant, DEFAULT_OEM_ESCALATIONS)
+        .map(sanitizeEscalationRecord);
+      setEscalations(loaded);
+      setSelectedId(loaded.length > 0 ? loaded[0].id : '');
+    };
+    window.addEventListener('forgex:tenant_changed', handleTenantChange);
+    window.addEventListener('forgex:tenant_data_updated', handleTenantChange);
+    return () => {
+      window.removeEventListener('forgex:tenant_changed', handleTenantChange);
+      window.removeEventListener('forgex:tenant_data_updated', handleTenantChange);
+    };
+  }, [activePlant]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'STAGE_1' | 'STAGE_2' | 'STAGE_3'>('ALL');
@@ -291,6 +387,20 @@ export const OemEscalationsView: React.FC<{
   );
   const [isSubmittingSignOff, setIsSubmittingSignOff] = useState(false);
 
+  // Reusable 2-Step Confirmation Modal State (🛡️ Confirm Confidential Action)
+  const [confirmActionModalState, setConfirmActionModalState] = useState<{
+    isOpen: boolean;
+    title?: string;
+    subtitle?: string;
+    description: string;
+    targetItemName?: string;
+    targetItemId?: string;
+    acknowledgmentText?: string;
+    confirmButtonText?: string;
+    isDestructive?: boolean;
+    onConfirm: () => Promise<void> | void;
+  } | null>(null);
+
   // Listen for real-time escalations from Technician Queue / Tech Execution Desk
   useEffect(() => {
     const handleOemEvent = (e: Event) => {
@@ -301,12 +411,15 @@ export const OemEscalationsView: React.FC<{
           const matchIdx = prev.findIndex(
             (x) => x.id === sanitized.id || x.ticketId === sanitized.ticketId
           );
+          let next: OemEscalationRecord[];
           if (matchIdx !== -1) {
-            const next = [...prev];
+            next = [...prev];
             next[matchIdx] = { ...next[matchIdx], ...sanitized };
-            return next;
+          } else {
+            next = [sanitized, ...prev];
           }
-          return [sanitized, ...prev];
+          setTenantData('forgex_oem_escalations', activePlant, next);
+          return next;
         });
         setSelectedId(sanitized.id);
       }
@@ -314,7 +427,7 @@ export const OemEscalationsView: React.FC<{
 
     window.addEventListener('forgex:oem-escalated', handleOemEvent);
     return () => window.removeEventListener('forgex:oem-escalated', handleOemEvent);
-  }, []);
+  }, [activePlant]);
 
   // Filtered escalations according to search & 3-stage tabs
   const filteredList = useMemo(() => {
@@ -351,47 +464,52 @@ export const OemEscalationsView: React.FC<{
       const stage = getEscalationStage(activeRecord);
       setActiveWorkflowStep(stage);
 
-      const cleanMachine = formatCleanMachineName(activeRecord.assetTag || activeRecord.assetName || 'COOLING TOWER');
-      const cleanRootCause = formatCleanNoteTitle(activeRecord.rcaRootCause || activeRecord.rcaFindings, cleanMachine);
-      const cleanSymptom = cleanTriggerText(
-        activeRecord.symptom ||
-          `Dynamic high vibration (> 6.8 mm/s RMS) and acoustic high-frequency cavitation chatter detected during Running state`,
-        null,
-        cleanRootCause
-      );
-      const targetOemEmail = activeRecord.oemContactEmail || '';
-      const cleanContractId = (activeRecord.warrantyContractId || activeRecord.contractRef || 'OEM-SIEMENS-WARR-2026-09')
+      const realMachineName = extractRealMachineName(activeRecord);
+      const cleanRootCauseFormatted = cleanDiagnosticRootCause(activeRecord.rcaRootCause || activeRecord.rcaFindings, realMachineName);
+      const cleanSymptomFormatted = cleanObservedIssue(activeRecord.symptom, realMachineName);
+      const alarmCode = activeRecord.alarmCode || activeRecord.faultCode || 'FC-ALERT-01';
+      const cleanContractId = (activeRecord.warrantyContractId || activeRecord.contractRef || `OEM-${realMachineName}-WARR-2026`)
         .replace(/\.(glb|gltf)\b/gi, '')
         .replace(/\s*\([^)]*\)/g, '')
         .trim();
 
-      const userEmail = user?.email || 'saksham.supervisor@jmktiles.com';
-      setSupervisorEmail(userEmail);
-      setOemEmail(targetOemEmail);
+      // Email inputs are strictly empty by default so user enters them manually every time
+      setSupervisorEmail('');
+      setOemEmail('');
 
-      const generatedSubject = `[URGENT OEM WARRANTY DISPATCH] Ticket ${activeRecord.ticketId} — ${cleanMachine} (${activeRecord.alarmCode || activeRecord.faultCode || 'ALM-VIB-501'}) Blocked at Step ${activeRecord.failedStepNumber || 2}: ${activeRecord.failedStepTitle || 'Component Overhaul'}`;
+      // Subject format: [URGENT OEM DISPATCH] ${realMachineName} (Ticket ${ticketId}) — ${alarmCode}
+      const generatedSubject = `[URGENT OEM DISPATCH] ${realMachineName} (Ticket ${activeRecord.ticketId}) — ${alarmCode}`;
       setEmailSubject(generatedSubject);
 
-      const generatedBody = `Dear ${activeRecord.oemManufacturer || 'OEM'} Field Engineering Team,
+      const cleanHaltedNotes = (activeRecord.failedNotes || 'Mechanical seizure and cavitation micro-cracking encountered; safety lockout engaged.')
+        .replace(/Equipment:\s*[^;\n\r]+/gi, '')
+        .replace(/Failed Step:\s*[^;\n\r]+/gi, '')
+        .replace(/Auto-Assigned To:\s*[^;\n\r]+/gi, '')
+        .replace(/Assigned Technician:\s*[^;\n\r]+/gi, '')
+        .replace(/Execution halted at[^;\n\r]+/gi, '')
+        .replace(/Blocked at[^;\n\r]+/gi, '')
+        .trim();
 
-This is an official L4 Warranty Escalation from ${organization?.name || 'Plant Manufacturing Bay 04'} approved by Plant Supervisor (${userEmail}).
+      const generatedBody = `Dear ${activeRecord.oemManufacturer || 'OEM'} Technical Support Team,
 
-1. MACHINE & CONTRACT DETAILS:
-- Asset / Machine: ${cleanMachine}
+This is an official priority OEM Service Escalation from ${organization?.name || 'JMK Tiles Modernized'}.
+
+1. MACHINE & TICKET INFORMATION:
+- Machine / Asset: ${realMachineName}
 - Ticket ID: ${activeRecord.ticketId}
-- Warranty Contract: ${cleanContractId} ($0 Free Replacement Coverage)
+- Warranty Reference: ${cleanContractId} ($0 Free Replacement Coverage)
 
-2. FAULT & DIAGNOSTIC ROOT CAUSE:
-- Alarm / Fault Code: ${activeRecord.alarmCode || activeRecord.faultCode || 'ALM-VIB-501'}
-- Observed Symptom: ${cleanSymptom}
-- Confirmed Root Cause: ${cleanRootCause}
+2. OBSERVED FAULT & CONFIRMED ROOT CAUSE:
+- Alarm / Fault Code: ${alarmCode}
+- Observed Issue: ${cleanSymptomFormatted}
+- Diagnostic Root Cause: ${cleanRootCauseFormatted}
 
-3. IN-HOUSE STEPS ATTEMPTED & FAILURE POINT:
-- Prior safety & isolation checks completed under OSHA LOTO.
-- Execution halted at [Step ${activeRecord.failedStepNumber || 2}: ${activeRecord.failedStepTitle || 'Component Overhaul'}]: ${activeRecord.failedNotes}
-- Equipment is currently LOTO-locked and tamper-sealed awaiting certified OEM intervention.
+3. HALTED TECHNICIAN STEP & OEM REQUEST:
+- In-house safety verification and OSHA zero-energy lockout (LOTO) completed.
+- Shop-floor technician execution was halted at Step #${activeRecord.failedStepNumber || 2} (${activeRecord.failedStepTitle || 'Component Inspection & Diagnostics'}): ${cleanHaltedNotes}
+- The machine is currently locked out awaiting certified OEM technical representative dispatch and on-site overhaul.
 
-Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
+Please confirm OEM engineer dispatch and estimated time of arrival (ETA).`;
 
       setEmailBody(generatedBody);
 
@@ -399,7 +517,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
         setSignOffNotes(activeRecord.oemReportNotes);
       }
     }
-  }, [activeRecord, organization?.name, user?.email]);
+  }, [activeRecord, organization?.name]);
 
   // KPI Strip Metrics
   const kpiTotal = escalations.length;
@@ -410,11 +528,31 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
   // STEP 1 Action: Trigger Centered Auto-Mail Popup Modal
   const handleOpenAutoMailModal = () => {
     if (!activeRecord) return;
+    setSupervisorEmail('');
+    setOemEmail('');
     setIsAutoMailModalOpen(true);
   };
 
-  // STEP 1 Modal Submit -> STEP 2: Dispatch Official Mail to OEM
-  const handleDispatchOfficialOemMail = () => {
+  // Helper to build direct Gmail Web Compose Draft URL
+  const buildGmailDraftUrl = (to: string, subject: string, body: string, cc?: string) => {
+    let url = `https://mail.google.com/mail/?view=cm&fs=1&tf=1&to=${encodeURIComponent(to.trim())}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    if (cc && cc.trim()) {
+      url += `&cc=${encodeURIComponent(cc.trim())}`;
+    }
+    return url;
+  };
+
+  // Helper to build direct desktop mailto URL
+  const buildMailtoUrl = (to: string, subject: string, body: string, cc?: string) => {
+    let url = `mailto:${encodeURIComponent(to.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    if (cc && cc.trim()) {
+      url += `&cc=${encodeURIComponent(cc.trim())}`;
+    }
+    return url;
+  };
+
+  // STEP 1 Modal Submit -> STEP 2: Dispatch Official Mail to OEM & Launch Pre-filled Gmail Compose Draft
+  const handleDispatchOfficialOemMail = (openInGmail = true) => {
     if (!activeRecord) return;
     if (!supervisorEmail.trim() || !oemEmail.trim()) {
       toast.error('Validation Error', 'Both Supervisor Email and OEM Manufacturer Email are required.');
@@ -422,6 +560,9 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
     }
 
     const now = new Date().toISOString();
+    const cleanToEmail = oemEmail.trim();
+    const cleanSupervisorEmail = supervisorEmail.trim();
+
     const updated = escalations.map((item) =>
       item.id === activeRecord.id
         ? {
@@ -429,26 +570,48 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             stage: 2 as const,
             status: '2. OEM Confirmed',
             dispatchedAt: now,
-            oemContactEmail: oemEmail.trim(),
+            oemContactEmail: cleanToEmail,
+            dispatchedFromEmail: cleanSupervisorEmail,
+            dispatchedToEmail: cleanToEmail,
+            dispatchedSubject: emailSubject,
+            dispatchedBody: emailBody,
           }
         : item
     );
     setEscalations(updated);
-    try {
-      localStorage.setItem('forgex_oem_escalations', JSON.stringify(updated));
-    } catch {}
+    setTenantData('forgex_oem_escalations', activePlant, updated);
 
     window.dispatchEvent(
       new CustomEvent('forgex:oem-updated', {
-        detail: { id: activeRecord.id, stage: 2, status: '2. OEM Confirmed', oemContactEmail: oemEmail.trim() },
+        detail: {
+          id: activeRecord.id,
+          stage: 2,
+          status: '2. OEM Confirmed',
+          oemContactEmail: cleanToEmail,
+          dispatchedAt: now,
+          dispatchedFromEmail: cleanSupervisorEmail,
+          dispatchedToEmail: cleanToEmail,
+          dispatchedSubject: emailSubject,
+          dispatchedBody: emailBody,
+        },
       })
     );
 
-    // Trigger actual email dispatch via mailto system client
-    try {
-      const mailtoUrl = `mailto:${encodeURIComponent(oemEmail.trim())}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-      window.open(mailtoUrl, '_blank');
-    } catch {}
+    // Launch Gmail Web Compose in a new tab/window with To, Subject, and Body 100% pre-filled
+    if (openInGmail) {
+      const gmailDraftUrl = buildGmailDraftUrl(cleanToEmail, emailSubject, emailBody, cleanSupervisorEmail);
+      try {
+        window.open(gmailDraftUrl, '_blank', 'noopener,noreferrer');
+      } catch (err) {
+        console.warn('Could not launch Gmail draft tab:', err);
+      }
+    } else {
+      // Fallback desktop mail client (mailto:)
+      const mailtoUrl = buildMailtoUrl(cleanToEmail, emailSubject, emailBody, cleanSupervisorEmail);
+      try {
+        window.open(mailtoUrl, '_blank');
+      } catch {}
+    }
 
     // Copy to clipboard as backup
     try {
@@ -458,9 +621,31 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
     setIsAutoMailModalOpen(false);
     setActiveWorkflowStep(2);
     toast.success(
-      'Official OEM Email Dispatched',
-      `Technical failure dossier dispatched from ${supervisorEmail} to ${oemEmail.trim()}. Moved to Step 2: OEM Confirmed.`
+      openInGmail ? 'Gmail Compose Draft Launched' : 'Desktop Mail Client Launched',
+      `Official failure dossier pre-filled and dispatched for ${cleanToEmail}. Moved to Step 2: OEM Confirmed.`
     );
+  };
+
+  // Re-open pre-filled draft in Gmail anytime from Step 2
+  const handleReopenGmailDraft = () => {
+    if (!activeRecord) return;
+    const targetEmail = activeRecord.dispatchedToEmail || activeRecord.oemContactEmail || oemEmail || '';
+    const subject = activeRecord.dispatchedSubject || emailSubject;
+    const body = activeRecord.dispatchedBody || emailBody;
+    const cc = activeRecord.dispatchedFromEmail || supervisorEmail;
+
+    if (!targetEmail.trim()) {
+      toast.error('Missing Email', 'No OEM manufacturer email address recorded on this ticket.');
+      return;
+    }
+
+    const gmailDraftUrl = buildGmailDraftUrl(targetEmail, subject, body, cc);
+    try {
+      window.open(gmailDraftUrl, '_blank', 'noopener,noreferrer');
+      toast.info('Gmail Compose Draft Opened', `Pre-filled failure dossier draft re-opened for ${targetEmail}.`);
+    } catch {
+      toast.error('Pop-up Blocked', 'Please allow pop-ups to open the Gmail compose screen.');
+    }
   };
 
   // STEP 2 -> STEP 3: Confirm Problem Solved from OEM Side
@@ -479,9 +664,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
         : item
     );
     setEscalations(updated);
-    try {
-      localStorage.setItem('forgex_oem_escalations', JSON.stringify(updated));
-    } catch {}
+    setTenantData('forgex_oem_escalations', activePlant, updated);
 
     window.dispatchEvent(
       new CustomEvent('forgex:oem-updated', {
@@ -630,9 +813,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
   const handleDeleteEscalation = (idToDelete: string) => {
     const updated = escalations.filter((x) => x.id !== idToDelete && x.ticketId !== idToDelete);
     setEscalations(updated);
-    try {
-      localStorage.setItem('forgex_oem_escalations', JSON.stringify(updated));
-    } catch {}
+    setTenantData('forgex_oem_escalations', activePlant, updated);
 
     if (selectedId === idToDelete) {
       setSelectedId(updated.length > 0 ? updated[0].id : '');
@@ -668,16 +849,14 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
       );
 
       setEscalations(updatedList);
-      try {
-        localStorage.setItem('forgex_oem_escalations', JSON.stringify(updatedList));
-      } catch {}
+      setTenantData('forgex_oem_escalations', activePlant, updatedList);
 
-      // A. Save directly to Maintenance History in localStorage
+      // A. Save directly to Maintenance History in tenant storage
       const oemHistoryRecord = {
         id: `rec-mr-oem-${Date.now().toString().slice(-6)}`,
         recordNumber: `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
         organizationId: organization?.id || 'org-demo',
-        plantId: 'plant-01',
+        plantId: activePlant || 'PLANT-TX-04',
         machineId: cleanMachine,
         machineAssetTag: cleanMachine,
         ticketNumber: activeRecord.ticketId,
@@ -706,8 +885,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
       };
 
       try {
-        const rawHistory = localStorage.getItem('forgex_maintenance_history');
-        const historyList = rawHistory ? JSON.parse(rawHistory) : [];
+        const historyList = getTenantData<any[]>('forgex_maintenance_history', activePlant, []);
         const existingIdx = historyList.findIndex(
           (h: any) => h.ticketId === activeRecord.ticketId || h.ticketNumber === activeRecord.ticketId
         );
@@ -716,51 +894,45 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
         } else {
           historyList.unshift(oemHistoryRecord);
         }
-        localStorage.setItem('forgex_maintenance_history', JSON.stringify(historyList));
+        setTenantData('forgex_maintenance_history', activePlant, historyList);
       } catch {}
 
       // B. Update forgex_shared_raised_tickets to mark ticket resolved/closed
       try {
-        const rawTickets = localStorage.getItem('forgex_shared_raised_tickets');
-        if (rawTickets) {
-          const tickets = JSON.parse(rawTickets);
-          if (Array.isArray(tickets)) {
-            const updatedTickets = tickets.map((t: any) => {
-              if (t.id === activeRecord.ticketId || t.ticketNumber === activeRecord.ticketId) {
-                return {
-                  ...t,
-                  status: 'RESOLVED',
-                  resolutionNotes: cleanFix || 'OEM Vendor Overhaul Cleared',
-                };
-              }
-              return t;
-            });
-            localStorage.setItem('forgex_shared_raised_tickets', JSON.stringify(updatedTickets));
-          }
+        const tickets = getTenantData<any[]>('forgex_shared_raised_tickets', activePlant, []);
+        if (Array.isArray(tickets) && tickets.length > 0) {
+          const updatedTickets = tickets.map((t: any) => {
+            if (t.id === activeRecord.ticketId || t.ticketNumber === activeRecord.ticketId) {
+              return {
+                ...t,
+                status: 'RESOLVED',
+                resolutionNotes: cleanFix || 'OEM Vendor Overhaul Cleared',
+              };
+            }
+            return t;
+          });
+          setTenantData('forgex_shared_raised_tickets', activePlant, updatedTickets);
         }
       } catch {}
 
       // C. Update matching ticket in Tech Execution Desk queue (forgex_tech_queue_tasks)
       try {
-        const rawQueue = localStorage.getItem('forgex_tech_queue_tasks');
-        if (rawQueue) {
-          const queue = JSON.parse(rawQueue);
-          if (Array.isArray(queue)) {
-            const updatedQueue = queue.map((t: any) => {
-              if (t.id === activeRecord.ticketId || t.rawCaseId === activeRecord.ticketId) {
-                return {
-                  ...t,
-                  status: 'Resolved',
-                  completedSteps: t.stepsCount || 5,
-                  steps: Array.isArray(t.steps)
-                    ? t.steps.map((s: any) => ({ ...s, status: 'COMPLETED' }))
-                    : t.steps,
-                };
-              }
-              return t;
-            });
-            localStorage.setItem('forgex_tech_queue_tasks', JSON.stringify(updatedQueue));
-          }
+        const queue = getTenantData<any[]>('forgex_tech_queue_tasks', activePlant, []);
+        if (Array.isArray(queue) && queue.length > 0) {
+          const updatedQueue = queue.map((t: any) => {
+            if (t.id === activeRecord.ticketId || t.rawCaseId === activeRecord.ticketId) {
+              return {
+                ...t,
+                status: 'Resolved',
+                completedSteps: t.stepsCount || 5,
+                steps: Array.isArray(t.steps)
+                  ? t.steps.map((s: any) => ({ ...s, status: 'COMPLETED' }))
+                  : t.steps,
+              };
+            }
+            return t;
+          });
+          setTenantData('forgex_tech_queue_tasks', activePlant, updatedQueue);
         }
       } catch {}
 
@@ -823,10 +995,9 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
         status: 'APPROVED',
       };
 
-      const existingRaw = localStorage.getItem('forgex_expert_notes');
-      const notesList = existingRaw ? JSON.parse(existingRaw) : [];
+      const notesList = getTenantData<any[]>('forgex_expert_notes', activePlant, []);
       notesList.unshift(newTip);
-      localStorage.setItem('forgex_expert_notes', JSON.stringify(notesList));
+      setTenantData('forgex_expert_notes', activePlant, notesList);
 
       setCapturedKnowledgeIds((prev) => new Set([...prev, rec.id]));
 
@@ -851,21 +1022,16 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
   };
 
   const cleanMachine = activeRecord
-    ? formatCleanMachineName(activeRecord.assetTag || activeRecord.assetName || 'COOLING TOWER')
+    ? extractRealMachineName(activeRecord)
     : 'COOLING TOWER';
   const cleanRootCause = activeRecord
-    ? formatCleanNoteTitle(activeRecord.rcaRootCause || activeRecord.rcaFindings, cleanMachine)
+    ? cleanDiagnosticRootCause(activeRecord.rcaRootCause || activeRecord.rcaFindings, cleanMachine)
     : 'Dynamic Hydraulic Cavitation & Impeller Vane Unbalance';
   const cleanSymptom = activeRecord
-    ? cleanTriggerText(
-        activeRecord.symptom ||
-          'Dynamic high vibration (> 6.8 mm/s RMS) and acoustic high-frequency cavitation chatter detected during Running state',
-        null,
-        cleanRootCause
-      )
-    : 'Dynamic high vibration detected on suction bearing';
+    ? cleanObservedIssue(activeRecord.symptom, cleanMachine)
+    : 'High vibration and mechanical sub-assembly seizure requiring OEM intervention.';
   const cleanWarrantyContractId = activeRecord
-    ? (activeRecord.warrantyContractId || activeRecord.contractRef || 'OEM-SIEMENS-WARR-2026-09')
+    ? (activeRecord.warrantyContractId || activeRecord.contractRef || `OEM-${cleanMachine}-WARR-2026`)
         .replace(/\.(glb|gltf)\b/gi, '')
         .replace(/\s*\([^)]*\)/g, '')
         .trim()
@@ -899,11 +1065,11 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
           </div>
         </div>
 
-        {/* Top 4 KPI Cards: Distinct Accent Strips & Soft Tints (No Excessive Green) */}
+        {/* Top 4 KPI Cards: Distinct Accent Strips & Soft Tints */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {/* Card 1: Total Escalations (Slate-Blue Accent) */}
-          <div className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs min-w-[105px] relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-slate-700 to-blue-600" />
+          <div className="bg-gradient-to-br from-slate-50 via-white to-blue-50/20 border border-slate-200 rounded-xl px-3 py-1.5 shadow-2xs min-w-[105px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-slate-700 via-indigo-600 to-blue-600" />
             <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block font-mono mt-0.5">
               Total Escalations
             </span>
@@ -914,8 +1080,8 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
           </div>
 
           {/* Card 2: 1. Supervisor Check (Amber-Orange Accent) */}
-          <div className="bg-amber-50/60 border border-amber-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-orange-500" />
+          <div className="bg-gradient-to-br from-amber-50/80 via-orange-50/30 to-white border border-amber-200/90 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600" />
             <span className="text-[9px] text-amber-800 font-bold uppercase tracking-wider block font-mono mt-0.5">
               1. Supervisor Check
             </span>
@@ -925,9 +1091,9 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             </div>
           </div>
 
-          {/* Card 3: 2. OEM Confirmed (Cyan-Indigo Accent) */}
-          <div className="bg-cyan-50/60 border border-cyan-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-cyan-500 to-indigo-600" />
+          {/* Card 3: 2. OEM Confirmed (Sky-Cyan Accent) */}
+          <div className="bg-gradient-to-br from-sky-50/80 via-cyan-50/30 to-white border border-cyan-200/90 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-sky-500 via-cyan-500 to-blue-600" />
             <span className="text-[9px] text-cyan-800 font-bold uppercase tracking-wider block font-mono mt-0.5">
               2. OEM Confirmed
             </span>
@@ -938,8 +1104,8 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
           </div>
 
           {/* Card 4: 3. 100% Verified (Emerald-Teal Accent) */}
-          <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-600" />
+          <div className="bg-gradient-to-br from-emerald-50/80 via-teal-50/30 to-white border border-emerald-200/90 rounded-xl px-3 py-1.5 shadow-2xs min-w-[115px] relative overflow-hidden">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600" />
             <span className="text-[9px] text-emerald-800 font-bold uppercase tracking-wider block font-mono mt-0.5">
               3. 100% Verified
             </span>
@@ -1007,7 +1173,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
               filteredList.map((rec) => {
                 const isSelected = activeRecord?.id === rec.id;
                 const stage = getEscalationStage(rec);
-                const recCleanMachine = formatCleanMachineName(rec.assetTag || rec.assetName || 'COOLING TOWER');
+                const recCleanMachine = extractRealMachineName(rec);
 
                 return (
                   <div
@@ -1165,22 +1331,34 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                   ].map(({ step, label }) => {
                     const isCurrentActive = activeWorkflowStep === step;
                     const isCompleted =
-                      (step === 1 && recordStage >= 2 && activeWorkflowStep >= 2) ||
-                      (step === 2 && recordStage >= 3 && activeWorkflowStep >= 3) ||
+                      (step === 1 && recordStage >= 2) ||
+                      (step === 2 && recordStage >= 3) ||
                       (step === 3 && recordStage === 3 && Boolean(activeRecord?.clearedAt));
+                    // Strict one-way enforcement: Earlier completed steps cannot be re-opened to unconfirm
+                    const isLockedEarlier = step < recordStage;
+                    const isLockedAtVerified = recordStage === 3 && step !== 3;
+                    const isDisabled = isLockedEarlier || isLockedAtVerified;
+
                     return (
                       <button
                         key={step}
                         type="button"
+                        disabled={isDisabled}
                         onClick={() => setActiveWorkflowStep(step)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                           isCurrentActive
-                            ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white shadow-md ring-2 ring-cyan-400/40'
+                            ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white shadow-md ring-2 ring-cyan-400/40 cursor-default'
+                            : isDisabled
+                            ? 'bg-slate-900/50 text-slate-500 border border-slate-800 opacity-60 cursor-not-allowed'
                             : isCompleted
-                            ? 'bg-indigo-950/90 text-indigo-200 border border-indigo-400/40 hover:bg-indigo-900/80'
-                            : 'bg-slate-900/80 text-slate-400 border border-slate-700 hover:bg-slate-800'
+                            ? 'bg-indigo-950/90 text-indigo-200 border border-indigo-400/40 hover:bg-indigo-900/80 cursor-pointer'
+                            : 'bg-slate-900/80 text-slate-400 border border-slate-700 hover:bg-slate-800 cursor-pointer'
                         }`}
-                        title={`Switch to ${label}`}
+                        title={
+                          isDisabled
+                            ? `Step ${step} completed & locked (Strict One-Way Workflow)`
+                            : `Switch to ${label}`
+                        }
                       >
                         <span>{isCompleted ? '✓ ' : ''}{label}</span>
                       </button>
@@ -1221,7 +1399,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             {activeWorkflowStep === 1 && (
               <div className="space-y-3.5 animate-in fade-in duration-150">
                 {/* Step 1 Context & Action Banner (Amber-Indigo Light Gradient) */}
-                <div className="p-3.5 bg-gradient-to-r from-amber-50 via-indigo-50/40 to-white border border-amber-300 text-slate-900 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="p-4 bg-gradient-to-r from-amber-50 via-indigo-50/40 to-white border border-amber-300 text-slate-900 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
                   <div className="flex items-center gap-2.5 text-xs">
                     <div className="w-8 h-8 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0">
                       <ShieldCheck className="w-4.5 h-4.5 text-amber-700" />
@@ -1231,197 +1409,118 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                         STEP 1: SUPERVISOR REVIEW &amp; SHOP-FLOOR FAILURE AUDIT
                       </strong>
                       <p className="text-[11px] text-slate-600 font-sans mt-0.5">
-                        Verify shop-floor failure telemetry and LOTO isolation before dispatching official OEM manufacturer notice.
+                        Verify shop-floor failure telemetry before authorizing official OEM manufacturer escalation dispatch.
                       </p>
                     </div>
                   </div>
-                  <Button
-                    size="sm"
-                    onClick={handleOpenAutoMailModal}
-                    className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs inline-flex items-center gap-1.5 px-4 py-2 rounded-xl shadow-md cursor-pointer shrink-0 transition-all active:scale-95"
-                  >
-                    <ShieldCheck className="w-4 h-4 text-cyan-200" />
-                    <span>Confirm Step 1 &amp; Prepare OEM Mail →</span>
-                  </Button>
+
+                  {recordStage >= 2 ? (
+                    <div className="px-3.5 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-bold flex items-center gap-1.5 shrink-0">
+                      <CheckCircle2 className="w-4 h-4 text-indigo-600" />
+                      <span>✓ Step 1 Confirmed &amp; Dispatched (Locked)</span>
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={handleOpenAutoMailModal}
+                      className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs inline-flex items-center gap-1.5 px-4 py-2 rounded-xl shadow-md cursor-pointer shrink-0 transition-all active:scale-95"
+                    >
+                      <ShieldCheck className="w-4 h-4 text-cyan-200" />
+                      <span>Confirm Step 1 &amp; Prepare OEM Mail →</span>
+                    </Button>
+                  )}
                 </div>
 
-                {/* 2-Column Grid: Shop-Floor Failure Telemetry + Supervisor Verification */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
-                  {/* Left Card: Failure & Telemetry Card (Soft Rose-to-Red) */}
-                  <div className="bg-gradient-to-br from-rose-50/70 via-white to-rose-50/30 border border-rose-200 text-slate-800 rounded-xl shadow-2xs overflow-hidden flex flex-col justify-between">
-                    <div className="bg-rose-100/70 border-b border-rose-200 px-4 py-2.5 flex items-center justify-between text-rose-950">
-                      <div className="flex items-center gap-2">
-                        <Activity className="w-4 h-4 text-rose-600" />
-                        <h3 className="text-xs font-bold uppercase font-mono tracking-wide">
-                          Shop-Floor Failure &amp; Attempted Steps Proof
-                        </h3>
-                      </div>
-                      <span className="font-mono text-[10px] font-bold bg-rose-200/80 text-rose-900 border border-rose-300 px-2 py-0.5 rounded">
-                        ALARM: {activeRecord.alarmCode || activeRecord.faultCode}
-                      </span>
+                {/* Single Crisp 2-Column Supervisor Issue Verification Card */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+                  <div className="px-5 py-3.5 bg-gradient-to-r from-slate-50 via-indigo-50/30 to-white border-b border-slate-200 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-indigo-600" />
+                      <h3 className="text-xs font-bold uppercase font-mono tracking-wide text-slate-800">
+                        Supervisor Issue Verification &amp; Authorization
+                      </h3>
                     </div>
+                    <span className="font-mono text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 px-2.5 py-0.5 rounded-md">
+                      Step 1 Verification
+                    </span>
+                  </div>
 
-                    <div className="p-4 space-y-3 flex-1">
-                      {/* Machine Tag & Ticket Info */}
-                      <div className="p-2.5 bg-white/80 border border-rose-200/80 rounded-lg flex items-center justify-between text-xs">
-                        <span className="text-slate-600 font-mono">
-                          Target Machine:{' '}
-                          <strong className="text-slate-900 font-bold">{cleanMachine}</strong>
-                        </span>
-                        <span className="text-indigo-700 font-mono font-bold">
-                          Ticket ID: {activeRecord.ticketId}
-                        </span>
+                  <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+                    {/* Left Column: Reported Machine & Fault Summary */}
+                    <div className="space-y-3.5 border-b md:border-b-0 md:border-r border-slate-100 md:pr-6 pb-4 md:pb-0">
+                      <div className="flex items-center gap-2 text-slate-700 font-bold font-mono text-[11px] uppercase tracking-wider">
+                        <Activity className="w-3.5 h-3.5 text-rose-500" />
+                        <span>Reported Machine &amp; Fault Summary</span>
                       </div>
 
-                      {/* Observed Field Symptom */}
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2 font-mono">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">Machine / Asset:</span>
+                          <strong className="text-slate-900 font-bold font-sans text-xs bg-white px-2 py-0.5 rounded border border-slate-200">
+                            {cleanMachine}
+                          </strong>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">Ticket ID:</span>
+                          <span className="text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                            {activeRecord.ticketId}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500">Alarm / Fault Code:</span>
+                          <span className="text-rose-700 font-bold bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                            {activeRecord.alarmCode || activeRecord.faultCode || 'FC-ALERT-01'}
+                          </span>
+                        </div>
+                      </div>
+
                       <div className="space-y-1">
                         <span className="text-[10px] font-mono uppercase font-bold text-slate-500 block">
-                          Observed Field Symptom:
+                          Observed Issue on Shop Floor:
                         </span>
-                        <p className="text-xs text-slate-800 font-sans leading-relaxed bg-white/80 p-2.5 rounded-lg border border-rose-200/60">
+                        <p className="text-xs text-slate-800 font-sans leading-relaxed bg-amber-50/50 p-3 rounded-xl border border-amber-200/70">
                           {cleanSymptom}
                         </p>
                       </div>
+                    </div>
 
-                      {/* Confirmed RCA Root Cause */}
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-mono uppercase font-bold text-indigo-700 block">
-                          Root Cause Analysis (RCA) Confirmed Hypothesis:
-                        </span>
-                        <p className="text-xs text-indigo-950 font-sans font-medium leading-relaxed bg-indigo-50/60 p-2.5 rounded-lg border border-indigo-200/80">
-                          {cleanRootCause}
+                    {/* Right Column: Supervisor Sign-Off Details */}
+                    <div className="space-y-3.5 flex flex-col justify-between">
+                      <div className="space-y-3.5">
+                        <div className="flex items-center gap-2 text-slate-700 font-bold font-mono text-[11px] uppercase tracking-wider">
+                          <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Supervisor Sign-Off Details</span>
+                        </div>
+
+                        <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2 font-mono">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500">Reviewing Supervisor:</span>
+                            <strong className="text-slate-900 font-bold font-sans">
+                              {user?.fullName || 'Saksham Goel'}
+                            </strong>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500">Facility / Plant:</span>
+                            <span className="text-slate-800 font-semibold font-sans truncate max-w-[200px]">
+                              {organization?.name || 'JMK Tiles Modernized'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500">Escalation Stage:</span>
+                            <span className="text-amber-800 font-bold bg-amber-100/80 px-2 py-0.5 rounded text-[11px]">
+                              Step 1 — Pending Supervisor Approval
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Clean AI Note */}
+                      <div className="p-3 bg-gradient-to-r from-indigo-50/70 via-blue-50/40 to-slate-50 rounded-xl border border-indigo-200/70 text-indigo-950 text-xs flex items-start gap-2.5">
+                        <span className="text-base shrink-0 select-none">✨</span>
+                        <p className="font-sans leading-relaxed italic text-slate-700 text-[11.5px]">
+                          Once confirmed, AI will automatically compile all attempted troubleshooting steps and root cause details into the official OEM dispatch email.
                         </p>
                       </div>
-
-                      {/* Checklist of Steps Attempted by Technician */}
-                      <div className="space-y-1.5 pt-1">
-                        <span className="text-[10px] font-mono uppercase font-bold text-slate-500 block">
-                          Checklist of Steps Attempted by Technician:
-                        </span>
-                        <div className="space-y-1.5">
-                          {/* Step 1: Passed */}
-                          <div className="p-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200 text-xs flex items-start gap-2">
-                            <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-                            <div className="text-indigo-950">
-                              <strong className="font-mono text-[11px] block">
-                                ✓ Step 1: LOTO &amp; Zero-Energy State Verification
-                              </strong>
-                              <p className="text-[11px] text-indigo-800/90 mt-0.5">
-                                Verified zero pressure (0.0 PSIG) &amp; electrical breaker locked. In-house safety protocol completed.
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* Step 2: Failed */}
-                          <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-300 text-xs space-y-1">
-                            <div className="flex items-center gap-2 text-rose-800 font-bold">
-                              <span className="w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] shrink-0 font-mono font-black">
-                                ✕
-                              </span>
-                              <span className="font-mono text-xs">
-                                Step #{activeRecord.failedStepNumber || 2} FAILED: {activeRecord.failedStepTitle || 'Flange Runout & Casing Alignment Verification'}
-                              </span>
-                            </div>
-                            <p className="text-xs text-rose-950 pl-6 leading-relaxed">
-                              {(activeRecord.failedNotes || '').replace(/^Blocked at (?:Step \d+:\s*)?[^—-]+[—\-]\s*/i, '').trim()}
-                            </p>
-                          </div>
-
-                          {/* Step 3: Halted */}
-                          <div className="p-2.5 rounded-lg bg-slate-100 border border-slate-200 text-xs flex items-start gap-2 opacity-80">
-                            <Lock className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-                            <div className="text-slate-700">
-                              <strong className="font-mono text-[11px] block">
-                                ⏸️ Step 3: Sub-Assembly Cartridge Replacement &amp; Overhaul
-                              </strong>
-                              <p className="text-[11px] text-slate-500 mt-0.5">
-                                Halted &amp; LOTO-locked to preserve factory warranty integrity pending certified OEM arrival.
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right Column: Supervisor Verification & Isolation Readiness */}
-                  <div className="flex flex-col space-y-3.5">
-                    {/* Supervisor Verification Card (Clean White Surface) */}
-                    <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-4 space-y-3">
-                      <div className="flex items-center gap-2 border-b border-slate-100 pb-2.5">
-                        <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                        <h3 className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
-                          Supervisor Verification &amp; Escalation Authorization
-                        </h3>
-                      </div>
-
-                      <p className="text-xs text-slate-600 font-sans leading-relaxed">
-                        Review shop-floor failure telemetry and LOTO isolation. Upon confirmation, an official technical dispatch email will be auto-generated with all machine and fault details.
-                      </p>
-
-                      <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-1.5 text-xs font-mono">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500">Reviewing Supervisor:</span>
-                          <strong className="text-slate-900 font-bold">{user?.fullName || 'Saksham Goel (Lead Supervisor)'}</strong>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500">Plant Location:</span>
-                          <strong className="text-slate-900">{organization?.name || 'JMK Plant Manufacturing Bay 04'}</strong>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500">Escalation Status:</span>
-                          <span className="text-amber-700 font-bold">Awaiting Mail Dispatch</span>
-                        </div>
-                      </div>
-
-                      <Button
-                        size="sm"
-                        onClick={handleOpenAutoMailModal}
-                        className="w-full bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs py-2.5 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all active:scale-95"
-                      >
-                        <Mail className="w-4 h-4 text-cyan-200" />
-                        <span>Confirm Step 1 &amp; Prepare OEM Mail</span>
-                      </Button>
-                    </div>
-
-                    {/* Warranty Coverage Card (Soft Sky-to-Cyan) */}
-                    <div className="bg-gradient-to-br from-sky-50 via-cyan-50/60 to-white border border-cyan-200 text-slate-800 p-3.5 rounded-xl shadow-2xs flex items-center justify-between gap-2.5">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-lg bg-cyan-100 text-cyan-700 border border-cyan-300 flex items-center justify-center shrink-0">
-                          <ShieldCheck className="w-4.5 h-4.5 text-cyan-700" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="font-bold text-slate-900 block text-xs leading-tight">
-                            ACTIVE OEM FACTORY WARRANTY
-                          </span>
-                          <span className="text-[11px] text-cyan-900/90 font-mono block mt-0.5">
-                            100% Component &amp; Labor Coverage Under {cleanWarrantyContractId}
-                          </span>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-mono font-bold px-2.5 py-1 rounded bg-cyan-100 text-cyan-800 border border-cyan-300 shrink-0">
-                        $0 Free Claim
-                      </span>
-                    </div>
-
-                    {/* Shop-Floor Tamper-Seal & LOTO Card (Soft Amber-to-Orange) */}
-                    <div className="bg-gradient-to-br from-amber-50 via-orange-50/50 to-white border border-amber-200 text-slate-800 p-3.5 rounded-xl shadow-2xs flex items-center justify-between gap-2.5">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 border border-amber-300 flex items-center justify-center shrink-0">
-                          <Lock className="w-4.5 h-4.5 text-amber-700" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="font-bold text-slate-900 block text-xs leading-tight">
-                            Shop-Floor Tamper-Seal &amp; LOTO Lock Active
-                          </span>
-                          <span className="text-[11px] text-amber-900/90 font-mono block mt-0.5">
-                            Serial #LOTO-9024 · Physically isolated &amp; safe for manufacturer arrival
-                          </span>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-mono font-bold px-2.5 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
-                        LOTO Sealed
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -1433,43 +1532,44 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             {/* ============================================================= */}
             {activeWorkflowStep === 2 && (
               <div className="space-y-3.5 animate-in fade-in duration-150">
-                {/* Step 2 Context Banner (Cyan-Blue Light Gradient) */}
-                <div className="p-3.5 bg-gradient-to-r from-cyan-50 via-blue-50/50 to-white border border-cyan-300 text-slate-900 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
-                  <div className="flex items-center gap-2.5 text-xs flex-1 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-cyan-100 border border-cyan-300 flex items-center justify-center text-cyan-700 shrink-0">
+                {/* Step 2 Context Banner (Cyan-Blue Light Gradient - Clean Unsquashed Stack) */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-cyan-50 via-sky-50 to-indigo-50 border border-cyan-200 w-full shadow-2xs">
+                  <div className="flex items-start gap-3 flex-1 min-w-[280px]">
+                    <div className="w-9 h-9 rounded-xl bg-cyan-100 border border-cyan-300 flex items-center justify-center text-cyan-700 shrink-0">
                       <Mail className="w-4.5 h-4.5 text-cyan-700" />
                     </div>
                     <div className="min-w-0">
-                      <strong className="text-slate-900 text-xs block font-mono">
-                        STEP 2: OEM DISPATCH CONFIRMED — AWAITING MANUFACTURER FIELD ACTION
+                      <strong className="text-slate-900 text-sm block font-mono font-bold tracking-tight">
+                        STEP 2: OEM DISPATCH CONFIRMED — AWAITING MANUFACTURER ACTION
                       </strong>
-                      <p className="text-[11px] text-slate-600 font-sans mt-0.5">
-                        Technical escalation mail has been dispatched. Track vendor communication, log manufacturer ETA, and verify on-site resolution.
+                      <p className="text-xs text-slate-600 font-sans mt-0.5">
+                        Official technical dossier has been auto-generated and dispatched to the OEM.
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  <div className="flex items-center gap-2.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => setIsViewMailModalOpen(true)}
-                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
+                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs whitespace-nowrap"
                     >
-                      <Copy className="w-3.5 h-3.5 text-slate-500" />
-                      <span>📄 View Dispatched Mail</span>
+                      <Mail className="w-3.5 h-3.5 text-slate-500" />
+                      <span>View Dispatched Mail</span>
                     </button>
-                    <Button
-                      size="sm"
-                      onClick={handleConfirmOemSolvedStep2}
-                      className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl shadow-md cursor-pointer transition-all active:scale-95 whitespace-nowrap shrink-0"
+                    <button
+                      type="button"
+                      onClick={handleReopenGmailDraft}
+                      className="inline-flex items-center gap-1.5 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs whitespace-nowrap"
+                      title="Re-open pre-filled failure dossier draft in Gmail"
                     >
-                      <Check className="w-4 h-4 text-cyan-200" />
-                      <span>✓ Confirm OEM Resolution (Step 3) →</span>
-                    </Button>
+                      <ExternalLink className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Re-Open Draft in Gmail</span>
+                    </button>
                   </div>
                 </div>
 
                 {/* Cyan-Blue Gradient Dispatch Confirmation Card */}
-                <div className="bg-gradient-to-br from-cyan-50/80 via-blue-50/40 to-white border border-cyan-300 rounded-xl p-5 shadow-2xs text-slate-800 space-y-4">
+                <div className="bg-gradient-to-br from-cyan-50/80 via-blue-50/40 to-white border border-cyan-300 rounded-2xl p-5 shadow-2xs text-slate-800 space-y-4">
                   {/* Top Header Row */}
                   <div className="flex items-center justify-between border-b border-cyan-200/80 pb-3 flex-wrap gap-2">
                     <div className="flex items-center gap-2">
@@ -1486,13 +1586,13 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                   </div>
 
                   {/* Communication Route Card */}
-                  <div className="bg-white border border-cyan-200 rounded-lg p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                  <div className="bg-white border border-cyan-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                     <div className="space-y-0.5">
                       <span className="text-[10px] font-mono text-slate-500 uppercase font-bold">
                         From Company Mail (Supervisor):
                       </span>
                       <p className="font-mono font-bold text-slate-900 select-all">
-                        {supervisorEmail}
+                        {activeRecord.dispatchedFromEmail || supervisorEmail || user?.email || 'supervisor@jmktiles.com'}
                       </p>
                     </div>
 
@@ -1503,18 +1603,18 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                         To OEM Manufacturer Mail:
                       </span>
                       <p className="font-mono font-bold text-cyan-800 select-all">
-                        {activeRecord.oemContactEmail || oemEmail || 'oem.support@manufacturer.com'}
+                        {activeRecord.dispatchedToEmail || activeRecord.oemContactEmail || oemEmail || 'oem.support@manufacturer.com'}
                       </p>
                     </div>
                   </div>
 
                   {/* Dispatched Failure Telemetry Summary */}
-                  <div className="bg-white/80 border border-slate-200 rounded-lg p-3.5 space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
+                  <div className="bg-white/90 border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                       <span className="font-mono text-slate-600 font-bold">
-                        Machine: <strong className="text-slate-900">{cleanMachine}</strong>
+                        Machine: <strong className="text-slate-900 font-sans">{cleanMachine}</strong>
                       </span>
-                      <span className="font-mono text-indigo-700 font-bold">
+                      <span className="font-mono text-indigo-700 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                         Ticket ID: {activeRecord.ticketId}
                       </span>
                     </div>
@@ -1523,7 +1623,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                       <span className="text-[10px] font-mono uppercase text-slate-500 font-bold block">
                         Diagnostic Root Cause:
                       </span>
-                      <p className="text-xs text-slate-800 font-medium">
+                      <p className="text-xs text-slate-800 font-medium leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-200/70">
                         {cleanRootCause}
                       </p>
                     </div>
@@ -1532,8 +1632,8 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                       <span className="text-[10px] font-mono uppercase text-rose-700 font-bold block">
                         Halted Sub-Assembly Step:
                       </span>
-                      <p className="text-xs text-rose-800 font-mono">
-                        Step #{activeRecord.failedStepNumber || 2}: {activeRecord.failedStepTitle || 'Component Overhaul'} — {(activeRecord.failedNotes || '').replace(/^Blocked at (?:Step \d+:\s*)?[^—-]+[—\-]\s*/i, '').trim()}
+                      <p className="text-xs text-rose-800 font-mono bg-rose-50/60 p-2.5 rounded-lg border border-rose-200">
+                        Step #{activeRecord.failedStepNumber || 2}: {activeRecord.failedStepTitle || 'Component Overhaul'} — {(activeRecord.failedNotes || 'Mechanical seizure and cavitation micro-cracking encountered; safety lockout engaged.').replace(/Equipment:\s*[^;\n\r]+/gi, '').replace(/Failed Step:\s*[^;\n\r]+/gi, '').replace(/Auto-Assigned To:\s*[^;\n\r]+/gi, '').replace(/Assigned Technician:\s*[^;\n\r]+/gi, '').replace(/Execution halted at[^;\n\r]+/gi, '').replace(/Blocked at[^;\n\r]+/gi, '').trim()}
                       </p>
                     </div>
                   </div>
@@ -1549,33 +1649,36 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                           Part A: Manufacturer Response &amp; ETA Tracking
                         </span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLoggedOemResponses((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(activeRecord.id)) {
-                              next.delete(activeRecord.id);
-                            } else {
+                      {loggedOemResponses.has(activeRecord.id) ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 cursor-default flex items-center gap-1.5 shadow-2xs"
+                          title="OEM response has been permanently logged and verified (Locked)"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>✓ OEM Engineering Response &amp; ETA Confirmed (Locked)</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoggedOemResponses((prev) => {
+                              const next = new Set(prev);
                               next.add(activeRecord.id);
-                              toast.success('OEM Response Logged', 'Manufacturer ETA & warranty acknowledgement confirmed.');
-                            }
-                            return next;
-                          });
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 border shadow-2xs ${
-                          loggedOemResponses.has(activeRecord.id)
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
-                            : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
-                        }`}
-                      >
-                        <Inbox className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>
-                          {loggedOemResponses.has(activeRecord.id)
-                            ? '✓ OEM Engineering Response Recorded'
-                            : '📩 Log OEM Engineering Response / ETA Confirmed'}
-                        </span>
-                      </button>
+                              try {
+                                localStorage.setItem('forgex_oem_logged_responses', JSON.stringify([...next]));
+                              } catch {}
+                              return next;
+                            });
+                            toast.success('OEM Response Logged', 'Manufacturer ETA & warranty acknowledgement confirmed.');
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50 transition cursor-pointer flex items-center gap-1.5 shadow-2xs active:scale-95"
+                        >
+                          <Inbox className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Log OEM Engineering Response / ETA Confirmed</span>
+                        </button>
+                      )}
                     </div>
 
                     {/* Revealed Official OEM Engineering Response Note */}
@@ -1607,26 +1710,50 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                   {/* ========================================================= */}
                   {/* PART B: FIELD RESOLUTION VERIFICATION & ADVANCE TO STEP 3 */}
                   {/* ========================================================= */}
-                  <div className="p-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-cyan-50 border border-emerald-300 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
+                  <div className="p-4 bg-gradient-to-r from-sky-50 via-cyan-50 to-blue-50 border border-cyan-300 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                        <h4 className="font-mono font-bold text-xs text-emerald-950 uppercase">
+                        <CheckCircle2 className="w-4 h-4 text-cyan-700 shrink-0" />
+                        <h4 className="font-mono font-bold text-xs text-slate-900 uppercase">
                           Part B: Field Overhaul Complete — Ready for Sign-Off
                         </h4>
                       </div>
-                      <p className="text-[11px] text-emerald-800 font-sans">
-                        Once OEM specialist completes on-site seal replacement, pressure testing, and vibrational validation, confirm resolution to unlock Step 3.
+                      <p className="text-[11px] text-slate-600 font-sans">
+                        Once OEM specialist completes on-site overhaul, pressure testing, and vibrational validation, confirm resolution to unlock Step 3.
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={handleConfirmOemSolvedStep2}
-                      className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-all active:scale-95"
-                    >
-                      <Check className="w-4 h-4 text-emerald-100" />
-                      <span>✅ Confirm OEM Problem Solved &amp; Advance to Step 3 (100% Verified) →</span>
-                    </Button>
+
+                    {recordStage >= 3 ? (
+                      <div className="px-4 py-2.5 rounded-xl bg-cyan-100 text-cyan-900 border border-cyan-300 text-xs font-bold flex items-center gap-2 shrink-0">
+                        <CheckCircle2 className="w-4 h-4 text-cyan-700" />
+                        <span>✓ OEM Resolution Confirmed &amp; 100% Verified (Locked)</span>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setConfirmActionModalState({
+                            isOpen: true,
+                            title: '🛡️ Confirm Confidential Action: Advance to Step 3',
+                            subtitle: 'OEM Overhaul Clearance & Resolution Verification',
+                            targetItemId: activeRecord.ticketId,
+                            targetItemName: `${cleanMachine} — ${cleanRootCause}`,
+                            description: `You are verifying that manufacturer service engineer has successfully completed repairs on ${cleanMachine}. Advancing will unlock Step 3 for 100% verified closure.`,
+                            acknowledgmentText: 'I verify that OEM technical repairs have been inspected and validated on-site.',
+                            confirmButtonText: 'Authorize & Advance to Step 3',
+                            isDestructive: false,
+                            onConfirm: () => {
+                              setConfirmActionModalState(null);
+                              handleConfirmOemSolvedStep2();
+                            },
+                          });
+                        }}
+                        className="bg-gradient-to-r from-cyan-600 via-sky-600 to-blue-600 hover:from-cyan-500 hover:to-sky-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-all active:scale-95"
+                      >
+                        <Check className="w-4 h-4 text-cyan-100" />
+                        <span>Confirm OEM Problem Solved &amp; Advance to Step 3 (100% Verified) →</span>
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1664,23 +1791,23 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                   </div>
                 </div>
 
-                {/* Soft Indigo-to-Sky-to-Amber surface */}
-                <div className="bg-gradient-to-br from-indigo-50/60 via-white to-sky-50/60 border border-indigo-200 rounded-xl p-5 shadow-2xs text-slate-800 space-y-4">
+                {/* Soft Emerald-to-Teal surface */}
+                <div className="bg-gradient-to-br from-emerald-50/70 via-white to-teal-50/50 border border-emerald-300 rounded-xl p-5 shadow-2xs text-slate-800 space-y-4">
                   {/* Header Row without double icons */}
-                  <div className="flex items-center justify-between border-b border-indigo-100 pb-3">
+                  <div className="flex items-center justify-between border-b border-emerald-100 pb-3">
                     <div className="flex items-center gap-2">
-                      <Building2 className="w-4 h-4 text-indigo-700" />
+                      <Building2 className="w-4 h-4 text-emerald-700" />
                       <h3 className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
                         100% VERIFIED — OEM OVERHAUL &amp; RESOLUTION COMPLETE
                       </h3>
                     </div>
-                    <span className="font-mono text-[10px] font-bold bg-indigo-100 text-indigo-900 border border-indigo-300 px-2.5 py-0.5 rounded-md">
+                    <span className="font-mono text-[10px] font-bold bg-emerald-100 text-emerald-900 border border-emerald-300 px-2.5 py-0.5 rounded-md">
                       ✓ 100% Verified &amp; Sealed
                     </span>
                   </div>
 
                   {/* Audit Trail Row */}
-                  <div className="bg-white border border-indigo-100 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs shadow-2xs">
+                  <div className="bg-white border border-emerald-100 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs shadow-2xs">
                     <div>
                       <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
                         Dispatched To OEM:
@@ -1773,17 +1900,33 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     />
                   </div>
 
-                  {/* Action Bar (Clean Indigo / Slate Styling without double icons) */}
-                  <div className="p-3 bg-white rounded-xl border border-indigo-200 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                  {/* Action Bar (Clean Emerald-Teal Theme) */}
+                  <div className="p-3 bg-white rounded-xl border border-emerald-200 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
                     <div className="flex items-center gap-2 flex-wrap">
                       {/* Button 1: Confirm OEM Resolution & Archive to History */}
                       <Button
                         size="sm"
                         disabled={isSubmittingSignOff}
-                        onClick={handleAuthorizeClearance}
-                        className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 transition-all active:scale-95"
+                        onClick={() => {
+                          setConfirmActionModalState({
+                            isOpen: true,
+                            title: '🛡️ Confirm Confidential Action: Close-Loop Audit Sign-Off',
+                            subtitle: 'Plant Chief Engineer Authorization & Permanent Archival',
+                            targetItemId: activeRecord.ticketId,
+                            targetItemName: `${cleanMachine} — ${cleanRootCause}`,
+                            description: `You are authorizing the return to production of ${cleanMachine} (Ticket #${activeRecord.ticketId}). This action permanently archives this case to Maintenance History and closes the ticket across all plant systems.`,
+                            acknowledgmentText: 'I authorize equipment clearance and certify that OEM repair specifications and plant safety protocols have been met.',
+                            confirmButtonText: 'Authorize Final Clearance & Archive',
+                            isDestructive: false,
+                            onConfirm: async () => {
+                              setConfirmActionModalState(null);
+                              await handleAuthorizeClearance();
+                            },
+                          });
+                        }}
+                        className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 transition-all active:scale-95"
                       >
-                        <Lock className="w-4 h-4 text-cyan-200" />
+                        <Lock className="w-4 h-4 text-emerald-100" />
                         <span>Confirm OEM Resolution &amp; Archive to History</span>
                       </Button>
 
@@ -1829,7 +1972,9 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
               {escalations.length === 0 ? 'No Active OEM Escalations' : 'Select an Escalated Ticket'}
             </h3>
             <p className="text-xs text-slate-500 max-w-sm font-sans leading-relaxed">
-              Click any escalation in the list to review failure telemetry, auto-draft the technical email, or confirm manufacturer overhaul.
+              {escalations.length === 0
+                ? 'No OEM escalations recorded for this facility. When a technician escalates an issue in Tech Execution Desk, it will appear here.'
+                : 'Click any escalation in the list to review failure telemetry, auto-draft the technical email, or confirm manufacturer overhaul.'}
             </p>
           </div>
         )}
@@ -1888,7 +2033,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     required
                     value={supervisorEmail}
                     onChange={(e) => setSupervisorEmail(e.target.value)}
-                    placeholder="e.g. supervisor@jmktiles.com"
+                    placeholder="Enter supervisor/company email..."
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white transition shadow-2xs font-medium"
                   />
                 </div>
@@ -1904,7 +2049,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     required
                     value={oemEmail}
                     onChange={(e) => setOemEmail(e.target.value)}
-                    placeholder="e.g. oem.support@manufacturer.com"
+                    placeholder="Enter OEM manufacturer email..."
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white transition shadow-2xs font-medium"
                   />
                 </div>
@@ -1940,31 +2085,37 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             </div>
 
             {/* Modal Footer Actions */}
-            <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100 flex-wrap">
               <button
                 type="button"
                 onClick={handleCopyEmailContent}
                 className="px-3.5 py-2 border border-slate-300 rounded-xl text-slate-700 hover:bg-slate-50 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                title="Copy email body to clipboard"
               >
                 <Copy className="w-3.5 h-3.5 text-slate-500" />
-                <span>📋 Copy Mail Content</span>
+                <span>Copy Mail</span>
               </button>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsAutoMailModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
+                  className="px-3.5 py-2 border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
                 >
                   Cancel
                 </button>
                 <Button
                   size="sm"
-                  onClick={handleDispatchOfficialOemMail}
-                  className="bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 transition-all active:scale-95"
+                  disabled={!supervisorEmail.trim() || !oemEmail.trim()}
+                  onClick={() => handleDispatchOfficialOemMail(true)}
+                  className={`bg-gradient-to-r from-red-600 via-rose-600 to-indigo-600 hover:from-red-500 hover:to-indigo-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md inline-flex items-center gap-2 transition-all active:scale-95 ${
+                    !supervisorEmail.trim() || !oemEmail.trim()
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'cursor-pointer'
+                  }`}
                 >
-                  <Send className="w-4 h-4 text-cyan-200" />
-                  <span>📨 Send Official Mail to OEM →</span>
+                  <Send className="w-4 h-4 text-rose-200" />
+                  <span>Open in Gmail &amp; Dispatch →</span>
                 </Button>
               </div>
             </div>
@@ -2014,23 +2165,37 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
               className="w-full p-3 bg-slate-900 text-slate-100 font-mono text-xs leading-relaxed rounded-lg border border-slate-700 shadow-inner"
             />
 
-            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100 flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleCopyEmailContent}
                 className="px-3.5 py-1.5 border border-slate-300 rounded-xl text-slate-700 hover:bg-slate-50 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
               >
                 <Copy className="w-3.5 h-3.5 text-slate-500" />
-                <span>📋 Copy Mail Body</span>
+                <span>Copy Mail Body</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => setIsViewMailModalOpen(false)}
-                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl cursor-pointer"
-              >
-                Close Preview
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsViewMailModalOpen(false);
+                    handleReopenGmailDraft();
+                  }}
+                  className="px-3.5 py-1.5 bg-gradient-to-r from-red-600 via-rose-600 to-indigo-600 hover:from-red-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl cursor-pointer inline-flex items-center gap-1.5 shadow-xs transition-all active:scale-95"
+                  title="Open this pre-filled failure dossier directly in Gmail"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open in Gmail</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsViewMailModalOpen(false)}
+                  className="px-4 py-1.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl cursor-pointer"
+                >
+                  Close Preview
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2077,6 +2242,24 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             </div>
           </div>
         </div>
+      )}
+
+      {/* 2-Step Confidential Action Confirmation Modal */}
+      {confirmActionModalState && (
+        <ConfirmActionModal
+          isOpen={confirmActionModalState.isOpen}
+          onClose={() => setConfirmActionModalState(null)}
+          title={confirmActionModalState.title}
+          subtitle={confirmActionModalState.subtitle}
+          targetItemId={confirmActionModalState.targetItemId}
+          targetItemName={confirmActionModalState.targetItemName}
+          description={confirmActionModalState.description}
+          acknowledgmentText={confirmActionModalState.acknowledgmentText}
+          confirmButtonText={confirmActionModalState.confirmButtonText}
+          isDestructive={confirmActionModalState.isDestructive}
+          isSubmitting={isSubmittingSignOff}
+          onConfirm={confirmActionModalState.onConfirm}
+        />
       )}
     </div>
   );

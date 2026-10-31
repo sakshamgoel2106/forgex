@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { User, Organization, OrganizationMembership, OrgPermission, OrgRole } from '@forgex/shared-types';
 import { ORG_ROLE_PERMISSIONS } from '@forgex/shared-types';
+import { clearTransientSessionState } from '../utils/tenantStorage';
 
 export interface RegisterCompanyData {
   organizationName: string;
@@ -281,6 +282,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           localStorage.setItem(TOKEN_KEY, newToken);
           localStorage.setItem(ORG_ID_KEY, newOrg.id);
+          clearTransientSessionState();
           localStorage.setItem(USER_KEY, JSON.stringify(newUser));
           localStorage.setItem(ORG_KEY, JSON.stringify(newOrg));
           localStorage.setItem(MEMBERSHIP_KEY, JSON.stringify(safeMembership));
@@ -1178,7 +1180,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const switchOrganization = async (newOrgId: string) => {
     if (!token) return;
     localStorage.setItem(ORG_ID_KEY, newOrgId);
+    clearTransientSessionState();
     await fetchCurrentUser(token, newOrgId);
+    window.dispatchEvent(
+      new CustomEvent('forgex:tenant_changed', {
+        detail: { orgId: newOrgId },
+      })
+    );
   };
 
   const refreshAuth = async () => {

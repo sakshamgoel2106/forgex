@@ -33,8 +33,15 @@ import {
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
 import { useAuth } from '../../lib/AuthContext';
+import { usePlant } from '../../lib/PlantContext';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
+import {
+  getTenantKey,
+  getTenantData,
+  setTenantData,
+  isDefaultDemoPlant,
+} from '../../utils/tenantStorage';
 import type { RcaSession } from '@forgex/shared-types';
 import { generateRcaPdfReport } from '../../utils/rcaPdfReport';
 import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill, sanitizeAssetTag } from '../modals/ExpertKnowledgeCaptureModal';
@@ -121,6 +128,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
 }) => {
   const { toast } = useToast();
   const { organization, user } = useAuth();
+  const { activePlant } = usePlant();
 
   // AI Voice Language Selector ('en' | 'hi') & Available Speech Synthesis Voices
   const [voiceLanguage, setVoiceLanguage] = useState<'en' | 'hi'>('en');
@@ -189,7 +197,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
   const [expertCapturePrefill, setExpertCapturePrefill] = useState<ExpertKnowledgePrefill | null>(null);
 
   // Storage Keys for Bulletproof Persistence (Database + localStorage + sessionStorage)
-  const storageKey = `forgex_rca_history_${organization?.id || 'default'}`;
+  const storageKey = getTenantKey(`forgex_rca_history_${organization?.id || 'default'}`, activePlant);
 
   // Inline Step Inspection State for 5-Why
   const [selectedWhyStep, setSelectedWhyStep] = useState<{ hypId: string; stepIndex: number } | null>(null);
@@ -262,11 +270,16 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     }
   }, [activeSession?.id]);
 
+  // Track currently speaking step ID and global speech state to prevent stuck SpeechSynthesis
+  const [speakingStepId, setSpeakingStepId] = useState<string | null>(null);
+  const isSpeakingRef = useRef<boolean>(false);
+
   // Speech Synthesis Speaker with AI Voice Changer & Hindi Support
   const speakText = useCallback((text: string, langOverride?: 'en' | 'hi') => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
+      isSpeakingRef.current = true;
       const utterance = new SpeechSynthesisUtterance(text);
       const targetLang = langOverride || voiceLanguageRef.current;
 
@@ -298,11 +311,82 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
         utterance.pitch = 1.0;
       }
 
+      utterance.onend = () => {
+        isSpeakingRef.current = false;
+        setSpeakingStepId(null);
+      };
+      utterance.onerror = () => {
+        isSpeakingRef.current = false;
+        setSpeakingStepId(null);
+      };
+
       window.speechSynthesis.speak(utterance);
     } catch (e) {
+      isSpeakingRef.current = false;
       console.warn('Voice speech error:', e);
     }
   }, [availableVoices]);
+
+  // Read a specific step card out loud with toggle
+  const handleToggleReadSpecificStep = useCallback((step: any, hindiData?: any) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+
+    if (speakingStepId === step.id) {
+      window.speechSynthesis.cancel();
+      isSpeakingRef.current = false;
+      setSpeakingStepId(null);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    setSpeakingStepId(step.id);
+    isSpeakingRef.current = true;
+
+    let textToSpeak = '';
+    const lang = voiceLanguageRef.current;
+    if (lang === 'hi') {
+      const hi = hindiData || translateStepToHindi(step);
+      textToSpeak = `स्टेप ${step.stepNumber}: ${hi.instruction}. अपेक्षित स्थिति: ${hi.expected}. उपकरण: ${step.requiredTools || 'मानक टूल्स'}.`;
+    } else {
+      const targetReading = step.expectedReading ? ` Expected reading: ${step.expectedReading}.` : '';
+      const tools = step.requiredTools ? ` Tools required: ${step.requiredTools}.` : '';
+      textToSpeak = `Step ${step.stepNumber}: ${step.name}. Instruction: ${step.instruction}.${targetReading}${tools}`;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    if (lang === 'hi') {
+      utterance.lang = 'hi-IN';
+      const hiVoice = availableVoices.find(
+        (v) =>
+          v.lang.toLowerCase().includes('hi') ||
+          v.name.toLowerCase().includes('hindi') ||
+          v.lang.toLowerCase().includes('hi-in')
+      );
+      if (hiVoice) utterance.voice = hiVoice;
+      utterance.rate = 0.95;
+    } else {
+      utterance.lang = 'en-US';
+      const enVoice = availableVoices.find(
+        (v) =>
+          v.lang.includes('en-US') ||
+          v.lang.includes('en-IN') ||
+          v.name.toLowerCase().includes('english')
+      );
+      if (enVoice) utterance.voice = enVoice;
+      utterance.rate = 1.0;
+    }
+
+    utterance.onend = () => {
+      isSpeakingRef.current = false;
+      setSpeakingStepId((prev) => (prev === step.id ? null : prev));
+    };
+    utterance.onerror = () => {
+      isSpeakingRef.current = false;
+      setSpeakingStepId((prev) => (prev === step.id ? null : prev));
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }, [availableVoices, speakingStepId]);
 
   // Cleanup speech recognition and synthesis on unmount
   useEffect(() => {
@@ -479,13 +563,12 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
       };
 
       try {
-        const existingRaw = localStorage.getItem('forgex_shared_raised_tickets');
-        const existingList = existingRaw ? JSON.parse(existingRaw) : [];
+        const existingList = getTenantData<any[]>('forgex_shared_raised_tickets', activePlant, []);
         const filtered = existingList.filter(
           (t: any) => t.id !== ticketNum && t.caseNumber !== ticketNum
         );
         filtered.unshift(newTicket);
-        localStorage.setItem('forgex_shared_raised_tickets', JSON.stringify(filtered));
+        setTenantData('forgex_shared_raised_tickets', activePlant, filtered);
       } catch (err) {
         console.warn('Error saving shared ticket:', err);
       }
@@ -711,7 +794,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
 
   const lastCommandTimeRef = useRef<number>(0);
   const hasAnnouncedRef = useRef<boolean>(false);
-  const handlersRef = useRef({
+  const voiceHandlersRef = useRef({
     handleVoiceStepPass: () => {},
     handleVoiceStepFail: () => {},
     handleDirectEscalateFromStep: () => {},
@@ -732,6 +815,8 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
       hasAnnouncedRef.current = false;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
+        isSpeakingRef.current = false;
+        setSpeakingStepId(null);
         const deactMsg = voiceLanguageRef.current === 'hi'
           ? HINDI_VOICE_PROMPTS.voiceDeactivated
           : 'Voice control disabled.';
@@ -755,6 +840,8 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
 
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
+      isSpeakingRef.current = false;
+      setSpeakingStepId(null);
 
       if (!hasAnnouncedRef.current) {
         hasAnnouncedRef.current = true;
@@ -766,6 +853,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
 
         // Critical: Start mic strictly AFTER TTS finishes speaking so mic never hears itself!
         utt.onend = () => {
+          isSpeakingRef.current = false;
           if (isVoiceListeningRef.current && recognitionRef.current) {
             try {
               recognitionRef.current.start();
@@ -773,6 +861,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
           }
         };
         utt.onerror = () => {
+          isSpeakingRef.current = false;
           if (isVoiceListeningRef.current && recognitionRef.current) {
             try {
               recognitionRef.current.start();
@@ -801,9 +890,9 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     );
   }, [toast]);
 
-  // Update handlersRef on every render so SpeechRecognition always calls the latest callbacks without recreating instance
+  // Update voiceHandlersRef on every render so SpeechRecognition always calls the latest callbacks without recreating instance
   useEffect(() => {
-    handlersRef.current = {
+    voiceHandlersRef.current = {
       handleVoiceStepPass,
       handleVoiceStepFail,
       handleDirectEscalateFromStep,
@@ -825,14 +914,14 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     recognition.lang = voiceLanguageRef.current === 'hi' ? 'hi-IN' : 'en-US';
 
     recognition.onresult = (event: any) => {
-      // 1. Drop inputs while TTS is speaking to prevent mic hearing speaker output!
-      if (typeof window !== 'undefined' && window.speechSynthesis?.speaking) {
+      // 1. Drop inputs only while TTS is actively speaking to prevent mic hearing speaker output!
+      if (typeof window !== 'undefined' && isSpeakingRef.current) {
         return;
       }
 
       const now = Date.now();
-      // 500ms debounce lock
-      if (now - lastCommandTimeRef.current < 500) {
+      // 400ms debounce lock
+      if (now - lastCommandTimeRef.current < 400) {
         return;
       }
 
@@ -842,9 +931,14 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
         if (!transcript) continue;
 
         // 1. Stop commands
-        if (/\b(stop voice|disable voice|turn off voice|band karo|mute|disable)\b/i.test(transcript)) {
+        if (/\b(stop voice|disable voice|turn off voice|band karo|mute|disable|stop)\b/i.test(transcript)) {
           lastCommandTimeRef.current = now;
-          handlersRef.current.toggleVoiceControl();
+          if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            isSpeakingRef.current = false;
+            setSpeakingStepId(null);
+          }
+          voiceHandlersRef.current.toggleVoiceControl();
           return;
         }
 
@@ -856,11 +950,16 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
           recognition.lang = 'hi-IN';
           if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
+            isSpeakingRef.current = false;
+            setSpeakingStepId(null);
             const utt = new SpeechSynthesisUtterance('हिंदी वॉइस एक्टिवेट हो गई है।');
             utt.lang = 'hi-IN';
             window.speechSynthesis.speak(utt);
           }
           toast.info('Language Changed', 'AI Voice set to Hindi (हिंदी)');
+          setTimeout(() => {
+            voiceHandlersRef.current.handleReadActiveStep();
+          }, 800);
           return;
         }
 
@@ -871,6 +970,8 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
           recognition.lang = 'en-US';
           if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
+            isSpeakingRef.current = false;
+            setSpeakingStepId(null);
             const utt = new SpeechSynthesisUtterance('English technical voice activated.');
             utt.lang = 'en-US';
             window.speechSynthesis.speak(utt);
@@ -881,38 +982,38 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
 
         // 3. Execution Commands
         if (isVoiceListeningRef.current) {
-          // PASS Triggers
+          // PASS / CONFIRM / DONE / VERIFIED Triggers
           if (/\b(pass|paas|pas|past|confirm|verified|done|ok|yes|sahi)\b/i.test(transcript)) {
             lastCommandTimeRef.current = now;
-            handlersRef.current.handleVoiceStepPass();
+            voiceHandlersRef.current.handleVoiceStepPass();
             return;
           }
 
-          // FAIL Triggers
-          if (/\b(fail|failed|fale|fell|no|error|galat|kharab)\b/i.test(transcript)) {
+          // FAIL / BLOCK / ISSUE Triggers
+          if (/\b(fail|failed|fale|fell|block|issue|no|error|galat|kharab)\b/i.test(transcript)) {
             lastCommandTimeRef.current = now;
-            handlersRef.current.handleVoiceStepFail();
+            voiceHandlersRef.current.handleVoiceStepFail();
             return;
           }
 
           // ESCALATE Triggers
           if (/\b(escalate|dispatch|technician|assign|bhejo)\b/i.test(transcript)) {
             lastCommandTimeRef.current = now;
-            handlersRef.current.handleDirectEscalateFromStep();
+            voiceHandlersRef.current.handleDirectEscalateFromStep();
             return;
           }
 
-          // NEXT Triggers
+          // NEXT / SKIP Triggers
           if (/\b(next|agla|skip|forward)\b/i.test(transcript)) {
             lastCommandTimeRef.current = now;
-            handlersRef.current.handleVoiceStepPass();
+            voiceHandlersRef.current.handleVoiceStepPass();
             return;
           }
 
-          // READ Triggers
-          if (/\b(read|read step|speak|tell|padho|batao|sunao)\b/i.test(transcript)) {
+          // READ / SPEAK / LISTEN Triggers
+          if (/\b(read|read step|speak|listen|tell|padho|batao|sunao)\b/i.test(transcript)) {
             lastCommandTimeRef.current = now;
-            handlersRef.current.handleReadActiveStep();
+            voiceHandlersRef.current.handleReadActiveStep();
             return;
           }
         }
@@ -1018,9 +1119,8 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     }
     // Check shared raised tickets
     try {
-      const raw = localStorage.getItem('forgex_shared_raised_tickets');
-      if (raw) {
-        const tickets: any[] = JSON.parse(raw);
+      const tickets: any[] = getTenantData<any[]>('forgex_shared_raised_tickets', activePlant, []);
+      if (Array.isArray(tickets)) {
         const isLinkedToActive = tickets.some(
           (t) =>
             (t.rcaSessionId && t.rcaSessionId === s.id) ||
@@ -1100,23 +1200,20 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     const ticketRefId = s.escalatedTicketId || escalatedTicketId || autoRaisedTicket?.ticketId;
 
     try {
-      const rawTickets = localStorage.getItem('forgex_shared_raised_tickets');
-      if (rawTickets) {
-        const tickets: any[] = JSON.parse(rawTickets);
-        if (Array.isArray(tickets)) {
-          if (ticketRefId) {
-            linkedTicket = tickets.find((t) => t.id === ticketRefId || t.caseNumber === ticketRefId);
-          }
-          if (!linkedTicket) {
-            linkedTicket = tickets.find((t) => t.rcaSessionId === activeSession.id);
-          }
-          if (!linkedTicket) {
-            const cleanActiveLower = cleanAssetTag.toLowerCase();
-            linkedTicket = tickets.find((t) => {
-              const tTag = (t.assetTag || '').replace(/\.(glb|gltf|obj|stl)\b/gi, '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
-              return tTag && cleanActiveLower && (tTag.includes(cleanActiveLower) || cleanActiveLower.includes(tTag));
-            });
-          }
+      const tickets: any[] = getTenantData<any[]>('forgex_shared_raised_tickets', activePlant, []);
+      if (Array.isArray(tickets)) {
+        if (ticketRefId) {
+          linkedTicket = tickets.find((t) => t.id === ticketRefId || t.caseNumber === ticketRefId);
+        }
+        if (!linkedTicket) {
+          linkedTicket = tickets.find((t) => t.rcaSessionId === activeSession.id);
+        }
+        if (!linkedTicket) {
+          const cleanActiveLower = cleanAssetTag.toLowerCase();
+          linkedTicket = tickets.find((t) => {
+            const tTag = (t.assetTag || '').replace(/\.(glb|gltf|obj|stl)\b/gi, '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase();
+            return tTag && cleanActiveLower && (tTag.includes(cleanActiveLower) || cleanActiveLower.includes(tTag));
+          });
         }
       }
     } catch {}
@@ -1125,7 +1222,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
 
     if (activeTicketId) {
       try {
-        const rawExec = localStorage.getItem(`forgex_tech_exec_${activeTicketId}`);
+        const rawExec = localStorage.getItem(getTenantKey(`forgex_tech_exec_${activeTicketId}`, activePlant)) || (isDefaultDemoPlant(activePlant) ? localStorage.getItem(`forgex_tech_exec_${activeTicketId}`) : null);
         if (rawExec) storedExec = JSON.parse(rawExec);
       } catch {}
     }
@@ -1376,7 +1473,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [organization?.id, activePlant]);
 
   // Check for incoming ticket or direct RCA redirect from AI Copilot / Tech Execution Desk
   const processIncomingTicket = useCallback(() => {
@@ -1598,6 +1695,31 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
 
   useEffect(() => {
     fetchRecentSessions();
+  }, [fetchRecentSessions]);
+
+  // Reset RCA session and selections on organization/plant switch
+  useEffect(() => {
+    setActiveSession(null);
+    setSelectedMachineTag('');
+    setSymptom('');
+    setErrorCode('');
+    fetchRecentSessions();
+  }, [organization?.id, activePlant, fetchRecentSessions]);
+
+  useEffect(() => {
+    const handleTenantSwitch = () => {
+      setActiveSession(null);
+      setSelectedMachineTag('');
+      setSymptom('');
+      setErrorCode('');
+      fetchRecentSessions();
+    };
+    window.addEventListener('forgex:tenant_changed', handleTenantSwitch);
+    window.addEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    return () => {
+      window.removeEventListener('forgex:tenant_changed', handleTenantSwitch);
+      window.removeEventListener('forgex:tenant_data_updated', handleTenantSwitch);
+    };
   }, [fetchRecentSessions]);
 
   // Append symptom chip to text area
@@ -1846,8 +1968,8 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     const rcaHistoryRecord = {
       id: `rec-mr-rca-${Date.now().toString().slice(-6)}`,
       recordNumber: `MR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-      organizationId: 'org-demo',
-      plantId: 'plant-01',
+      organizationId: organization?.id || 'org-demo',
+      plantId: activePlant || 'PLANT-TX-04',
       machineId: targetTag,
       machineAssetTag: targetTag,
       ticketNumber: ticketId,
@@ -1869,8 +1991,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     };
 
     try {
-      const rawHistory = localStorage.getItem('forgex_maintenance_history');
-      const historyList = rawHistory ? JSON.parse(rawHistory) : [];
+      const historyList = getTenantData<any[]>('forgex_maintenance_history', activePlant, []);
       const existingIdx = historyList.findIndex(
         (h: any) => h.ticketId === ticketId || h.ticketNumber === ticketId
       );
@@ -1879,7 +2000,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
       } else {
         historyList.unshift(rcaHistoryRecord);
       }
-      localStorage.setItem('forgex_maintenance_history', JSON.stringify(historyList));
+      setTenantData('forgex_maintenance_history', activePlant, historyList);
       window.dispatchEvent(new CustomEvent('forgex:history-updated', { detail: rcaHistoryRecord }));
     } catch {}
 
@@ -2276,14 +2397,13 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
         author: user?.fullName || 'Plant Specialist',
       };
 
-      // 1. Direct persistence to localStorage for instantaneous cross-tab visibility
+      // 1. Direct persistence to tenant storage for instantaneous cross-tab visibility
       try {
-        const stored = localStorage.getItem('forgex_expert_notes');
-        const list = stored ? JSON.parse(stored) : [];
+        const list = getTenantData<any[]>('forgex_expert_notes', activePlant, []);
         list.unshift(newExpertNote);
-        localStorage.setItem('forgex_expert_notes', JSON.stringify(list));
+        setTenantData('forgex_expert_notes', activePlant, list);
       } catch (errLocal) {
-        console.warn('Could not cache expert note to localStorage:', errLocal);
+        console.warn('Could not cache expert note to tenant storage:', errLocal);
       }
 
       // 2. Best-effort post to backend library
@@ -2585,13 +2705,12 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
         ],
       };
 
-      // Persist to shared store in localStorage & sessionStorage for bulletproof cross-module synchronization
+      // Persist to shared store in tenant storage & sessionStorage for bulletproof cross-module synchronization
       try {
-        const existingRaw = localStorage.getItem('forgex_shared_raised_tickets');
-        const existingList = existingRaw ? JSON.parse(existingRaw) : [];
+        const existingList = getTenantData<any[]>('forgex_shared_raised_tickets', activePlant, []);
         const filtered = existingList.filter((t: any) => t.id !== ticketNum && t.caseNumber !== ticketNum);
         filtered.unshift(newTicket);
-        localStorage.setItem('forgex_shared_raised_tickets', JSON.stringify(filtered));
+        setTenantData('forgex_shared_raised_tickets', activePlant, filtered);
       } catch (errShared) {
         console.warn('Could not cache to forgex_shared_raised_tickets:', errShared);
       }
@@ -3811,8 +3930,31 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
                                       )}
                                     </div>
 
-                                    {/* Verification Buttons / Badges */}
+                                    {/* Verification Buttons / Badges & Audio Reader */}
                                     <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+                                      {/* 🔊 Read Step Audio Toggle Button */}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleReadSpecificStep(step, hindiData)}
+                                        className={`px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5 transition font-semibold cursor-pointer shadow-2xs whitespace-nowrap active:scale-95 text-xs ${
+                                          speakingStepId === step.id
+                                            ? 'bg-gradient-to-r from-rose-600 to-amber-600 text-white border-rose-500 animate-pulse'
+                                            : 'bg-gradient-to-r from-indigo-50 via-sky-50 to-blue-50 text-indigo-700 border-indigo-200 hover:from-indigo-100 hover:to-blue-100'
+                                        }`}
+                                        title={speakingStepId === step.id ? 'Stop reading instructions' : 'Read step aloud in current voice language'}
+                                      >
+                                        {speakingStepId === step.id ? (
+                                          <>
+                                            <span className="w-2 h-2 rounded-full bg-white animate-ping shrink-0" />
+                                            <span>⏹ Stop Reading</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <span>🔊 Read Step</span>
+                                          </>
+                                        )}
+                                      </button>
+
                                       {isPassed ? (
                                         <span className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs">
                                           <Check className="w-3.5 h-3.5 text-emerald-700" />
