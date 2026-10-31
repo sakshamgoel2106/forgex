@@ -4,12 +4,14 @@ import { X } from 'lucide-react';
 export interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
-  title: string;
-  subtitle?: string;
+  title?: React.ReactNode;
+  subtitle?: React.ReactNode;
   children: React.ReactNode;
   footer?: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
   bodyClassName?: string;
+  headerClassName?: string;
+  customHeader?: React.ReactNode;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -21,6 +23,8 @@ export const Modal: React.FC<ModalProps> = ({
   footer,
   maxWidth = 'md',
   bodyClassName,
+  headerClassName,
+  customHeader,
 }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -53,22 +57,26 @@ export const Modal: React.FC<ModalProps> = ({
         className={`w-full ${widthClasses[maxWidth]} bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]`}
       >
         {/* Modal Header */}
-        <div className="px-6 py-4 border-b border-slate-200/80 flex items-center justify-between bg-white">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900 tracking-tight font-sans">
-              {title}
-            </h3>
-            {subtitle && (
-              <p className="text-xs text-slate-500 mt-1 font-sans leading-relaxed">{subtitle}</p>
-            )}
+        {customHeader ? (
+          customHeader
+        ) : (
+          <div className={headerClassName || "px-6 py-4 border-b border-slate-200/80 flex items-center justify-between bg-white"}>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 tracking-tight font-sans">
+                {title}
+              </h3>
+              {subtitle && (
+                <p className="text-xs text-slate-500 mt-1 font-sans leading-relaxed">{subtitle}</p>
+              )}
+            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        )}
 
         {/* Modal Body */}
         <div className={bodyClassName || "p-6 overflow-y-auto flex-1 text-xs text-slate-700 bg-white"}>{children}</div>

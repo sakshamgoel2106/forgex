@@ -105,12 +105,27 @@ const AppContent: React.FC = () => {
   // Global cross-module navigation and popstate event listener
   useEffect(() => {
     const handleNavEvent = (e: Event) => {
-      const customEvent = e as CustomEvent<{ module: string; caseId?: string; ticketId?: string }>;
-      if (customEvent.detail?.module) {
-        if (customEvent.detail.caseId || customEvent.detail.ticketId) {
-          setNavTargetId(customEvent.detail.ticketId || customEvent.detail.caseId);
+      const customEvent = e as CustomEvent<any>;
+      const detail = customEvent.detail;
+      const target = typeof detail === 'string' ? detail : (detail?.module || detail?.tab);
+      const caseOrTicketId = typeof detail === 'object' ? (detail?.ticketId || detail?.caseId) : undefined;
+      
+      if (caseOrTicketId) {
+        setNavTargetId(caseOrTicketId);
+      }
+
+      if (target) {
+        if (target === 'expert-knowledge' || target === 'expert') {
+          setActiveModule('expert');
+        } else if (target === 'maintenance-history' || target === 'history') {
+          setActiveModule('history');
+        } else if (target === 'raised-tickets' || target === 'tech') {
+          setActiveModule('tech');
+        } else if (target === 'maintenance' || target === 'sop') {
+          setActiveModule('maintenance');
+        } else {
+          setActiveModule(target as NavModule);
         }
-        setActiveModule(customEvent.detail.module as NavModule);
       }
     };
 
@@ -120,13 +135,19 @@ const AppContent: React.FC = () => {
         setActiveModule('copilot');
       } else if (path.includes('troubleshooting')) {
         setActiveModule('troubleshooting');
+      } else if (path.includes('expert-knowledge') || path.includes('expert')) {
+        setActiveModule('expert');
+      } else if (path.includes('maintenance-history') || path.includes('history')) {
+        setActiveModule('history');
       }
     };
 
     window.addEventListener('forgex:navigate', handleNavEvent);
+    window.addEventListener('navigate-tab', handleNavEvent);
     window.addEventListener('popstate', handlePopState);
     return () => {
       window.removeEventListener('forgex:navigate', handleNavEvent);
+      window.removeEventListener('navigate-tab', handleNavEvent);
       window.removeEventListener('popstate', handlePopState);
     };
   }, []);
@@ -205,6 +226,20 @@ const AppContent: React.FC = () => {
           <TroubleshootingView
             onNavigateToSop={() => setActiveModule('maintenance')}
             onNavigateToMaintenance={(_asset) => setActiveModule('maintenance')}
+            onNavigate={(mod, targetId) => {
+              if (targetId) setNavTargetId(targetId);
+              if (mod === 'expert-knowledge' || mod === 'expert') setActiveModule('expert');
+              else if (mod === 'maintenance-history' || mod === 'history') setActiveModule('history');
+              else if (mod === 'raised-tickets' || mod === 'tech') setActiveModule('tech');
+              else if (mod === 'maintenance' || mod === 'sop') setActiveModule('maintenance');
+              else setActiveModule(mod as NavModule);
+            }}
+            setActiveTab={(tab) => {
+              if (tab === 'expert-knowledge' || tab === 'expert') setActiveModule('expert');
+              else if (tab === 'maintenance-history' || tab === 'history') setActiveModule('history');
+              else if (tab === 'raised-tickets' || tab === 'tech') setActiveModule('tech');
+              else setActiveModule(tab as NavModule);
+            }}
           />
         );
       case 'expert':

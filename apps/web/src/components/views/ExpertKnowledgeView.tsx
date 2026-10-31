@@ -447,27 +447,57 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     };
   }, []);
 
-  // Load Notes from Backend API (Silently in background when showLoading = false)
+  // Load Notes from Backend API and merge with locally published notes
   const fetchNotes = useCallback(async (showLoading = true) => {
     try {
       if (showLoading) setIsLoading(true);
       const res = await apiFetch('/api/v1/recovery/expert-library');
-      if (!res.ok) {
-        throw new Error(`Failed to load expert library (${res.status})`);
+      let combinedNotes: any[] = [];
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.data)) {
+          combinedNotes = data.data;
+        }
       }
-      const data = await res.json();
-      if (data.success && Array.isArray(data.data)) {
-        setNotes(data.data);
-      } else {
-        setNotes([]);
-      }
+      // Merge with locally published notes in localStorage
+      try {
+        const stored = localStorage.getItem('forgex_expert_notes');
+        if (stored) {
+          const localNotes = JSON.parse(stored);
+          if (Array.isArray(localNotes)) {
+            const serverIds = new Set(combinedNotes.map((n) => n.id));
+            const newLocals = localNotes.filter((n) => !serverIds.has(n.id));
+            combinedNotes = [...newLocals, ...combinedNotes];
+          }
+        }
+      } catch {}
+      setNotes(combinedNotes);
     } catch (err: any) {
       console.error('Error fetching expert knowledge notes:', err);
+      // Fallback to local notes if server fails
+      try {
+        const stored = localStorage.getItem('forgex_expert_notes');
+        if (stored) {
+          const localNotes = JSON.parse(stored);
+          if (Array.isArray(localNotes)) setNotes(localNotes);
+        }
+      } catch {}
       toast.error('Repository Connection Error', 'Could not load expert notes from server.');
     } finally {
       if (showLoading) setIsLoading(false);
     }
   }, [toast]);
+
+  // Listen to new notes published in real-time from RCA or modals
+  useEffect(() => {
+    const handleNewNote = () => {
+      fetchNotes(false);
+    };
+    window.addEventListener('forgex:expert-note-created', handleNewNote);
+    return () => {
+      window.removeEventListener('forgex:expert-note-created', handleNewNote);
+    };
+  }, [fetchNotes]);
 
   // Load Strictly Uploaded Machines from Knowledge Hub Documents
   useEffect(() => {

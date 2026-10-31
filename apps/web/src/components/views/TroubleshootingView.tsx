@@ -27,6 +27,8 @@ import {
   MessageSquare,
   Lightbulb,
   Mic,
+  RotateCcw,
+  Rocket,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Modal } from '../ui/Modal';
@@ -35,8 +37,9 @@ import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
 import type { RcaSession } from '@forgex/shared-types';
 import { generateRcaPdfReport } from '../../utils/rcaPdfReport';
-import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill } from '../modals/ExpertKnowledgeCaptureModal';
+import { ExpertKnowledgeCaptureModal, type ExpertKnowledgePrefill, sanitizeAssetTag } from '../modals/ExpertKnowledgeCaptureModal';
 import { selectBestTechnician } from './SopExecutionView';
+import { translateStepToHindi, HINDI_VOICE_PROMPTS } from '../../lib/hindiTranslator';
 
 const toShortSentence = (text?: string, maxWords = 14): string => {
   if (!text) return '';
@@ -66,12 +69,40 @@ const QUICK_SYMPTOM_CHIPS = [
   'Electrical Trip',
 ];
 
-export const TroubleshootingView: React.FC<{
+export interface TroubleshootingViewProps {
   onNavigateToSop?: () => void;
   onNavigateToMaintenance?: (assetId: string) => void;
-}> = ({ onNavigateToSop, onNavigateToMaintenance: _onNavigateToMaintenance }) => {
+  onNavigate?: (module: string, targetId?: string) => void;
+  setActiveTab?: (tab: string) => void;
+}
+
+export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
+  onNavigateToSop,
+  onNavigateToMaintenance: _onNavigateToMaintenance,
+  onNavigate,
+  setActiveTab: setParentActiveTab,
+}) => {
   const { toast } = useToast();
   const { organization, user } = useAuth();
+
+  // AI Voice Language Selector ('en' | 'hi') & Available Speech Synthesis Voices
+  const [voiceLanguage, setVoiceLanguage] = useState<'en' | 'hi'>('en');
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const voiceLanguageRef = useRef<'en' | 'hi'>('en');
+
+  useEffect(() => {
+    voiceLanguageRef.current = voiceLanguage;
+  }, [voiceLanguage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const updateVoices = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length > 0) setAvailableVoices(v);
+    };
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+  }, []);
 
   // Machine state restricted strictly to Knowledge Hub uploaded machines
   const [machines, setMachines] = useState<MachineItem[]>([]);
@@ -194,19 +225,47 @@ export const TroubleshootingView: React.FC<{
     }
   }, [activeSession?.id]);
 
-  // Speech Synthesis Speaker
-  const speakText = useCallback((text: string) => {
+  // Speech Synthesis Speaker with AI Voice Changer & Hindi Support
+  const speakText = useCallback((text: string, langOverride?: 'en' | 'hi') => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     try {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
+      const targetLang = langOverride || voiceLanguageRef.current;
+
+      if (targetLang === 'hi') {
+        utterance.lang = 'hi-IN';
+        const hiVoice = availableVoices.find(
+          (v) =>
+            v.lang.toLowerCase().includes('hi') ||
+            v.name.toLowerCase().includes('hindi') ||
+            v.lang.toLowerCase().includes('hi-in')
+        );
+        if (hiVoice) {
+          utterance.voice = hiVoice;
+        }
+        utterance.rate = 0.95;
+        utterance.pitch = 1.0;
+      } else {
+        utterance.lang = 'en-US';
+        const enVoice = availableVoices.find(
+          (v) =>
+            v.lang.includes('en-US') ||
+            v.lang.includes('en-IN') ||
+            v.name.toLowerCase().includes('english')
+        );
+        if (enVoice) {
+          utterance.voice = enVoice;
+        }
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+      }
+
       window.speechSynthesis.speak(utterance);
     } catch (e) {
       console.warn('Voice speech error:', e);
     }
-  }, []);
+  }, [availableVoices]);
 
   // Cleanup speech recognition and synthesis on unmount
   useEffect(() => {
@@ -222,27 +281,101 @@ export const TroubleshootingView: React.FC<{
     };
   }, []);
 
-  // Automatic Ticket Creation & AI Technician Dispatch when all 5 steps fail
-  const autoDispatchTicketForAllFailedSteps = useCallback(
-    async (session: RcaSession) => {
-      const targetTag = session.assetTag || selectedMachineTag || 'ASSET-001';
+
+  // Navigate to Raised Tickets / Maintenance Desk
+  const handleNavigateToRaisedTickets = useCallback(
+    (ticketId?: string) => {
+      if (ticketId) {
+        sessionStorage.setItem('forgex_selected_case_id', ticketId);
+      }
+      window.history.pushState({}, '', '/maintenance');
+      window.dispatchEvent(
+        new CustomEvent('forgex:navigate', { detail: { module: 'maintenance', ticketId } })
+      );
+      if (onNavigateToSop) {
+        onNavigateToSop();
+      }
+    },
+    [onNavigateToSop]
+  );
+
+  // Re-test Step: Clear Failed status and restore subsequent steps
+  const handleResetOrRetestStep = useCallback(
+    (step: any, stepIdx: number) => {
+      const session = activeSessionRef.current;
+      if (!session) return;
+      const nowIso = new Date().toISOString();
+
+      const updatedSteps = session.investigationSteps.map((s, idx) => {
+        if (idx === stepIdx) {
+          return {
+            ...s,
+            status: 'PENDING' as any,
+            verifiedAt: undefined,
+            verifiedBy: undefined,
+          };
+        }
+        return s;
+      });
+
+      const updatedSession: RcaSession = {
+        ...session,
+        investigationSteps: updatedSteps,
+        status: 'IN_PROGRESS' as any,
+        updatedAt: nowIso,
+      };
+
+      setActiveSession(updatedSession);
+      persistSession(updatedSession);
+      setActiveStepIndex(stepIdx);
+
+      apiFetch(`/api/v1/rca/sessions/${session.id}/steps/${step.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: 'PENDING',
+          verifiedAt: null,
+          verifiedBy: null,
+        }),
+      }).catch(() => null);
+
+      if (voiceLanguageRef.current === 'hi') {
+        speakText(`स्टेप ${step.stepNumber} री-टेस्ट के लिए रीसेट कर दिया गया है।`, 'hi');
+      } else {
+        speakText(`Step ${step.stepNumber} reset for re-test.`, 'en');
+      }
+
+      toast.info(`Step #${step.stepNumber} Reset`, 'Subsequent diagnostic steps restored.');
+    },
+    [persistSession, speakText, toast]
+  );
+
+  // Direct Escalation from Single Failed Step
+  const handleDirectEscalateFromStep = useCallback(
+    async (stepToEscalate?: any) => {
+      const session = activeSessionRef.current;
+      if (!session) return;
+      const targetStep =
+        stepToEscalate ||
+        session.investigationSteps.find((s) => s.status === 'FAIL') ||
+        session.investigationSteps[activeStepIndexRef.current];
+      const targetTag = sanitizeAssetTag(session.assetTag || selectedMachineTag || 'PLANT-MACHINE');
       const activeFault =
-        session.detectedFaultCode || session.errorCode || errorCode || 'CRIT-DIAG-FAIL';
+        session.detectedFaultCode || session.errorCode || errorCode || 'DIAG-ANOMALY';
       const topHyp =
         session.hypotheses?.find((h) => h.status === 'CONFIRMED') || session.hypotheses?.[0];
       const currentSymptom =
-        session.symptom?.trim() || symptom?.trim() || 'All 5 diagnostic verification checks failed';
+        session.symptom?.trim() || symptom?.trim() || 'Physical boundary tolerance check failed during RCA';
       const engineerName =
         user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
       const matchedMachine = machines.find(
         (m) => (m.asset_tag || m.assetTag || m.name || m.id) === targetTag
       );
 
-      // AI Smart Auto-Assignment
       const assignedTech = selectBestTechnician(
         {
           assetTag: targetTag,
-          title: `[CRITICAL] ${targetTag}: All 5 Diagnostic Steps Failed (${activeFault})`,
+          title: `[CRITICAL] ${targetTag}: Step ${targetStep?.stepNumber || 1} Failed (${activeFault})`,
           symptomDescription: currentSymptom,
           faultCode: activeFault,
         },
@@ -259,24 +392,18 @@ export const TroubleshootingView: React.FC<{
         assetTag: targetTag,
         assetId: targetTag,
         assetName: matchedMachine?.name || session.machineName || targetTag,
-        title: `[${ticketNum}] ${targetTag}: Critical Anomaly — All 5 Diagnostic Steps Failed`,
-        description: `CRITICAL DISPATCH: All 5 investigation steps on ${targetTag} failed verification.\n\nObserved Symptom: ${currentSymptom}\nTop AI Root Cause: ${
-          topHyp?.title || 'Systemic Mechanical Breakdown'
-        }\nRecommended Fix: ${
-          topHyp?.recommendedFix ||
-          'Execute immediate hazardous energy isolation (LOTO) and senior technician overhaul.'
-        }\n\nAuto-dispatched via Hands-Free Diagnostic Copilot.`,
+        title: `[${ticketNum}] ${targetTag}: Anomaly at Step ${targetStep?.stepNumber || 1} (${targetStep?.name || 'Diagnostic Check'})`,
+        description: `CRITICAL FIELD DISPATCH: Diagnostic check failed at Step ${targetStep?.stepNumber || 1}: ${targetStep?.name}.\n\nExpected Reading: ${targetStep?.expectedReading || 'In-spec baseline'}\nObserved Anomaly: Physical boundary tolerance check failed.\nPrimary Root Cause: ${topHyp?.title || 'Component Defect / Wear'}\nRecommended Fix: ${topHyp?.recommendedFix || 'Execute LOTO and perform technician overhaul.'}`,
         severity: 'CRITICAL' as const,
         priority: 'CRITICAL' as const,
         status: 'IN_PROGRESS' as const,
         symptomDescription: currentSymptom,
         faultCode: activeFault,
         machineStatus: session.machineStatus || 'Tripped / Offline',
-        topRootCause: topHyp?.title || 'Systemic Mechanical Breakdown',
-        probability: topHyp?.probability || 92,
-        recommendedFix:
-          topHyp?.recommendedFix || 'Execute immediate LOTO and replace damaged components.',
-        investigationProgress: '5/5 Failed (Critical Anomaly)',
+        topRootCause: topHyp?.title || 'Component Defect / Wear',
+        probability: topHyp?.probability || 95,
+        recommendedFix: topHyp?.recommendedFix || 'Execute immediate LOTO and replace damaged assembly.',
+        investigationProgress: `Step ${targetStep?.stepNumber || 1} Failed (Halted & Escalated)`,
         specialistDiscipline: 'Mechanical / Rotating Equipment Lead',
         lotoApplied: true,
         reportedByRole: 'AI Diagnostic Assistant',
@@ -286,30 +413,31 @@ export const TroubleshootingView: React.FC<{
         assignedTechnicianRating: assignedTech.rating,
         isAiAutoAssigned: true,
         rcaSessionId: session.id,
-        source: 'RCA_AUTO_DISPATCH',
+        source: 'RCA_STEP_ANOMALY',
         createdAtFormatted: new Date().toLocaleString(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        checklist: session.investigationSteps.map((s, i) => ({
-          id: `auto-chk-${i + 1}`,
-          stepNumber: s.stepNumber,
-          title: s.name,
-          instruction: s.instruction,
-          requiresLoto: s.requiresLoto,
-          status: 'PENDING' as const,
-        })),
+        checklist: [
+          {
+            id: `chk-esc-1`,
+            stepNumber: 1,
+            title: `Inspect failed boundary: ${targetStep?.name || 'Equipment Check'}`,
+            instruction: targetStep?.instruction || 'Verify physical tolerances and replace failed mechanical seals or bearings.',
+            requiresLoto: true,
+            status: 'PENDING' as const,
+          },
+        ],
         history: [
           {
             id: `h-${Date.now()}`,
-            action: 'AUTO_DISPATCHED_ALL_STEPS_FAILED',
-            user: 'ForgeX AI Copilot',
+            action: 'DISPATCHED_SINGLE_STEP_ANOMALY',
+            user: 'ForgeX Diagnostic Assistant',
             timestamp: new Date().toISOString(),
-            notes: `All 5 diagnostic steps failed on ${targetTag}. High-priority repair ticket auto-created and assigned to ${assignedTech.fullName} (⭐ ${assignedTech.rating}).`,
+            notes: `Diagnostic anomaly confirmed at Step #${targetStep?.stepNumber} on ${targetTag}. Work order dispatched directly to ${assignedTech.fullName} (⭐ ${assignedTech.rating}).`,
           },
         ],
       };
 
-      // Store in forgex_shared_raised_tickets
       try {
         const existingRaw = localStorage.getItem('forgex_shared_raised_tickets');
         const existingList = existingRaw ? JSON.parse(existingRaw) : [];
@@ -329,7 +457,6 @@ export const TroubleshootingView: React.FC<{
         window.dispatchEvent(new CustomEvent('forgex:ticket-created', { detail: newTicket }));
       } catch {}
 
-      // Async backend call
       apiFetch('/api/v1/tickets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -337,52 +464,38 @@ export const TroubleshootingView: React.FC<{
           plantId: matchedMachine?.plant_area || organization?.id || 'plant-default',
           machineId: matchedMachine?.id || undefined,
           machineAssetTag: targetTag,
-          originalQuestion: `Auto-Dispatched: [${targetTag}] All 5 RCA Steps Failed`,
-          diagnosticDetails: `Equipment: ${targetTag}\nAll 5 diagnostic verification steps failed.\nSymptom: ${currentSymptom}\nPrimary Root Cause: ${topHyp?.title}\nAuto-Assigned To: ${assignedTech.fullName}`,
+          originalQuestion: `Auto-Dispatched: [${targetTag}] Step ${targetStep?.stepNumber} Failed`,
+          diagnosticDetails: `Equipment: ${targetTag}\nFailed Step: ${targetStep?.stepNumber} - ${targetStep?.name}\nExpected: ${targetStep?.expectedReading}\nAuto-Assigned To: ${assignedTech.fullName}`,
           severity: 'CRITICAL',
-          escalationReason: 'RCA_ALL_STEPS_FAILED',
+          escalationReason: 'RCA_STEP_FAILED_HALTED',
         }),
       }).catch(() => null);
 
-      // State updates
-      setEscalatedTicketId(ticketNum);
-      setAutoRaisedTicket({
-        ticketId: ticketNum,
-        techName: assignedTech.fullName,
-        assetTag: targetTag,
-      });
+      if (voiceLanguageRef.current === 'hi') {
+        speakText(HINDI_VOICE_PROMPTS.ticketEscalated(ticketNum), 'hi');
+      } else {
+        speakText(`Work order ${ticketNum} dispatched to technician ${assignedTech.fullName}.`, 'en');
+      }
 
-      // Voice announcement
-      speakText(
-        `All 5 diagnostic checks failed on ${targetTag}. High-priority repair ticket has been automatically raised and dispatched to the field technician ${assignedTech.fullName}.`
+      toast.success(
+        `Ticket ${ticketNum} Dispatched to Technician`,
+        `Assigned to ${assignedTech.fullName}. Redirecting to Technician Workspace...`
       );
 
-      toast.error(
-        'All 5 Steps Failed — Ticket Auto-Raised',
-        `Dispatched Ticket #${ticketNum} to ${assignedTech.fullName}.`
-      );
+      setTimeout(() => {
+        onNavigate?.('raised-tickets', ticketNum);
+        setParentActiveTab?.('raised-tickets');
+        window.dispatchEvent(new CustomEvent('navigate-tab', { detail: 'raised-tickets' }));
+        window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'tech', ticketId: ticketNum } }));
+        if (typeof window !== 'undefined') {
+          window.location.hash = '#raised-tickets';
+        }
+      }, 700);
     },
-    [errorCode, machines, organization?.id, selectedMachineTag, speakText, symptom, toast, user]
+    [errorCode, machines, onNavigate, organization?.id, selectedMachineTag, setParentActiveTab, speakText, symptom, toast, user]
   );
 
-  // Navigate to Raised Tickets / Maintenance Desk
-  const handleNavigateToRaisedTickets = useCallback(
-    (ticketId?: string) => {
-      if (ticketId) {
-        sessionStorage.setItem('forgex_selected_case_id', ticketId);
-      }
-      window.history.pushState({}, '', '/maintenance');
-      window.dispatchEvent(
-        new CustomEvent('forgex:navigate', { detail: { module: 'maintenance', ticketId } })
-      );
-      if (onNavigateToSop) {
-        onNavigateToSop();
-      }
-    },
-    [onNavigateToSop]
-  );
-
-  // Execute Step Fail: Unlock & Auto-Next on Fail, Auto-Raise when all 5 fail
+  // Execute Step Fail: Single Step Fail HALTS all subsequent checks immediately
   const handleExecuteStepFail = useCallback(
     async (step: any, stepIdx: number) => {
       const session = activeSessionRef.current;
@@ -403,18 +516,16 @@ export const TroubleshootingView: React.FC<{
         return s;
       });
 
-      const allStepsFailed =
-        updatedSteps.length > 0 && updatedSteps.every((s) => s.status === 'FAIL');
-
       const updatedSession: RcaSession = {
         ...session,
         investigationSteps: updatedSteps,
-        status: allStepsFailed ? ('ESCALATED' as any) : session.status,
+        status: 'ANOMALY_HALTED' as any,
         updatedAt: nowIso,
       };
 
       setActiveSession(updatedSession);
       persistSession(updatedSession);
+      setActiveStepIndex(stepIdx);
 
       apiFetch(`/api/v1/rca/sessions/${session.id}/steps/${step.id}`, {
         method: 'PATCH',
@@ -426,25 +537,19 @@ export const TroubleshootingView: React.FC<{
         }),
       }).catch(() => null);
 
-      if (allStepsFailed) {
-        await autoDispatchTicketForAllFailedSteps(updatedSession);
+      if (voiceLanguageRef.current === 'hi') {
+        speakText(HINDI_VOICE_PROMPTS.stepFailedHalted(step.stepNumber), 'hi');
       } else {
-        const nextIdx = Math.min(stepIdx + 1, updatedSteps.length - 1);
-        setActiveStepIndex(nextIdx);
-        setTimeout(() => {
-          stepRefs.current[nextIdx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 100);
-
-        const nextStep = updatedSteps[nextIdx];
-        const announcement = `Step ${step.stepNumber} failed. Proceeding to Step ${nextStep.stepNumber}: ${nextStep.name}. ${nextStep.instruction}`;
-        speakText(announcement);
-        toast.error(
-          `Step #${step.stepNumber} Anomaly Confirmed`,
-          `Advanced to Step #${nextStep.stepNumber}: ${nextStep.name}`
-        );
+        const announcement = `Diagnostic anomaly confirmed at Step ${step.stepNumber}. Further in-house checks halted. Immediate field technician escalation required.`;
+        speakText(announcement, 'en');
       }
+
+      toast.error(
+        `Step #${step.stepNumber} Anomaly Confirmed — Checks Halted`,
+        `Physical boundary check failed. Immediate field technician intervention required.`
+      );
     },
-    [autoDispatchTicketForAllFailedSteps, persistSession, speakText, toast, user]
+    [persistSession, speakText, toast, user]
   );
 
   // Execute Step Pass: Auto-scroll to next step or mark 100% verified
@@ -500,9 +605,14 @@ export const TroubleshootingView: React.FC<{
 
       if (isAllNowPassed) {
         setVerificationCompleteModal(true);
-        speakText(
-          `All diagnostic investigation steps on ${session.assetTag} successfully passed and verified.`
-        );
+        if (voiceLanguageRef.current === 'hi') {
+          speakText(HINDI_VOICE_PROMPTS.stepPassed(step.stepNumber), 'hi');
+        } else {
+          speakText(
+            `All diagnostic investigation steps on ${session.assetTag} successfully passed and verified.`,
+            'en'
+          );
+        }
         toast.success('Investigation 100% Verified!', 'All steps verified.');
       } else {
         const nextIdx = Math.min(stepIdx + 1, updatedSteps.length - 1);
@@ -511,25 +621,37 @@ export const TroubleshootingView: React.FC<{
           stepRefs.current[nextIdx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 100);
         const nextStep = updatedSteps[nextIdx];
-        speakText(`Step ${step.stepNumber} passed. Next: Step ${nextStep.stepNumber}, ${nextStep.name}`);
+        if (voiceLanguageRef.current === 'hi') {
+          speakText(HINDI_VOICE_PROMPTS.stepPassed(step.stepNumber, nextStep.stepNumber, nextStep.name), 'hi');
+        } else {
+          speakText(`Step ${step.stepNumber} passed. Next: Step ${nextStep.stepNumber}, ${nextStep.name}`, 'en');
+        }
         toast.success(`Step #${step.stepNumber} Verified`, `Proceeding to Step #${nextStep.stepNumber}`);
       }
     },
     [persistSession, speakText, toast, user]
   );
 
-  // Read Active Step out loud (Essential-only: concise action + target reading)
+  // Read Active Step out loud (supports English technical and Hindi AI translation)
   const handleReadActiveStep = useCallback(() => {
     const s = activeSessionRef.current;
     const idx = activeStepIndexRef.current;
     if (!s || !s.investigationSteps || !s.investigationSteps[idx]) {
-      speakText('No active investigation step selected.');
+      const msg = voiceLanguageRef.current === 'hi'
+        ? 'कोई सक्रिय डायग्नोस्टिक स्टेप चयनित नहीं है।'
+        : 'No active investigation step selected.';
+      speakText(msg);
       return;
     }
     const current = s.investigationSteps[idx];
-    const conciseAction = toShortSentence(current.name || current.instruction, 10);
-    const targetReading = current.expectedReading ? ` Target: ${current.expectedReading}.` : '';
-    speakText(`Step ${current.stepNumber}: ${conciseAction}.${targetReading}`);
+    if (voiceLanguageRef.current === 'hi') {
+      const hi = translateStepToHindi(current);
+      speakText(hi.combinedSpeech, 'hi');
+    } else {
+      const conciseAction = toShortSentence(current.name || current.instruction, 10);
+      const targetReading = current.expectedReading ? ` Target: ${current.expectedReading}.` : '';
+      speakText(`Step ${current.stepNumber}: ${conciseAction}.${targetReading}`, 'en');
+    }
   }, [speakText]);
 
   // Voice command handlers
@@ -547,7 +669,9 @@ export const TroubleshootingView: React.FC<{
     handleExecuteStepFail(s.investigationSteps[idx], idx);
   }, [handleExecuteStepFail]);
 
-  // Toggle & Wake-Word Voice Control (Supports "Activate Voice" & "Stop Voice")
+  const lastCommandTimeRef = useRef<number>(0);
+
+  // Toggle & Instant 1st-Try Voice Control (Supports "Activate Voice", "Pass", "Fail", "Hindi", "Escalate", "Stop Voice")
   const toggleVoiceControl = useCallback(() => {
     if (isVoiceListening) {
       if (recognitionRef.current) {
@@ -557,7 +681,10 @@ export const TroubleshootingView: React.FC<{
       }
       setIsVoiceListening(false);
       isVoiceListeningRef.current = false;
-      speakText('Voice control disabled.');
+      const deactMsg = voiceLanguageRef.current === 'hi'
+        ? HINDI_VOICE_PROMPTS.voiceDeactivated
+        : 'Voice control disabled.';
+      speakText(deactMsg);
       toast.info('Voice Control', 'Hands-free voice assistant disabled.');
       return;
     }
@@ -578,80 +705,116 @@ export const TroubleshootingView: React.FC<{
 
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
+      // KEY FIX: Enable interimResults so words trigger IMMEDIATELY on the 1st try!
+      recognition.interimResults = true;
+      recognition.lang = voiceLanguageRef.current === 'hi' ? 'hi-IN' : 'en-US';
 
       recognition.onstart = () => {
         setIsVoiceListening(true);
         isVoiceListeningRef.current = true;
+        const actMsg = voiceLanguageRef.current === 'hi'
+          ? HINDI_VOICE_PROMPTS.voiceActivated
+          : 'Hands-free voice control activated.';
+        speakText(actMsg);
         toast.success(
-          'Voice Control Active',
-          'Commands: "Pass", "Confirm", "Fail", "Next", "Read Step", "Stop Voice"'
+          'Voice Control Active (1st-Try Instant Mode)',
+          'Say: "Pass", "Fail", "Next", "Read Step", "Hindi", "Escalate", "Stop Voice"'
         );
-        speakText('Hands-free voice control activated.');
       };
 
       recognition.onresult = (event: any) => {
-        const last = event.results.length - 1;
-        const transcript = (event.results[last][0].transcript || '').trim().toLowerCase();
-        console.log('Voice Command Received:', transcript);
-
-        // 1. Wake-Word Activation commands
-        if (transcript.includes('activate voice') || transcript.includes('start voice')) {
-          setIsVoiceListening(true);
-          isVoiceListeningRef.current = true;
-          speakText('Hands-free voice control activated.');
-          toast.success(
-            'Voice Control Active',
-            'Listening: "Pass", "Confirm", "Fail", "Next", "Read Step", "Stop Voice"'
-          );
+        const now = Date.now();
+        // 450ms cooldown lock prevents duplicate triggers from rapid interim-final event transitions
+        if (now - lastCommandTimeRef.current < 450) {
           return;
         }
 
-        // 2. Wake-Word Deactivation commands
-        if (
-          transcript.includes('stop voice') ||
-          transcript.includes('disable voice') ||
-          transcript.includes('deactivate voice') ||
-          transcript.includes('turn off voice')
-        ) {
-          setIsVoiceListening(false);
-          isVoiceListeningRef.current = false;
-          speakText('Voice control disabled.');
-          toast.info('Voice Control', 'Hands-free voice assistant disabled.');
-          return;
-        }
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          const transcript = (res[0]?.transcript || '').trim().toLowerCase();
+          if (!transcript) continue;
 
-        // 3. Execution Commands
-        if (isVoiceListeningRef.current) {
-          if (
-            transcript.includes('pass') ||
-            transcript.includes('confirm') ||
-            transcript.includes('verify') ||
-            transcript.includes('clear')
-          ) {
-            handleVoiceStepPass();
-          } else if (
-            transcript.includes('fail') ||
-            transcript.includes('failed') ||
-            transcript.includes('anomaly')
-          ) {
-            handleVoiceStepFail();
-          } else if (transcript.includes('next')) {
-            handleVoiceStepPass();
-          } else if (
-            transcript.includes('read step') ||
-            transcript.includes('read') ||
-            transcript.includes('repeat') ||
-            transcript.includes('speak')
-          ) {
-            handleReadActiveStep();
+          // 1. Wake / Activation commands
+          if (/\b(activate voice|start voice|voice on|shuru karo|chalu karo)\b/i.test(transcript)) {
+            lastCommandTimeRef.current = now;
+            setIsVoiceListening(true);
+            isVoiceListeningRef.current = true;
+            speakText(voiceLanguageRef.current === 'hi' ? HINDI_VOICE_PROMPTS.voiceActivated : 'Hands-free voice control activated.');
+            return;
+          }
+
+          // 2. Stop commands
+          if (/\b(stop voice|disable voice|deactivate voice|turn off voice|band karo|mute)\b/i.test(transcript)) {
+            lastCommandTimeRef.current = now;
+            setIsVoiceListening(false);
+            isVoiceListeningRef.current = false;
+            speakText(voiceLanguageRef.current === 'hi' ? HINDI_VOICE_PROMPTS.voiceDeactivated : 'Voice control disabled.');
+            try {
+              recognitionRef.current?.stop();
+            } catch {}
+            return;
+          }
+
+          // 3. Language Switch commands
+          if (/\b(hindi|hindi mein|hindi me|hindi voice)\b/i.test(transcript)) {
+            lastCommandTimeRef.current = now;
+            setVoiceLanguage('hi');
+            voiceLanguageRef.current = 'hi';
+            speakText('हिंदी वॉइस एक्टिवेट हो गई है।', 'hi');
+            toast.info('Language Changed', 'AI Voice set to Hindi (हिंदी)');
+            return;
+          }
+
+          if (/\b(english|english voice)\b/i.test(transcript)) {
+            lastCommandTimeRef.current = now;
+            setVoiceLanguage('en');
+            voiceLanguageRef.current = 'en';
+            speakText('English technical voice activated.', 'en');
+            toast.info('Language Changed', 'AI Voice set to English');
+            return;
+          }
+
+          // 4. Execution Commands (Instant Phonetic Matching on 1st Try)
+          if (isVoiceListeningRef.current) {
+            // PASS Triggers
+            if (/\b(pass|paas|pas|past|fast|confirm|verified|done|ok|yes|sahi|pass step)\b/i.test(transcript)) {
+              lastCommandTimeRef.current = now;
+              handleVoiceStepPass();
+              return;
+            }
+
+            // FAIL Triggers
+            if (/\b(fail|fell|fale|failed|mail|sale|error|no|galat|kharab|fail step)\b/i.test(transcript)) {
+              lastCommandTimeRef.current = now;
+              handleVoiceStepFail();
+              return;
+            }
+
+            // ESCALATE Triggers
+            if (/\b(escalate|dispatch|technician|assign|bhejo)\b/i.test(transcript)) {
+              lastCommandTimeRef.current = now;
+              handleDirectEscalateFromStep();
+              return;
+            }
+
+            // NEXT Triggers
+            if (/\b(next|agla|skip|forward)\b/i.test(transcript)) {
+              lastCommandTimeRef.current = now;
+              handleVoiceStepPass();
+              return;
+            }
+
+            // READ Triggers
+            if (/\b(read|speak|tell|padho|batao|sunao|repeat)\b/i.test(transcript)) {
+              lastCommandTimeRef.current = now;
+              handleReadActiveStep();
+              return;
+            }
           }
         }
       };
 
       recognition.onerror = (err: any) => {
-        console.warn('Speech recognition error:', err);
         if (err.error === 'not-allowed') {
           setIsVoiceListening(false);
           isVoiceListeningRef.current = false;
@@ -677,7 +840,7 @@ export const TroubleshootingView: React.FC<{
       setIsVoiceListening(false);
       isVoiceListeningRef.current = false;
     }
-  }, [handleReadActiveStep, handleVoiceStepFail, handleVoiceStepPass, isVoiceListening, speakText, toast]);
+  }, [handleDirectEscalateFromStep, handleReadActiveStep, handleVoiceStepFail, handleVoiceStepPass, isVoiceListening, speakText, toast]);
 
   // Reload Previous RCA Session
   const handleLoadSession = useCallback((session: RcaSession) => {
@@ -1358,7 +1521,7 @@ export const TroubleshootingView: React.FC<{
   const handleResolveTicketAndSaveRecord = async (solvedStep?: any) => {
     if (!activeSession) return;
 
-    const targetTag = activeSession.assetTag || selectedMachineTag || 'PLANT-MACHINE';
+    const targetTag = sanitizeAssetTag(activeSession.assetTag || selectedMachineTag || 'PLANT-MACHINE');
     const engineerName = user?.fullName || (user as any)?.name || user?.email || 'Authorized Engineer';
     const topHyp =
       activeSession.hypotheses?.find((h) => h.status === 'CONFIRMED') ||
@@ -3135,223 +3298,350 @@ export const TroubleshootingView: React.FC<{
               {/* Investigation Steps Checklist Tab */}
               {activeTab === 'steps' && (
                 <div className="space-y-4">
-                  {/* Hands-Free Voice Assistant Command Bar & Connected Timeline (Deep Navy-to-Indigo Gradient) */}
-                  <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white rounded-xl mb-4 border border-indigo-950/60 shadow-md overflow-hidden">
-                    {/* Top Row: Protocol Title, Connected Pill Timeline, Progress Count, Voice Button */}
-                    <div className="p-3 sm:px-4 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar whitespace-nowrap">
-                      {/* Left: Diagnostic Protocol Title */}
-                      <div className="flex items-center gap-2 font-mono font-bold text-xs uppercase tracking-wide text-indigo-200 shrink-0">
-                        <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
-                        <span>Diagnostic Verification Protocol</span>
-                      </div>
+                  {/* Hands-Free Voice Assistant Command Bar & Connected Timeline (Right-edge clipping fixed & Voice Language Selector) */}
+                  {(() => {
+                    const firstFailedStepIndex = activeSession.investigationSteps.findIndex((s) => s.status === 'FAIL');
+                    const hasFailedStep = firstFailedStepIndex !== -1;
+                    const failedStep = hasFailedStep ? activeSession.investigationSteps[firstFailedStepIndex] : null;
 
-                      {/* Center: Single-Row Connected Pill Timeline */}
-                      <div className="flex items-center gap-1.5 font-mono text-xs shrink-0">
-                        {activeSession.investigationSteps.map((step, idx) => {
-                          const isPassed = step.status === 'PASS';
-                          const isFailed = step.status === 'FAIL';
-                          const isActive = idx === activeStepIndex;
-                          return (
-                            <React.Fragment key={step.id}>
+                    return (
+                      <>
+                        <div className="w-full overflow-hidden p-3.5 rounded-xl bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white space-y-2.5 shadow-md border border-indigo-950/60 mb-4">
+                          {/* Row 1: Protocol Title, Connected Step Pills, Progress/Status Badge, Voice Language Selector & Voice Toggle */}
+                          <div className="flex items-center justify-between gap-2.5 flex-wrap">
+                            {/* Left: Protocol Title + Compact Step Pills */}
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                              <div className="flex items-center gap-2 font-mono font-bold text-xs uppercase tracking-wide text-indigo-200 shrink-0">
+                                <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
+                                <span>Diagnostic Verification Protocol</span>
+                              </div>
+
+                              {/* Connected Step Pills */}
+                              <div className="flex items-center gap-1.5 font-mono text-xs shrink-0">
+                                {activeSession.investigationSteps.map((step, idx) => {
+                                  const isPassed = step.status === 'PASS';
+                                  const isFailed = step.status === 'FAIL';
+                                  const isActive = idx === activeStepIndex;
+                                  const isHaltedSubsequent = hasFailedStep && idx > firstFailedStepIndex;
+
+                                  return (
+                                    <React.Fragment key={step.id}>
+                                      <button
+                                        type="button"
+                                        disabled={isHaltedSubsequent}
+                                        onClick={() => {
+                                          if (!isHaltedSubsequent) {
+                                            setActiveStepIndex(idx);
+                                            stepRefs.current[idx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                          }
+                                        }}
+                                        className={`px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1 transition-all whitespace-nowrap ${
+                                          isPassed
+                                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 shadow-2xs'
+                                            : isFailed
+                                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50 shadow-2xs'
+                                            : isHaltedSubsequent
+                                            ? 'bg-slate-900/40 text-slate-600 border border-slate-800 cursor-not-allowed opacity-40'
+                                            : isActive
+                                            ? 'bg-gradient-to-r from-indigo-500 to-blue-500 text-white ring-2 ring-indigo-400 shadow-xs cursor-pointer'
+                                            : 'bg-slate-800/90 text-slate-400 border border-slate-700 hover:text-white cursor-pointer'
+                                        }`}
+                                        title={isHaltedSubsequent ? `Step ${step.stepNumber} Halted (Prior check failed)` : `Step ${step.stepNumber}: ${step.name}`}
+                                      >
+                                        <span>{step.stepNumber < 10 ? `0${step.stepNumber}` : step.stepNumber}</span>
+                                        {isPassed && <Check className="w-3 h-3 text-emerald-400" />}
+                                        {isFailed && <X className="w-3 h-3 text-rose-400" />}
+                                      </button>
+                                      {idx < activeSession.investigationSteps.length - 1 && (
+                                        <span className={`w-2.5 h-0.5 ${isHaltedSubsequent ? 'bg-slate-800' : 'bg-slate-700'} shrink-0`} />
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Progress or Halted Badge */}
+                              <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 ${
+                                hasFailedStep
+                                  ? 'text-rose-300 bg-rose-950/80 border border-rose-800/80'
+                                  : 'text-cyan-300 bg-cyan-950/60 border border-cyan-800/60'
+                              }`}>
+                                {hasFailedStep
+                                  ? `🚨 Step 0${failedStep?.stepNumber} Failed • Checks Halted`
+                                  : `${passedStepsCount}/${totalStepsCount} Passed (${progressPercent}%)`}
+                              </span>
+                            </div>
+
+                            {/* Right: AI Voice Language/Changer Selector + Voice Control ON/OFF Button */}
+                            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                              {/* Language Selector: EN Voice vs Hindi Voice */}
+                              <div className="flex items-center bg-slate-900/90 rounded-lg p-0.5 border border-slate-700/80 text-xs font-mono">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setVoiceLanguage('en');
+                                    voiceLanguageRef.current = 'en';
+                                    speakText('English technical voice active', 'en');
+                                    toast.info('AI Voice Mode', 'Switched to English Technical Voice');
+                                  }}
+                                  className={`px-2.5 py-1 rounded-md transition font-bold cursor-pointer flex items-center gap-1.5 ${
+                                    voiceLanguage === 'en'
+                                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
+                                      : 'text-slate-400 hover:text-slate-200'
+                                  }`}
+                                  title="Switch to English Technical Voice"
+                                >
+                                  <span>🇺🇸</span>
+                                  <span>EN Voice</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setVoiceLanguage('hi');
+                                    voiceLanguageRef.current = 'hi';
+                                    speakText('हिंदी वॉइस एक्टिवेट हो गई है', 'hi');
+                                    toast.info('AI Voice Mode', 'Switched to Hindi (हिंदी) AI Voice');
+                                  }}
+                                  className={`px-2.5 py-1 rounded-md transition font-bold cursor-pointer flex items-center gap-1.5 ${
+                                    voiceLanguage === 'hi'
+                                      ? 'bg-gradient-to-r from-orange-600 to-amber-600 text-white shadow-xs'
+                                      : 'text-slate-400 hover:text-slate-200'
+                                  }`}
+                                  title="Switch to Hindi AI Translated Voice (हिंदी)"
+                                >
+                                  <span>🇮🇳</span>
+                                  <span>हिंदी Voice</span>
+                                </button>
+                              </div>
+
+                              {/* Voice Control ON/OFF Button */}
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setActiveStepIndex(idx);
-                                  stepRefs.current[idx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                }}
-                                className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
-                                  isPassed
-                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 shadow-2xs'
-                                    : isFailed
-                                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/50 shadow-2xs'
-                                    : isActive
-                                    ? 'bg-gradient-to-r from-indigo-500 to-blue-500 text-white ring-2 ring-indigo-400 shadow-xs'
-                                    : 'bg-slate-800/90 text-slate-400 border border-slate-700 hover:text-white'
+                                onClick={toggleVoiceControl}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer shrink-0 whitespace-nowrap ${
+                                  isVoiceListening
+                                    ? 'bg-rose-600 text-white hover:bg-rose-700 ring-2 ring-rose-400 animate-pulse'
+                                    : 'bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white border border-indigo-400/40'
                                 }`}
-                                title={`Step ${step.stepNumber}: ${step.name}`}
+                                title="Hands-Free Voice Control: Say 'Activate Voice', 'Pass', 'Fail', 'Next', 'Read Step', 'Hindi', 'Escalate', 'Stop Voice'"
                               >
-                                <span>{step.stepNumber < 10 ? `0${step.stepNumber}` : step.stepNumber}</span>
-                                {isPassed && <Check className="w-3 h-3 text-emerald-400" />}
-                                {isFailed && <X className="w-3 h-3 text-rose-400" />}
+                                <Mic className={`w-3.5 h-3.5 ${isVoiceListening ? 'text-white' : 'text-cyan-300'}`} />
+                                <span>{isVoiceListening ? '🎙️ Voice Control: ON' : '🎙️ Voice Control: OFF'}</span>
                               </button>
-                              {idx < activeSession.investigationSteps.length - 1 && (
-                                <span className="w-3 h-0.5 bg-slate-700 shrink-0" />
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-                      </div>
-
-                      {/* Right: Progress Count & Hands-Free Voice Control Button */}
-                      <div className="flex items-center gap-2.5 shrink-0">
-                        <span className="font-mono text-xs font-bold text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 px-2.5 py-1 rounded-full whitespace-nowrap">
-                          {passedStepsCount}/{totalStepsCount} Passed ({progressPercent}%)
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={toggleVoiceControl}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer whitespace-nowrap ${
-                            isVoiceListening
-                              ? 'bg-rose-600 text-white hover:bg-rose-700 animate-pulse ring-2 ring-rose-400'
-                              : 'bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white border border-indigo-400/40'
-                          }`}
-                          title="Hands-Free Voice Control: Say 'Activate Voice', 'Pass', 'Fail', 'Next', 'Read Step', 'Stop Voice'"
-                        >
-                          <Mic className={`w-3.5 h-3.5 ${isVoiceListening ? 'text-white' : 'text-cyan-300'}`} />
-                          <span>{isVoiceListening ? 'Listening (Active)' : 'Hands-Free Voice Control'}</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Integrated Horizontal Progress Bar */}
-                    <div className="w-full h-1 bg-slate-800/80">
-                      <div
-                        className={`h-full transition-all duration-300 ${
-                          progressPercent === 100
-                            ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
-                            : 'bg-gradient-to-r from-cyan-400 via-indigo-400 to-blue-500'
-                        }`}
-                        style={{ width: `${progressPercent}%` }}
-                      />
-                    </div>
-
-                    {/* Bottom Strip: Voice Command Cheat-Sheet Strip */}
-                    <div className="px-4 py-1.5 bg-slate-900/95 border-t border-indigo-950/80 flex items-center justify-between text-[11px] font-mono text-slate-300 overflow-x-auto no-scrollbar whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 text-cyan-300 font-semibold">
-                        <Mic className="w-3 h-3 text-cyan-400 shrink-0" />
-                        <span>Voice Commands:</span>
-                        <span className="text-slate-300 font-normal">
-                          Say <strong className="text-white">"Activate Voice"</strong> • <strong className="text-white">"Pass"</strong> / <strong className="text-white">"Confirm"</strong> • <strong className="text-white">"Fail"</strong> • <strong className="text-white">"Next"</strong> • <strong className="text-white">"Read Step"</strong> • <strong className="text-white">"Stop Voice"</strong>
-                        </span>
-                      </div>
-                      <span className="text-[10px] text-slate-400 ml-3">
-                        {isVoiceListening ? '🎙️ Listening for commands' : '💤 Say "Activate Voice" or click to start'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Step Cards List */}
-                  <div className="space-y-3">
-                    {activeSession.investigationSteps.map((step, sIdx) => {
-                      const isFailed = step.status === 'FAIL';
-                      const isPassed = step.status === 'PASS';
-                      const isActive = sIdx === activeStepIndex;
-                      const hypTools =
-                        step.requiredTools && step.requiredTools.length > 0
-                          ? step.requiredTools
-                          : activeSession.hypotheses[0]?.requiredTools && activeSession.hypotheses[0].requiredTools.length > 0
-                          ? activeSession.hypotheses[0].requiredTools
-                          : ['Calibrated Torque Wrench (60 Nm)', 'CAT IV Multimeter', 'Laser Tachometer', 'IR Pyrometer'];
-
-                      return (
-                        <div
-                          key={step.id}
-                          ref={(el) => (stepRefs.current[sIdx] = el)}
-                          className={`rounded-xl border p-4 bg-white shadow-xs transition-all duration-200 space-y-3 ${
-                            isPassed
-                              ? 'border-l-4 border-l-emerald-500 bg-gradient-to-r from-emerald-50/20 to-white border-slate-200'
-                              : isFailed
-                              ? 'border-l-4 border-l-rose-500 bg-rose-50/60 border-rose-300 ring-1 ring-rose-200'
-                              : isActive
-                              ? 'border-l-4 border-l-indigo-600 bg-gradient-to-r from-indigo-50/30 to-white border-indigo-200 shadow-sm ring-1 ring-indigo-200'
-                              : 'border-slate-200'
-                          }`}
-                        >
-                          {/* Top Row: Step Pill Badge + Title + LOTO Required (Left) and Verification Status/Buttons (Right) */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                            <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
-                              <span className="bg-gradient-to-r from-indigo-600 to-blue-600 text-white px-2.5 py-0.5 rounded-md text-xs font-bold font-mono shadow-xs shrink-0 whitespace-nowrap">
-                                STEP {step.stepNumber < 10 ? `0${step.stepNumber}` : step.stepNumber}
-                              </span>
-                              <h4 className="text-sm font-bold text-slate-900">{step.name}</h4>
-                              {step.requiresLoto && (
-                                <span className="text-[10px] font-mono px-2 py-0.5 bg-rose-100 text-rose-800 font-bold rounded border border-rose-200 uppercase whitespace-nowrap shrink-0">
-                                  LOTO REQUIRED
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Verification Buttons / Badges (Zero Duplicate Icons) */}
-                            <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
-                              {isPassed ? (
-                                <span className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs">
-                                  <Check className="w-3.5 h-3.5 text-emerald-700" />
-                                  <span>PASSED & VERIFIED</span>
-                                </span>
-                              ) : isFailed ? (
-                                <div className="flex items-center gap-1.5">
-                                  <span className="px-3 py-1 rounded-lg bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs">
-                                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                                    <span>FAILED (Anomaly Confirmed)</span>
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleExecuteStepPass(step, sIdx)}
-                                    className="text-[11px] font-mono text-slate-500 hover:text-emerald-700 underline px-1 py-0.5 cursor-pointer"
-                                    title="Re-verify as Pass"
-                                  >
-                                    Re-test
-                                  </button>
-                                </div>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleExecuteStepPass(step, sIdx)}
-                                    className="px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-600 hover:text-white font-bold cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
-                                  >
-                                    <Check className="w-3.5 h-3.5" />
-                                    <span>Pass</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleExecuteStepFail(step, sIdx)}
-                                    className="px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition bg-white text-rose-700 border-rose-300 hover:bg-rose-600 hover:text-white font-bold cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                    <span>Fail</span>
-                                  </button>
-                                </>
-                              )}
                             </div>
                           </div>
 
-                          {/* Step Instruction */}
-                          <p className="text-xs text-slate-700 font-sans leading-relaxed">
-                            {step.instruction}
-                          </p>
-
-                          {/* 2-Column Mini Grid for Expected Reading & Required Diagnostic Tools (Zero Gap Tightened) */}
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mt-3">
-                            {/* Left Box: Expected Reading */}
-                            <div className="bg-slate-50 border border-slate-200/80 p-2.5 rounded-lg flex flex-col justify-center gap-1">
-                              <span className="text-[10px] font-mono font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-                                🎯 EXPECTED READING / CONDITION
+                          {/* Row 2: Full Wrapped Command Strip (Never clips on right edge) */}
+                          <div className="flex items-center gap-1.5 flex-wrap text-[11px] font-mono text-slate-300 pt-1.5 border-t border-white/10 w-full justify-between">
+                            <div className="flex items-center gap-1.5 flex-wrap text-cyan-300 font-semibold">
+                              <Mic className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                              <span>Say:</span>
+                              <span className="text-slate-200 font-normal">
+                                <strong className="text-white">"Activate Voice"</strong> •{' '}
+                                <strong className="text-white">"Pass"</strong> / <strong className="text-white">"Confirm"</strong> •{' '}
+                                <strong className="text-white">"Fail"</strong> •{' '}
+                                <strong className="text-white">"Next"</strong> •{' '}
+                                <strong className="text-white">"Read Step"</strong> •{' '}
+                                <strong className="text-white">"Hindi"</strong> •{' '}
+                                <strong className="text-white">"Escalate"</strong> •{' '}
+                                <strong className="text-white">"Stop Voice"</strong>
                               </span>
-                              <p className="text-xs text-slate-800 font-mono font-semibold">
-                                {step.expectedReading || 'In-spec baseline operational tolerance (DCS / OEM specs)'}
-                              </p>
                             </div>
-
-                            {/* Right Box: Required Diagnostic Tools */}
-                            <div className="bg-indigo-50/40 border border-indigo-100 p-2.5 rounded-lg flex flex-col justify-center gap-1">
-                              <span className="text-[10px] font-mono font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
-                                🧰 REQUIRED DIAGNOSTIC TOOLS
-                              </span>
-                              <div className="flex flex-wrap gap-1 text-[10px] font-mono text-slate-700">
-                                {hypTools.map((tool: string, tIdx: number) => (
-                                  <span key={tIdx} className="px-1.5 py-0.5 rounded bg-white border border-indigo-100 text-slate-800">
-                                    {tool}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
+                            <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                              {isVoiceListening ? '🟢 Listening (1st-try recognition active)' : '⚪ Inactive (Click or say "Activate Voice")'}
+                            </span>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+
+                        {/* Step Cards List */}
+                        <div className="space-y-3">
+                          {activeSession.investigationSteps.map((step, sIdx) => {
+                            // CRITICAL LOGIC: If ANY step has failed, collapse and hide ALL subsequent steps below it!
+                            if (hasFailedStep && sIdx > firstFailedStepIndex) {
+                              return null;
+                            }
+
+                            const isFailed = step.status === 'FAIL';
+                            const isPassed = step.status === 'PASS';
+                            const isActive = sIdx === activeStepIndex;
+                            const hindiData = translateStepToHindi(step);
+                            const hypTools =
+                              step.requiredTools && step.requiredTools.length > 0
+                                ? step.requiredTools
+                                : activeSession.hypotheses[0]?.requiredTools && activeSession.hypotheses[0].requiredTools.length > 0
+                                ? activeSession.hypotheses[0].requiredTools
+                                : ['Calibrated Torque Wrench (60 Nm)', 'CAT IV Multimeter', 'Laser Tachometer', 'IR Pyrometer'];
+
+                            return (
+                              <React.Fragment key={step.id}>
+                                <div
+                                  ref={(el) => (stepRefs.current[sIdx] = el)}
+                                  className={`rounded-xl border p-4 bg-white shadow-xs transition-all duration-200 space-y-3 ${
+                                    isPassed
+                                      ? 'border-l-4 border-l-emerald-500 bg-gradient-to-r from-emerald-50/20 to-white border-slate-200'
+                                      : isFailed
+                                      ? 'border-l-4 border-l-rose-500 bg-rose-50/60 border-rose-300 ring-1 ring-rose-200'
+                                      : isActive
+                                      ? 'border-l-4 border-l-indigo-600 bg-gradient-to-r from-indigo-50/30 to-white border-indigo-200 shadow-sm ring-1 ring-indigo-200'
+                                      : 'border-slate-200'
+                                  }`}
+                                >
+                                  {/* Top Row: Step Pill Badge + Title + LOTO Required (Left) and Verification Status/Buttons (Right) */}
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
+                                      <span className="bg-gradient-to-r from-indigo-600 to-blue-600 text-white px-2.5 py-0.5 rounded-md text-xs font-bold font-mono shadow-xs shrink-0 whitespace-nowrap">
+                                        STEP {step.stepNumber < 10 ? `0${step.stepNumber}` : step.stepNumber}
+                                      </span>
+                                      <h4 className="text-sm font-bold text-slate-900">{step.name}</h4>
+                                      {step.requiresLoto && (
+                                        <span className="text-[10px] font-mono px-2 py-0.5 bg-rose-100 text-rose-800 font-bold rounded border border-rose-200 uppercase whitespace-nowrap shrink-0">
+                                          LOTO REQUIRED
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Verification Buttons / Badges */}
+                                    <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
+                                      {isPassed ? (
+                                        <span className="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs">
+                                          <Check className="w-3.5 h-3.5 text-emerald-700" />
+                                          <span>PASSED & VERIFIED</span>
+                                        </span>
+                                      ) : isFailed ? (
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="px-3 py-1 rounded-lg bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs flex items-center gap-1.5 shadow-2xs">
+                                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                                            <span>FAILED (Anomaly Confirmed)</span>
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleResetOrRetestStep(step, sIdx)}
+                                            className="text-[11px] font-mono text-slate-500 hover:text-emerald-700 underline px-1 py-0.5 cursor-pointer"
+                                            title="Re-verify as Pass"
+                                          >
+                                            Re-test
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleExecuteStepPass(step, sIdx)}
+                                            className="px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-600 hover:text-white font-bold cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
+                                          >
+                                            <Check className="w-3.5 h-3.5" />
+                                            <span>Pass</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleExecuteStepFail(step, sIdx)}
+                                            className="px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition bg-white text-rose-700 border-rose-300 hover:bg-rose-600 hover:text-white font-bold cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
+                                          >
+                                            <X className="w-3.5 h-3.5" />
+                                            <span>Fail</span>
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Step Instruction */}
+                                  <p className="text-xs text-slate-700 font-sans leading-relaxed">
+                                    {step.instruction}
+                                  </p>
+
+                                  {/* Hindi AI Translated Guidance Pill (shown when Hindi Voice selected) */}
+                                  {voiceLanguage === 'hi' && (
+                                    <div className="p-2.5 rounded-lg bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-indigo-500/10 border border-amber-300/40 text-slate-800 text-xs flex items-start gap-2 shadow-2xs animate-in fade-in duration-200 font-sans">
+                                      <span className="text-sm shrink-0">🇮🇳</span>
+                                      <div className="space-y-0.5 leading-relaxed">
+                                        <div className="font-bold text-[11px] text-amber-800 uppercase tracking-wide flex items-center gap-1.5">
+                                          <span>हिंदी विवरण (AI Translated Guidance)</span>
+                                        </div>
+                                        <p className="text-xs text-slate-900 font-medium">
+                                          {hindiData.instruction}
+                                        </p>
+                                        <p className="text-[11px] text-slate-700">
+                                          <strong className="text-amber-900">अपेक्षित स्थिति:</strong> {hindiData.expected}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* 2-Column Mini Grid for Expected Reading & Required Diagnostic Tools */}
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mt-3">
+                                    {/* Left Box: Expected Reading */}
+                                    <div className="bg-slate-50 border border-slate-200/80 p-2.5 rounded-lg flex flex-col justify-center gap-1">
+                                      <span className="text-[10px] font-mono font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                                        🎯 EXPECTED READING / CONDITION
+                                      </span>
+                                      <p className="text-xs text-slate-800 font-mono font-semibold">
+                                        {step.expectedReading || 'In-spec baseline operational tolerance (DCS / OEM specs)'}
+                                      </p>
+                                    </div>
+
+                                    {/* Right Box: Required Diagnostic Tools */}
+                                    <div className="bg-indigo-50/40 border border-indigo-100 p-2.5 rounded-lg flex flex-col justify-center gap-1">
+                                      <span className="text-[10px] font-mono font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1.5">
+                                        🧰 REQUIRED DIAGNOSTIC TOOLS
+                                      </span>
+                                      <div className="flex flex-wrap gap-1 text-[10px] font-mono text-slate-700">
+                                        {hypTools.map((tool: string, tIdx: number) => (
+                                          <span key={tIdx} className="px-1.5 py-0.5 rounded bg-white border border-indigo-100 text-slate-800">
+                                            {tool}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* CRITICAL REQUIREMENT: Single-Fail Immediate Escalation Banner rendered directly below the failed step */}
+                                {isFailed && (
+                                  <div className="p-4 rounded-xl bg-gradient-to-r from-rose-950 via-indigo-950 to-slate-900 text-white border border-rose-500/40 flex items-center justify-between gap-4 shadow-lg flex-wrap sm:flex-nowrap animate-in fade-in slide-in-from-top-2 duration-300">
+                                    <div className="flex items-start gap-3">
+                                      <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/50 text-rose-400 flex items-center justify-center shrink-0 shadow-xs">
+                                        <AlertTriangle className="w-5 h-5 text-rose-400" />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <h4 className="font-bold text-sm text-white flex items-center gap-2">
+                                          <span>🚨 Diagnostic Anomaly Confirmed at Step 0{step.stepNumber} — Further In-House Checks Halted</span>
+                                        </h4>
+                                        <p className="text-xs text-rose-200/80 leading-relaxed font-sans">
+                                          Physical boundary/tolerance check failed. Immediate field technician intervention required.
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleResetOrRetestStep(step, sIdx)}
+                                        className="px-3.5 py-2 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-mono font-semibold border border-slate-700 flex items-center gap-1.5 transition cursor-pointer active:scale-95"
+                                        title="Re-open step for testing"
+                                      >
+                                        <RotateCcw className="w-3.5 h-3.5" />
+                                        <span>Re-test Step</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDirectEscalateFromStep(step)}
+                                        className="px-4 py-2 rounded-lg bg-gradient-to-r from-rose-600 via-red-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white text-xs font-bold font-mono shadow-md flex items-center gap-2 transition cursor-pointer hover:shadow-lg active:scale-95"
+                                        title="Say 'Escalate' or click to dispatch ticket to technician"
+                                      >
+                                        <Rocket className="w-4 h-4" />
+                                        <span>Escalate Ticket to Technician →</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+                      </>
+                    );
+                  })()}
 
                   {/* Auto-Dispatched Confirmation Banner (Shown when all 5 steps fail) */}
                   {(autoRaisedTicket ||
@@ -4087,6 +4377,26 @@ export const TroubleshootingView: React.FC<{
         isOpen={isExpertCaptureOpen}
         onClose={() => setIsExpertCaptureOpen(false)}
         prefillData={expertCapturePrefill}
+        onPublishedToExpert={() => {
+          setIsExpertCaptureOpen(false);
+          onNavigate?.('expert-knowledge');
+          setParentActiveTab?.('expert-knowledge');
+          window.dispatchEvent(new CustomEvent('navigate-tab', { detail: 'expert-knowledge' }));
+          window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'expert' } }));
+          if (typeof window !== 'undefined') {
+            window.location.hash = '#expert-knowledge';
+          }
+        }}
+        onSavedToHistoryOnly={() => {
+          setIsExpertCaptureOpen(false);
+          onNavigate?.('maintenance-history');
+          setParentActiveTab?.('maintenance-history');
+          window.dispatchEvent(new CustomEvent('navigate-tab', { detail: 'maintenance-history' }));
+          window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'history' } }));
+          if (typeof window !== 'undefined') {
+            window.location.hash = '#maintenance-history';
+          }
+        }}
       />
     </div>
   );
