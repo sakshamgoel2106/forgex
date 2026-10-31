@@ -35,6 +35,17 @@ import {
   computeTechnicianLiveStatus,
   setTechnicianShiftStatus,
 } from '../../utils/technicianLiveStatus';
+import {
+  getDeletedTicketIds,
+  extractAllTicketIdentifiers,
+  isTicketDeleted,
+  purgeTicketFromAllStorage,
+  formatCleanTaskDescription,
+} from '../../utils/ticketPersistence';
+import {
+  formatCleanMachineName,
+  formatCleanNoteTitle,
+} from '../../lib/hindiTranslator';
 
 export interface TechStep {
   id: string;
@@ -228,11 +239,11 @@ const formatCleanAssetTag = (tag?: string, title?: string, name?: string): strin
     const codeMatch = combined.match(/\b([A-Z]{2,8}[-_]?[0-9]{2,4}[A-Z]?)\b/);
     if (codeMatch) return codeMatch[1].toUpperCase();
     if (name && name !== 'Industrial Machinery' && name.length <= 16 && !isUUID(name)) {
-      return name.toUpperCase().replace(/\s+/g, '-');
+      return formatCleanMachineName(name.toUpperCase().replace(/\s+/g, '-'));
     }
     return 'GEARBOX-305';
   }
-  return tag;
+  return formatCleanMachineName(tag);
 };
 
 const getMachineDisplayName = (task: { assetTag: string; assetName?: string; title?: string }): string => {
@@ -246,6 +257,8 @@ const getMachineDisplayName = (task: { assetTag: string; assetName?: string; tit
     rawName = 'Helical Industrial Gearbox';
   }
 
+  rawName = formatCleanMachineName(rawName);
+
   if (rawName.toUpperCase().includes(cleanTag.toUpperCase())) {
     return rawName;
   }
@@ -257,7 +270,7 @@ export const TechnicianWorkspaceView: React.FC<{
   onNavigateToCopilot?: (assetTag: string) => void;
   initialTicketId?: string;
 }> = ({ onLaunchSop: _onLaunchSop, onNavigateToCopilot, initialTicketId }) => {
-  const { user, token, organization, isOwnerOrAdmin, membership } = useAuth();
+  const { user, token, organization } = useAuth();
   const { toast } = useToast();
   const [tasks, setTasks] = useState<TechTask[]>([]);
   const [selectedTask, setSelectedTask] = useState<TechTask | null>(null);
@@ -520,11 +533,6 @@ export const TechnicianWorkspaceView: React.FC<{
     printWindow.document.write(htmlContent);
     printWindow.document.close();
   };
-
-  const isSupervisorOrAdmin =
-    isOwnerOrAdmin ||
-    membership?.role === 'SUPERVISOR' ||
-    membership?.role === 'PLANT_MANAGER';
 
   // Helper to load persisted execution state per task
   const loadStoredExecution = (taskId: string, rawCaseId?: string) => {
@@ -1104,7 +1112,10 @@ export const TechnicianWorkspaceView: React.FC<{
         console.warn('Error reading forgex_shared_raised_tickets in tech desk:', errShared);
       }
 
-      const allTasks = [...mappedFromShared, ...mappedFromCases, ...mappedFromTickets];
+      const deletedSet = getDeletedTicketIds();
+      const allTasks = [...mappedFromShared, ...mappedFromCases, ...mappedFromTickets].filter(
+        (t) => !isTicketDeleted(t, deletedSet)
+      );
       setTasks(allTasks);
 
       // Deep-link auto-selection: check initialTicketId prop, sessionStorage, and URL ?ticketId= param
@@ -1155,6 +1166,42 @@ export const TechnicianWorkspaceView: React.FC<{
       window.removeEventListener('forgex:ticket-created', handleTicketCreated);
     };
   }, [fetchQueue]);
+
+  // Real-time synchronization when a ticket is deleted from any module
+  useEffect(() => {
+    const handleTicketDeleted = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const targetIds: string[] =
+        detail?.targetIds ||
+        [detail?.ticketId, detail?.caseNumber, detail?.caseId].filter(Boolean);
+      if (targetIds.length === 0) return;
+
+      const targetSet = new Set(targetIds.map((id) => id.toUpperCase()));
+
+      setTasks((prev) => {
+        const nextTasks = prev.filter((t) => {
+          const tIds = extractAllTicketIdentifiers(t);
+          return !tIds.some((id) => targetSet.has(id.toUpperCase()));
+        });
+        setSelectedTask((prevSelected) => {
+          if (!prevSelected) return null;
+          const selIds = extractAllTicketIdentifiers(prevSelected);
+          if (selIds.some((id) => targetSet.has(id.toUpperCase()))) {
+            return nextTasks.length > 0 ? nextTasks[0] : null;
+          }
+          return prevSelected;
+        });
+        return nextTasks;
+      });
+    };
+
+    window.addEventListener('forgex:ticket-deleted', handleTicketDeleted);
+    window.addEventListener('forgex:case-deleted', handleTicketDeleted);
+    return () => {
+      window.removeEventListener('forgex:ticket-deleted', handleTicketDeleted);
+      window.removeEventListener('forgex:case-deleted', handleTicketDeleted);
+    };
+  }, []);
 
   // Listen for navigation deep-links to specific tickets
   useEffect(() => {
@@ -1574,43 +1621,53 @@ export const TechnicianWorkspaceView: React.FC<{
     toast.info('Loading RCA Report', `Navigating to RCA investigation for ${cleanTag}...`);
   };
 
-  // Delete Task Action (Role-guarded: Admin / Supervisor or Completed tasks)
+  // Delete Task Action (Permanent Multi-Store Scrub & Tombstoning)
   const handleDeleteTask = async (task: TechTask) => {
     setDeleting(true);
     try {
       if (token) {
-        const caseRef = task.rawCaseId || task.id;
         const headers: Record<string, string> = {
           Authorization: `Bearer ${token}`,
         };
         if (organization?.id) headers['x-organization-id'] = organization.id;
 
-        await fetch(`/api/v1/maintenance/cases/${caseRef}`, {
-          method: 'DELETE',
-          headers,
-        }).catch(() => null);
+        const refs = [task.rawCaseId, task.id].filter(Boolean);
+        for (const ref of refs) {
+          await fetch(`/api/v1/maintenance/cases/${ref}`, {
+            method: 'DELETE',
+            headers,
+          }).catch(() => null);
+          await fetch(`/api/v1/tickets/${ref}`, {
+            method: 'DELETE',
+            headers,
+          }).catch(() => null);
+        }
       }
 
-      // Clear local storage entries
-      try {
-        localStorage.removeItem(`forgex_tech_exec_${task.id}`);
-        if (task.rawCaseId) {
-          localStorage.removeItem(`forgex_tech_exec_${task.rawCaseId}`);
-        }
-      } catch {}
+      // 1. Purge from all localStorage stores and record in tombstone set
+      const deletedIds = purgeTicketFromAllStorage(task);
+      const targetSet = new Set(deletedIds.map((id) => id.toUpperCase()));
 
-      // Update local state
+      // 2. Update local state
       setTasks((prev) => {
-        const nextTasks = prev.filter((t) => t.id !== task.id && t.rawCaseId !== task.rawCaseId);
-        if (selectedTask?.id === task.id) {
-          setSelectedTask(nextTasks.length > 0 ? nextTasks[0] : null);
+        const nextTasks = prev.filter((t) => {
+          const tIds = extractAllTicketIdentifiers(t);
+          return !tIds.some((id) => targetSet.has(id.toUpperCase()));
+        });
+        if (selectedTask) {
+          const selIds = extractAllTicketIdentifiers(selectedTask);
+          if (selIds.some((id) => targetSet.has(id.toUpperCase()))) {
+            setSelectedTask(nextTasks.length > 0 ? nextTasks[0] : null);
+          }
         }
         return nextTasks;
       });
 
+      toast.success('Task Deleted', `Ticket ${task.id} permanently deleted.`);
       setDeleteConfirmTask(null);
     } catch (err) {
       console.error('Failed to delete task:', err);
+      toast.error('Deletion Failed', 'Failed to delete task from queue.');
     } finally {
       setDeleting(false);
     }
@@ -1811,8 +1868,8 @@ export const TechnicianWorkspaceView: React.FC<{
 
       // 6. Pre-fill and trigger Expert Knowledge Capture Form (Requirement 4)
       setExpertCapturePrefill({
-        machineAssetTag: task.assetTag,
-        issueTitle: `Field Fix: [${task.assetTag}] ${task.title}`,
+        machineAssetTag: formatCleanMachineName(task.assetTag),
+        issueTitle: formatCleanNoteTitle(formatCleanTaskDescription(task.title), formatCleanMachineName(task.assetTag)),
         category: task.specialistDiscipline?.toLowerCase().includes('hydraul')
           ? 'Tooling Hack'
           : task.specialistDiscipline?.toLowerCase().includes('safety')
@@ -1857,8 +1914,8 @@ export const TechnicianWorkspaceView: React.FC<{
   // Pre-fill and open quick tip to Expert Knowledge (Requirement 3)
   const handleAddTipToExpertKnowledge = (task: TechTask) => {
     setExpertCapturePrefill({
-      machineAssetTag: task.assetTag,
-      issueTitle: `Field Fix: [${task.assetTag}] ${task.title}`,
+      machineAssetTag: formatCleanMachineName(task.assetTag),
+      issueTitle: formatCleanNoteTitle(formatCleanTaskDescription(task.title), formatCleanMachineName(task.assetTag)),
       category: task.specialistDiscipline?.toLowerCase().includes('hydraul')
         ? 'Tooling Hack'
         : task.specialistDiscipline?.toLowerCase().includes('safety')
@@ -2373,7 +2430,6 @@ export const TechnicianWorkspaceView: React.FC<{
               ) : (
                 filteredQueue.map((task) => {
                   const isSelected = selectedTask?.id === task.id;
-                  const canDelete = isSupervisorOrAdmin || task.status === 'Resolved';
                   const cleanAssetTag = formatCleanAssetTag(task.assetTag, task.title, task.assetName);
 
                   return (
@@ -2410,30 +2466,29 @@ export const TechnicianWorkspaceView: React.FC<{
                             {task.priority}
                           </span>
 
-                          {/* Quick delete icon on card */}
-                          {canDelete && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeleteConfirmTask(task);
-                              }}
-                              title="Delete / Archive task"
-                              className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-red-600 transition cursor-pointer"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          )}
+                          {/* Quick delete icon on card (Available on EVERY ticket card) */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDeleteConfirmTask(task);
+                            }}
+                            title="Delete / Archive task"
+                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
 
-                      {/* Row 2: Full untruncated Machine Tag pill + 2-line Clean Wrapping Issue Title */}
+                      {/* Row 2: Clean Machine Tag pill + Clean Wrapping Issue Title (no repeated prefix or .GLB) */}
                       <div className="space-y-1">
                         <span className="inline-flex items-center gap-1 font-mono font-bold text-slate-800 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] break-words">
-                          ⚙️ {cleanAssetTag}
+                          ⚙️ {formatCleanMachineName(cleanAssetTag)}
                         </span>
                         <p className="text-slate-800 font-medium text-xs leading-snug line-clamp-2 break-words" title={task.title}>
-                          {task.title}
+                          {formatCleanTaskDescription(task.title)}
                         </p>
                       </div>
 
@@ -2487,7 +2542,7 @@ export const TechnicianWorkspaceView: React.FC<{
                     {/* Bold Machine Tag pill in dark navy-indigo */}
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-slate-900 text-white font-mono text-xs font-bold shadow-xs">
                       <span className="text-amber-400">⚙️</span>
-                      <span>{formatCleanAssetTag(selectedTask.assetTag, selectedTask.title, selectedTask.assetName)}</span>
+                      <span>{formatCleanMachineName(formatCleanAssetTag(selectedTask.assetTag, selectedTask.title, selectedTask.assetName))}</span>
                     </span>
                     {selectedTask.faultCode && (
                       <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
@@ -2591,17 +2646,19 @@ export const TechnicianWorkspaceView: React.FC<{
                       return null;
                     })()}
 
-                    {/* Delete Button (Role-guarded) */}
-                    {(isSupervisorOrAdmin || selectedTask.status === 'Resolved') && (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirmTask(selectedTask)}
-                        title="Delete task from active queue (Purge to history)"
-                        className="p-1.5 border border-slate-200 bg-white hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer shadow-2xs"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                    {/* Delete Button (Available for all tasks) */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDeleteConfirmTask(selectedTask);
+                      }}
+                      title="Delete task from active queue (Purge to history)"
+                      className="p-1.5 border border-slate-200 bg-white hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition cursor-pointer shadow-2xs"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
 
                     {/* Close Button */}
                     <button
@@ -2619,7 +2676,7 @@ export const TechnicianWorkspaceView: React.FC<{
                 <div className="w-full mt-2.5 pt-2.5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="flex-1 min-w-0 pr-2">
                     <h2 className="text-base font-bold text-slate-900 truncate" title={selectedTask.title}>
-                      {selectedTask.title}
+                      {formatCleanTaskDescription(selectedTask.title)}
                     </h2>
                   </div>
                   <div className="shrink-0 text-xs text-slate-500 font-mono">
@@ -3399,13 +3456,15 @@ export const TechnicianWorkspaceView: React.FC<{
               <div>
                 <h3 className="text-sm font-bold text-slate-900">Delete Task from Queue?</h3>
                 <p className="text-xs text-slate-500 font-mono">
-                  {deleteConfirmTask.id} · {deleteConfirmTask.assetTag}
+                  {deleteConfirmTask.id} · {formatCleanMachineName(deleteConfirmTask.assetTag)}
                 </p>
               </div>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              Are you sure you want to remove this task from the active technician queue? Completed
+              Are you sure you want to remove task{' '}
+              <strong className="text-slate-900 font-mono">{deleteConfirmTask.id}</strong> (
+              {formatCleanTaskDescription(deleteConfirmTask.title)}) from the active technician queue? Completed
               and historical records will remain archived permanently in{' '}
               <strong className="text-slate-800">Maintenance History</strong>.
             </p>

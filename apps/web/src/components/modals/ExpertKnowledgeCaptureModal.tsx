@@ -4,7 +4,12 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
-import { formatCleanMachineName, formatCleanNoteTitle } from '../../lib/hindiTranslator';
+import {
+  formatCleanMachineName,
+  formatCleanNoteTitle,
+  cleanRemediationText,
+  cleanTriggerText,
+} from '../../lib/hindiTranslator';
 
 export interface ExpertKnowledgePrefill {
   machineAssetTag: string;
@@ -59,11 +64,12 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
   useEffect(() => {
     if (prefillData) {
       const cleanMach = formatCleanMachineName(prefillData.machineAssetTag || '');
+      const cleanTitle = formatCleanNoteTitle(prefillData.issueTitle || '', cleanMach);
       setMachineAssetTag(cleanMach);
-      setIssueTitle(formatCleanNoteTitle(prefillData.issueTitle || '', cleanMach));
+      setIssueTitle(cleanTitle);
       setCategory(prefillData.category || 'Reliability');
-      setResolutionSummary(prefillData.resolutionSummary || '');
-      setSymptom(prefillData.symptom || '');
+      setResolutionSummary(cleanRemediationText(prefillData.resolutionSummary || ''));
+      setSymptom(cleanTriggerText(prefillData.symptom || '', null, cleanTitle));
       setShareToExpert(true);
     }
   }, [prefillData]);
@@ -102,17 +108,19 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
 
     const cleanTag = formatCleanMachineName(machineAssetTag);
     const cleanTitle = formatCleanNoteTitle(issueTitle, cleanTag);
+    const cleanFix = cleanRemediationText(resolutionSummary.trim());
+    const cleanTrigger = cleanTriggerText(symptom.trim() || null, null, cleanTitle);
 
     setIsSubmitting(true);
     try {
       const newNote = {
         id: `note-${Date.now()}`,
         title: cleanTitle,
-        description: resolutionSummary.trim(),
+        description: cleanFix || resolutionSummary.trim(),
         category: category || 'Reliability',
         severity: 'Pro-Tip / Best Practice',
-        symptom: symptom.trim() || null,
-        taskDuringIssue: cleanTitle,
+        symptom: cleanTrigger,
+        taskDuringIssue: 'Standard Plant Operation / AI RCA Diagnostic',
         machineAssetTag: cleanTag,
         machineAssetTags: [cleanTag],
         upvotes: 1,
@@ -169,9 +177,19 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
 
       // 4. Global cross-module redirection to Expert Knowledge
       if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('navigate-to-module', { detail: 'expert-knowledge' }));
         window.dispatchEvent(new CustomEvent('navigate-tab', { detail: 'expert-knowledge' }));
-        window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'expert' } }));
+        window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'expert', tab: 'expert-knowledge' } }));
         window.location.hash = '#expert-knowledge';
+
+        setTimeout(() => {
+          const sidebarBtn = Array.from(document.querySelectorAll('button, a')).find((el) =>
+            /expert knowledge|tribal/i.test(el.textContent || '')
+          ) as HTMLElement | undefined;
+          if (sidebarBtn) {
+            sidebarBtn.click();
+          }
+        }, 50);
       }
 
       onClose();

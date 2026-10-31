@@ -447,10 +447,10 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
           title: hasThermal
-            ? `Cylinder Head Thermostat Seizure & Jacket Water Bypass on ${assetTag}`
+            ? `Cylinder Head Thermostat Seizure & Jacket Water Bypass`
             : hasVibration
-            ? `Diesel Fuel Injector Nozzle Coking & Multi-Cylinder Torsional Imbalance on ${assetTag}`
-            : `Turbocharger Wastegate Actuator Binding & Intake Boost Instability on ${assetTag}`,
+            ? `Diesel Fuel Injector Nozzle Coking & Multi-Cylinder Torsional Imbalance`
+            : `Turbocharger Wastegate Actuator Binding & Intake Boost Instability`,
           probability: 89,
           severity: 'CRITICAL',
           mechanismExplanation: hasThermal
@@ -475,7 +475,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Main Bearing Hydrodynamic Film Breakdown & Crankcase Oil Dilution on ${assetTag}`,
+          title: `Main Bearing Hydrodynamic Film Breakdown & Crankcase Oil Dilution`,
           probability: 68,
           severity: 'HIGH',
           mechanismExplanation: `Unburned fuel bypass past piston rings dilutes crankcase oil, dropping kinematic viscosity and causing journal contact.`,
@@ -498,7 +498,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Alternator Stator Exciter Diode Bridge Asymmetry on ${assetTag}`,
+          title: `Alternator Stator Exciter Diode Bridge Asymmetry`,
           probability: 44,
           severity: 'MEDIUM',
           mechanismExplanation: `Thermal stress on rotating rectifier caused open-circuit failure in one exciter diode, inducing 120 Hz electrical ripple.`,
@@ -521,7 +521,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
       } else if (isCompressor) {
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Stage 2 Discharge Reed Valve Plate Fatigue Fracture on ${assetTag}`,
+          title: `Stage 2 Discharge Reed Valve Plate Fatigue Fracture`,
           probability: 87,
           severity: 'CRITICAL',
           mechanismExplanation: `Cyclic bending fatigue fractured stainless reed valve petals, causing compressed gas backflow and rapid thermal spikes.`,
@@ -544,7 +544,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Intercooler Shell-and-Tube Fouling & Moisture Separator Carryover on ${assetTag}`,
+          title: `Intercooler Shell-and-Tube Fouling & Moisture Separator Carryover`,
           probability: 63,
           severity: 'HIGH',
           mechanismExplanation: `Intercooler fin particulate buildup impairs heat rejection; condensate carryover into Stage 2 causes liquid slugging.`,
@@ -567,7 +567,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Crosshead Pin Bearing Bushing Wear & Clearance Drift on ${assetTag}`,
+          title: `Crosshead Pin Bearing Bushing Wear & Clearance Drift`,
           probability: 45,
           severity: 'MEDIUM',
           mechanismExplanation: `Bronze crosshead pin bushing wear exceeds OEM 0.003 in clearance, causing mechanical lash during TDC reversal.`,
@@ -590,7 +590,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
       } else if (isElectricalOrVfd) {
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Motor Stator Winding Insulation Breakdown & Phase Imbalance on ${assetTag}`,
+          title: `Motor Stator Winding Insulation Breakdown & Phase Imbalance`,
           probability: 91,
           severity: 'CRITICAL',
           mechanismExplanation: `Thermal degradation and moisture dropped stator insulation resistance below 2 Megohms, causing phase current unbalance.`,
@@ -613,7 +613,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Bearing Fluting Caused by VFD Inverter High-Frequency Shaft Currents on ${assetTag}`,
+          title: `Bearing Fluting Caused by VFD Inverter High-Frequency Shaft Currents`,
           probability: 69,
           severity: 'HIGH',
           mechanismExplanation: `Inverter fast-switching dV/dt induces capacitive shaft voltage, arcing through bearing oil films and creating EDM fluting.`,
@@ -636,7 +636,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `VFD Inverter DC Bus Ripple & Cooling Fan Heat Sink Thermal Choking on ${assetTag}`,
+          title: `VFD Inverter DC Bus Ripple & Cooling Fan Heat Sink Thermal Choking`,
           probability: 43,
           severity: 'MEDIUM',
           mechanismExplanation: `DC bus capacitor ripple drift and clogged heatsink fan louvers cause inverter thermal throttling under plant load.`,
@@ -661,10 +661,10 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
           title: hasLeakOrPressure
-            ? `Mechanical Seal Face Thermal Degradation & Dynamic O-Ring Breakdown on ${assetTag}`
+            ? `Mechanical Seal Face Thermal Degradation & Dynamic O-Ring Breakdown`
             : hasVibration
-            ? `Dynamic Hydraulic Cavitation & Impeller Vane Unbalance on ${assetTag}`
-            : `Bearing Lubrication Starvation & Hydrodynamic Thermal Runaway on ${assetTag}`,
+            ? `Dynamic Hydraulic Cavitation & Impeller Vane Unbalance`
+            : `Bearing Lubrication Starvation & Hydrodynamic Thermal Runaway`,
           probability: 88,
           severity: 'CRITICAL',
           mechanismExplanation: `Localized suction pressure drop below fluid vapor pressure on ${assetTag} causes cavitation implosions and thermal seal face micro-cracking.`,
@@ -687,7 +687,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Flexible Shaft Coupling Misalignment & Foundation Soft-Foot Resonance on ${assetTag}`,
+          title: `Flexible Shaft Coupling Misalignment & Foundation Soft-Foot Resonance`,
           probability: 66,
           severity: 'HIGH',
           mechanismExplanation: `Shaft centerline angular and offset misalignment induces 2X vibration harmonics, exacerbated by baseplate soft-foot resonance.`,
@@ -710,7 +710,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
 
         hypotheses.push({
           id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-          title: `Suction Line Strainer Mesh Blockage & Fluid Starvation on ${assetTag}`,
+          title: `Suction Line Strainer Mesh Blockage & Fluid Starvation`,
           probability: 44,
           severity: 'MEDIUM',
           mechanismExplanation: `Particulate scale accumulation blinds suction strainer mesh, restricting flow below minimum continuous stable rate.`,

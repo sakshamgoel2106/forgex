@@ -41,6 +41,13 @@ import type {
 import { apiFetch } from '../../lib/api';
 import { useToast } from '../../lib/ToastContext';
 import { computeTechnicianLiveStatus } from '../../utils/technicianLiveStatus';
+import {
+  getDeletedTicketIds,
+  extractAllTicketIdentifiers,
+  isTicketDeleted,
+  purgeTicketFromAllStorage,
+} from '../../utils/ticketPersistence';
+import { formatCleanMachineName } from '../../lib/hindiTranslator';
 
 export interface WorkOrderCase extends MaintenanceCase {
   history: Array<{
@@ -1524,10 +1531,13 @@ export const SopExecutionView: React.FC<{
           console.warn('Error reading forgex_shared_raised_tickets:', errShared);
         }
 
-        setCases(mappedCases);
-        purgeExecutionLocalStorage(mappedCases.map((c) => c.id));
+        const deletedSet = getDeletedTicketIds();
+        const activeMappedCases = mappedCases.filter((c) => !isTicketDeleted(c, deletedSet));
 
-        const activeCount = mappedCases.filter((c) => c.status !== 'CLOSED').length;
+        setCases(activeMappedCases);
+        purgeExecutionLocalStorage(activeMappedCases.map((c) => c.id));
+
+        const activeCount = activeMappedCases.filter((c) => c.status !== 'CLOSED').length;
         onActiveCountChange?.(activeCount);
 
         const savedSelectedId = sessionStorage.getItem('forgex_selected_case_id');
@@ -1613,14 +1623,42 @@ export const SopExecutionView: React.FC<{
       }
     };
 
+    const handleTicketDeletedSync = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const targetIds: string[] =
+        detail?.targetIds ||
+        [detail?.ticketId, detail?.caseNumber, detail?.caseId].filter(Boolean);
+      if (targetIds.length === 0) return;
+
+      const targetSet = new Set(targetIds.map((id) => id.toUpperCase()));
+      setCases((prev) => {
+        const remaining = prev.filter((c) => {
+          const cIds = extractAllTicketIdentifiers(c);
+          return !cIds.some((id) => targetSet.has(id.toUpperCase()));
+        });
+        setActiveCaseId((prevId) => {
+          if (!prevId) return null;
+          if (targetSet.has(prevId.toUpperCase())) {
+            return remaining.length > 0 ? remaining[0].id : null;
+          }
+          return prevId;
+        });
+        return remaining;
+      });
+    };
+
     window.addEventListener('forgex:navigate', handleNav);
     window.addEventListener('forgex:ticket-progress-sync', handleProgressSync);
     window.addEventListener('forgex:ticket-solved', handleProgressSync);
+    window.addEventListener('forgex:ticket-deleted', handleTicketDeletedSync);
+    window.addEventListener('forgex:case-deleted', handleTicketDeletedSync);
     window.addEventListener('storage', handleStorageChange);
     return () => {
       window.removeEventListener('forgex:navigate', handleNav);
       window.removeEventListener('forgex:ticket-progress-sync', handleProgressSync);
       window.removeEventListener('forgex:ticket-solved', handleProgressSync);
+      window.removeEventListener('forgex:ticket-deleted', handleTicketDeletedSync);
+      window.removeEventListener('forgex:case-deleted', handleTicketDeletedSync);
       window.removeEventListener('storage', handleStorageChange);
     };
   }, [loadCases]);
@@ -2109,19 +2147,9 @@ export const SopExecutionView: React.FC<{
     }
   };
 
-  // 4b. 1-Click Ticket Deletion with Active Execution Safety Lock (Requirement 1)
+  // 4b. 1-Click Ticket Deletion with Full Storage Purge & Tombstoning
   const handleDeleteCase = async (targetCase: WorkOrderCase | null) => {
     if (!targetCase || isSubmitting) return;
-
-    // Safety Lock Guard
-    if (isTicketExecutionUnderway(targetCase)) {
-      toast.error(
-        'Deletion Blocked',
-        '🔒 Cannot delete: Field execution already underway. Use OEM Escalation or Archive instead.'
-      );
-      setDeleteModalState({ isOpen: false, targetCase: null });
-      return;
-    }
 
     setIsSubmitting(true);
     const targetId = targetCase.id;
@@ -2137,36 +2165,29 @@ export const SopExecutionView: React.FC<{
         console.warn('Backend delete notification note:', apiErr);
       }
 
-      // 2. Remove from shared raised tickets store
-      try {
-        const sharedRaw = localStorage.getItem('forgex_shared_raised_tickets');
-        if (sharedRaw) {
-          const shared = JSON.parse(sharedRaw);
-          if (Array.isArray(shared)) {
-            const updated = shared.filter(
-              (item: any) => item.id !== targetId && item.caseNumber !== targetCaseNumber
-            );
-            localStorage.setItem('forgex_shared_raised_tickets', JSON.stringify(updated));
-          }
-        }
-        if (targetCaseNumber) localStorage.removeItem(`forgex_tech_exec_${targetCaseNumber}`);
-        if (targetId) localStorage.removeItem(`forgex_tech_exec_${targetId}`);
-      } catch (storeErr) {
-        console.warn('Failed to prune storage on deletion:', storeErr);
-      }
+      // 2. Multi-Store scrub and tombstone registration
+      const deletedIds = purgeTicketFromAllStorage(targetCase);
+      const targetSet = new Set(deletedIds.map((id) => id.toUpperCase()));
 
       // 3. Update local state
       setCases((prev) =>
-        prev.filter((c) => c.id !== targetId && c.caseNumber !== targetCaseNumber)
+        prev.filter((c) => {
+          const cIds = extractAllTicketIdentifiers(c);
+          return !cIds.some((id) => targetSet.has(id.toUpperCase()));
+        })
       );
 
-      if (activeCaseId === targetId || activeCaseId === targetCaseNumber) {
+      if (
+        (activeCaseId && targetSet.has(activeCaseId.toUpperCase())) ||
+        activeCaseId === targetId ||
+        activeCaseId === targetCaseNumber
+      ) {
         setActiveCaseId(null);
       }
 
       toast.success(
         'Ticket Deleted',
-        `Ticket ${targetCaseNumber || targetId} was removed from the dispatch queue.`
+        `Ticket ${targetCaseNumber || targetId} was permanently removed from the dispatch queue.`
       );
       setDeleteModalState({ isOpen: false, targetCase: null });
 
@@ -2174,13 +2195,6 @@ export const SopExecutionView: React.FC<{
         (c) => c.id !== targetId && c.status !== 'CLOSED'
       ).length;
       onActiveCountChange?.(remainingActiveCount);
-
-      // Notify other views
-      window.dispatchEvent(
-        new CustomEvent('forgex:ticket-deleted', {
-          detail: { ticketId: targetId, caseNumber: targetCaseNumber },
-        })
-      );
     } catch (err: any) {
       toast.error('Deletion Failed', err.message || 'Could not delete ticket.');
     } finally {
@@ -2722,8 +2736,8 @@ export const SopExecutionView: React.FC<{
     const isUUID = (str?: string) =>
       Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
 
-    let displayTag = c.assetTag || c.assetName || '';
-    if (!displayTag || isUUID(displayTag)) {
+    let displayTag = formatCleanMachineName(c.assetTag || c.assetName || '');
+    if (!displayTag || displayTag === 'PLANT_WIDE' || isUUID(displayTag)) {
       displayTag = c.assetId && !isUUID(c.assetId) ? c.assetId : 'ELEC-MTR-701';
     }
     // Strip parenthetical suffixes and .GLB extensions on the card header pill
@@ -2795,17 +2809,31 @@ export const SopExecutionView: React.FC<{
             )}
           </div>
 
-          <span
-            className={`font-mono text-[9px] font-bold px-2 py-0.5 rounded-full border shrink-0 tracking-wider uppercase ${
-              c.severity === 'CRITICAL'
-                ? 'bg-rose-500/20 text-rose-300 border-rose-400/40'
-                : c.severity === 'HIGH'
-                ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
-                : 'bg-blue-500/20 text-blue-300 border-blue-400/40'
-            }`}
-          >
-            {c.severity}
-          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span
+              className={`font-mono text-[9px] font-bold px-2 py-0.5 rounded-full border shrink-0 tracking-wider uppercase ${
+                c.severity === 'CRITICAL'
+                  ? 'bg-rose-500/20 text-rose-300 border-rose-400/40'
+                  : c.severity === 'HIGH'
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                  : 'bg-blue-500/20 text-blue-300 border-blue-400/40'
+              }`}
+            >
+              {c.severity}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setDeleteModalState({ isOpen: true, targetCase: c });
+              }}
+              title="Delete ticket"
+              className="p-0.5 text-slate-400 hover:text-red-400 hover:bg-white/10 rounded transition cursor-pointer"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
         </div>
 
         {/* Card Body with subtle gradient background */}
@@ -3356,18 +3384,16 @@ export const SopExecutionView: React.FC<{
                   </button>
                 )}
 
-                {/* 🗑️ Delete Ticket Button (With Safety Guard - only shown when not underway) */}
-                {!isTicketExecutionUnderway(activeCase) && (
-                  <button
-                    type="button"
-                    onClick={() => setDeleteModalState({ isOpen: true, targetCase: activeCase })}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 shadow-2xs transition cursor-pointer"
-                    title="Delete unstarted ticket from dispatch queue"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                    <span>Delete Ticket</span>
-                  </button>
-                )}
+                {/* 🗑️ Delete Ticket Button */}
+                <button
+                  type="button"
+                  onClick={() => setDeleteModalState({ isOpen: true, targetCase: activeCase })}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 shadow-2xs transition cursor-pointer"
+                  title="Delete ticket from dispatch queue"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Delete Ticket</span>
+                </button>
 
                 <button
                   type="button"

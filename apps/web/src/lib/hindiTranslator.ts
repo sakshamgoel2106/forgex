@@ -171,38 +171,147 @@ export function formatCleanMachineName(rawName?: string | null): string {
 
 /**
  * Strips duplicate machine names, prefixes like "RCA Fix: [COOLING TOWER]", and trailing machine references
- * E.g. "RCA Fix: [COOLING TOWER (COOLING-TOWER.GLB)] Dynamic Hydraulic Cavitation & Impeller Vane Unbalance"
+ * E.g. "Dynamic Hydraulic Cavitation & Impeller Vane Unbalance on COOLING TOWER (COOLING-TOWER)"
+ *      -> "Dynamic Hydraulic Cavitation & Impeller Vane Unbalance"
+ * E.g. "COOLING TOWER: Dynamic Hydraulic Cavitation & Impeller Vane Unbalance"
  *      -> "Dynamic Hydraulic Cavitation & Impeller Vane Unbalance"
  */
 export function formatCleanNoteTitle(title?: string | null, machineName?: string | null): string {
   if (!title) return 'Expert Field Guidance';
   let clean = String(title).trim();
 
-  // Strip prefixes like "RCA Fix: ", "Expert Note: ", "Field Fix: "
-  clean = clean.replace(/^(?:RCA\s*Fix|Expert\s*Note|Field\s*Fix|Troubleshooting\s*Fix)\s*:\s*/i, '');
+  // Strip prefixes like "RCA Fix: ", "Expert Note: ", "Field Fix: ", "Troubleshooting Fix: "
+  clean = clean.replace(/^(?:RCA\s*Fix|Expert\s*Note|Field\s*Fix|Troubleshooting\s*Fix|Verified\s*RCA)\s*:\s*/i, '');
 
   // Strip leading brackets like "[COOLING TOWER (COOLING-TOWER.GLB)]" or "[COOLING TOWER]:"
   clean = clean.replace(/^\[[^\]]+\]\s*:?\s*/i, '');
 
-  // If machine name is known, strip prefix "COOLING TOWER: " or trailing " on COOLING TOWER"
-  const cleanMach = machineName ? formatCleanMachineName(machineName) : '';
-  const rawMach = machineName ? String(machineName).trim() : '';
-
-  const candidates = [cleanMach, rawMach].filter((m) => m && m !== 'PLANT_WIDE');
-  for (const candidate of candidates) {
-    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Prefix check
-    clean = clean.replace(new RegExp(`^${escaped}\\s*[:\\-–—]\\s*`, 'i'), '');
-    // Trailing check
-    clean = clean.replace(new RegExp(`\\s*(?:on|for|at|in|[-–—])\\s+${escaped}\\s*$`, 'i'), '');
+  // Build candidate words from machineName to strip prefixes / suffixes
+  const candidates: string[] = [];
+  if (machineName) {
+    const raw = String(machineName).trim();
+    if (raw && raw !== 'PLANT_WIDE') {
+      candidates.push(raw);
+      candidates.push(formatCleanMachineName(raw));
+      const parenMatch = raw.match(/^([^(]+)\(([^)]+)\)/);
+      if (parenMatch) {
+        candidates.push(parenMatch[1].trim());
+        candidates.push(parenMatch[2].trim());
+      }
+    }
   }
+
+  for (const cand of candidates) {
+    if (!cand || cand === 'PLANT_WIDE') continue;
+    const escaped = cand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Prefix check (e.g. "COOLING TOWER: ...")
+    clean = clean.replace(new RegExp(`^${escaped}\\s*[:\\-–—]\\s*`, 'i'), '');
+    // Trailing check with optional parenthetical (e.g. " on COOLING TOWER (COOLING-TOWER)")
+    clean = clean.replace(new RegExp(`\\s*(?:on|for|at|in|[-–—])\\s+${escaped}(?:\\s*\\([^)]*\\))?\\s*$`, 'i'), '');
+    // Trailing in parentheses (e.g. " (COOLING TOWER)")
+    clean = clean.replace(new RegExp(`\\s*\\(${escaped}\\)\\s*$`, 'i'), '');
+  }
+
+  // Generic trailing machine/asset patterns (e.g. " on COOLING TOWER...", " on PUMP-001...")
+  clean = clean.replace(/\s*(?:on|for|at|in)\s+[A-Z0-9_\-\s]+(?:\([^)]*\))?\s*$/i, '');
+  // Generic trailing parenthetical with uppercase asset codes or model names
+  clean = clean.replace(/\s*\([A-Z0-9_\-\s.]*(?:tower|pump|unit|motor|compressor|press|glb|gltf)[A-Z0-9_\-\s.]*\)\s*$/i, '');
+  // Clean any trailing model or asset in parentheses e.g. " (COOLING-TOWER)"
+  clean = clean.replace(/\s*\([A-Z0-9_\-\s]{3,}\)\s*$/i, '');
 
   // Clean any remaining .GLB or parenthetical asset tags in title
   clean = clean.replace(/\.(glb|gltf)\b/gi, '');
-  clean = clean.replace(/\s*\([^)]{0,35}\.glb\)/gi, '');
-  clean = clean.replace(/^\s*[:\-–—]\s*/, '').trim();
+  clean = clean.replace(/\s*\([^)]*?(?:\.glb|\.gltf)[^)]*?\)/gi, '');
+  clean = clean.replace(/^[:\-–—\s]+|[:\-–—\s]+$/g, '').trim();
 
   return clean || title || 'Expert Field Guidance';
+}
+
+// Alias for cleanNoteTitle
+export const cleanNoteTitle = formatCleanNoteTitle;
+
+/**
+ * Sanitizes the "WHEN TO APPLY" / Trigger condition
+ * Ensures title is never appended or duplicated into the trigger symptom
+ */
+export function cleanTriggerText(
+  symptom?: string | null,
+  taskDuringIssue?: string | null,
+  cleanTitle?: string | null
+): string {
+  let text = (symptom || '').trim();
+
+  // If symptom is empty, fall back to taskDuringIssue only if it's not the title or root cause
+  if (!text) {
+    if (taskDuringIssue) {
+      const task = taskDuringIssue.trim();
+      const normTask = task.toLowerCase();
+      const normTitle = (cleanTitle || '').toLowerCase();
+      if (
+        !normTitle ||
+        (!normTask.includes(normTitle) &&
+          !normTitle.includes(normTask) &&
+          !normTask.includes('cavitation') &&
+          !normTask.includes('root cause'))
+      ) {
+        text = task;
+      }
+    }
+  }
+
+  // Strip repeated machine names from trigger
+  text = text.replace(/\s*(?:on|for|at|in)\s+[A-Z0-9_\-\s]+(?:\([^)]*\.glb\))?/gi, '');
+  text = text.replace(/\.(glb|gltf)\b/gi, '');
+
+  // Strip duplicate note title if somehow embedded in symptom
+  if (cleanTitle && cleanTitle.length > 5) {
+    const escapedTitle = cleanTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(new RegExp(`(?:\\s*[•\\-–—|]\\s*)?${escapedTitle}`, 'gi'), '').trim();
+  }
+
+  // Strip boilerplate prefixes
+  text = text.replace(/^symptom\s*:\s*/i, '').trim();
+
+  if (!text || text === '•' || text === '-' || text === '|') {
+    return 'Operational parameter deviation / Abnormal vibration';
+  }
+
+  return text;
+}
+
+/**
+ * Sanitizes "FIELD FIX" / Remediation instructions
+ * Strips boilerplate prefixes like "Verified all investigation steps. Primary root cause: ... Remediation:"
+ * or "Recommended Field Fix:" so the text starts immediately with the actionable engineering fix.
+ */
+export function cleanRemediationText(rawText?: string | null): string {
+  if (!rawText) return '';
+  let clean = String(rawText).trim();
+
+  // 1. If explicit markers like "Remediation:", "Recommended Field Fix:", etc. exist, extract what comes after
+  const splitMatch = clean.match(/(?:Remediation|Recommended\s*Field\s*Fix|Recommended\s*Fix|Field\s*Fix|Actionable\s*Fix|Corrective\s*Action)\s*:\s*([\s\S]+)$/i);
+  if (splitMatch && splitMatch[1] && splitMatch[1].trim().length > 10) {
+    clean = splitMatch[1].trim();
+  } else {
+    // 2. Strip leading "Verified all investigation steps..." sentences
+    clean = clean.replace(/^Verified all investigation steps\.?\s*/i, '');
+    clean = clean.replace(/^(?:Primary\s*)?(?:root\s*cause|hypothesis)\s*:[^\n.]*[\n.]\s*/i, '');
+    clean = clean.replace(/^Root cause confirmed[^\n.]*[\n.]\s*/i, '');
+  }
+
+  // 3. Strip redundant machine references in the remediation text if repeated as "on COOLING TOWER (COOLING-TOWER.GLB)"
+  clean = clean.replace(/\s*on\s+[A-Z0-9_\-\s]+\((?:[A-Z0-9_\-\s.]*\.glb|[A-Z0-9_\-\s.]+)\)/gi, '');
+  clean = clean.replace(/\.(glb|gltf)\b/gi, '');
+
+  // 4. Clean leading punctuation or bullet points
+  clean = clean.replace(/^[:\-–—•\s]+/, '').trim();
+
+  // Capitalize first letter
+  if (clean.length > 0) {
+    clean = clean.charAt(0).toUpperCase() + clean.slice(1);
+  }
+
+  return clean;
 }
 
 /**

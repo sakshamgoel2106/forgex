@@ -12,7 +12,9 @@ import {
   RefreshCw,
   AlertCircle,
   ArrowUpDown,
-  CheckCircle2,
+  Check,
+  ChevronDown,
+  ChevronUp,
   X,
   Wrench,
   Cpu,
@@ -26,6 +28,7 @@ import type {
   MaintenanceRecord,
   Machine,
 } from '@forgex/shared-types';
+import { formatCleanMachineName } from '../../lib/hindiTranslator';
 
 export type EnrichedMaintenanceRecord = MaintenanceRecord & {
   resolutionSource?: string;
@@ -45,6 +48,40 @@ export const formatHistoryDateTime = (dateStr?: string) => {
     minute: '2-digit',
     hour12: true,
   });
+};
+
+export const formatHistoryDate = (dateStr?: string): string => {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+export const formatHistoryTime = (dateStr?: string): string => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
+export const cleanRootCauseText = (text?: string | null): string => {
+  if (!text) return 'Operational baseline verified.';
+  let clean = String(text).trim();
+  // Strip trailing "on COOLING TOWER (COOLING-TOWER.GLB)" or "on MACHINE..."
+  clean = clean.replace(/\s*(?:on|for|at|in)\s+[A-Z0-9_\-\s]+(?:\([^)]*\))?\s*$/i, '');
+  clean = clean.replace(/\.(glb|gltf)\b/gi, '');
+  clean = clean.replace(/\s*\([^)]*?(?:\.glb|\.gltf)[^)]*?\)/gi, '');
+  clean = clean.replace(/\s*\([^)]*$/g, '');
+  clean = clean.replace(/^[:\-–—•\s]+|[:\-–—•\s]+$/g, '').trim();
+  return clean || text;
 };
 
 const isUUID = (str?: string): boolean => {
@@ -68,12 +105,12 @@ export const generateComplianceHash = (recordId: string, assetTag: string, dateS
 export const resolveAssetTag = (r: EnrichedMaintenanceRecord, machinesList: Machine[]): string => {
   // 1. Direct machineAssetTag if valid and not a UUID
   if (r.machineAssetTag && !isUUID(r.machineAssetTag)) {
-    return r.machineAssetTag;
+    return formatCleanMachineName(r.machineAssetTag);
   }
 
   // 2. Direct machineId if valid and not a UUID
   if (r.machineId && !isUUID(r.machineId)) {
-    return r.machineId;
+    return formatCleanMachineName(r.machineId);
   }
 
   // 3. Resolve UUID against registered machines list
@@ -84,7 +121,7 @@ export const resolveAssetTag = (r: EnrichedMaintenanceRecord, machinesList: Mach
         (r.machineAssetTag && m.id === r.machineAssetTag)
     );
     if (match && match.assetTag && !isUUID(match.assetTag)) {
-      return match.assetTag;
+      return formatCleanMachineName(match.assetTag);
     }
   }
 
@@ -99,7 +136,7 @@ export const resolveAssetTag = (r: EnrichedMaintenanceRecord, machinesList: Mach
     !extracted[1].startsWith('WO-') &&
     !extracted[1].startsWith('TCK-')
   ) {
-    return extracted[1];
+    return formatCleanMachineName(extracted[1]);
   }
 
   return 'EQUIPMENT-UNIT-01';
@@ -171,6 +208,37 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
   const [expandedRecord, setExpandedRecord] = useState<EnrichedMaintenanceRecord | null>(null);
   const [deleteRecordConfirmId, setDeleteRecordConfirmId] = useState<string | null>(null);
   const [promotedKnowledgeIds, setPromotedKnowledgeIds] = useState<Set<string>>(new Set());
+
+  // Collapsible timeline card state (1st newest record expanded by default)
+  const [manuallyExpandedIds, setManuallyExpandedIds] = useState<Record<string, boolean>>({});
+  const [expandAll, setExpandAll] = useState<boolean | null>(null);
+
+  const toggleCardExpansion = (recordId: string, isFirstOverall: boolean, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setManuallyExpandedIds((prev) => {
+      const currentlyExpanded = expandAll !== null ? expandAll : (prev[recordId] ?? isFirstOverall);
+      return {
+        ...prev,
+        [recordId]: !currentlyExpanded,
+      };
+    });
+  };
+
+  const handleToggleExpandAll = () => {
+    if (expandAll === true) {
+      setExpandAll(false);
+      setManuallyExpandedIds({});
+    } else {
+      setExpandAll(true);
+      setManuallyExpandedIds({});
+    }
+  };
+
+  const isRecordExpanded = (recordId: string, isFirstOverall: boolean) => {
+    if (expandAll !== null) return expandAll;
+    if (recordId in manuallyExpandedIds) return manuallyExpandedIds[recordId];
+    return isFirstOverall;
+  };
 
   // Request race-condition guard
   const activeRequestId = useRef(0);
@@ -893,19 +961,46 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                   {month}
                 </span>
                 <div className="flex-1 h-px bg-slate-200" />
-                <span className="text-xs font-mono text-slate-400">
-                  {monthRecords.length} record{monthRecords.length === 1 ? '' : 's'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-slate-400">
+                    {monthRecords.length} record{monthRecords.length === 1 ? '' : 's'}
+                  </span>
+                  {/* Expand All / Collapse All toggle next to X records */}
+                  <button
+                    type="button"
+                    onClick={handleToggleExpandAll}
+                    className="text-[11px] font-mono font-semibold text-indigo-600 hover:text-indigo-800 transition cursor-pointer flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-2xs"
+                  >
+                    {expandAll === true ? (
+                      <>
+                        <ChevronUp className="w-3 h-3" />
+                        <span>Collapse All</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-3 h-3" />
+                        <span>Expand All</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
-              {/* Connected Vertical Engineering Timeline Container */}
-              <div className="relative space-y-6 before:absolute before:top-4 before:bottom-4 before:left-3 sm:before:left-[118px] before:w-0.5 before:bg-gradient-to-b before:from-cyan-500 before:via-indigo-500 before:to-indigo-200">
-                {monthRecords.map((r) => {
+              {/* Connected Vertical Engineering Timeline Container (Scrollable Viewport) */}
+              <div className="max-h-[calc(100vh-260px)] overflow-y-auto pr-2 space-y-2">
+                {monthRecords.map((r, index) => {
                   const tag = resolveAssetTag(r, machines);
+                  const cleanTag = formatCleanMachineName(tag);
                   const repeatCount = machineRepeatCounts.get(tag) || 1;
                   const isChronicRepeat = repeatCount >= 2;
                   const srcInfo = getResolutionSourceInfo(r);
-                  const formattedDateTime = formatHistoryDateTime(r.resolvedAt || r.createdAt);
+                  const isFirstInMonth = index === 0;
+                  const isLastInMonth = index === monthRecords.length - 1;
+                  const isFirstOverall = r.id === filteredRecords[0]?.id;
+                  const isExpanded = isRecordExpanded(r.id, isFirstOverall);
+                  const entryDate = formatHistoryDate(r.resolvedAt || r.createdAt);
+                  const entryTime = formatHistoryTime(r.resolvedAt || r.createdAt);
+                  const cleanRootCause = cleanRootCauseText(r.rootCause || r.problemStatement);
                   const mttrDisplay = r.mttrMinutes ? `${r.mttrMinutes}m` : '18m';
                   const remedySummary =
                     Array.isArray(r.repairActions) && r.repairActions.length > 0
@@ -915,23 +1010,22 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                   return (
                     <div
                       key={r.id}
-                      className="relative flex flex-col sm:flex-row items-start gap-4 sm:gap-6 pl-8 sm:pl-0"
+                      className="flex items-stretch gap-0 group"
                     >
-                      {/* Left Rail: Glowing timeline track node + Date/Time + Machine Node Badge */}
-                      <div className="sm:w-[130px] shrink-0 sm:text-right flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-1.5 sm:pt-2">
-                        {/* Glowing Node on Timeline Axis */}
-                        <div className="absolute left-[7px] sm:left-[114px] top-3.5 w-3 h-3 rounded-full bg-cyan-400 border-2 border-slate-900 shadow-[0_0_8px_rgba(6,182,212,0.9)] z-10" />
-
-                        {/* Date/Time Node */}
-                        <span className="font-mono text-[11px] font-semibold text-slate-500 block">
-                          {formattedDateTime}
+                      {/* 1. Left Metadata Column */}
+                      <div className="w-36 sm:w-40 shrink-0 pr-3 sm:pr-4 py-1 flex flex-col items-end text-right space-y-1">
+                        {/* Line 1: Date */}
+                        <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                          {entryDate}
                         </span>
-
-                        {/* Prominent Dark-Indigo Machine Node Badge */}
-                        <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-cyan-300 font-mono text-xs font-bold px-2.5 py-1 rounded-lg border border-indigo-700/60 shadow-xs flex items-center gap-1.5 shrink-0">
-                          <span>⚙️ {tag}</span>
+                        {/* Line 2: Time */}
+                        <span className="text-[11px] font-mono text-slate-500 whitespace-nowrap">
+                          {entryTime}
+                        </span>
+                        {/* Line 3: Dark Navy-Indigo Machine Pill (⚙️ COOLING TOWER — strip .GLB) */}
+                        <div className="mt-1 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-cyan-300 font-mono text-[11px] font-bold px-2 py-0.5 rounded-md border border-indigo-700/60 shadow-xs flex items-center gap-1 shrink-0 whitespace-nowrap">
+                          <span>⚙️ {cleanTag}</span>
                         </div>
-
                         {/* Repeat Count Badge if chronic */}
                         {isChronicRepeat && (
                           <span
@@ -939,111 +1033,170 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                               e.stopPropagation();
                               setSearchTerm(tag);
                             }}
-                            className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs hover:bg-rose-100 transition cursor-pointer"
+                            className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-300 shadow-2xs hover:bg-rose-100 transition cursor-pointer whitespace-nowrap"
                             title={`Asset ${tag} has ${repeatCount} recorded failures — click to filter trend`}
                           >
                             <RotateCcw className="w-2.5 h-2.5 text-rose-600" />
-                            <span>{repeatCount}x Repeat</span>
+                            <span>🔁 {repeatCount}x Repeat</span>
                           </span>
                         )}
                       </div>
 
-                      {/* Right Connected Card */}
-                      <div
-                        onClick={() => setExpandedRecord(r)}
-                        className="flex-1 min-w-0 bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-indigo-400 transition-all overflow-hidden cursor-pointer w-full"
-                      >
-                        {/* Top Dark-Slate/Indigo Gradient Header Bar */}
-                        <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-3.5 py-2 rounded-t-xl flex items-center justify-between gap-2.5 flex-wrap border-b border-indigo-900/40">
-                          <div className="flex items-center gap-2 flex-wrap min-w-0">
-                            {/* Record ID */}
-                            <span className="font-mono text-xs font-bold text-cyan-300 tracking-wide">
-                              {r.recordNumber || r.ticketNumber || r.id}
-                            </span>
+                      {/* 2. Dedicated Timeline Track Column */}
+                      <div className="w-6 shrink-0 relative flex flex-col items-center">
+                        {/* Top vertical line */}
+                        <div className={`w-0.5 bg-gradient-to-b from-indigo-500 to-cyan-500 ${isFirstInMonth ? 'h-3 mt-1' : 'flex-1'}`} />
+                        {/* Centered circle node */}
+                        <div className="w-3.5 h-3.5 rounded-full bg-cyan-400 ring-4 ring-indigo-100 shadow-[0_0_8px_rgba(6,182,212,0.9)] z-10 shrink-0 my-0.5" />
+                        {/* Bottom vertical line */}
+                        <div className={`w-0.5 bg-gradient-to-b from-cyan-500 to-indigo-500 flex-1 ${isLastInMonth ? 'opacity-30' : ''}`} />
+                      </div>
 
-                            {/* Resolution Source Badge */}
-                            <span
-                              className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border shadow-2xs ${srcInfo.badgeClass}`}
-                            >
-                              {srcInfo.label}
-                            </span>
-
-                            {/* MTTR Pill */}
-                            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-white/10 text-slate-200 border border-white/20">
-                              <Timer className="w-3 h-3 text-cyan-400" />
-                              <span>MTTR: {mttrDisplay}</span>
-                            </span>
-
-                            {/* Audited By */}
-                            <span className="text-slate-300 text-xs font-sans flex items-center gap-1">
-                              <User className="w-3 h-3 text-slate-400" />
-                              <span className="text-slate-200">Audited by:</span>
-                              <strong className="text-white font-medium">
-                                {r.resolvingTechnicianName || r.assignedTechnicianName || 'Specialist'}
-                              </strong>
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            {/* Verified & Sealed */}
-                            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 shadow-2xs">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                              <span>✓ VERIFIED &amp; SEALED</span>
-                            </span>
-
-                            {/* View Full Audit Dossier link */}
-                            <span className="text-xs font-bold text-indigo-300 hover:text-cyan-300 transition flex items-center gap-1">
-                              <span>View Full Audit Dossier &rarr;</span>
-                            </span>
-
-                            {/* Delete Record Button */}
-                            <button
-                              type="button"
-                              onClick={(ev) => {
-                                ev.stopPropagation();
-                                setDeleteRecordConfirmId(r.id);
-                              }}
-                              className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-white/10 transition cursor-pointer"
-                              title="Delete record"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Card Body: 2 Visual Connected Flow Boxes */}
-                        <div className="p-3.5 grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-50/40">
-                          {/* Box 1: DIAGNOSED ROOT CAUSE (Rose/Slate tinted) */}
-                          <div className="p-3 rounded-lg border border-rose-200/80 bg-rose-50/40 space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-800 flex items-center gap-1">
-                                <span>🚨 DIAGNOSED ROOT CAUSE</span>
+                      {/* 3. Right Card Column */}
+                      <div className="flex-1 min-w-0 pl-3 pb-3">
+                        <div
+                          className="bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-indigo-400 transition-all overflow-hidden w-full"
+                        >
+                          {/* Top Dark-Slate/Indigo Gradient Header Bar */}
+                          <div
+                            onClick={() => toggleCardExpansion(r.id, isFirstOverall)}
+                            className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-3.5 py-2.5 rounded-t-xl flex items-center justify-between gap-2.5 flex-wrap border-b border-indigo-900/40 cursor-pointer select-none"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap min-w-0">
+                              {/* Record ID */}
+                              <span className="font-mono text-xs font-bold text-cyan-300 tracking-wide">
+                                {r.recordNumber || r.ticketNumber || r.id}
                               </span>
-                              {r.alarmCode && (
-                                <span className="font-mono text-[9px] font-bold bg-rose-100 text-rose-800 border border-rose-200 px-1.5 py-0.2 rounded">
-                                  ALARM: {r.alarmCode}
+
+                              {/* Resolution Source Badge */}
+                              <span
+                                className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border shadow-2xs ${srcInfo.badgeClass}`}
+                              >
+                                {srcInfo.label}
+                              </span>
+
+                              {/* MTTR Pill */}
+                              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-white/10 text-slate-200 border border-white/20">
+                                <Timer className="w-3 h-3 text-cyan-400" />
+                                <span>MTTR: {mttrDisplay}</span>
+                              </span>
+
+                              {/* Audited By */}
+                              <span className="text-slate-300 text-xs font-sans flex items-center gap-1">
+                                <User className="w-3 h-3 text-slate-400" />
+                                <span className="text-slate-300">Audited by:</span>
+                                <strong className="text-white font-medium">
+                                  {r.resolvingTechnicianName || r.assignedTechnicianName || 'Specialist'}
+                                </strong>
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              {/* Verified & Sealed (Single checkmark) */}
+                              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 shadow-2xs">
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span>VERIFIED &amp; SEALED</span>
+                              </span>
+
+                              {/* View Full Audit Dossier link */}
+                              <button
+                                type="button"
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  setExpandedRecord(r);
+                                }}
+                                className="text-xs font-bold text-indigo-300 hover:text-cyan-300 transition flex items-center gap-1 cursor-pointer"
+                              >
+                                <span>View Full Audit Dossier &rarr;</span>
+                              </button>
+
+                              {/* Delete Record Button */}
+                              <button
+                                type="button"
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  setDeleteRecordConfirmId(r.id);
+                                }}
+                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-white/10 transition cursor-pointer"
+                                title="Delete record"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Expand / Collapse Chevron */}
+                              <button
+                                type="button"
+                                onClick={(ev) => toggleCardExpansion(r.id, isFirstOverall, ev)}
+                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                                title={isExpanded ? 'Collapse Remedy Details' : 'Expand Remedy Details'}
+                              >
+                                {isExpanded ? (
+                                  <ChevronUp className="w-4 h-4 text-slate-300" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4 text-slate-300" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Card Content: Either Full 2-Box Grid (Expanded) OR Sleek 1-Line Summary Preview (Collapsed) */}
+                          {isExpanded ? (
+                            <div className="p-3.5 grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-50/40 animate-in fade-in duration-150">
+                              {/* Box 1: DIAGNOSED ROOT CAUSE (Rose/Slate tinted) */}
+                              <div className="p-3 rounded-lg border border-rose-200/80 bg-rose-50/40 space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-800 flex items-center gap-1">
+                                    <span>🚨 DIAGNOSED ROOT CAUSE</span>
+                                  </span>
+                                  {r.alarmCode && (
+                                    <span className="font-mono text-[9px] font-bold bg-rose-100 text-rose-800 border border-rose-200 px-1.5 py-0.2 rounded">
+                                      ALARM: {r.alarmCode}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-800 font-sans leading-relaxed break-words font-medium">
+                                  {cleanRootCause}
+                                </p>
+                              </div>
+
+                              {/* Box 2: EXECUTED REMEDY & VERIFICATION */}
+                              <div className="p-3 rounded-lg border border-indigo-200/80 bg-indigo-50/40 space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-800 flex items-center gap-1">
+                                    <span>🔧 EXECUTED REMEDY &amp; VERIFICATION</span>
+                                  </span>
+                                  <span className="font-mono text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.2 rounded">
+                                    SPEC VERIFIED
+                                  </span>
+                                </div>
+                                <p className="text-xs text-indigo-950 font-sans leading-relaxed break-words font-medium">
+                                  {remedySummary}
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div
+                              onClick={(e) => toggleCardExpansion(r.id, isFirstOverall, e)}
+                              className="px-3.5 py-2.5 bg-slate-50/70 hover:bg-slate-100/70 border-t border-slate-100 flex items-center justify-between gap-3 text-xs transition cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <span className="font-mono text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded shrink-0">
+                                  ROOT CAUSE
                                 </span>
-                              )}
-                            </div>
-                            <p className="text-xs text-slate-800 font-sans leading-relaxed break-words font-medium">
-                              {r.rootCause || r.problemStatement || 'Operational baseline verified.'}
-                            </p>
-                          </div>
-
-                          {/* Box 2: EXECUTED REMEDY & VERIFICATION (Indigo/Emerald tinted, zero truncation) */}
-                          <div className="p-3 rounded-lg border border-indigo-200/80 bg-indigo-50/40 space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-800 flex items-center gap-1">
-                                <span>🔧 EXECUTED REMEDY &amp; VERIFICATION</span>
-                              </span>
-                              <span className="font-mono text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.2 rounded">
-                                SPEC VERIFIED
+                                <span className="text-slate-800 font-medium truncate" title={cleanRootCause}>
+                                  {cleanRootCause}
+                                </span>
+                                <span className="text-slate-400 font-mono shrink-0">→</span>
+                                <span className="text-slate-600 truncate" title={remedySummary}>
+                                  {remedySummary}
+                                </span>
+                              </div>
+                              <span className="text-indigo-600 hover:text-indigo-800 font-mono text-[11px] font-bold shrink-0 flex items-center gap-0.5">
+                                <span>Show Remedy Details</span>
+                                <ChevronDown className="w-3.5 h-3.5" />
                               </span>
                             </div>
-                            <p className="text-xs text-indigo-950 font-sans leading-relaxed break-words font-medium">
-                              {remedySummary}
-                            </p>
-                          </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1078,7 +1231,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                       {r.recordNumber || r.ticketNumber || r.id}
                     </span>
                     <span className="font-mono text-xs font-bold text-indigo-200 bg-indigo-500/30 border border-indigo-400/30 px-2.5 py-0.5 rounded">
-                      {tag}
+                      {formatCleanMachineName(tag)}
                     </span>
                     <span className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded-full ${srcInfo.badgeClass}`}>
                       {srcInfo.label}
@@ -1088,7 +1241,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                     </span>
                   </div>
                   <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
-                    Closed-Loop Resolution Audit Dossier — {tag}
+                    Closed-Loop Resolution Audit Dossier — {formatCleanMachineName(tag)}
                   </h2>
                   <div className="flex items-center gap-3 text-xs text-slate-300 font-mono">
                     <span>👨‍🔧 Signed by: <strong className="text-white">{r.resolvingTechnicianName || r.assignedTechnicianName || 'Specialist'}</strong></span>
@@ -1129,7 +1282,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                 </div>
 
                 {/* 3-Column Structured Audit Grid */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* Col 1: Diagnostic Context */}
                   <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-2.5">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-2">
@@ -1146,7 +1299,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                       <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
                         Field Symptom / Problem
                       </span>
-                      <p className="text-xs text-slate-800 leading-relaxed font-sans bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                      <p className="text-xs text-slate-800 leading-relaxed font-sans bg-slate-50 p-2.5 rounded-lg border border-slate-200 font-medium">
                         {r.problemStatement || 'Physical vibration and mechanical deviation observed.'}
                       </p>
                     </div>
@@ -1155,8 +1308,8 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                       <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
                         Confirmed Root Cause
                       </span>
-                      <p className="text-xs text-indigo-950 leading-relaxed font-sans bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-200">
-                        {r.rootCause || 'Root cause confirmed and addressed.'}
+                      <p className="text-xs text-indigo-950 leading-relaxed font-sans bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-200 break-words font-medium">
+                        {cleanRootCauseText(r.rootCause || 'Root cause confirmed and addressed.')}
                       </p>
                     </div>
                   </div>
@@ -1168,8 +1321,8 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                         <Wrench className="w-4 h-4 text-indigo-600 shrink-0" />
                         <span>Executed Fix Actions</span>
                       </div>
-                      <span className="font-mono text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
-                        100% COMPLETE
+                      <span className="font-mono text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded whitespace-nowrap shrink-0 ml-auto">
+                        100% DONE
                       </span>
                     </div>
 
@@ -1207,17 +1360,19 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                     </div>
 
                     <div className="space-y-2 text-xs">
-                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center">
-                        <span className="font-medium text-slate-600">Verification State:</span>
-                        <span className="font-mono font-bold text-emerald-700 flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
+                      <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 w-full overflow-hidden">
+                        <span className="text-xs text-slate-600 font-medium shrink-0">Verification State:</span>
+                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold font-mono whitespace-nowrap shrink-0 flex items-center gap-1">
+                          <Check className="w-3 h-3 text-emerald-600" />
                           PASSED
                         </span>
                       </div>
 
-                      <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-2">
-                        <span className="font-medium text-slate-600 whitespace-nowrap">Restart Authorized:</span>
-                        <span className="font-mono font-bold text-emerald-700 whitespace-nowrap">YES — FULL OPERATIONAL</span>
+                      <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 w-full overflow-hidden">
+                        <span className="text-xs text-slate-600 font-medium shrink-0">Restart Authorized:</span>
+                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold whitespace-nowrap shrink-0">
+                          ✓ Full Operational
+                        </span>
                       </div>
 
                       <div className="p-2.5 bg-indigo-50/50 rounded-lg border border-indigo-200 text-[11px] text-indigo-950 font-sans">

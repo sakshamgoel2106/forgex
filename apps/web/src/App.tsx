@@ -144,10 +144,12 @@ const AppContent: React.FC = () => {
 
     window.addEventListener('forgex:navigate', handleNavEvent);
     window.addEventListener('navigate-tab', handleNavEvent);
+    window.addEventListener('navigate-to-module', handleNavEvent);
     window.addEventListener('popstate', handlePopState);
     return () => {
       window.removeEventListener('forgex:navigate', handleNavEvent);
       window.removeEventListener('navigate-tab', handleNavEvent);
+      window.removeEventListener('navigate-to-module', handleNavEvent);
       window.removeEventListener('popstate', handlePopState);
     };
   }, []);

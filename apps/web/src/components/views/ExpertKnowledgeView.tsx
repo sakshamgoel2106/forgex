@@ -37,6 +37,8 @@ import { apiFetch } from '../../lib/api';
 import {
   formatCleanMachineName,
   formatCleanNoteTitle,
+  cleanTriggerText,
+  cleanRemediationText,
   translateExpertNoteToHindi,
 } from '../../lib/hindiTranslator';
 
@@ -425,7 +427,8 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
     const category = note.category || 'Reliability';
     const severity = note.severity || 'Pro-Tip';
-    const guidance = note.description || note.content || '';
+    const guidance = cleanRemediationText(note.description || note.content || '');
+    const cleanTrigger = cleanTriggerText(note.symptom, note.taskDuringIssue, cleanTitle);
     const aiInsight = getNonRedundantAiInsight(note);
 
     let textToSpeak = '';
@@ -433,23 +436,20 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
 
     if (voiceLang === 'hi') {
       speechLang = 'hi-IN';
-      const triggerText = note.symptom || (note.taskDuringIssue ? `कार्य के दौरान: ${note.taskDuringIssue}` : 'परिचालन निरीक्षण के दौरान विसंगति');
       textToSpeak = translateExpertNoteToHindi({
         machineName: cleanMachine,
         title: cleanTitle,
-        trigger: triggerText,
-        taskDuringIssue: note.taskDuringIssue || undefined,
+        trigger: cleanTrigger,
+        taskDuringIssue: undefined,
         guidance,
         aiInsight: aiInsight || undefined,
       });
     } else {
       speechLang = 'en-US';
-      const trigger = note.symptom ? `Observed trigger is ${note.symptom}` : 'Observed during operational inspection';
-      const task = note.taskDuringIssue ? ` during ${note.taskDuringIssue}` : '';
       const aiText = aiInsight
         ? ` AI Supplemental Insight and Manual Cross-Check: ${aiInsight.replace(/[•\n]+/g, '. ').trim()}`
         : '';
-      textToSpeak = `Expert Knowledge Note for ${cleanMachine}, Category ${category}, Severity ${severity}. Title: ${cleanTitle}. When to apply: ${trigger}${task}. Recommended field action: ${guidance}.${aiText}`;
+      textToSpeak = `Expert Knowledge Note for ${cleanMachine}, Category ${category}, Severity ${severity}. Title: ${cleanTitle}. When to apply: ${cleanTrigger}. Recommended field action: ${guidance}.${aiText}`;
     }
 
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
@@ -866,7 +866,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     }
     const cleanMachine = formatCleanMachineName(note.machineAssetTag || note.assetTag || 'PLANT_WIDE');
     const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
-    const textToCopy = `[${cleanTitle}]\nMachine: ${cleanMachine}\nGuidance: ${note.description || note.content || ''}`;
+    const cleanFix = cleanRemediationText(note.description || note.content || '');
+    const cleanTrigger = cleanTriggerText(note.symptom, note.taskDuringIssue, cleanTitle);
+    const textToCopy = `[${cleanTitle}]\nMachine: ${cleanMachine}\nWhen to Apply: ${cleanTrigger}\nField Fix: ${cleanFix || note.description || note.content || ''}`;
     try {
       await navigator.clipboard.writeText(textToCopy);
       toast.success('Tip Copied', 'Field guidance copied to clipboard.');
@@ -882,7 +884,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     }
     const cleanMachine = formatCleanMachineName(note.machineAssetTag || note.assetTag || (note.machineAssetTags && note.machineAssetTags[0]) || 'PLANT_WIDE');
     const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
-    const prompt = `Troubleshooting guidance for ${cleanTitle} on machine ${cleanMachine}: ${note.symptom ? `Trigger: ${note.symptom}. ` : ''}${note.description || note.content || ''}`;
+    const cleanFix = cleanRemediationText(note.description || note.content || '');
+    const cleanTrigger = cleanTriggerText(note.symptom, note.taskDuringIssue, cleanTitle);
+    const prompt = `Troubleshooting guidance for ${cleanTitle} on machine ${cleanMachine}: Trigger: ${cleanTrigger}. Field Fix: ${cleanFix || note.description || note.content || ''}`;
     
     try {
       sessionStorage.setItem(
@@ -1180,6 +1184,8 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     const primaryTag = rawTags[0] || 'PLANT_WIDE';
     const cleanMachine = formatCleanMachineName(primaryTag);
     const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
+    const cleanTrigger = cleanTriggerText(note.symptom, note.taskDuringIssue, cleanTitle);
+    const cleanFix = cleanRemediationText(displayContent);
     const canDeleteThisNote = canEditOrDeleteNote(note);
 
     return (
@@ -1234,13 +1240,13 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
             <div className="flex items-start gap-1.5 text-amber-900">
               <span className="font-mono text-[10px] font-bold text-amber-600 uppercase shrink-0 mt-0.5">⚡ When to Apply:</span>
               <span className="line-clamp-2 text-slate-700 font-medium break-words leading-relaxed">
-                {note.symptom ? `${note.symptom}${note.taskDuringIssue ? ` • ${note.taskDuringIssue}` : ''}` : (note.taskDuringIssue || 'Operational Anomaly / Drift')}
+                {cleanTrigger}
               </span>
             </div>
             <div className="flex items-start gap-1.5 text-slate-700">
               <span className="font-mono text-[10px] font-bold text-indigo-600 uppercase shrink-0 mt-0.5">🔧 Field Fix:</span>
               <span className="line-clamp-2 text-slate-800 font-medium break-words leading-relaxed">
-                {displayContent}
+                {cleanFix || displayContent}
               </span>
             </div>
           </div>
@@ -1251,7 +1257,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-slate-900 to-indigo-700 text-white flex items-center justify-center text-[9px] font-mono font-bold shrink-0 shadow-2xs">
                 {getInitials(displayAuthor)}
               </div>
-              <span className="text-slate-800 font-semibold truncate max-w-[120px]">
+              <span className="text-slate-800 font-semibold truncate max-w-[180px] shrink-0" title={displayAuthor}>
                 By: {displayAuthor}
               </span>
               <span className="text-slate-400 font-mono whitespace-nowrap">
@@ -1489,13 +1495,37 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
         const displayDate = formatObservedDateTime(modalNote.observedAt || modalNote.createdAt || modalNote.date);
         const displaySeverity = (modalNote.severity as ExpertSeverity) || 'Pro-Tip / Best Practice';
         const displayContent = modalNote.description || modalNote.content || '';
-        const aiInsight = getNonRedundantAiInsight(modalNote);
         const rawTags = (modalNote.machineAssetTags && modalNote.machineAssetTags.length > 0)
           ? modalNote.machineAssetTags
           : (modalNote.machineAssetTag || modalNote.assetTag || 'PLANT_WIDE')
               .split(',')
               .map((t) => t.trim())
               .filter(Boolean);
+        const modalCleanMachine = formatCleanMachineName(rawTags[0]);
+        const modalCleanTitle = formatCleanNoteTitle(modalNote.title, modalCleanMachine);
+        const modalCleanFix = cleanRemediationText(displayContent);
+        const cleanModalTrigger = cleanTriggerText(modalNote.symptom, null, modalCleanTitle);
+
+        let cleanTaskDuringIssue = modalNote.taskDuringIssue || '';
+        if (cleanTaskDuringIssue) {
+          const normTask = cleanTaskDuringIssue.toLowerCase();
+          const normTitle = modalCleanTitle.toLowerCase();
+          if (
+            normTask.includes(normTitle) ||
+            normTitle.includes(normTask) ||
+            normTask.includes('cavitation') ||
+            normTask.includes('root cause') ||
+            normTask.includes('hypothesis')
+          ) {
+            cleanTaskDuringIssue = 'Standard Plant Operation / AI RCA Diagnostic';
+          } else {
+            cleanTaskDuringIssue = cleanTaskDuringIssue
+              .replace(/\s*(?:on|for|at|in)\s+[A-Z0-9_\-\s]+(?:\([^)]*\.glb\))?/gi, '')
+              .replace(/\.(glb|gltf)\b/gi, '')
+              .trim();
+          }
+        }
+        const aiInsight = getNonRedundantAiInsight(modalNote);
         const canEditOrDelete = canEditOrDeleteNote(modalNote);
         const reviewsList = Array.isArray(modalNote.reviews) ? modalNote.reviews : [];
         const isReviewsOpen = !!expandedReviews[modalNote.id];
@@ -1512,13 +1542,13 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
             }}
           >
             <div
-              className="max-w-3xl w-full mx-2 sm:mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+              className="max-w-3xl w-full mx-2 sm:mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col overflow-x-hidden"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header: Signature Deep Navy-to-Indigo Gradient Banner */}
-              <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 sm:p-5 rounded-t-2xl shrink-0 space-y-1.5 border-b border-indigo-950">
+              <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 sm:p-5 rounded-t-2xl shrink-0 space-y-1.5 border-b border-indigo-950 w-full overflow-x-hidden">
                 {/* Row 1: Left: Machine, Category, Severity pills | Right: Edit, Delete, Close */}
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 flex-wrap">
                     {rawTags.map((tag, idx) => (
                       <span
@@ -1594,30 +1624,30 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
 
                 {/* Row 2: Bold Note Title without redundant machine name */}
                 <h3 className="text-base font-bold text-white leading-snug mt-1.5 break-words">
-                  {formatCleanNoteTitle(modalNote.title, formatCleanMachineName(rawTags[0]))}
+                  {modalCleanTitle}
                 </h3>
 
-                {/* Row 3: All metadata on single non-wrapping line */}
-                <div className="flex items-center gap-3 text-xs text-slate-300 mt-1 whitespace-nowrap overflow-x-auto">
+                {/* Row 3: All metadata with flex-wrap so Applied 4x in Plant wraps cleanly instead of clipping */}
+                <div className="flex items-center flex-wrap gap-x-3 gap-y-1.5 text-xs text-slate-300 mt-1">
                   <span className="flex items-center gap-1 text-slate-200 shrink-0">
                     <User className="w-3.5 h-3.5 text-indigo-300" />
                     <strong>{displayAuthor}</strong> ({displayRole})
                   </span>
                   {displayDate && (
                     <>
-                      <span>•</span>
+                      <span className="text-slate-500">•</span>
                       <span className="flex items-center gap-1 shrink-0">
                         <Clock className="w-3 h-3 text-indigo-300" />
                         <span>{displayDate}</span>
                       </span>
                     </>
                   )}
-                  <span>•</span>
+                  <span className="text-slate-500">•</span>
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 font-bold shrink-0">
                     <Zap className="w-3 h-3 text-emerald-300" />
                     <span>{getEstTimeSaved(modalNote)}</span>
                   </span>
-                  <span>•</span>
+                  <span className="text-slate-500">•</span>
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 shrink-0">
                     <Flame className="w-3 h-3 text-amber-300" />
                     <span>Applied {getPlantAppliedCount(modalNote)}x in Plant</span>
@@ -1626,43 +1656,34 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
               </div>
 
               {/* Modal Body */}
-              <div className="p-4 sm:p-5 overflow-y-auto space-y-3 flex-1">
+              <div className="p-4 sm:p-5 overflow-y-auto space-y-3 flex-1 w-full overflow-x-hidden">
                 {/* 2-Column Grid: When to Apply & Recommended Action */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch w-full overflow-x-hidden">
                   {/* Left Column: When to Apply */}
-                  <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-3 space-y-1 flex flex-col justify-between">
+                  <div className="bg-amber-50/80 border border-amber-200/90 rounded-xl p-3 space-y-1 flex flex-col justify-between overflow-hidden">
                     <div>
                       <div className="flex items-center gap-1.5 font-mono font-bold text-amber-900 text-xs uppercase tracking-wider mb-1">
                         <Zap className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                         <span>WHEN TO APPLY / TRIGGER CONDITION</span>
                       </div>
-                      {modalNote.symptom && (
-                        <p className="text-xs text-amber-950 font-sans leading-relaxed">
-                          <strong>Observed Trigger:</strong> {modalNote.symptom}
-                        </p>
-                      )}
-                      {modalNote.taskDuringIssue && (
-                        <p className="text-xs text-amber-950 font-sans leading-relaxed mt-1">
-                          <strong>Task During Issue:</strong> {modalNote.taskDuringIssue}
-                        </p>
-                      )}
-                      {!modalNote.symptom && !modalNote.taskDuringIssue && (
-                        <p className="text-xs text-amber-900/70 italic font-sans">
-                          Operational Anomaly / Field Inspection
-                        </p>
-                      )}
+                      <p className="text-xs text-amber-950 font-sans leading-relaxed break-words">
+                        <strong>Observed Trigger:</strong> {cleanModalTrigger || modalNote.symptom || 'High vibration in machine during Running - Abnormal operation'}
+                      </p>
+                      <p className="text-xs text-amber-950 font-sans leading-relaxed mt-1 break-words">
+                        <strong>Task During Issue:</strong> {cleanTaskDuringIssue || 'Standard Plant Operation / AI RCA Diagnostic'}
+                      </p>
                     </div>
                   </div>
 
                   {/* Right Column: Recommended Field Action */}
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1 flex flex-col justify-between">
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1 flex flex-col justify-between overflow-hidden">
                     <div>
                       <div className="flex items-center gap-1.5 font-mono font-bold text-slate-800 text-xs uppercase tracking-wider mb-1">
                         <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                         <span>RECOMMENDED FIELD ACTION & GUIDANCE</span>
                       </div>
-                      <p className="text-slate-800 text-xs leading-relaxed font-sans whitespace-pre-line">
-                        {displayContent}
+                      <p className="text-slate-800 text-xs leading-relaxed font-sans whitespace-pre-line break-words">
+                        {modalCleanFix || displayContent}
                       </p>
                     </div>
                   </div>
@@ -1670,12 +1691,12 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
 
                 {/* AI Supplemental Insight & Manual Cross-Check directly below 2-column grid */}
                 {aiInsight && (
-                  <div className="bg-indigo-50/90 border border-indigo-200 rounded-xl p-3 space-y-1">
+                  <div className="bg-indigo-50/90 border border-indigo-200 rounded-xl p-3 space-y-1 w-full overflow-x-hidden">
                     <div className="flex items-center gap-1.5 font-mono font-bold text-indigo-950 text-xs uppercase tracking-wider">
                       <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                       <span>AI SUPPLEMENTAL INSIGHT & MANUAL CROSS-CHECK</span>
                     </div>
-                    <p className="text-xs text-indigo-950 leading-relaxed font-sans whitespace-pre-line pl-5">
+                    <p className="text-xs text-indigo-950 leading-relaxed font-sans whitespace-pre-line pl-5 break-words">
                       {aiInsight}
                     </p>
                   </div>
@@ -1764,137 +1785,139 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   </div>
                 )}
 
-                {/* Bottom Action Footer on responsive row with compact padding and zero right clipping */}
-                <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-1.5 flex-wrap sm:flex-nowrap w-full">
-                  <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap shrink-0">
-                    {/* Helpful Upvote Button */}
-                    <button
-                      type="button"
-                      onClick={(e) => handleUpvote(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
-                      title="Endorse this tip as verified in plant"
-                    >
-                      <ThumbsUp className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                      <span>Helpful ({modalNote.upvotes || 0})</span>
-                    </button>
-
-                    {/* Did Not Work Dislike Button */}
-                    <button
-                      type="button"
-                      onClick={(e) => handleDislike(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg border border-rose-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
-                    >
-                      <ThumbsDown className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                      <span>Did Not Work ({modalNote.downvotes || 0})</span>
-                    </button>
-
-                    {/* 1-Click Hands-Free Voice Readout Button + Multi-Language Voice Selector */}
-                    <div className="flex items-center rounded-lg border border-indigo-200 bg-indigo-50/70 p-0.5 shrink-0">
+                {/* Bottom Action Footer: Isolated Horizontal Scroll Container for action buttons */}
+                <div className="pt-3 border-t border-slate-200 w-full overflow-x-hidden">
+                  <div className="w-full overflow-x-auto overflow-y-hidden py-1 px-1 flex items-center justify-between gap-2 flex-nowrap scroll-smooth">
+                    <div className="flex items-center gap-1.5 shrink-0 flex-nowrap">
+                      {/* Helpful Upvote Button */}
                       <button
                         type="button"
-                        onClick={() => handleToggleVoiceReadout(modalNote)}
-                        className={`h-7 px-2 rounded-md text-xs font-mono font-semibold transition-all cursor-pointer active:scale-95 flex items-center gap-1 ${
-                          isSpeaking
-                            ? 'bg-amber-500 text-white animate-pulse'
-                            : 'hover:bg-indigo-100 text-indigo-700'
-                        }`}
-                        title="Hands-free audio readout of trigger and field fix"
+                        onClick={(e) => handleUpvote(modalNote.id, e)}
+                        className="h-8 flex items-center gap-1 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
+                        title="Endorse this tip as verified in plant"
                       >
-                        {isSpeaking ? (
-                          <>
-                            <VolumeX className="w-3.5 h-3.5 shrink-0" />
-                            <span>Stop</span>
-                          </>
-                        ) : (
-                          <>
-                            <Volume2 className="w-3.5 h-3.5 shrink-0" />
-                            <span>Listen</span>
-                          </>
-                        )}
+                        <ThumbsUp className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span>Helpful ({modalNote.upvotes || 0})</span>
                       </button>
-                      <div className="h-4 w-px bg-indigo-300/60 mx-0.5" />
-                      {/* Language Switcher Pill (EN | हिं) */}
-                      <div className="flex items-center gap-0.5 text-[10px] font-mono font-bold">
+
+                      {/* Did Not Work Dislike Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => handleDislike(modalNote.id, e)}
+                        className="h-8 flex items-center gap-1 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg border border-rose-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
+                      >
+                        <ThumbsDown className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                        <span>Did Not Work ({modalNote.downvotes || 0})</span>
+                      </button>
+
+                      {/* 1-Click Hands-Free Voice Readout Button + Multi-Language Voice Selector */}
+                      <div className="flex items-center rounded-lg border border-indigo-200 bg-indigo-50/70 p-0.5 shrink-0">
                         <button
                           type="button"
-                          onClick={() => {
-                            setVoiceLang('en');
-                            if (isSpeaking) {
-                              window.speechSynthesis.cancel();
-                              setIsSpeaking(false);
-                            }
-                          }}
-                          className={`px-1.5 py-0.5 rounded transition cursor-pointer ${
-                            voiceLang === 'en'
-                              ? 'bg-indigo-600 text-white shadow-2xs'
-                              : 'text-indigo-600 hover:bg-indigo-100/80'
+                          onClick={() => handleToggleVoiceReadout(modalNote)}
+                          className={`h-7 px-2 rounded-md text-xs font-mono font-semibold transition-all cursor-pointer active:scale-95 flex items-center gap-1 shrink-0 ${
+                            isSpeaking
+                              ? 'bg-amber-500 text-white animate-pulse'
+                              : 'hover:bg-indigo-100 text-indigo-700'
                           }`}
-                          title="English Voice Readout"
+                          title="Hands-free audio readout of trigger and field fix"
                         >
-                          🌐 EN
+                          {isSpeaking ? (
+                            <>
+                              <VolumeX className="w-3.5 h-3.5 shrink-0" />
+                              <span>Stop</span>
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                              <span>Listen</span>
+                            </>
+                          )}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setVoiceLang('hi');
-                            if (isSpeaking) {
-                              window.speechSynthesis.cancel();
-                              setIsSpeaking(false);
-                            }
-                          }}
-                          className={`px-1.5 py-0.5 rounded transition cursor-pointer ${
-                            voiceLang === 'hi'
-                              ? 'bg-indigo-600 text-white shadow-2xs'
-                              : 'text-indigo-600 hover:bg-indigo-100/80'
-                          }`}
-                          title="हिंदी Voice Readout (Hindi Translation)"
-                        >
-                          🇮🇳 हिं
-                        </button>
+                        <div className="h-4 w-px bg-indigo-300/60 mx-0.5 shrink-0" />
+                        {/* Language Switcher Pill (EN | हिं) */}
+                        <div className="flex items-center gap-0.5 text-[10px] font-mono font-bold shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setVoiceLang('en');
+                              if (isSpeaking) {
+                                window.speechSynthesis.cancel();
+                                setIsSpeaking(false);
+                              }
+                            }}
+                            className={`px-1.5 py-0.5 rounded transition cursor-pointer shrink-0 ${
+                              voiceLang === 'en'
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'text-indigo-600 hover:bg-indigo-100/80'
+                            }`}
+                            title="English Voice Readout"
+                          >
+                            🌐 EN
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setVoiceLang('hi');
+                              if (isSpeaking) {
+                                window.speechSynthesis.cancel();
+                                setIsSpeaking(false);
+                              }
+                            }}
+                            className={`px-1.5 py-0.5 rounded transition cursor-pointer shrink-0 ${
+                              voiceLang === 'hi'
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'text-indigo-600 hover:bg-indigo-100/80'
+                            }`}
+                            title="हिंदी Voice Readout (Hindi Translation)"
+                          >
+                            🇮🇳 हिं
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Worker Feedback Drawer Toggle */}
+                      <button
+                        type="button"
+                        onClick={(e) => toggleReviews(modalNote.id, e)}
+                        className="h-8 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                        <span>Feedback ({reviewsList.length})</span>
+                        {isReviewsOpen ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
+                      </button>
                     </div>
 
-                    {/* Worker Feedback Drawer Toggle */}
-                    <button
-                      type="button"
-                      onClick={(e) => toggleReviews(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
-                    >
-                      <MessageSquare className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                      <span>Feedback ({reviewsList.length})</span>
-                      {isReviewsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                    </button>
-                  </div>
+                    <div className="flex items-center gap-1.5 shrink-0 flex-nowrap ml-auto">
+                      {/* Copy Note Button */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        onClick={() => handleCopyTip(modalNote)}
+                        className="h-8 px-2.5 py-1.5 text-xs font-mono flex items-center gap-1 transition-all active:scale-95 whitespace-nowrap shrink-0"
+                      >
+                        <Copy className="w-3.5 h-3.5 shrink-0" />
+                        <span>Copy</span>
+                      </Button>
 
-                  <div className="flex items-center gap-1.5 shrink-0 flex-nowrap ml-auto">
-                    {/* Copy Note Button */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      type="button"
-                      onClick={() => handleCopyTip(modalNote)}
-                      className="h-8 px-2.5 py-1.5 text-xs font-mono flex items-center gap-1 transition-all active:scale-95 whitespace-nowrap shrink-0"
-                    >
-                      <Copy className="w-3.5 h-3.5 shrink-0" />
-                      <span>Copy</span>
-                    </Button>
-
-                    {/* Ask AI Copilot (1-Click Apply) */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isSpeaking && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-                          window.speechSynthesis.cancel();
-                          setIsSpeaking(false);
-                        }
-                        handleAskCopilot(modalNote);
-                      }}
-                      className="h-8 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1 text-xs font-mono shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
-                      title="Load insight directly into AI Copilot"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-indigo-200 shrink-0" />
-                      <span>Ask AI Copilot</span>
-                    </button>
+                      {/* Ask AI Copilot (1-Click Apply) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isSpeaking && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                            window.speechSynthesis.cancel();
+                            setIsSpeaking(false);
+                          }
+                          handleAskCopilot(modalNote);
+                        }}
+                        className="h-8 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1 text-xs font-mono shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
+                        title="Load insight directly into AI Copilot"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-200 shrink-0" />
+                        <span>Ask AI Copilot</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
