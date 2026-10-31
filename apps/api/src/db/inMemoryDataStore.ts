@@ -258,6 +258,10 @@ export class InMemoryDataStore implements IDataStore {
     return null;
   }
 
+  public async listOrganizations(): Promise<Organization[]> {
+    return Array.from(this.organizations.values());
+  }
+
   public async updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization | null> {
     const existing = this.organizations.get(id);
     if (!existing) return null;

@@ -1,6 +1,6 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Environment, useGLTF, Html } from '@react-three/drei';
+import { OrbitControls, useGLTF, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { AlertTriangle, RefreshCw, AlertCircle } from 'lucide-react';
 
@@ -397,8 +397,9 @@ export const ThreeDModelViewer: React.FC<ThreeDModelViewerProps> = ({
           <directionalLight position={[-10, -5, -10]} intensity={0.5} />
           <gridHelper args={[20, 40, 0x94a3b8, 0xe2e8f0]} position={[0, -1.2, 0]} />
 
-          {/* Realistic City Environment preset */}
-          <Environment preset="city" />
+          {/* Offline Studio Lighting (Air-Gapped, Zero Remote HDR Downloads) */}
+          <directionalLight position={[0, 10, -10]} intensity={0.5} />
+          <hemisphereLight args={[0xffffff, 0x444444, 0.5]} />
 
           {/* Suspense wrapper with custom loading spinner */}
           <Suspense fallback={<CanvasLoadingSpinner />}>

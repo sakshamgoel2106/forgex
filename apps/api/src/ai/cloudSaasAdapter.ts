@@ -9,6 +9,7 @@ import type {
 import { logger } from '../utils/logger.js';
 import { getLanguageConfig } from '@forgex/shared-types';
 import { synthesizeAcousticReport } from './acousticSynthesisHelper.js';
+import { guardedFetch } from '../utils/outboundGuard.js';
 
 export class CloudSaasAdapter implements IMultimodalGenerationProvider {
   constructor(
@@ -233,7 +234,7 @@ Respond in strict JSON with:
         for (const candidate of candidateModels) {
           const geminiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent?key=${this._apiKey}`;
           try {
-            const res = await fetch(geminiEndpoint, {
+            const res = await guardedFetch(geminiEndpoint, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

@@ -25,8 +25,10 @@ export function createGenerationProvider(): IMultimodalGenerationProvider {
         'Enterprise Air-Gap Policy: Cloud inference is strictly prohibited in Enterprise deployment mode.'
       );
     }
-    if (mode === 'ollama') {
-      defaultGenerationProvider = new OllamaEnterpriseAdapter(config.OLLAMA_BASE_URL, config.OLLAMA_DEFAULT_MODEL);
+    const ollamaUrl = process.env.OLLAMA_BASE_URL || config.OLLAMA_BASE_URL || 'http://localhost:11434';
+    const ollamaModel = process.env.LLM_MODEL || config.OLLAMA_DEFAULT_MODEL || 'qwen2.5:14b';
+    if (mode === 'ollama' || process.env.AI_PROVIDER === 'ollama') {
+      defaultGenerationProvider = new OllamaEnterpriseAdapter(ollamaUrl, ollamaModel);
     } else {
       defaultGenerationProvider = new LocalDevInferenceAdapter();
     }

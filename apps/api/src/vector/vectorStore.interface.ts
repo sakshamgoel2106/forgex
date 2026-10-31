@@ -49,4 +49,5 @@ export interface IVectorStoreAdapter {
     queryText?: string
   ): Promise<VectorSearchResult[]>;
   clear(collectionName?: string): Promise<void>;
+  healthCheck?(): Promise<{ ok: boolean; status: string; provider: string; dimensions?: number; latencyMs: number; message?: string }>;
 }

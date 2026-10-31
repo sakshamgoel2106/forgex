@@ -1,0 +1,234 @@
+version: '3.8'
+
+# =============================================================================
+# ForgeX AI — Enterprise Air-Gapped Single-Tenant Stack
+# ZERO outbound egress traffic. All AI inference, embeddings, storage, and
+# vector retrieval run entirely on-premise within an isolated Docker network.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Relational Database: PostgreSQL 16
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: forgex-enterprise-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-forgex_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-forgex_enterprise_change_me_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-forgex_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - forgex_enterprise_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-forgex_admin} -d $${POSTGRES_DB:-forgex_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - forgex_enterprise_net
+
+  # ---------------------------------------------------------------------------
+  # 2. Vector Database: Qdrant (Local instance, no external API key required)
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: forgex-enterprise-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - forgex_enterprise_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e \"GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && cat <&3 | grep -q \"200 OK\"' || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - forgex_enterprise_net
+
+  # ---------------------------------------------------------------------------
+  # 3. Object Storage: MinIO (S3-compatible, forcePathStyle=true)
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    container_name: forgex-enterprise-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-forgex_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-forgex_minio_change_me_2026}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - forgex_enterprise_minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - forgex_enterprise_net
+
+  # ---------------------------------------------------------------------------
+  # 4. Local On-Premise LLM & Embeddings: Ollama
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: forgex-enterprise-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - forgex_enterprise_ollama_models:/root/.ollama
+    networks:
+      - forgex_enterprise_net
+
+  # ---------------------------------------------------------------------------
+  # 5. Core API Server: ForgeX Node.js backend
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: forgex-enterprise-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio:
+        condition: service_started
+      ollama:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      HOST: 0.0.0.0
+      DEPLOYMENT_MODE: enterprise
+      ALLOW_EXTERNAL_NETWORK: "false"
+      ALLOW_ORG_SIGNUP: "false"
+      ALLOW_GOOGLE_AUTH: "false"
+
+      # Provider Abstractions
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-llama3.2}
+      LLM_VISION_MODEL: ${LLM_VISION_MODEL:-llava}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+
+      # Vector Database
+      VECTOR_STORE_PROVIDER: qdrant
+      QDRANT_URL: http://qdrant:6333
+
+      # Storage Adapter (MinIO)
+      STORAGE_PROVIDER: minio
+      S3_ENDPOINT: http://minio:9000
+      S3_FORCE_PATH_STYLE: "true"
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-forgex-documents}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-forgex_minio_admin}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-forgex_minio_change_me_2026}
+
+      # Relational Store & Secrets
+      DATABASE_URL: postgres://${POSTGRES_USER:-forgex_admin}:${POSTGRES_PASSWORD:-forgex_enterprise_change_me_2026}@postgres:5432/${POSTGRES_DB:-forgex_db}
+      JWT_SECRET: ${JWT_SECRET:-forgex_enterprise_jwt_secret_change_me}
+      CORS_ORIGIN: "*"
+    ports:
+      - "${API_PORT:-4000}:4000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forgex_enterprise_net
+
+  # ---------------------------------------------------------------------------
+  # 6. Background Pipeline Worker: Document ingestion and outbox relay
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: forgex-enterprise-worker
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      DEPLOYMENT_MODE: enterprise
+      ALLOW_EXTERNAL_NETWORK: "false"
+
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-llama3.2}
+      LLM_VISION_MODEL: ${LLM_VISION_MODEL:-llava}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+
+      VECTOR_STORE_PROVIDER: qdrant
+      QDRANT_URL: http://qdrant:6333
+
+      STORAGE_PROVIDER: minio
+      S3_ENDPOINT: http://minio:9000
+      S3_FORCE_PATH_STYLE: "true"
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-forgex-documents}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-forgex_minio_admin}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-forgex_minio_change_me_2026}
+
+      DATABASE_URL: postgres://${POSTGRES_USER:-forgex_admin}:${POSTGRES_PASSWORD:-forgex_enterprise_change_me_2026}@postgres:5432/${POSTGRES_DB:-forgex_db}
+      JWT_SECRET: ${JWT_SECRET:-forgex_enterprise_jwt_secret_change_me}
+      WORKER_ROLE: "INGESTION_AND_RELAY"
+    command: ["node", "apps/api/dist/server.js"]
+    networks:
+      - forgex_enterprise_net
+
+  # ---------------------------------------------------------------------------
+  # 7. Frontend Web Application: Nginx serving built SPA & proxying API
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: forgex-enterprise-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${WEB_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - forgex_enterprise_net
+
+# -----------------------------------------------------------------------------
+# Persistent Volumes
+# -----------------------------------------------------------------------------
+volumes:
+  forgex_enterprise_pg_data:
+  forgex_enterprise_qdrant_data:
+  forgex_enterprise_minio_data:
+  forgex_enterprise_ollama_models:
+
+# -----------------------------------------------------------------------------
+# Enterprise Isolated Network
+# -----------------------------------------------------------------------------
+networks:
+  forgex_enterprise_net:
+    driver: bridge

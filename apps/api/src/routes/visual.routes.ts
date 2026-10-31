@@ -9,6 +9,8 @@ import type { IVisionProcessingProvider } from '../ai/vision.interface.js';
 import type { VisualIntelligenceEngine } from '../services/visualIntelligenceEngine.js';
 import { requireRole } from '../middleware/auth.middleware.js';
 import { MultimodalVisionService } from '../ai/multimodalVisionService.js';
+import { SecurityEventService } from '../services/securityEvent.service.js';
+import { logger } from '../utils/logger.js';
 
 export function createVisualRouter(
   dataStore: IDataStore,
@@ -16,9 +18,11 @@ export function createVisualRouter(
   visualEngine: VisualIntelligenceEngine,
   embeddingAdapter?: IEmbeddingAdapter,
   vectorStore?: IVectorStoreAdapter,
-  visionProvider?: IVisionProcessingProvider
+  visionProvider?: IVisionProcessingProvider,
+  securityService?: SecurityEventService
 ): Router {
   const router = Router();
+  const secService = securityService || new SecurityEventService(dataStore);
   const controller = new VisualController(
     dataStore,
     storageAdapter,
@@ -149,9 +153,99 @@ export function createVisualRouter(
           language,
         });
 
+        // Audit Log AI verification result to tamper-evident SecurityEvent ledger
+        if (req.auth) {
+          secService.recordSecurityEvent({
+            organizationId: req.auth.organization.id,
+            actorUserId: req.auth.user.id,
+            actorEmail: req.auth.user.email,
+            actorRole: req.auth.membership?.role || 'TECHNICIAN',
+            category: 'RESTRICTED_ACTION',
+            action: 'LOTO_ZERO_ENERGY_AI_VERIFY',
+            resourceCategory: 'MACHINE',
+            resourceId: assetTag || 'UNKNOWN_ASSET',
+            decision: lotoResult.verified ? 'FLAGGED' : 'DENIED',
+            policyReasonCode: lotoResult.verified
+              ? 'LOTO_AI_ZERO_ENERGY_PRE_VERIFIED_AWAITING_HUMAN'
+              : 'LOTO_RESIDUAL_PRESSURE_DETECTED_BLOCKED',
+            severity: lotoResult.verified ? 'INFORMATIONAL' : 'HIGH',
+            metadata: {
+              assetTag,
+              verified: lotoResult.verified,
+              alertType: lotoResult.alertType,
+              readingValue: lotoResult.diagnostic?.readingValue ?? null,
+              readingUnit: lotoResult.diagnostic?.readingUnit ?? 'bar',
+              safetyStatus: lotoResult.diagnostic?.safetyStatus,
+              summary: lotoResult.diagnostic?.summary,
+              safetyMessage: lotoResult.message,
+              requiresHumanAttestation: true,
+            },
+          }).catch((auditErr) => logger.warn({ auditErr }, 'Failed to record LOTO AI verify SecurityEvent'));
+        }
+
         res.status(200).json({ success: true, data: lotoResult });
       } catch (err: any) {
         res.status(500).json({ success: false, error: err?.message || 'LOTO verification failed' });
+      }
+    }
+  );
+
+  // Explicit Human Physical Attestation Endpoint (Hold-to-confirm 1.5s)
+  // IMPORTANT SAFETY REQUIREMENT: AI verification must never auto-pass the lockout.
+  router.post(
+    '/loto-attest',
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'ENGINEER', 'PLANT_MANAGER', 'VIEWER']),
+    async (req, res): Promise<void> => {
+      try {
+        const { assetId, assetTag, aiResult, humanAttestation, photoRef, timestamp, holdDurationMs } = req.body;
+        if (!humanAttestation) {
+          res.status(400).json({ success: false, error: 'Explicit human physical attestation is required to certify LOTO' });
+          return;
+        }
+
+        const orgId = req.auth?.organization?.id || 'org_default';
+        const user = req.auth?.user;
+
+        const secEvent = await secService.recordSecurityEvent({
+          organizationId: orgId,
+          actorUserId: user?.id,
+          actorEmail: user?.email,
+          actorRole: req.auth?.membership?.role || 'TECHNICIAN',
+          category: 'RESTRICTED_ACTION',
+          action: 'LOTO_ZERO_ENERGY_HUMAN_ATTESTATION',
+          resourceCategory: 'MACHINE',
+          resourceId: assetId || assetTag || 'UNKNOWN_ASSET',
+          decision: aiResult?.verified ? 'ALLOWED' : 'DENIED',
+          policyReasonCode: aiResult?.verified
+            ? 'LOTO_ZERO_ENERGY_PHYSICALLY_CONFIRMED'
+            : 'LOTO_RESIDUAL_PRESSURE_UNRESOLVED',
+          severity: aiResult?.verified ? 'INFORMATIONAL' : 'CRITICAL',
+          metadata: {
+            assetTag: assetTag || assetId,
+            aiResult,
+            humanAttestation: true,
+            timestamp: timestamp || new Date().toISOString(),
+            photoRef: photoRef ? (typeof photoRef === 'string' ? photoRef.slice(0, 100) : 'photo_recorded') : null,
+            holdDurationMs: holdDurationMs || 1500,
+            technicianName: user?.fullName || user?.email || 'Field Technician',
+            lockoutPassed: Boolean(aiResult?.verified),
+            workOrderUnlockAuthorized: Boolean(aiResult?.verified),
+          },
+        });
+
+        res.status(200).json({
+          success: true,
+          data: {
+            unlocked: Boolean(aiResult?.verified),
+            securityEventId: secEvent.event.id,
+            timestamp: secEvent.event.timestamp,
+            decision: secEvent.event.decision,
+            policyReasonCode: secEvent.event.policyReasonCode,
+          },
+        });
+      } catch (err: any) {
+        logger.error({ err: err?.message }, 'Failed to record LOTO human attestation');
+        res.status(500).json({ success: false, error: err?.message || 'Failed to record LOTO attestation' });
       }
     }
   );

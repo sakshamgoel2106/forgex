@@ -25,6 +25,7 @@ import {
 import type { NavModule } from './Sidebar';
 import { useAuth } from '../../lib/AuthContext';
 import { usePlant } from '../../lib/PlantContext';
+import { useDeployment } from '../../lib/RuntimeConfig';
 
 interface TopBarProps {
   activeModule: NavModule;
@@ -57,6 +58,8 @@ const MODULE_LABELS: Record<NavModule, string> = {
   team: 'Team & Access',
   audit: 'Security & Audit',
   settings: 'Settings',
+  scan: 'Equipment Scanner',
+  loto: 'LOTO Safety Protocol',
 };
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -71,6 +74,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   sidebarCollapsed,
 }) => {
   const { user, organization, membership, memberships, logout, switchOrganization, token } = useAuth();
+  const { mode: deploymentMode, branding } = useDeployment();
   const { plants, activePlant, setActivePlant } = usePlant();
   const [activeFallbackNotice, setActiveFallbackNotice] = useState<string | null>(null);
   const [hasMachines, setHasMachines] = useState<boolean>(false);
@@ -163,19 +167,28 @@ export const TopBar: React.FC<TopBarProps> = ({
             </button>
           )}
 
-          {/* Brand mark with official ForgeX icon */}
+          {/* Brand mark with official branding icon */}
           <div
             className="flex items-center gap-2.5 cursor-pointer group"
             onClick={() => onNavigate('overview')}
           >
             <img
-              src="/forgex_icon.png"
-              alt="ForgeX AI"
+              src={branding.logoUrl || '/forgex_icon.png'}
+              alt={branding.name}
               className="w-7 h-7 object-contain shrink-0 filter drop-shadow-sm transition-transform group-hover:scale-105"
             />
             <div>
-              <div className="text-sm font-bold tracking-tight text-gray-900 leading-tight">
-                ForgeX <span className="text-[#1D4ED8]">AI</span>
+              <div className="flex items-center gap-1.5 text-sm font-bold tracking-tight text-gray-900 leading-tight">
+                <span>{branding.name}</span>
+                {deploymentMode === 'enterprise' ? (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-800 border border-amber-500/30">
+                    Enterprise · On-Prem
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                    Cloud
+                  </span>
+                )}
               </div>
               <div className="text-[9px] text-gray-400 leading-tight font-medium uppercase tracking-wider">
                 Industrial Intelligence

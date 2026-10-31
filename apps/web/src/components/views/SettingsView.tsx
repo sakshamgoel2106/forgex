@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import {
   User as UserIcon,
   Settings as SettingsIcon,
@@ -22,18 +23,27 @@ import {
   X,
   Mail,
   ShieldAlert,
+  QrCode,
+  Copy,
+  Check,
+  RefreshCw,
+  Download,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { useAuth } from '../../lib/AuthContext';
+import { useDeployment } from '../../lib/RuntimeConfig';
 import { useToast } from '../../lib/ToastContext';
 import { AuditLedgerView } from './AuditLedgerView';
 import type { UserSession, UserPreferences } from '@forgex/shared-types';
 
+const makeSvgAvatar = (bg: string, label: string) =>
+  `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="${encodeURIComponent(bg)}"/><circle cx="64" cy="50" r="22" fill="%23ffffff" fill-opacity="0.95"/><path d="M28 108 c0 -22 18 -36 36 -36 s36 14 36 36" fill="%23ffffff" fill-opacity="0.95"/><text x="64" y="56" font-family="monospace" font-size="14" font-weight="bold" fill="${encodeURIComponent(bg)}" text-anchor="middle">${label}</text></svg>`;
+
 const INDUSTRIAL_AVATAR_PRESETS = [
-  { label: 'Plant Lead', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80' },
-  { label: 'Engineer', url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80' },
-  { label: 'Technician', url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80' },
-  { label: 'Supervisor', url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80' },
+  { label: 'Plant Lead', url: makeSvgAvatar('#2563eb', 'PL') },
+  { label: 'Engineer', url: makeSvgAvatar('#059669', 'ENG') },
+  { label: 'Technician', url: makeSvgAvatar('#d97706', 'TECH') },
+  { label: 'Supervisor', url: makeSvgAvatar('#7c3aed', 'SUP') },
 ];
 
 const INDUSTRY_OPTIONS = [
@@ -100,6 +110,7 @@ export interface SettingsViewProps {
 export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab = 'profile' }) => {
   const { toast } = useToast();
   const { user, organization, membership, isOwnerOrAdmin, token, logout, refreshAuth, forgotPassword } = useAuth();
+  const { mode: deploymentMode, switchWorkspace, storedWorkspace } = useDeployment();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canViewAudit = isOwnerOrAdmin || membership?.role === 'PLANT_MANAGER';
@@ -452,7 +463,53 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab = 'profil
     .substring(0, 2)
     .toUpperCase();
 
-  const isEnterprise = organization?.deploymentType === 'enterprise';
+  const isEnterprise = organization?.deploymentType === 'enterprise' || deploymentMode === 'enterprise';
+
+  const defaultOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000';
+  const [onboardingServerUrl, setOnboardingServerUrl] = useState<string>(
+    storedWorkspace?.baseUrl || defaultOrigin
+  );
+  const [onboardingQrDataUrl, setOnboardingQrDataUrl] = useState<string>('');
+  const [copiedPayload, setCopiedPayload] = useState(false);
+
+  const onboardingPayloadJson = JSON.stringify(
+    {
+      server: onboardingServerUrl.trim().replace(/\/+$/, ''),
+      org: organization?.id || '',
+      name: organization?.name || 'Acme Refinery',
+    },
+    null,
+    2
+  );
+
+  useEffect(() => {
+    if (!isEnterprise || !isOwnerOrAdmin) return;
+    let isMounted = true;
+    const compactPayload = JSON.stringify({
+      server: onboardingServerUrl.trim().replace(/\/+$/, ''),
+      org: organization?.id || '',
+      name: organization?.name || 'Acme Refinery',
+    });
+
+    QRCode.toDataURL(compactPayload, {
+      width: 260,
+      margin: 2,
+      color: {
+        dark: '#0F172A',
+        light: '#FFFFFF',
+      },
+    })
+      .then((url) => {
+        if (isMounted) setOnboardingQrDataUrl(url);
+      })
+      .catch((err) => {
+        console.warn('Failed to generate onboarding QR code:', err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isEnterprise, isOwnerOrAdmin, onboardingServerUrl, organization?.id, organization?.name]);
 
   return (
     <div
@@ -942,6 +999,64 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab = 'profil
               </div>
             </div>
           </div>
+
+          {/* Connected Workspace & Switch Workspace */}
+          <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-sm p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center gap-2">
+                <Server className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-[#0F172A]">
+                  Connected Workspace Server
+                </h3>
+              </div>
+              <span className="text-[11px] font-mono px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+                {storedWorkspace?.baseUrl ? 'REMOTE WORKSPACE NODE' : 'SAME-ORIGIN SERVER'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+              <div className="p-4 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
+                <div className="text-xs font-bold text-[#0F172A] flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-blue-600" />
+                  Active API Endpoint
+                </div>
+                <div className="text-xs font-mono font-semibold text-blue-900 break-all p-2 rounded-lg bg-white border border-[#E2E8F0]">
+                  {storedWorkspace?.baseUrl || (typeof window !== 'undefined' ? window.location.origin : 'Current Origin')}
+                </div>
+                <p className="text-[11px] text-[#64748B]">
+                  Workspace Mode: <span className="font-semibold uppercase text-[#0F172A]">{storedWorkspace?.mode || deploymentMode}</span>
+                  {storedWorkspace?.name && (
+                    <span className="ml-1 font-mono text-slate-700">({storedWorkspace.name})</span>
+                  )}
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200 space-y-2 flex flex-col justify-between">
+                <div>
+                  <div className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-600" />
+                    Switch Workspace
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-relaxed mt-1">
+                    Clears this workstation's stored server configuration and active session, returning to the workspace connection flow.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm('Switch workspace? This will clear your current session and server configuration on this device.')) {
+                      logout();
+                      switchWorkspace();
+                    }
+                  }}
+                  className="mt-2 w-fit px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-sm"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Switch Workspace
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1282,6 +1397,116 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ initialTab = 'profil
               </div>
             )}
           </div>
+
+          {/* ==================================================================== */}
+          {/* MOBILE ONBOARDING QR (ENTERPRISE ADMIN ONLY)                         */}
+          {/* ==================================================================== */}
+          {isEnterprise && isOwnerOrAdmin && (
+            <div className="bg-white rounded-2xl border border-purple-200 shadow-sm p-6 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-[#E2E8F0] gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center">
+                    <QrCode className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-[#0F172A]">
+                      Mobile Onboarding QR Code
+                    </h3>
+                    <p className="text-xs text-[#64748B] mt-0.5">
+                      Technician &amp; Operator Device Provisioning for Enterprise On-Premises
+                    </p>
+                  </div>
+                </div>
+
+                <span className="text-[11px] font-mono font-bold px-3 py-1 rounded-full bg-purple-50 text-purple-700 border border-purple-200 self-start sm:self-auto">
+                  ADMIN ONLY • ONBOARDING
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* QR Code Preview */}
+                <div className="lg:col-span-5 flex flex-col items-center p-5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-center">
+                  {onboardingQrDataUrl ? (
+                    <img
+                      src={onboardingQrDataUrl}
+                      alt="Mobile Onboarding QR"
+                      className="w-56 h-56 rounded-xl border border-slate-200 shadow-sm bg-white p-2"
+                    />
+                  ) : (
+                    <div className="w-56 h-56 rounded-xl border border-dashed border-slate-300 flex items-center justify-center text-xs text-slate-400">
+                      Generating QR...
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex items-center gap-2">
+                    {onboardingQrDataUrl && (
+                      <a
+                        href={onboardingQrDataUrl}
+                        download={`forgex-onboarding-${organization?.slug || 'enterprise'}.png`}
+                        className="px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-xs font-semibold text-[#0F172A] hover:bg-slate-50 transition shadow-sm flex items-center gap-1.5"
+                      >
+                        <Download className="w-3.5 h-3.5 text-purple-600" />
+                        Download QR
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(onboardingPayloadJson);
+                        setCopiedPayload(true);
+                        toast.success('Payload Copied', 'Workspace connection JSON copied to clipboard.');
+                        setTimeout(() => setCopiedPayload(false), 2500);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-white border border-[#CBD5E1] text-xs font-semibold text-[#0F172A] hover:bg-slate-50 transition shadow-sm flex items-center gap-1.5"
+                    >
+                      {copiedPayload ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-600" />}
+                      {copiedPayload ? 'Copied' : 'Copy JSON'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Configuration & Payload Info */}
+                <div className="lg:col-span-7 space-y-4">
+                  <div>
+                    <label className="block text-xs font-mono font-semibold text-[#475569] mb-1.5">
+                      Enterprise Server Host URL (Broadcast Address)
+                    </label>
+                    <input
+                      type="url"
+                      value={onboardingServerUrl}
+                      onChange={(e) => setOnboardingServerUrl(e.target.value)}
+                      placeholder="https://forge.internal.company.com:4000"
+                      className="w-full px-3.5 py-2 rounded-xl border border-[#CBD5E1] text-xs font-mono text-[#0F172A] focus:border-purple-600 focus:outline-none focus:ring-1 focus:ring-purple-600 transition"
+                    />
+                    <p className="text-[11px] text-[#64748B] mt-1 leading-relaxed">
+                      Enter the network address or internal DNS hostname reachable by technician mobile devices and tablets over plant Wi-Fi.
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-mono font-semibold text-[#475569]">
+                        QR Payload Schema (JSON)
+                      </span>
+                      <span className="text-[10px] font-mono text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                        RFC-8259 Standard
+                      </span>
+                    </div>
+                    <pre className="p-3.5 rounded-xl bg-[#0B0F17] text-emerald-400 font-mono text-xs overflow-x-auto border border-slate-800 shadow-inner">
+                      {onboardingPayloadJson}
+                    </pre>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-purple-50/60 border border-purple-200 text-xs text-purple-900 leading-relaxed flex items-start gap-2.5">
+                    <ShieldCheck className="w-4 h-4 text-purple-700 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-semibold">Technician Instructions:</span> When launching the ForgeX PWA or mobile app on a new device, tap <em>"My Company Server (Enterprise)"</em> &rarr; <em>"Scan Workspace QR Code"</em> and point the camera at this screen. The device will automatically validate the host node and register with this workspace.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

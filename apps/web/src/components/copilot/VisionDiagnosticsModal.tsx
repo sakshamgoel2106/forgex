@@ -558,6 +558,7 @@ export const VisionDiagnosticsModal: React.FC<VisionDiagnosticsModalProps> = ({
                     ref={fileInputRef}
                     type="file"
                     accept="image/png,image/jpeg,image/webp,image/*"
+                    capture="environment"
                     onChange={handleFileInputChange}
                     className="hidden"
                   />

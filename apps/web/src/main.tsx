@@ -2,6 +2,22 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { isNative, initNativePlatform } from './lib/platform';
+
+// Initialize native mobile platform (status bar styling, layout bounds)
+if (isNative()) {
+  initNativePlatform();
+
+  // In native Android APK builds, assets are bundled in the package.
+  // Skip service worker registration and clean up any stale registrations.
+  if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then((registrations) => {
+      for (const reg of registrations) {
+        reg.unregister();
+      }
+    }).catch(() => {});
+  }
+}
 
 // Storage sanitization & invalidation drive
 const FORGEX_STORAGE_VERSION = 'v1.4.3-clean';

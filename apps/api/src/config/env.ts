@@ -23,11 +23,26 @@ const booleanFromString = (defaultValue: boolean) =>
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
-  DEPLOYMENT_MODE: z.enum(['saas', 'enterprise', 'local_dev']).default('local_dev'),
+  DEPLOYMENT_MODE: z.enum(['saas', 'enterprise', 'local_dev']).default('saas'),
+  ALLOW_ORG_SIGNUP: z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
+  ALLOW_GOOGLE_AUTH: z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
+  ALLOW_EXTERNAL_NETWORK: z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
+  AI_PROVIDER: z.enum(['gemini', 'ollama', 'vllm']).optional(),
+  VECTOR_PROVIDER: z.enum(['qdrant-cloud', 'qdrant-local']).optional(),
+  SINGLE_TENANT_ORG_ID: z.string().optional().default(''),
+  BRANDING_NAME: z.string().default('ForgeX AI'),
+  BRANDING_LOGO_URL: z.string().default('/forgex_icon.png'),
+  BRANDING_PRIMARY_COLOR: z.string().default('#0f172a'),
+  FEATURE_RFID: booleanFromString(true),
+  FEATURE_OTP: booleanFromString(true),
+  FEATURE_OFFLINE_SYNC: booleanFromString(true),
   PORT: z.coerce.number().default(4000),
   HOST: z.string().default('0.0.0.0'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
+  ALLOWED_ORIGINS: z.string().optional().default(''),
+  SERVE_WEB: booleanFromString(false),
+  WEB_DIST_PATH: z.string().optional().default(''),
 
   // Security & Authentication
   AUTH_PROVIDER: z.enum(['supabase', 'keycloak', 'local_dev']).default('local_dev'),
@@ -242,3 +257,48 @@ function validateEnv(): EnvConfig {
 }
 
 export const config = validateEnv();
+
+/**
+ * Returns the list of permitted CORS origins from ALLOWED_ORIGINS or CORS_ORIGIN.
+ * In non-production environments and when configured, always includes Capacitor
+ * and localhost native schemes: https://localhost, capacitor://localhost, http://localhost.
+ */
+export function getAllowedOriginsList(envConfig?: {
+  ALLOWED_ORIGINS?: string;
+  CORS_ORIGIN?: string;
+  NODE_ENV?: string;
+}): string[] {
+  const active = envConfig || config;
+  const raw =
+    process.env.ALLOWED_ORIGINS ||
+    active?.ALLOWED_ORIGINS ||
+    process.env.CORS_ORIGIN ||
+    active?.CORS_ORIGIN ||
+    '';
+
+  const parsed = raw
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+  const nativeDefaults = ['https://localhost', 'capacitor://localhost', 'http://localhost'];
+  const isDev = (active?.NODE_ENV || process.env.NODE_ENV) !== 'production';
+  const originSet = new Set<string>(parsed);
+
+  // In non-production, always include localhost web and native schemes
+  if (isDev) {
+    for (const def of nativeDefaults) {
+      originSet.add(def);
+    }
+    originSet.add('http://localhost:5173');
+    originSet.add('http://127.0.0.1:5173');
+  } else {
+    for (const def of nativeDefaults) {
+      if (raw.includes(def)) {
+        originSet.add(def);
+      }
+    }
+  }
+
+  return Array.from(originSet);
+}

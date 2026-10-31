@@ -33,6 +33,9 @@ import {
   Building2,
   Camera,
   Zap,
+  Plus,
+  FileText,
+  Menu,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Modal } from '../ui/Modal';
@@ -50,6 +53,7 @@ import {
   type SupportedLanguageCode,
   type AcousticTelemetry,
   type VisionDiagnosticResult,
+  type Citation,
   SUPPORTED_LANGUAGES,
   getLanguageConfig,
 } from '@forgex/shared-types';
@@ -58,6 +62,8 @@ import { VisionDiagnosticsModal } from '../copilot/VisionDiagnosticsModal';
 import { LotoSafetyRunnerModal } from '../copilot/LotoSafetyRunnerModal';
 import { RcaTicketModal } from '../copilot/RcaTicketModal';
 import { ForgeXAiThinkingAnimation } from '../copilot/ForgeXAiThinkingAnimation';
+import { CitationPdfViewerModal } from '../copilot/CitationPdfViewerModal';
+import { SEEDED_MACHINES_CATALOG } from '../mobile/MachineScanView';
 
 /**
  * Clean, safe Markdown renderer for assistant messages:
@@ -231,7 +237,11 @@ const CopilotMarkdown: React.FC<{ content: string }> = ({ content }) => {
   );
 };
 
-export const CopilotWorkspaceView: React.FC = () => {
+export interface CopilotWorkspaceViewProps {
+  initialAssetTag?: string;
+}
+
+export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ initialAssetTag }) => {
   const { user, organization } = useAuth();
   const { toast } = useToast();
   const { activePlant, plants } = usePlant();
@@ -242,8 +252,14 @@ export const CopilotWorkspaceView: React.FC = () => {
   }, [plants, activePlant]);
 
   // Session & Equipment Context State
-  const [selectedMachineId, setSelectedMachineId] = useState<string>('');
+  const [selectedMachineId, setSelectedMachineId] = useState<string>(initialAssetTag || '');
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialAssetTag) {
+      setSelectedMachineId(initialAssetTag);
+    }
+  }, [initialAssetTag]);
 
   // Machine Ledger State
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -297,13 +313,54 @@ export const CopilotWorkspaceView: React.FC = () => {
   const [feedbackNotes, setFeedbackNotes] = useState('');
   const [feedbackSubmittedMsg, setFeedbackSubmittedMsg] = useState<string | null>(null);
 
+  // Citations Full-Screen PDF Modal State
+  const [activeCitationModal, setActiveCitationModal] = useState<Citation | null>(null);
+
+  // Mobile Drawer State for Left Column (threads & scope)
+  const [isMobileThreadsOpen, setIsMobileThreadsOpen] = useState(false);
+
+  // Mobile Composer Quick Actions "+" Menu State
+  const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatScrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Selected Machine Details
+  // Selected Machine Details (with immediate catalog resolution for QR scan launches)
   const selectedMachine = useMemo(() => {
     if (!selectedMachineId) return null;
-    return machines.find((m) => m.id === selectedMachineId || m.assetTag === selectedMachineId) || null;
+    const found = machines.find((m) => m.id === selectedMachineId || m.assetTag === selectedMachineId);
+    if (found) return found;
+
+    // Check catalog of seeded machines so it immediately resolves on QR scan before API loads
+    const catalogMatch = SEEDED_MACHINES_CATALOG.find(
+      (m) =>
+        m.assetTag.toUpperCase() === selectedMachineId.toUpperCase() ||
+        m.id.toLowerCase() === selectedMachineId.toLowerCase()
+    );
+    if (catalogMatch) {
+      return {
+        id: catalogMatch.id,
+        assetTag: catalogMatch.assetTag,
+        name: catalogMatch.name,
+        area: catalogMatch.area,
+        manufacturer: catalogMatch.manufacturer,
+        modelNumber: catalogMatch.modelNumber,
+        serialNumber: catalogMatch.serialNumber,
+        machineType: catalogMatch.isoClass,
+        operationalState: catalogMatch.status,
+        documentationReadiness: 'READY',
+      } as Machine;
+    }
+
+    return {
+      id: selectedMachineId,
+      assetTag: selectedMachineId,
+      name: `Industrial Equipment (${selectedMachineId})`,
+      area: 'Plant Facility Floor',
+      documentationReadiness: 'READY',
+    } as Machine;
   }, [machines, selectedMachineId]);
 
   // Filtered Machines for Sidebar
@@ -360,12 +417,15 @@ export const CopilotWorkspaceView: React.FC = () => {
       if (headerPickerRef.current && !headerPickerRef.current.contains(e.target as Node)) {
         setIsHeaderMachinePickerOpen(false);
       }
+      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+        setIsPlusMenuOpen(false);
+      }
     };
-    if (isHeaderMachinePickerOpen) {
+    if (isHeaderMachinePickerOpen || isPlusMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [isHeaderMachinePickerOpen]);
+  }, [isHeaderMachinePickerOpen, isPlusMenuOpen]);
 
   // Load Machines
   const loadMachines = useCallback(async () => {
@@ -519,35 +579,32 @@ export const CopilotWorkspaceView: React.FC = () => {
     [speakingMessageId, speechLanguage, currentLangConfig, stopSpeech, toast]
   );
 
-  // Push-to-talk Web Speech API recognition dynamically bound to selected language
-  const handleTogglePushToTalk = () => {
+  // Push-to-talk Web Speech API recognition dynamically bound to selected language with graceful fallback
+  const startPushToTalk = useCallback(() => {
     stopSpeech();
     setVoiceError(null);
 
-    if (isListening) {
+    const SpeechRecognitionAPI =
+      (typeof window !== 'undefined' && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) || null;
+
+    if (!SpeechRecognitionAPI) {
+      setVoiceError(
+        'Voice dictation is unavailable in this environment / Android WebView. You can type your question in the text box below.'
+      );
+      textInputRef.current?.focus();
+      return;
+    }
+
+    try {
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
         } catch {}
       }
-      setIsListening(false);
-      return;
-    }
 
-    const SpeechRecognitionAPI =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognitionAPI) {
-      setVoiceError(
-        'Speech recognition is not supported in this browser. Please use Google Chrome, Microsoft Edge, or type your question below.'
-      );
-      return;
-    }
-
-    try {
       const recognition = new SpeechRecognitionAPI();
       recognitionRef.current = recognition;
-      recognition.continuous = false;
+      recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = speechLanguage;
 
@@ -568,7 +625,7 @@ export const CopilotWorkspaceView: React.FC = () => {
         if (event.error === 'not-allowed') {
           setVoiceError('Microphone permission was denied. Please allow microphone access in your browser settings.');
         } else if (event.error !== 'no-speech') {
-          setVoiceError(`Voice input error: ${event.error}`);
+          setVoiceError(`Voice input error (${event.error}). Please type below.`);
         }
       };
 
@@ -579,9 +636,38 @@ export const CopilotWorkspaceView: React.FC = () => {
       recognition.start();
     } catch (err: any) {
       setIsListening(false);
-      setVoiceError(`Could not access microphone: ${err?.message || 'Device unavailable'}`);
+      setVoiceError('Could not start microphone. Please type your question in the text box below.');
+      textInputRef.current?.focus();
+    }
+  }, [speechLanguage, stopSpeech]);
+
+  const stopPushToTalk = useCallback(() => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+  }, []);
+
+  const handleTogglePushToTalk = () => {
+    if (isListening) {
+      stopPushToTalk();
+    } else {
+      startPushToTalk();
     }
   };
+
+  // Helper to identify answers addressing failures or abnormal conditions
+  const isFailureAnalysisAnswer = useCallback((msg: CopilotMessage): boolean => {
+    if (msg.senderType !== 'ASSISTANT') return false;
+    if (msg.questionMode === 'RESTRICTED_SAFETY_CRITICAL') return true;
+    if (Boolean((msg as any).acousticTelemetry && (msg as any).acousticTelemetry.detectedPattern !== 'NOMINAL')) return true;
+    if (Boolean((msg as any).visionDiagnostic && (msg as any).visionDiagnostic.safetyStatus !== 'SAFE_ZERO_ENERGY')) return true;
+    const failureRegex = /failure|fault|cavitation|vibration|leak|overheat|overpressure|rca|root cause|abnormal|alarm|critical|wear|broken|damage|shutdown|trip|error|overhaul|defective/i;
+    return failureRegex.test(msg.content);
+  }, []);
 
   // Execute Grounded RAG Query
   const handleSendQuery = async (
@@ -932,34 +1018,39 @@ export const CopilotWorkspaceView: React.FC = () => {
     switch (mode) {
       case 'GENERAL':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-blue-950/70 text-blue-300 border border-blue-800">
-            <BookOpen className="w-3 h-3 text-blue-400" />
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-850 text-slate-200 border border-slate-700 shadow-2xs">
+            <BookOpen className="w-3 h-3 text-slate-400" />
             GENERAL KNOWLEDGE
           </span>
         );
       case 'COMPANY_SPECIFIC':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-800">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-700 shadow-2xs">
             <FileCheck2 className="w-3 h-3 text-emerald-400" />
             COMPANY OPERATIONAL STANDARD
           </span>
         );
       case 'MACHINE_SPECIFIC':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-950/70 text-cyan-300 border border-cyan-800">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-700 shadow-2xs">
             <Layers className="w-3 h-3 text-cyan-400" />
             VERIFIED MACHINE EVIDENCE
           </span>
         );
       case 'RESTRICTED_SAFETY_CRITICAL':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-950/70 text-rose-300 border border-rose-800">
-            <AlertTriangle className="w-3 h-3 text-rose-400" />
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-red-500/20 text-red-400 border border-red-500/50 shadow-2xs">
+            <AlertTriangle className="w-3 h-3 text-red-400" />
             SAFETY-CRITICAL / RESTRICTED
           </span>
         );
       default:
-        return null;
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700 shadow-2xs">
+            <BookOpen className="w-3 h-3 text-slate-400" />
+            GENERAL
+          </span>
+        );
     }
   };
 
@@ -1007,9 +1098,9 @@ export const CopilotWorkspaceView: React.FC = () => {
   }, [selectedMachine]);
 
   return (
-    <div className="flex-1 flex h-full overflow-hidden bg-[#F5F6F7] font-sans">
-      {/* Left Column: Asset Context & Conversation History */}
-      <div className="w-80 h-full border-r border-[#E2E8F0] bg-white flex flex-col overflow-hidden shadow-sm shrink-0">
+    <div className="flex-1 flex flex-col md:flex-row h-full max-h-[100dvh] overflow-hidden bg-[#F5F6F7] font-sans relative">
+      {/* Left Column: Asset Context & Conversation History (Desktop Only) */}
+      <div className="hidden md:flex md:w-80 h-full border-r border-[#E2E8F0] bg-white flex-col overflow-hidden shadow-sm shrink-0">
         {/* Top Pinned Action: New Consultation Thread */}
         <div className="p-3 border-b border-[#E2E8F0] bg-white shrink-0">
           <button
@@ -1313,38 +1404,113 @@ export const CopilotWorkspaceView: React.FC = () => {
         </div>
       </div>
 
+      {/* Mobile Slide-Over History & Scope Drawer */}
+      {isMobileThreadsOpen && (
+        <div className="fixed inset-0 z-50 md:hidden bg-black/60 backdrop-blur-sm flex animate-fadeIn">
+          <div className="w-80 max-w-[85vw] h-full bg-white flex flex-col shadow-2xl animate-slideRight">
+            <div className="p-3.5 border-b border-[#E2E8F0] flex items-center justify-between bg-slate-900 text-white shrink-0">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-blue-400" />
+                <span className="font-bold text-xs uppercase tracking-wider">Consultation History</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileThreadsOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 border-b border-[#E2E8F0] bg-white shrink-0">
+              <button
+                onClick={() => {
+                  handleStartNewConversation();
+                  setIsMobileThreadsOpen(false);
+                }}
+                className="w-full py-2.5 px-3 bg-gradient-to-r from-slate-950 to-indigo-950 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-sm"
+              >
+                <PlusCircle className="w-4 h-4 text-white" />
+                <span>New Consultation Thread</span>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+              <div className="px-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                Recent Threads ({conversations.length})
+              </div>
+              {conversations.length === 0 ? (
+                <div className="p-4 text-center text-xs text-slate-400">No previous consultations found</div>
+              ) : (
+                conversations.map((c) => (
+                  <div
+                    key={c.id}
+                    onClick={() => {
+                      handleSelectConversation(c.id);
+                      setIsMobileThreadsOpen(false);
+                    }}
+                    className={`w-full text-left p-2.5 rounded-xl text-xs border cursor-pointer transition ${
+                      activeConversationId === c.id
+                        ? 'bg-blue-50 border-blue-300 font-bold text-slate-900'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="font-mono text-[10px] text-blue-600 font-bold">{c.assetId || 'FACTORY-WIDE'}</div>
+                    <div className="truncate text-slate-800 mt-0.5">{c.title}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <div className="flex-1" onClick={() => setIsMobileThreadsOpen(false)} />
+        </div>
+      )}
+
       {/* Center Column: Chat Stream Workspace */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#F5F6F7] relative text-[#1A202C] font-sans">
-        {/* Workspace Top Bar */}
-        <div className="p-3 border-b border-[#E2E8F0] bg-white flex items-center justify-between text-xs font-sans shadow-sm shrink-0">
-          <div className="flex items-center gap-2.5">
-            <Sparkles className="w-4 h-4 text-[#2563EB]" />
-            <span className="font-bold text-[#1A202C] tracking-wide">AI INDUSTRIAL COPILOT</span>
-            <span className="text-slate-300">|</span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 border border-emerald-200 shadow-2xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />
-              Single-Factory Mode
-            </span>
+      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden bg-[#F5F6F7] relative text-[#1A202C] font-sans">
+        {/* Workspace Top Bar (Responsive Mobile/Desktop Layout) */}
+        <div className="p-2.5 sm:p-3 border-b border-[#E2E8F0] bg-white flex items-center justify-between text-xs font-sans shadow-sm shrink-0 gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Mobile History Toggle */}
+            <button
+              type="button"
+              onClick={() => setIsMobileThreadsOpen(true)}
+              className="md:hidden min-h-[38px] min-w-[38px] p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition border border-slate-300 shrink-0"
+              title="Open Consultation History"
+            >
+              <Menu className="w-4 h-4 text-slate-700" />
+            </button>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Sparkles className="w-4 h-4 text-[#2563EB] shrink-0" />
+              <span className="font-bold text-[#1A202C] tracking-wide text-xs sm:text-sm truncate">
+                AI COPILOT
+              </span>
+              <span className="text-slate-300 hidden sm:inline">|</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                <span>Single-Factory</span>
+              </span>
+            </div>
           </div>
 
-          {/* Top Actions: 1-Click RCA Ticket & Voice Toolbar */}
-          <div className="flex items-center gap-2.5">
-            {/* 1-Click Auto-Filled RCA Ticket Generator Trigger */}
+          {/* Top Actions */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* 1-Click RCA Button (Desktop/Tablet) */}
             <button
               onClick={() => setIsRcaModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white font-bold text-xs shadow-xs hover:shadow-md transition cursor-pointer"
-              title="Synthesize conversation into an enterprise RCA Work Order"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-500 text-white font-bold text-xs shadow-xs transition hover:brightness-105"
             >
               <Zap className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
-              <span>1-Click RCA Ticket</span>
+              <span>1-Click RCA</span>
             </button>
+
             {/* Language Selector */}
-            <div className="flex items-center gap-1.5 bg-white border border-[#CBD5E1] px-2.5 py-1 rounded-lg text-[11px] font-sans shadow-sm">
+            <div className="flex items-center gap-1 bg-white border border-[#CBD5E1] px-2 py-1 rounded-lg text-[11px] font-sans shadow-sm">
               <Languages className="w-3.5 h-3.5 text-[#2563EB]" />
               <select
                 value={speechLanguage}
                 onChange={(e) => setSpeechLanguage(e.target.value as SupportedLanguageCode)}
-                className="bg-transparent text-[#1A202C] focus:outline-none cursor-pointer"
+                className="bg-transparent text-[#1A202C] focus:outline-none cursor-pointer max-w-[80px] sm:max-w-none text-[11px]"
               >
                 {SUPPORTED_LANGUAGES.map((lang) => (
                   <option key={lang.code} value={lang.code}>
@@ -1354,29 +1520,21 @@ export const CopilotWorkspaceView: React.FC = () => {
               </select>
             </div>
 
-            {/* Auto-Speak Toggle Button */}
+            {/* Auto-Speak Toggle */}
             <button
               onClick={() => {
                 stopSpeech();
                 setAutoSpeakEnabled(!autoSpeakEnabled);
               }}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-[11px] font-sans transition shadow-sm ${
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] transition shadow-sm ${
                 autoSpeakEnabled
                   ? 'bg-blue-50 border-blue-300 text-blue-800 font-bold'
-                  : 'bg-white border-[#CBD5E1] hover:border-slate-400 text-[#64748B]'
+                  : 'bg-white border-[#CBD5E1] text-[#64748B]'
               }`}
-              title={
-                autoSpeakEnabled
-                  ? 'Auto-Speak active: Copilot answers will be spoken automatically'
-                  : 'Auto-Speak off: Use LISTEN button on answers'
-              }
+              title={autoSpeakEnabled ? 'Voice Auto-Speak On' : 'Voice Auto-Speak Off'}
             >
-              {autoSpeakEnabled ? (
-                <Volume2 className="w-3.5 h-3.5 text-[#2563EB]" />
-              ) : (
-                <VolumeX className="w-3.5 h-3.5 text-[#64748B]" />
-              )}
-              <span>{autoSpeakEnabled ? 'AUTO-SPEAK ON' : 'AUTO-SPEAK OFF'}</span>
+              {autoSpeakEnabled ? <Volume2 className="w-3.5 h-3.5 text-[#2563EB]" /> : <VolumeX className="w-3.5 h-3.5 text-[#64748B]" />}
+              <span>{autoSpeakEnabled ? 'VOICE ON' : 'VOICE OFF'}</span>
             </button>
           </div>
         </div>
@@ -1811,7 +1969,7 @@ export const CopilotWorkspaceView: React.FC = () => {
                       <span className="text-xs font-sans font-bold text-[#1A202C] tracking-wide">
                         GROUNDED ENGINEERING RESPONSE
                       </span>
-                      {renderQuestionModeBadge(msg.questionMode)}
+                      {renderQuestionModeBadge(msg.questionMode || (selectedMachine ? 'MACHINE_SPECIFIC' : 'GENERAL'))}
                     </div>
                     <div className="flex items-center gap-2">
                       {renderConfidenceBadge(msg.confidence)}
@@ -1892,6 +2050,73 @@ export const CopilotWorkspaceView: React.FC = () => {
 
                   {/* Structured Markdown Body Content */}
                   <CopilotMarkdown content={msg.content} />
+
+                  {/* Citations as Tappable Chips (Opens PDF Viewer Full-Screen on Mobile) */}
+                  {msg.citations && msg.citations.length > 0 ? (
+                    <div className="pt-2 space-y-1.5 border-t border-slate-100">
+                      <div className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                        <FileText className="w-3 h-3 text-blue-600" />
+                        <span>Source Citations · Tap to View PDF ({msg.citations.length})</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {msg.citations.map((cit, cIdx) => (
+                          <button
+                            key={cit.id || cIdx}
+                            type="button"
+                            onClick={() => setActiveCitationModal(cit)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 text-blue-900 text-xs font-medium transition cursor-pointer text-left max-w-full shadow-2xs"
+                            title={`Open Page ${cit.pageNumber} in full-screen PDF viewer`}
+                          >
+                            <BookOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                            <span className="font-semibold truncate max-w-[180px] sm:max-w-xs">
+                              {cit.documentTitle || cit.documentNumber || 'OEM Manual'}
+                            </span>
+                            <span className="font-mono text-[10px] bg-blue-200/70 text-blue-800 px-1.5 py-0.2 rounded font-bold shrink-0">
+                              p. {cit.pageNumber || 1}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : selectedMachine ? (
+                    <div className="pt-1.5 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveCitationModal({
+                            id: `cit-${selectedMachine.assetTag}`,
+                            documentId: selectedMachine.id,
+                            documentNumber: `OEM-${selectedMachine.assetTag}`,
+                            documentTitle: `${selectedMachine.manufacturer || 'OEM'} ${selectedMachine.name} Manual`,
+                            documentVersionId: 'v1.0',
+                            pageNumber: 1,
+                            chunkId: 'chunk-0',
+                            snippet: `OEM Technical manual, maintenance standards, and schematics for ${selectedMachine.assetTag}.`,
+                            confidenceScore: 0.96,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50/80 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 text-blue-900 text-xs font-medium transition cursor-pointer text-left shadow-2xs"
+                      >
+                        <BookOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span className="font-semibold">{selectedMachine.assetTag} Manual &amp; Schematics</span>
+                        <span className="font-mono text-[10px] bg-blue-200/70 text-blue-800 px-1.5 py-0.2 rounded font-bold">p. 1</span>
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {/* Prominent Full-Width 1-Click RCA Button for Failure-Analysis Answers */}
+                  {isFailureAnalysisAnswer(msg) && (
+                    <div className="pt-2 w-full">
+                      <button
+                        type="button"
+                        onClick={() => setIsRcaModalOpen(true)}
+                        className="w-full min-h-[48px] py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 active:scale-[0.98] text-white font-bold text-xs sm:text-sm shadow-md shadow-blue-900/20 flex items-center justify-center gap-2 transition cursor-pointer"
+                      >
+                        <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
+                        <span>⚡ 1-Click RCA Ticket · Create Failure Investigation Work Order</span>
+                      </button>
+                    </div>
+                  )}
 
                   {/* Specialist Ticket Banner if Dispatched */}
                   {msg.ticketNumber && (
@@ -2053,68 +2278,115 @@ export const CopilotWorkspaceView: React.FC = () => {
           </div>
         )}
 
-        {/* Bottom Query Input Box & Microphone Controls */}
-        <div className="p-4 border-t border-[#E2E8F0] bg-white shrink-0">
-          <div className="flex items-center gap-2 max-w-5xl mx-auto">
-            {/* Real Web Speech Push-To-Talk Mic Button */}
-            <button
-              onClick={handleTogglePushToTalk}
-              className={`p-2.5 rounded-xl border transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer ${
-                isListening
-                  ? 'bg-gradient-to-r from-rose-50 to-red-100 border-rose-300 text-rose-600 animate-pulse ring-2 ring-rose-400'
-                  : 'bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 border-indigo-200/70 text-slate-700'
-              }`}
-              title={
-                isListening
-                  ? 'Listening... Click to stop voice capture'
-                  : "Click to speak your inquiry (e.g. 'What is the torque for casing bolts?')"
-              }
-            >
-              {isListening ? (
-                <>
-                  <Mic className="w-4 h-4 text-rose-600 animate-bounce" />
-                  <span className="text-[10px] font-sans text-rose-600 font-bold hidden sm:inline">
-                    Listening... (Stop)
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Mic className="w-4 h-4 text-emerald-600" />
-                  <span className="text-[10px] font-sans text-[#64748B] hidden sm:inline">
-                    Push-to-Talk
-                  </span>
-                </>
+        {/* Bottom Sticky Query Composer Box Above Bottom Nav */}
+        <div className="sticky bottom-0 z-20 p-2.5 sm:p-4 border-t border-[#E2E8F0] bg-white/95 backdrop-blur-md shadow-lg shrink-0">
+          {/* Listening Soundwave Banner if active */}
+          {isListening && (
+            <div className="mb-2 p-2 px-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs font-mono flex items-center justify-between animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping" />
+                <span className="font-bold">Listening to microphone... Speak or release mic to query</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="w-1 h-3 bg-rose-500 animate-bounce" />
+                <span className="w-1 h-5 bg-rose-600 animate-bounce [animation-delay:0.1s]" />
+                <span className="w-1 h-4 bg-rose-500 animate-bounce [animation-delay:0.2s]" />
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5 sm:gap-2 max-w-5xl mx-auto relative">
+            {/* Mobile '+' Menu Toggle Button */}
+            <div className="relative sm:hidden" ref={plusMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsPlusMenuOpen(!isPlusMenuOpen)}
+                className="min-h-[48px] min-w-[48px] p-2.5 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition active:scale-95"
+                aria-label="More input options"
+              >
+                <Plus className={`w-5 h-5 transition-transform ${isPlusMenuOpen ? 'rotate-45' : ''}`} />
+              </button>
+
+              {/* Popover Menu on Mobile */}
+              {isPlusMenuOpen && (
+                <div className="absolute left-0 bottom-full mb-2 w-56 bg-slate-900 border border-slate-800 text-white rounded-2xl p-2 shadow-2xl z-50 space-y-1 animate-slideUp">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPlusMenuOpen(false);
+                      setIsVisionModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center gap-2.5 text-xs text-slate-200 transition text-left"
+                  >
+                    <Camera className="w-4 h-4 text-blue-400" />
+                    <span>Camera Gauge Scan</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPlusMenuOpen(false);
+                      setIsAcousticModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center gap-2.5 text-xs text-slate-200 transition text-left"
+                  >
+                    <Activity className="w-4 h-4 text-indigo-400" />
+                    <span>Vibration / FFT Scan</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPlusMenuOpen(false);
+                      setIsLotoModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center gap-2.5 text-xs text-slate-200 transition text-left"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span>Vision LOTO Safety</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPlusMenuOpen(false);
+                      setIsRcaModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl hover:bg-slate-800 flex items-center gap-2.5 text-xs text-slate-200 transition text-left"
+                  >
+                    <Zap className="w-4 h-4 text-amber-400 fill-amber-400" />
+                    <span>1-Click RCA Ticket</span>
+                  </button>
+                </div>
               )}
-            </button>
+            </div>
 
-            {/* Vision Scan ("Gemini Multimodal Gauge & Part Vision") */}
-            <button
-              type="button"
-              onClick={() => setIsVisionModalOpen(true)}
-              className="p-2.5 rounded-xl border border-indigo-200/70 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 text-slate-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
-              title="Multimodal Vision Scan: Inspect analog pressure gauges, mechanical seal wear & nameplates with Gemini Vision"
-            >
-              <Camera className="w-4 h-4 text-blue-600" />
-              <span className="text-[10px] font-sans font-bold hidden sm:inline">
-                Vision Scan
-              </span>
-            </button>
+            {/* Inline Action Buttons on screens >= sm */}
+            <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsVisionModalOpen(true)}
+                className="min-h-[48px] px-3 py-2 rounded-xl border border-indigo-200/70 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 text-slate-700 font-sans transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                title="Camera Gauge Scan"
+              >
+                <Camera className="w-4 h-4 text-blue-600" />
+                <span className="text-[11px] font-bold hidden md:inline">Vision Scan</span>
+              </button>
 
-            {/* Acoustic Scan ("Shazam for Factory Machines") */}
-            <button
-              type="button"
-              onClick={() => setIsAcousticModalOpen(true)}
-              className="p-2.5 rounded-xl border border-indigo-200/70 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 text-slate-700 font-sans transition shrink-0 flex items-center gap-1.5 shadow-sm cursor-pointer"
-              title="Acoustic Diagnostics: Real-time FFT spectrum scan & anomaly diagnosis (Shazam for Machines)"
-            >
-              <Activity className="w-4 h-4 text-indigo-600 animate-pulse" />
-              <span className="text-[10px] font-sans font-bold hidden sm:inline">
-                Acoustic Scan
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setIsAcousticModalOpen(true)}
+                className="min-h-[48px] px-3 py-2 rounded-xl border border-indigo-200/70 bg-gradient-to-r from-slate-50 to-indigo-50/50 hover:from-indigo-50 hover:to-blue-50 text-slate-700 font-sans transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                title="Vibration & FFT Spectrum"
+              >
+                <Activity className="w-4 h-4 text-indigo-600" />
+                <span className="text-[11px] font-bold hidden md:inline">Vibration/FFT</span>
+              </button>
+            </div>
 
-            {/* Text Input Field */}
+            {/* Text Input Field: min-h-[48px], text-base on mobile to prevent iOS Safari auto-zoom */}
             <input
+              ref={textInputRef}
               type="text"
               value={queryInput}
               onChange={(e) => setQueryInput(e.target.value)}
@@ -2123,31 +2395,49 @@ export const CopilotWorkspaceView: React.FC = () => {
                 isListening
                   ? 'Listening to microphone... speak now...'
                   : selectedMachine
-                  ? `Ask about ${selectedMachine.assetTag} (e.g. 'What is torque for casing bolts?' or 'Show LOTO steps')...`
-                  : "Ask an industrial question (e.g. 'What is standard pump LOTO procedure?')..."
+                  ? `Ask about ${selectedMachine.assetTag}...`
+                  : 'Ask an industrial question...'
               }
-              className="flex-1 px-4 py-2.5 bg-white border border-[#CBD5E1] rounded-xl text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
+              className="flex-1 min-h-[48px] px-3.5 sm:px-4 bg-white border border-[#CBD5E1] rounded-xl text-base sm:text-xs font-sans text-[#1A202C] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] transition shadow-sm"
             />
 
-            {/* Query Submit Button */}
+            {/* Large Push-to-Talk Mic Button (Supports Hold to Talk & Tap) */}
             <button
+              type="button"
+              onClick={handleTogglePushToTalk}
+              onMouseDown={startPushToTalk}
+              onMouseUp={stopPushToTalk}
+              onTouchStart={() => startPushToTalk()}
+              onTouchEnd={stopPushToTalk}
+              aria-label="Push to talk microphone"
+              className={`min-h-[48px] min-w-[48px] rounded-xl border flex items-center justify-center transition shadow-sm select-none touch-manipulation cursor-pointer shrink-0 ${
+                isListening
+                  ? 'bg-rose-600 text-white border-rose-500 animate-pulse ring-4 ring-rose-400/40 shadow-lg shadow-rose-900/30'
+                  : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700 active:scale-95'
+              }`}
+              title={isListening ? 'Listening... release to send' : 'Hold or click to speak'}
+            >
+              <Mic className={`w-5 h-5 ${isListening ? 'animate-bounce text-white' : 'text-slate-700'}`} />
+            </button>
+
+            {/* Send Button */}
+            <button
+              type="button"
               onClick={() => handleSendQuery()}
               disabled={isQuerying || !queryInput.trim()}
-              className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition shadow-sm shrink-0 ${
+              className={`min-h-[48px] px-4 sm:px-5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-sm shrink-0 active:scale-95 ${
                 isQuerying
                   ? 'bg-blue-600/80 text-white cursor-wait animate-pulse'
                   : 'bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white cursor-pointer'
               }`}
+              aria-label="Send query"
             >
               {isQuerying ? (
-                <>
-                  <Sparkles className="w-3.5 h-3.5 animate-spin" />
-                  <span>Thinking...</span>
-                </>
+                <Sparkles className="w-4 h-4 animate-spin" />
               ) : (
                 <>
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Query Copilot</span>
+                  <Send className="w-4 h-4" />
+                  <span className="hidden sm:inline">Send</span>
                 </>
               )}
             </button>
@@ -2290,6 +2580,14 @@ export const CopilotWorkspaceView: React.FC = () => {
             `Case ${createdCase?.caseNumber || createdCase?.id || ''} successfully logged in Maintenance Queue`
           );
         }}
+      />
+
+      {/* Full-Screen Mobile Citations PDF Viewer Modal */}
+      <CitationPdfViewerModal
+        isOpen={Boolean(activeCitationModal)}
+        onClose={() => setActiveCitationModal(null)}
+        citation={activeCitationModal}
+        machine={selectedMachine}
       />
     </div>
   );

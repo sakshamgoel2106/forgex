@@ -3,7 +3,7 @@ import type {
   VisionDiagnosticResult,
 } from '@forgex/shared-types';
 import { logger } from '../utils/logger.js';
-import { config } from '../config/env.js';
+import { getLlmProvider } from '../providers/llm/index.js';
 
 export interface VisualAnalysisInput {
   imageBase64: string;
@@ -50,21 +50,14 @@ export class MultimodalVisionService {
       return this.synthesizeCorrodedSealDiagnostic(targetTag, language, preset);
     }
 
-    // 2. Live Cloud Gemini Multimodal Analysis (gemini-2.5-flash / gemini-3.8-flash)
-    if (
-      config.CLOUD_AI_API_KEY &&
-      config.CLOUD_AI_API_KEY !== 'saas_mock_key' &&
-      !config.CLOUD_AI_API_KEY.includes('test') &&
-      !config.CLOUD_AI_API_KEY.includes('mock')
-    ) {
-      try {
-        const cloudResult = await this.callGeminiVision(imageBase64, visionMode, targetTag, language);
-        if (cloudResult) {
-          return cloudResult;
-        }
-      } catch (err: any) {
-        logger.warn({ error: err?.message }, 'Gemini Multimodal API call failed; falling back to deterministic inspection');
+    // 2. Multimodal Vision Provider Analysis (via active LlmProvider: Gemini / Ollama / OpenAI / Mock)
+    try {
+      const providerResult = await this.callProviderVision(imageBase64, visionMode, targetTag, language);
+      if (providerResult) {
+        return providerResult;
       }
+    } catch (err: any) {
+      logger.warn({ error: err?.message }, 'Multimodal vision provider call failed; falling back to deterministic inspection');
     }
 
     // 3. Deterministic Heuristic Fallback for non-preset image buffers
@@ -200,17 +193,15 @@ export class MultimodalVisionService {
   }
 
   /**
-   * Gemini 2.5 Flash / 3.8 Flash Multimodal API Call with 8-Second Safety Timeout
+   * Multimodal Vision Analysis via LlmProvider with 8-Second Safety Timeout
    */
-  private static async callGeminiVision(
+  private static async callProviderVision(
     imageBase64: string,
     visionMode: VisionMode,
     assetTag: string,
     language: string
   ): Promise<VisionDiagnosticResult | null> {
-    const apiKey = config.CLOUD_AI_API_KEY;
-    const model = process.env.CLOUD_VISION_MODEL || 'gemini-2.5-flash';
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const provider = getLlmProvider();
 
     // Clean base64 payload
     let base64Data = imageBase64;
@@ -277,52 +268,31 @@ Required JSON Structure:
   "confidenceScore": number
 }`;
 
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: systemPrompt },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-        },
-      }),
-      signal: AbortSignal.timeout(8000), // Enforce 8-second safety timeout
-    });
+    try {
+      const rawText = await provider.generateWithImage(
+        systemPrompt,
+        base64Data,
+        mimeType,
+        { jsonMode: true, timeoutMs: 8000 }
+      );
 
-    if (!res.ok) {
-      logger.warn({ status: res.status, statusText: res.statusText }, 'Gemini Vision returned non-200');
+      if (!rawText) return null;
+      const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
+
+      return {
+        detectedObject: parsed.detectedObject || 'ANALOG_GAUGE',
+        readingValue: typeof parsed.readingValue === 'number' ? parsed.readingValue : null,
+        readingUnit: parsed.readingUnit || 'bar',
+        oemLimitComparison: parsed.oemLimitComparison || null,
+        safetyStatus: parsed.safetyStatus || 'NORMAL',
+        summary: parsed.summary || 'Visual inspection complete.',
+        timestamp: new Date().toISOString(),
+        confidenceScore: typeof parsed.confidenceScore === 'number' ? parsed.confidenceScore : 0.94,
+      };
+    } catch (err: any) {
+      logger.warn({ provider: provider.name, error: err?.message }, 'Provider multimodal vision call failed');
       return null;
     }
-
-    const jsonResponse: any = await res.json();
-    const rawText = jsonResponse?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) return null;
-
-    const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
-
-    return {
-      detectedObject: parsed.detectedObject || 'ANALOG_GAUGE',
-      readingValue: typeof parsed.readingValue === 'number' ? parsed.readingValue : null,
-      readingUnit: parsed.readingUnit || 'bar',
-      oemLimitComparison: parsed.oemLimitComparison || null,
-      safetyStatus: parsed.safetyStatus || 'NORMAL',
-      summary: parsed.summary || 'Visual inspection complete.',
-      timestamp: new Date().toISOString(),
-      confidenceScore: typeof parsed.confidenceScore === 'number' ? parsed.confidenceScore : 0.94,
-    };
   }
 
   /**

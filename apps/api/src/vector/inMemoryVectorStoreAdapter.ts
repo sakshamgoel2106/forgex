@@ -114,4 +114,14 @@ export class InMemoryVectorStoreAdapter implements IVectorStoreAdapter {
     const denom = Math.sqrt(normA) * Math.sqrt(normB);
     return denom > 0 ? dot / denom : 0;
   }
+
+  public async healthCheck(): Promise<{ ok: boolean; status: string; provider: string; latencyMs: number; message?: string }> {
+    return {
+      ok: true,
+      status: 'IN_MEMORY',
+      provider: 'in-memory',
+      latencyMs: 0,
+      message: `In-memory vector store operational (${this.collections.size} active collections)`,
+    };
+  }
 }

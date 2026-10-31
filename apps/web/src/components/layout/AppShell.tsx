@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { usePlant } from '../../lib/PlantContext';
 import { Sidebar, type NavModule } from './Sidebar';
 import { TopBar } from './TopBar';
+import { MobileHeader } from '../mobile/MobileHeader';
+import { MobileBottomNav } from '../mobile/MobileBottomNav';
 import { GlobalSearchModal } from './GlobalSearchModal';
 import { NotificationsDrawer } from './NotificationsDrawer';
 import { Sheet, SheetContent } from '../ui/sheet';
@@ -49,22 +51,29 @@ export const AppShell: React.FC<AppShellProps> = ({
         className="flex flex-col h-screen w-screen overflow-hidden font-sans antialiased"
         style={{ background: '#F0F2F5', color: '#0E1621' }}
       >
-        {/* Full-width Top Navigation Rail */}
-        <TopBar
-          activeModule={activeModule}
-          plantSite={plantSite}
-          onPlantChange={setPlantSite}
-          onOpenSearch={() => setSearchOpen(true)}
-          onOpenNotifications={() => setNotificationsOpen(true)}
-          onOpenMobileNav={() => setMobileNavOpen(true)}
-          onNavigate={handleModuleSelect}
-          onToggleSidebar={toggleCollapse}
-          sidebarCollapsed={collapsed}
-        />
+        {/* Desktop Top Navigation Rail (md and above) */}
+        <div className="hidden md:block shrink-0">
+          <TopBar
+            activeModule={activeModule}
+            plantSite={plantSite}
+            onPlantChange={setPlantSite}
+            onOpenSearch={() => setSearchOpen(true)}
+            onOpenNotifications={() => setNotificationsOpen(true)}
+            onOpenMobileNav={() => setMobileNavOpen(true)}
+            onNavigate={handleModuleSelect}
+            onToggleSidebar={toggleCollapse}
+            sidebarCollapsed={collapsed}
+          />
+        </div>
+
+        {/* Compact Mobile Top Header (below md) */}
+        <div className="block md:hidden shrink-0">
+          <MobileHeader onNavigate={handleModuleSelect} />
+        </div>
 
         {/* Workspace Body: Left Sidebar + Main Content */}
-        <div className="flex flex-1 overflow-hidden min-h-0 min-w-0 w-full">
-          {/* Desktop Left Sidebar */}
+        <div className="flex flex-1 overflow-hidden min-h-0 min-w-0 w-full relative">
+          {/* Desktop Left Sidebar (hidden on mobile) */}
           <div className="hidden md:flex h-full shrink-0">
             <Sidebar
               activeModule={activeModule}
@@ -91,14 +100,20 @@ export const AppShell: React.FC<AppShellProps> = ({
             </SheetContent>
           </Sheet>
 
-          {/* Main workspace content area */}
+          {/* Main workspace content area with mobile bottom padding */}
           <main
-            className="flex-1 min-w-0 min-h-0 overflow-hidden relative flex flex-col w-full h-full"
+            className="flex-1 min-w-0 min-h-0 overflow-hidden relative flex flex-col w-full h-full pb-[calc(56px+env(safe-area-inset-bottom,0px))] md:pb-0"
             style={{ background: '#F0F2F5' }}
           >
             {children}
           </main>
         </div>
+
+        {/* Fixed Mobile Bottom Navigation (visible only below md) */}
+        <MobileBottomNav
+          activeModule={activeModule}
+          onSelectModule={handleModuleSelect}
+        />
 
         {/* Global Modals & Drawers */}
         <GlobalSearchModal

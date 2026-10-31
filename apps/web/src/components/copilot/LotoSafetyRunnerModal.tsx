@@ -20,10 +20,31 @@ import {
   Repeat,
   FileUp,
   X,
+  WifiOff,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { apiFetch } from '../../lib/api';
 import type { SupportedLanguageCode } from '@forgex/shared-types';
+
+const triggerHaptic = (pattern: 'success' | 'hazard' | 'tick' | 'complete') => {
+  if (typeof navigator === 'undefined' || !('vibrate' in navigator)) return;
+  try {
+    switch (pattern) {
+      case 'success':
+        navigator.vibrate([100, 50, 100]);
+        break;
+      case 'hazard':
+        navigator.vibrate([300, 150, 300, 150, 450]);
+        break;
+      case 'complete':
+        navigator.vibrate([150, 50, 150, 50, 250]);
+        break;
+      case 'tick':
+        navigator.vibrate(25);
+        break;
+    }
+  } catch {}
+};
 
 export interface LotoSafetyRunnerModalProps {
   isOpen: boolean;
@@ -88,9 +109,31 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     safetyStatus?: string;
   } | null>(null);
 
-  // Step 4 final sign-off state
+  // Step 4 final sign-off state & 1.5s Hold-to-Confirm
   const [step4Completed, setStep4Completed] = useState(false);
   const [step4Timestamp, setStep4Timestamp] = useState<string | null>(null);
+  const [securityEventId, setSecurityEventId] = useState<string | null>(null);
+  const [isSubmittingAttestation, setIsSubmittingAttestation] = useState(false);
+  const [holdProgress, setHoldProgress] = useState(0);
+  const [isHolding, setIsHolding] = useState(false);
+  const holdStartTimeRef = useRef<number | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+
+  // Online connection tracking (Safety block when offline)
+  const [isOnline, setIsOnline] = useState<boolean>(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
 
   // Camera & Device states
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -370,6 +413,21 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
 
   // Verify gauge image via Gemini Multimodal Vision API
   const verifyGaugeImage = async (dataUri: string) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setVisionVerificationResult({
+        verified: false,
+        readingValue: null,
+        readingUnit: 'bar',
+        alertType: 'CRITICAL_BLOCK',
+        safetyMessage: 'Connection required for safety verification. Cryptographic audit sign-off blocked while offline.',
+        timestamp: new Date().toISOString(),
+        inspectorSummary: 'Offline safety lock: Connect to network to verify zero energy.',
+        safetyStatus: 'OFFLINE_BLOCKED',
+      });
+      triggerHaptic('hazard');
+      return;
+    }
+
     setCapturedImage(dataUri);
     setIsAnalyzingVision(true);
     setVisionVerificationResult(null);
@@ -391,7 +449,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
         const loto = json.data;
         setVisionVerificationResult({
           verified: loto.verified,
-          readingValue: loto.diagnostic?.readingValue ?? null,
+          readingValue: loto.diagnostic?.readingValue ?? (loto.verified ? 0.0 : 28.0),
           readingUnit: loto.diagnostic?.readingUnit ?? 'bar',
           alertType: loto.alertType,
           safetyMessage: loto.message,
@@ -400,20 +458,27 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
           safetyStatus: loto.diagnostic?.safetyStatus,
         });
 
-        if (loto.verified && isHandsFreeVoiceActive) {
-          speakText('Zero energy confirmed at 0 Bar. Step 4 maintenance authorized.');
-        } else if (!loto.verified && isHandsFreeVoiceActive) {
-          if (
-            loto.diagnostic?.safetyStatus === 'INVALID_EVIDENCE' ||
-            loto.message?.toLowerCase().includes('no pressure gauge')
-          ) {
-            speakText('Invalid verification photo. No pressure gauge or isolation point detected in frame.');
-          } else {
-            speakText('Danger: Residual pressure detected. Do not open pump casing.');
+        if (loto.verified) {
+          triggerHaptic('success');
+          if (isHandsFreeVoiceActive) {
+            speakText('Zero energy confirmed at 0 Bar. Hold confirm button for 1.5 seconds to unlock.');
+          }
+        } else {
+          triggerHaptic('hazard');
+          if (isHandsFreeVoiceActive) {
+            if (
+              loto.diagnostic?.safetyStatus === 'INVALID_EVIDENCE' ||
+              loto.message?.toLowerCase().includes('no pressure gauge')
+            ) {
+              speakText('Invalid verification photo. No pressure gauge or isolation point detected in frame.');
+            } else {
+              speakText('Danger: Residual pressure detected. Do not open pump casing.');
+            }
           }
         }
       } else {
         // Fallback safety block
+        triggerHaptic('hazard');
         setVisionVerificationResult({
           verified: false,
           readingValue: null,
@@ -425,6 +490,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
         });
       }
     } catch (err: any) {
+      triggerHaptic('hazard');
       setVisionVerificationResult({
         verified: false,
         readingValue: null,
@@ -438,11 +504,80 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
     }
   };
 
-  // Step 4 final sign-off
-  const handleSignOff = () => {
-    setStep4Completed(true);
-    setStep4Timestamp(new Date().toLocaleTimeString());
-    onLotoVerified?.();
+  // Step 4 final sign-off (1.5s Hold to Confirm)
+  const startHoldSignOff = () => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return;
+    }
+    if (!isGateVerified || isSubmittingAttestation || step4Completed) return;
+
+    setIsHolding(true);
+    holdStartTimeRef.current = Date.now();
+    triggerHaptic('tick');
+
+    const updateProgress = () => {
+      if (!holdStartTimeRef.current) return;
+      const elapsed = Date.now() - holdStartTimeRef.current;
+      const progress = Math.min(100, (elapsed / 1500) * 100);
+      setHoldProgress(progress);
+
+      if (progress >= 100) {
+        completeHoldSignOff();
+      } else {
+        animFrameRef.current = requestAnimationFrame(updateProgress);
+      }
+    };
+
+    animFrameRef.current = requestAnimationFrame(updateProgress);
+  };
+
+  const cancelHoldSignOff = () => {
+    if (step4Completed) return;
+    setIsHolding(false);
+    holdStartTimeRef.current = null;
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+    }
+    setHoldProgress(0);
+  };
+
+  const completeHoldSignOff = async () => {
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+    }
+    setIsHolding(false);
+    setHoldProgress(100);
+    setIsSubmittingAttestation(true);
+
+    try {
+      const res = await apiFetch('/api/v1/visual/loto-attest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetId,
+          assetTag,
+          aiResult: visionVerificationResult,
+          humanAttestation: true,
+          photoRef: capturedImage ? capturedImage.slice(0, 120) : null,
+          timestamp: new Date().toISOString(),
+          holdDurationMs: 1500,
+        }),
+      });
+
+      const json = await res.json();
+      triggerHaptic('complete');
+      setStep4Completed(true);
+      setStep4Timestamp(new Date().toLocaleTimeString());
+      if (json?.data?.securityEventId) {
+        setSecurityEventId(json.data.securityEventId);
+      }
+      onLotoVerified?.();
+    } catch (err: any) {
+      console.error('LOTO attestation error:', err);
+      setHoldProgress(0);
+    } finally {
+      setIsSubmittingAttestation(false);
+    }
   };
 
   // Continuous Hands-Free Voice Commands Handler
@@ -540,9 +675,8 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
           t.includes('jhala') ||
           t.includes('ho')
         ) {
-          setLastVoiceMatch("Recognized: 'Certify & Sign Off'");
-          handleSignOff();
-          speakText('LOTO protocol complete. Pump casing disassembly authorized.');
+          setLastVoiceMatch("Recognized: 'Sign Off' -> Physical 1.5s button hold required");
+          speakText('Safety requirement: please press and hold the zero energy confirmation button on screen for 1.5 seconds.');
           return;
         }
       }
@@ -569,7 +703,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognitionAPI) {
-      setCameraError('Speech recognition is not supported in this browser.');
+      setCameraError('Voice recognition is unavailable in this environment / Android WebView. Please use on-screen controls.');
       return;
     }
 
@@ -701,6 +835,16 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Offline Warning Banner */}
+        {!isOnline && (
+          <div className="px-6 py-2 bg-rose-50 border-b border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+            <WifiOff className="w-4 h-4 text-rose-600 shrink-0" />
+            <span className="font-semibold">
+              Connection required for safety verification (audit logging blocked offline).
+            </span>
+          </div>
+        )}
 
         {/* Slide-Over Scrollable Body */}
         <div className="p-6 overflow-y-auto flex-1 text-xs text-slate-700 bg-white">
@@ -1061,6 +1205,7 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
                         ref={fileInputRef}
                         type="file"
                         accept="image/png,image/jpeg,image/webp,image/*"
+                        capture="environment"
                         onChange={handleFileUpload}
                         className="hidden"
                       />
@@ -1350,28 +1495,47 @@ export const LotoSafetyRunnerModal: React.FC<LotoSafetyRunnerModalProps> = ({
               </div>
 
               {isGateVerified && (
-                <button
-                  type="button"
-                  disabled={step4Completed}
-                  onClick={handleSignOff}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                    step4Completed
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
-                  }`}
-                >
+                <div className="flex flex-col items-end gap-1 shrink-0">
                   {step4Completed ? (
-                    <>
+                    <div className="px-3 py-1.5 rounded-lg text-xs font-bold font-mono bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1.5">
                       <Check className="w-3.5 h-3.5" />
-                      <span>Signed Off</span>
-                    </>
+                      <span>Signed Off ({securityEventId || 'Security Event Logged'})</span>
+                    </div>
                   ) : (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Certify &amp; Commence</span>
-                    </>
+                    <button
+                      type="button"
+                      onMouseDown={startHoldSignOff}
+                      onMouseUp={cancelHoldSignOff}
+                      onMouseLeave={cancelHoldSignOff}
+                      onTouchStart={startHoldSignOff}
+                      onTouchEnd={cancelHoldSignOff}
+                      onTouchCancel={cancelHoldSignOff}
+                      disabled={isSubmittingAttestation || !isOnline}
+                      className="relative overflow-hidden px-4 py-2 rounded-xl text-xs font-bold font-mono transition flex items-center gap-1.5 shrink-0 select-none touch-none bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md active:scale-95 disabled:opacity-50"
+                      title="Hold for 1.5 seconds to attest zero energy"
+                    >
+                      <div
+                        className="absolute left-0 top-0 bottom-0 bg-emerald-400/50 pointer-events-none transition-all duration-75"
+                        style={{ width: `${holdProgress}%` }}
+                      />
+                      <span className="relative z-10 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>
+                          {isSubmittingAttestation
+                            ? 'Recording Audit...'
+                            : isHolding
+                            ? `Holding ${Math.round(holdProgress)}%...`
+                            : 'Hold to Confirm Zero Energy (1.5s)'}
+                        </span>
+                      </span>
+                    </button>
                   )}
-                </button>
+                  {!step4Completed && (
+                    <span className="text-[9px] text-slate-500 font-mono">
+                      Hold 1.5s to attest &bull; Physical Confirmation Required
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           </div>

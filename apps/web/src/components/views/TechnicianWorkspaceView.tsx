@@ -2930,6 +2930,11 @@ export const TechnicianWorkspaceView: React.FC<{
                               <button
                                 type="button"
                                 onClick={() => {
+                                  const hasSpeech = (typeof window !== 'undefined') && Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+                                  if (!hasSpeech) {
+                                    toast.info('Voice Assistant Unavailable', 'Voice recognition is unavailable in this environment / Android WebView. Please use on-screen controls.');
+                                    return;
+                                  }
                                   setIsVoiceActive((prev) => {
                                     const next = !prev;
                                     if (next) {

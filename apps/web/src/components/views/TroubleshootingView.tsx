@@ -746,7 +746,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      toast.error('Voice Not Supported', 'Web Speech API is not supported in this browser.');
+      toast.info('Voice Dictation Unavailable', 'Voice dictation is unavailable in this environment / Android WebView. Please type your query in the input box below.');
       return;
     }
 

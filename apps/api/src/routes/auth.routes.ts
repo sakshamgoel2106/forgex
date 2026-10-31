@@ -6,6 +6,7 @@ import { LocalDevAuthAdapter } from '../auth/localDevAuthAdapter.js';
 import { GoogleAuthService } from '../auth/googleAuthService.js';
 import { EmailOtpService } from '../auth/emailOtpService.js';
 import { config } from '../config/env.js';
+import { deploymentConfig } from '../config/deployment.js';
 import { logger } from '../utils/logger.js';
 import { hashPassword, verifyPassword } from '../utils/password.js';
 import { ORG_ROLE_PERMISSIONS } from '@forgex/shared-types';
@@ -40,6 +41,20 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
    */
   router.post('/register-org', async (req: Request, res: Response): Promise<void> => {
     try {
+      // Enterprise mode rule: Return 403 once the single organization exists
+      if (deploymentConfig.mode === 'enterprise') {
+        const orgs = await dataStore.listOrganizations();
+        if (orgs.length > 0) {
+          res.status(403).json({
+            success: false,
+            error: {
+              code: 'FORGEX_ENTERPRISE_SINGLE_TENANT',
+              message: 'Self-service organization registration is disabled in Enterprise On-Prem mode once the tenant organization has been provisioned.',
+            },
+          });
+          return;
+        }
+      }
       const {
         organizationName,
         companyName,
@@ -1912,7 +1927,21 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
    * GET /api/v1/auth/google/config
    * Returns Google OAuth configuration status to client
    */
+  /**
+   * GET /api/v1/auth/google/config
+   * Returns Google OAuth configuration status to client
+   */
   router.get('/google/config', async (_req: Request, res: Response): Promise<void> => {
+    if (deploymentConfig.mode === 'enterprise' || !deploymentConfig.allowGoogleAuth) {
+      res.status(200).json({
+        success: true,
+        data: {
+          configured: false,
+          enterpriseDisabled: true,
+        },
+      });
+      return;
+    }
     res.status(200).json({
       success: true,
       data: {
@@ -1927,6 +1956,16 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
    * Authenticates user via Google OAuth, verifies claims, resolves role & org, or prompts registration
    */
   router.post('/google', async (req: Request, res: Response): Promise<void> => {
+    if (deploymentConfig.mode === 'enterprise' || !deploymentConfig.allowGoogleAuth) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORGEX_AUTH_METHOD_DISABLED',
+          message: 'Google OAuth authentication is disabled in Enterprise On-Prem deployment mode.',
+        },
+      });
+      return;
+    }
     try {
       const { credential, idToken, googleId, email, fullName, organizationId } = req.body;
       const identity = await GoogleAuthService.verifyGoogleToken({
@@ -2062,6 +2101,16 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
    * Path 1: Register a new company workspace using Google Sign-In
    */
   router.post('/register-org-google', async (req: Request, res: Response): Promise<void> => {
+    if (deploymentConfig.mode === 'enterprise' || !deploymentConfig.allowGoogleAuth) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORGEX_AUTH_METHOD_DISABLED',
+          message: 'Google OAuth registration is disabled in Enterprise On-Prem deployment mode.',
+        },
+      });
+      return;
+    }
     try {
       const {
         credential,
@@ -2235,6 +2284,16 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
    * Accept an employee invitation through Google identity
    */
   router.post('/accept-invitation-google', async (req: Request, res: Response): Promise<void> => {
+    if (deploymentConfig.mode === 'enterprise' || !deploymentConfig.allowGoogleAuth) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'FORGEX_AUTH_METHOD_DISABLED',
+          message: 'Google OAuth invitation acceptance is disabled in Enterprise On-Prem deployment mode.',
+        },
+      });
+      return;
+    }
     try {
       const { invitationToken, credential, idToken, googleId, email, fullName } = req.body;
       if (!invitationToken || typeof invitationToken !== 'string') {

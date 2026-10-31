@@ -15,3 +15,4 @@ export * from './recovery.js';
 export * from './guidance.js';
 export * from './analytics.js';
 export * from './i18n.js';
+export * from './deployment.js';

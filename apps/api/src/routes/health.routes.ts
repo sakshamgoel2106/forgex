@@ -1,19 +1,37 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { HealthController } from '../controllers/health.controller.js';
+import { requireRole } from '../middleware/auth.middleware.js';
 
-export const healthRouter = Router();
+export function createHealthRouter(authMiddleware?: RequestHandler): Router {
+  const router = Router();
 
-// Standard container probes
-healthRouter.get('/healthz', HealthController.getLiveness);
-healthRouter.get('/livez', HealthController.getLiveness);
-healthRouter.get('/health/live', HealthController.getLiveness);
+  // Standard container probes
+  router.get('/healthz', HealthController.getLiveness);
+  router.get('/livez', HealthController.getLiveness);
+  router.get('/health/live', HealthController.getLiveness);
 
-healthRouter.get('/readyz', HealthController.getReadiness);
-healthRouter.get('/health/ready', HealthController.getReadiness);
+  router.get('/readyz', HealthController.getReadiness);
+  router.get('/health/ready', HealthController.getReadiness);
 
-// Detailed enterprise diagnostic health endpoint
-healthRouter.get('/api/v1/health', HealthController.getDetailedHealth);
+  // Detailed enterprise diagnostic health endpoint
+  router.get('/api/v1/health', HealthController.getDetailedHealth);
 
-// Operational metrics endpoint (sanitized, zero document content)
-healthRouter.get('/api/v1/metrics', HealthController.getMetrics);
-healthRouter.get('/metrics', HealthController.getMetrics);
+  // Operational metrics endpoint (sanitized, zero document content)
+  router.get('/api/v1/metrics', HealthController.getMetrics);
+  router.get('/metrics', HealthController.getMetrics);
+
+  // Dependencies status endpoint (Admin only)
+  const middlewareChain: RequestHandler[] = [];
+  if (authMiddleware) {
+    middlewareChain.push(authMiddleware);
+  }
+  middlewareChain.push(requireRole(['ORGANIZATION_ADMIN', 'ORGANIZATION_OWNER']));
+
+  router.get('/api/health/dependencies', ...middlewareChain, HealthController.getDependenciesHealth);
+  router.get('/api/v1/health/dependencies', ...middlewareChain, HealthController.getDependenciesHealth);
+  router.get('/health/dependencies', ...middlewareChain, HealthController.getDependenciesHealth);
+
+  return router;
+}
+
+export const healthRouter = createHealthRouter();

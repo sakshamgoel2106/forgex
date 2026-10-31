@@ -2,6 +2,8 @@
  * ForgeX AI — Standardized API Request/Response Envelopes and Health Schemas
  */
 
+import type { DeploymentMode } from './deployment.js';
+
 export interface ApiResponse<T> {
   success: true;
   data: T;
@@ -32,7 +34,7 @@ export interface HealthCheckResponse {
   uptimeSeconds: number;
   timestamp: string;
   environment: 'development' | 'staging' | 'production';
-  deploymentMode?: 'SAAS' | 'ENTERPRISE' | 'LOCAL_DEV';
+  deploymentMode?: DeploymentMode | 'SAAS' | 'ENTERPRISE' | 'LOCAL_DEV';
   checks: {
     database: SubsystemHealth;
     vectorStore: SubsystemHealth;
@@ -42,8 +44,6 @@ export interface HealthCheckResponse {
     documentWorker?: SubsystemHealth;
   };
 }
-
-export type DeploymentMode = 'SAAS' | 'ENTERPRISE' | 'LOCAL_DEV';
 
 export interface TenantUsageQuota {
   organizationId: string;

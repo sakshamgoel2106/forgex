@@ -8,8 +8,12 @@ import { createEmbeddingAdapter } from './embeddings/embeddingFactory.js';
 import { createVectorStoreAdapter } from './vector/vectorStoreFactory.js';
 import { bootstrapInitialData } from './db/bootstrapData.js';
 import { startRcaRetentionWorker, stopRcaRetentionWorker } from './services/rcaRetentionWorker.js';
+import { installGlobalOutboundGuard } from './utils/outboundGuard.js';
 
 async function startServer() {
+  // 0. Install Enterprise Outbound Call Air-Gap Guard
+  installGlobalOutboundGuard();
+
   // 1. Validate environment requirements for configured deployment mode
   try {
     validateModeSpecificRequirements(config);

@@ -312,6 +312,7 @@ export interface IDataStore {
   getOrganizationById(id: string): Promise<Organization | null>;
   getOrganizationBySlug(slug: string): Promise<Organization | null>;
   updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization | null>;
+  listOrganizations(): Promise<Organization[]>;
 
   // Users & Profiles
   createUser(dto: CreateUserDTO): Promise<User>;

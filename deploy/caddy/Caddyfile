@@ -1,0 +1,42 @@
+# =============================================================================
+# ForgeX AI — Caddy Reverse Proxy with Automatic On-Premise TLS
+# =============================================================================
+# Place this Caddyfile in deploy/caddy/ or run with:
+# caddy run --config deploy/caddy/Caddyfile
+#
+# Replace "forgex.plant.internal" with your factory domain or machine IP.
+# If using internal self-signed CA, Caddy's "tls internal" will issue and manage
+# trusted certificates locally.
+# =============================================================================
+
+forgex.plant.internal, 192.168.1.100:443, localhost:8443 {
+    # 1. On-Premise TLS:
+    # Option A: Automatic local CA (Root CA generated in Caddy data dir)
+    tls internal
+
+    # Option B: Use your corporate / plant CA certificates (uncomment if provided):
+    # tls /etc/ssl/certs/forgex.crt /etc/ssl/certs/forgex.key
+
+    # 2. Strict Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # 3. Static Web Application (When SERVE_WEB=true in API, proxy all traffic directly to API)
+    # Reverse proxy to ForgeX Core Service (Node.js API + Static PWA)
+    reverse_proxy api:4000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-For {remote_host}
+    }
+
+    # Logging
+    log {
+        output stdout
+        format json
+    }
+}

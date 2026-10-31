@@ -7,12 +7,20 @@ let defaultVectorStore: IVectorStoreAdapter | null = null;
 export function createVectorStoreAdapter(): IVectorStoreAdapter {
   if (defaultVectorStore) return defaultVectorStore;
 
-  const isTest = process.env.NODE_ENV === 'test';
-  const provider =
-    process.env.VECTOR_STORE_PROVIDER ||
-    (isTest ? 'local' : (process.env.QDRANT_URL && !process.env.QDRANT_URL.includes('localhost') ? 'qdrant' : 'local'));
+  const isTest = process.env.NODE_ENV === 'test' && !process.env.QDRANT_URL;
+  const configuredProvider = process.env.VECTOR_STORE_PROVIDER || process.env.VECTOR_PROVIDER;
 
-  if (provider === 'qdrant') {
+  // QDRANT_URL and QDRANT_API_KEY are optional (local Qdrant has no key).
+  // If Qdrant is selected/present, QdrantVectorStoreAdapter handles automatic fallback
+  // to InMemoryVectorStoreAdapter with a logged warning if Qdrant is unreachable.
+  const shouldUseQdrant =
+    configuredProvider === 'qdrant' ||
+    configuredProvider === 'qdrant-local' ||
+    configuredProvider === 'qdrant-cloud' ||
+    Boolean(process.env.QDRANT_URL) ||
+    (!isTest && configuredProvider !== 'local' && configuredProvider !== 'in-memory');
+
+  if (shouldUseQdrant) {
     defaultVectorStore = new QdrantVectorStoreAdapter();
   } else {
     defaultVectorStore = new InMemoryVectorStoreAdapter();
@@ -23,4 +31,8 @@ export function createVectorStoreAdapter(): IVectorStoreAdapter {
 
 export function setVectorStoreAdapter(adapter: IVectorStoreAdapter): void {
   defaultVectorStore = adapter;
+}
+
+export function resetVectorStoreAdapter(): void {
+  defaultVectorStore = null;
 }

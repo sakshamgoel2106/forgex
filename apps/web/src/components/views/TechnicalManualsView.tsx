@@ -358,7 +358,15 @@ export function getDocXrayIntelligence(doc: HubDocument): DocXrayIntelligence {
   };
 }
 
-export const TechnicalManualsView: React.FC = () => {
+export interface TechnicalManualsViewProps {
+  initialSearch?: string;
+  initialAssetTag?: string;
+}
+
+export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
+  initialSearch,
+  initialAssetTag,
+}) => {
   const { toast } = useToast();
   const { isOwnerOrAdmin, membership } = useAuth();
   const { activePlant, plants: plantOptions } = usePlant();
@@ -378,7 +386,13 @@ export const TechnicalManualsView: React.FC = () => {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSyncingRecovery, setIsSyncingRecovery] = useState<boolean>(false);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialSearch || initialAssetTag || '');
+
+  useEffect(() => {
+    if (initialSearch || initialAssetTag) {
+      setSearch(initialSearch || initialAssetTag || '');
+    }
+  }, [initialSearch, initialAssetTag]);
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [selectedDoc, setSelectedDoc] = useState<HubDocument | null>(null);

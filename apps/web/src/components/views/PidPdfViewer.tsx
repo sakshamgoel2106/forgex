@@ -9,8 +9,11 @@ import {
   type PidTagDetail,
 } from './pidConstants';
 
-// Configure reliable unpkg-backed worker matching the installed pdfjs-dist version
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Configure locally bundled pdfjs worker (Air-Gapped, Zero CDN Egress)
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString();
 
 export interface PidPdfViewerProps {
   fileUrl: string;

@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
+import { useDeployment } from '../../lib/RuntimeConfig';
+import { isNative } from '../../lib/platform';
 import {
   Building2,
   ShieldCheck,
@@ -111,8 +113,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
   };
 
   const [mode, setMode] = useState<ViewMode>(getInitialMode);
+  const { mode: deploymentMode, features, branding } = useDeployment();
 
-  // Auto-redirect if authenticated session exists
+  // If org signup is disabled (e.g. enterprise single tenant mode), disallow register mode
+  useEffect(() => {
+    if (!features.orgSignup && mode === 'register') {
+      setMode('login');
+    }
+  }, [features.orgSignup, mode]);
   useEffect(() => {
     const rawToken = typeof window !== 'undefined' ? localStorage.getItem('forgex_token') : null;
     const isValidToken = Boolean(rawToken) && rawToken !== 'undefined' && rawToken !== 'null' && rawToken !== '';
@@ -1184,13 +1192,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
         <div className="relative z-10 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 p-0.5 shadow-lg shadow-blue-500/20">
             <div className="w-full h-full bg-[#0B0F17] rounded-[10px] flex items-center justify-center p-1.5">
-              <img src="/forgex_icon.png" alt="ForgeX AI" className="w-full h-full object-contain" />
+              <img src={branding.logoUrl || '/forgex_icon.png'} alt={branding.name} className="w-full h-full object-contain" />
             </div>
           </div>
           <div>
             <div className="font-mono text-sm font-bold tracking-widest text-white uppercase flex items-center gap-2">
-              <span>FORGEX AI</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-normal">ENTERPRISE</span>
+              <span>{branding.name}</span>
+              {deploymentMode === 'enterprise' ? (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-normal">
+                  ENTERPRISE · ON-PREM
+                </span>
+              ) : (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-normal">
+                  CLOUD
+                </span>
+              )}
             </div>
             <div className="text-[11px] font-mono text-gray-400">Autonomous Industrial Intelligence Platform</div>
           </div>
@@ -1241,12 +1257,20 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
           <div className="flex lg:hidden items-center justify-center gap-2.5 mb-3.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 p-0.5 shadow-md shadow-blue-500/20">
               <div className="w-full h-full bg-[#0B0F17] rounded-[6px] flex items-center justify-center p-1">
-                <img src="/forgex_icon.png" alt="ForgeX AI" className="w-full h-full object-contain" />
+                <img src={branding.logoUrl || '/forgex_icon.png'} alt={branding.name} className="w-full h-full object-contain" />
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="font-mono text-sm font-bold tracking-wider text-gray-900 uppercase">FORGEX AI</span>
-              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">ENTERPRISE</span>
+              <span className="font-mono text-sm font-bold tracking-wider text-gray-900 uppercase">{branding.name}</span>
+              {deploymentMode === 'enterprise' ? (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 font-medium">
+                  ENTERPRISE · ON-PREM
+                </span>
+              ) : (
+                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">
+                  CLOUD
+                </span>
+              )}
             </div>
           </div>
 
@@ -1273,7 +1297,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                     : 'INDUSTRIAL AUTHENTICATION'}
                 </span>
                 <span className="text-[11px] font-mono text-[#64748B]">
-                  {mode === 'register' ? `Step ${regStep} of 2` : mode === 'enterprise-setup' ? 'Deployment Guide' : 'ForgeX AI v2.4'}
+                  {mode === 'register' ? `Step ${regStep} of 2` : mode === 'enterprise-setup' ? 'Deployment Guide' : `${branding.name} v2.4`}
                 </span>
               </div>
 
@@ -1292,7 +1316,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                   ? 'Establish New Password'
                   : mode === 'accept-invitation'
                   ? 'Activate Your Account'
-                  : 'Sign in to ForgeX AI'}
+                  : `Sign in to ${branding.name}`}
               </h1>
               <p className="text-xs text-[#64748B] mt-1 font-sans">
                 {mode === 'register'
@@ -1953,22 +1977,24 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                         <label className="block text-[11px] font-mono font-bold text-gray-500 uppercase tracking-wider">
                           ADMINISTRATOR AUTHENTICATION METHOD
                         </label>
-                        <div className="grid grid-cols-2 gap-1.5 p-1 bg-gray-100 rounded-xl border border-gray-200">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRegPath('google');
-                              setError(null);
-                            }}
-                            className={`py-1.5 sm:py-2 px-1 sm:px-2 text-[11px] sm:text-xs font-semibold rounded-lg transition flex items-center justify-center gap-1 sm:gap-1.5 ${
-                              regPath === 'google'
-                                ? 'bg-white text-gray-900 shadow-xs'
-                                : 'text-gray-600 hover:text-gray-900'
-                            }`}
-                          >
-                            <GoogleIcon className="w-3.5 h-3.5" />
-                            <span>Google</span>
-                          </button>
+                        <div className={`grid ${features.googleAuth && !isNative() ? 'grid-cols-2' : 'grid-cols-1'} gap-1.5 p-1 bg-gray-100 rounded-xl border border-gray-200`}>
+                          {features.googleAuth && !isNative() && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRegPath('google');
+                                setError(null);
+                              }}
+                              className={`py-1.5 sm:py-2 px-1 sm:px-2 text-[11px] sm:text-xs font-semibold rounded-lg transition flex items-center justify-center gap-1 sm:gap-1.5 ${
+                                regPath === 'google'
+                                  ? 'bg-white text-gray-900 shadow-xs'
+                                  : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                            >
+                              <GoogleIcon className="w-3.5 h-3.5" />
+                              <span>Google</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -1988,7 +2014,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSuccess }) => {
                       </div>
 
                       {/* METHOD A: GOOGLE OAUTH */}
-                      {regPath === 'google' && (
+                      {features.googleAuth && !isNative() && regPath === 'google' && (
                         <div className="space-y-4">
                           {!regGoogleAdmin ? (
                             <div className="py-6 px-4 bg-gray-50 border border-gray-200 rounded-xl text-center space-y-3">
@@ -2719,25 +2745,39 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
 
                   {/* Primary Authentication Choices: Google & Email OTP (Section 2) */}
                   <div className="space-y-2.5 mb-5">
-                    {/* Option 1: Continue with Google */}
-                    {googleConfig.configured ? (
-                      <button
-                        type="button"
-                        onClick={handleStartGoogleAuth}
-                        disabled={googleSubmitting}
-                        className="w-full py-2.5 px-4 bg-white hover:bg-gray-50 border border-[#CBD5E1] text-[#1A202C] font-semibold text-xs rounded-xl flex items-center justify-center gap-2.5 transition shadow-xs hover:border-gray-400"
-                      >
-                        <GoogleIcon className="w-4 h-4" />
-                        <span>{googleSubmitting ? 'Authenticating with Google...' : 'Continue with Google'}</span>
-                      </button>
-                    ) : (
-                      <div className="w-full py-2 px-3 bg-gray-50 border border-dashed border-gray-300 rounded-xl flex items-center justify-between text-xs text-gray-500">
+                    {/* Option 1: Continue with Google (if enabled on Web/PWA, or native notice) */}
+                    {isNative() ? (
+                      <div className="w-full py-2.5 px-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs text-slate-600">
                         <div className="flex items-center gap-2">
-                          <GoogleIcon className="w-3.5 h-3.5 opacity-50" />
-                          <span className="text-[11px]">Google OAuth (Not configured for this deployment)</span>
+                          <GoogleIcon className="w-4 h-4 opacity-40" />
+                          <span className="text-[11px] font-medium text-slate-500">Google Sign-In</span>
                         </div>
-                        <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded">Offline</span>
+                        <span className="text-[10px] font-semibold text-slate-600 bg-slate-200/90 px-2 py-0.5 rounded">
+                          Use email OTP or password in the app
+                        </span>
                       </div>
+                    ) : (
+                      features.googleAuth && (
+                        googleConfig.configured ? (
+                          <button
+                            type="button"
+                            onClick={handleStartGoogleAuth}
+                            disabled={googleSubmitting}
+                            className="w-full py-2.5 px-4 bg-white hover:bg-gray-50 border border-[#CBD5E1] text-[#1A202C] font-semibold text-xs rounded-xl flex items-center justify-center gap-2.5 transition shadow-xs hover:border-gray-400"
+                          >
+                            <GoogleIcon className="w-4 h-4" />
+                            <span>{googleSubmitting ? 'Authenticating with Google...' : 'Continue with Google'}</span>
+                          </button>
+                        ) : (
+                          <div className="w-full py-2 px-3 bg-gray-50 border border-dashed border-gray-300 rounded-xl flex items-center justify-between text-xs text-gray-500">
+                            <div className="flex items-center gap-2">
+                              <GoogleIcon className="w-3.5 h-3.5 opacity-50" />
+                              <span className="text-[11px]">Google OAuth (Not configured for this deployment)</span>
+                            </div>
+                            <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded">Offline</span>
+                          </div>
+                        )
+                      )
                     )}
 
                     {/* Segmented Auth Method Switcher */}
@@ -3019,7 +3059,7 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
                           </span>
                         ) : (
                           <>
-                            Sign In to ForgeX AI
+                            Sign In to {branding.name}
                             <ArrowRight className="w-4 h-4" />
                           </>
                         )}
@@ -3030,20 +3070,22 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
 
                   {/* Actions / Sub-links */}
                   <div className="mt-5 pt-4 border-t border-[#E2E8F0] space-y-2">
-                    <div className="flex items-center justify-between text-xs text-[#64748B] flex-wrap gap-1.5">
-                      <span>New factory or plant?</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMode('register');
-                          setRegStep(1);
-                          setError(null);
-                        }}
-                        className="text-[#2563EB] hover:text-blue-700 font-semibold transition"
-                      >
-                        Register Your Company →
-                      </button>
-                    </div>
+                    {features.orgSignup && (
+                      <div className="flex items-center justify-between text-xs text-[#64748B] flex-wrap gap-1.5">
+                        <span>New factory or plant?</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMode('register');
+                            setRegStep(1);
+                            setError(null);
+                          }}
+                          className="text-[#2563EB] hover:text-blue-700 font-semibold transition"
+                        >
+                          Register Your Company →
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between text-xs text-[#64748B] flex-wrap gap-1.5">
                       <span>Have a factory activation code?</span>
@@ -3079,8 +3121,8 @@ Emergency Hotline: 24/7 dedicated enterprise response desk
           </div>
         </div>
       </div>
-      {/* GOOGLE SIGN-IN MODAL (Supported for live OAuth fallback, testing, and dev) */}
-      {googleModalOpen && (
+      {/* GOOGLE SIGN-IN MODAL (Supported for live OAuth fallback in SaaS mode) */}
+      {features.googleAuth && !isNative() && googleModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
           <div className="bg-white rounded-2xl border border-gray-200 shadow-2xl max-w-sm w-full p-4 sm:p-6 space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">

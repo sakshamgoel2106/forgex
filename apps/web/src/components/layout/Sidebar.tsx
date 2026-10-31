@@ -41,7 +41,9 @@ export type NavModule =
   | 'notifications'
   | 'team'
   | 'audit'
-  | 'settings';
+  | 'settings'
+  | 'scan'
+  | 'loto';
 
 interface SidebarProps {
   activeModule: NavModule;

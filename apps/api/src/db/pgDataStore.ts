@@ -374,6 +374,27 @@ export class PgDataStore implements IDataStore {
     };
   }
 
+  public async listOrganizations(): Promise<Organization[]> {
+    const res = await this.pool.query(
+      `SELECT id, name, slug, industry, country, timezone, website, company_size, measurement_units, deployment_type, created_at, updated_at
+       FROM organizations ORDER BY created_at ASC`
+    );
+    return res.rows.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      industry: row.industry ?? undefined,
+      country: row.country ?? undefined,
+      timezone: row.timezone ?? undefined,
+      website: row.website ?? undefined,
+      companySize: row.company_size ?? undefined,
+      measurementUnits: (row.measurement_units as 'metric' | 'imperial') ?? 'metric',
+      deploymentType: (row.deployment_type as 'saas' | 'enterprise') ?? 'saas',
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+
   public async updateOrganization(id: string, updates: Partial<Organization>): Promise<Organization | null> {
     const fields: string[] = [];
     const values: any[] = [];

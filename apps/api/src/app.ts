@@ -1,9 +1,12 @@
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
-import { config } from './config/env.js';
+import path from 'node:path';
+import fs from 'node:fs';
+import { config, getAllowedOriginsList } from './config/env.js';
+import { getDeploymentConfig, getPublicDeploymentConfig } from './config/deployment.js';
 import { logger } from './utils/logger.js';
-import { healthRouter } from './routes/health.routes.js';
+import { createHealthRouter } from './routes/health.routes.js';
 import type { IAuthAdapter } from './auth/authAdapter.interface.js';
 import { createAuthAdapter } from './auth/authAdapterFactory.js';
 import type { IDataStore } from './db/dataStore.interface.js';
@@ -75,7 +78,10 @@ export interface AppDependencies {
   speechProvider?: ISpeechToTextProvider & ITextToSpeechProvider;
 }
 
+import { installGlobalOutboundGuard } from './utils/outboundGuard.js';
+
 export function createApp(deps: AppDependencies = {}): express.Application {
+  installGlobalOutboundGuard();
   const app = express();
 
   const authAdapter = deps.authAdapter ?? createAuthAdapter(config);
@@ -87,6 +93,9 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   const storageAdapter = deps.storageAdapter ?? createStorageAdapter();
   const embeddingAdapter = deps.embeddingAdapter ?? createEmbeddingAdapter();
   const vectorStore = deps.vectorStore ?? createVectorStoreAdapter();
+  app.locals.storageAdapter = storageAdapter;
+  app.locals.embeddingAdapter = embeddingAdapter;
+  app.locals.vectorStore = vectorStore;
   const visionProvider = deps.visionProvider ?? createVisionProvider();
   const ingestionQueue =
     deps.ingestionQueue ??
@@ -139,15 +148,150 @@ export function createApp(deps: AppDependencies = {}): express.Application {
 
   const authenticate = createAuthMiddleware(authAdapter, dataStore);
 
-  // Security hardening
-  app.use(helmet());
-  const allowedOrigins = config.CORS_ORIGIN.includes(',')
-    ? config.CORS_ORIGIN.split(',').map((s) => s.trim())
-    : config.CORS_ORIGIN;
+  const isDev = config.NODE_ENV !== 'production';
+  const deployment = getDeploymentConfig();
+  const isEnterprise = deployment.mode === 'enterprise' || !deployment.allowExternalNetwork;
+
+  // Requirement 4: Strict Content-Security-Policy via helmet
+  // Enterprise mode: connect-src 'self' + configured internal hosts only; zero third-party script-src.
+  // SaaS mode: allows Google domains for GIS and APIs.
+  const buildCsp = () => {
+    if (isEnterprise) {
+      const internalOrigins = new Set<string>([
+        "'self'",
+        'blob:',
+        'data:',
+        'ws:',
+        'wss:',
+      ]);
+
+      const envUrls = [
+        process.env.OLLAMA_BASE_URL,
+        process.env.QDRANT_URL,
+        process.env.S3_ENDPOINT,
+        process.env.MINIO_ENDPOINT,
+        process.env.DATABASE_URL,
+        process.env.WORKER_URL,
+        process.env.OPENAI_BASE_URL,
+        process.env.ENTERPRISE_HOST_ALLOWLIST,
+      ];
+
+      for (const urlStr of envUrls) {
+        if (!urlStr) continue;
+        const parts = urlStr.split(',');
+        for (const p of parts) {
+          const trimmed = p.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = new URL(trimmed);
+            internalOrigins.add(parsed.origin);
+          } catch {
+            internalOrigins.add(trimmed);
+          }
+        }
+      }
+
+      if (isDev) {
+        internalOrigins.add('http://localhost:*');
+        internalOrigins.add('http://127.0.0.1:*');
+        internalOrigins.add('ws://localhost:*');
+        internalOrigins.add('ws://127.0.0.1:*');
+      }
+
+      return {
+        directives: {
+          defaultSrc: ["'self'"],
+          // Strict: Zero third-party scripts. Self-hosted only.
+          scriptSrc: [
+            "'self'",
+            "'unsafe-inline'",
+            "'wasm-unsafe-eval'",
+          ],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'blob:'],
+          fontSrc: ["'self'", 'data:'],
+          connectSrc: Array.from(internalOrigins),
+          workerSrc: ["'self'", 'blob:'],
+          frameSrc: ["'none'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          formAction: ["'self'"],
+        },
+      };
+    }
+
+    // SaaS Cloud Mode with Google Workspace integration
+    return {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: [
+          "'self'",
+          "'unsafe-inline'",
+          "'unsafe-eval'",
+          'https://accounts.google.com',
+          'https://apis.google.com',
+        ],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://accounts.google.com'],
+        imgSrc: [
+          "'self'",
+          'data:',
+          'blob:',
+          'https://*.googleusercontent.com',
+          'https://accounts.google.com',
+        ],
+        fontSrc: ["'self'", 'data:'],
+        connectSrc: [
+          "'self'",
+          'blob:',
+          'data:',
+          'ws:',
+          'wss:',
+          'https://accounts.google.com',
+          'https://www.googleapis.com',
+          'https://generativelanguage.googleapis.com',
+        ],
+        frameSrc: ["'self'", 'https://accounts.google.com'],
+        workerSrc: ["'self'", 'blob:'],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+      },
+    };
+  };
+
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: isDev ? false : undefined,
+      contentSecurityPolicy: buildCsp(),
+    })
+  );
+
+  const allowedOrigins = getAllowedOriginsList(config);
   app.use(
     cors({
-      origin: allowedOrigins,
+      origin: isDev
+        ? (_origin, callback) => {
+            // In dev mode, allow requests from any origin (e.g. tunnels, mobile test devices, localhost)
+            callback(null, true);
+          }
+        : (requestOrigin, callback) => {
+            if (!requestOrigin) return callback(null, true);
+            if (allowedOrigins.includes(requestOrigin) || allowedOrigins.includes('*')) {
+              return callback(null, true);
+            }
+            callback(null, false);
+          },
       credentials: true,
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'x-organization-id',
+        'x-plant-id',
+        'Accept',
+        'Cache-Control',
+        'X-Requested-With',
+      ],
+      exposedHeaders: ['Content-Range', 'X-Content-Range'],
     })
   );
 
@@ -176,8 +320,41 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     next();
   });
 
-  // Health and readiness endpoints (Public, unthrottled for cluster orchestrators)
-  app.use(healthRouter);
+  // Health, readiness, and authenticated dependencies endpoints
+  app.use(createHealthRouter(authenticate));
+
+  // Public, unauthenticated Runtime Configuration endpoint (safe fields only, zero secrets)
+  const publicConfigHandler = (_req: express.Request, res: express.Response) => {
+    const pubConfig = getPublicDeploymentConfig();
+    res.json({
+      success: true,
+      data: pubConfig,
+      ...pubConfig,
+    });
+  };
+  app.get('/api/config/public', publicConfigHandler);
+  app.get('/api/v1/config/public', publicConfigHandler);
+
+  // In Enterprise mode, auto-resolve x-organization-id to the single tenant if missing
+  app.use(async (req, _res, next) => {
+    if (deployment.mode === 'enterprise' && !req.headers['x-organization-id']) {
+      try {
+        let tenantId = deployment.singleTenantOrgId;
+        if (!tenantId && (dataStore as any).listOrganizations) {
+          const orgs = await (dataStore as any).listOrganizations();
+          if (orgs.length > 0) {
+            tenantId = orgs[0].id;
+          }
+        }
+        if (tenantId) {
+          req.headers['x-organization-id'] = tenantId;
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Failed to auto-resolve single-tenant organization in enterprise mode');
+      }
+    }
+    next();
+  });
 
   // General API rate limiter
   app.use(RateLimiterService.generalLimiter());
@@ -222,7 +399,8 @@ export function createApp(deps: AppDependencies = {}): express.Application {
       visualEngine,
       embeddingAdapter,
       vectorStore,
-      visionProvider
+      visionProvider,
+      securityService
     )
   );
   app.use(
@@ -251,6 +429,57 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   app.use('/api/rca', authenticate, rcaRouter);
 
 
+
+  // Requirement 5: Serve the built web app from the API (express.static + SPA fallback) when SERVE_WEB=true
+  const shouldServeWeb = config.SERVE_WEB || process.env.SERVE_WEB === 'true';
+  if (shouldServeWeb) {
+    const candidatePaths = [
+      config.WEB_DIST_PATH,
+      process.env.WEB_DIST_PATH,
+      path.resolve(process.cwd(), 'apps/web/dist'),
+      path.resolve(process.cwd(), '../web/dist'),
+      path.resolve(process.cwd(), 'web/dist'),
+      path.resolve(process.cwd(), 'dist/web'),
+    ].filter(Boolean) as string[];
+
+    const resolvedWebDist = candidatePaths.find((p) => {
+      try {
+        return fs.existsSync(path.join(p, 'index.html'));
+      } catch {
+        return false;
+      }
+    });
+
+    if (resolvedWebDist) {
+      logger.info({ webDist: resolvedWebDist }, 'Serving ForgeX Web UI from API origin (SERVE_WEB=true)');
+
+      // Serve static assets with caching headers
+      app.use(
+        express.static(resolvedWebDist, {
+          maxAge: '1d',
+          index: false,
+        })
+      );
+
+      // SPA fallback for all non-API GET requests
+      app.get('*', (req, res, next) => {
+        if (
+          req.path.startsWith('/api') ||
+          req.path.startsWith('/health') ||
+          req.path.startsWith('/ready') ||
+          req.path.startsWith('/metrics')
+        ) {
+          return next();
+        }
+        res.sendFile(path.join(resolvedWebDist, 'index.html'));
+      });
+    } else {
+      logger.warn(
+        { candidatePaths },
+        'SERVE_WEB=true was requested, but web dist directory with index.html could not be located. Run `npm run build` in apps/web.'
+      );
+    }
+  }
 
   // Global not found handler
   app.use((_req, res) => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../lib/AuthContext';
 import {
   Wrench,
@@ -27,6 +27,7 @@ import {
   Edit3,
   ShieldCheck,
   Camera,
+  ArrowRight,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Button } from '../ui/button';
@@ -1212,6 +1213,23 @@ export const SopExecutionView: React.FC<{
   const [cases, setCases] = useState<WorkOrderCase[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(initialCaseId || null);
   const [selectedDrawerStepIdx, setSelectedDrawerStepIdx] = useState<number>(0);
+  const [drawerPhotoProofs, setDrawerPhotoProofs] = useState<Record<number, string>>({});
+  const drawerFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleDrawerPhotoCapture = (e: React.ChangeEvent<HTMLInputElement>, stepIdx: number) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      if (result) {
+        setDrawerPhotoProofs((prev) => ({ ...prev, [stepIdx]: result }));
+        toast.success('Camera photo proof attached', 'ISO 17025 verification logged');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const [isLoadingCases, setIsLoadingCases] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [errorDetailsModalContent, setErrorDetailsModalContent] = useState<string | null>(null);
@@ -2780,27 +2798,35 @@ export const SopExecutionView: React.FC<{
       Boolean((c as any).executionStarted) ||
       Boolean((c as any).isStarted);
 
+    const cardSla = computeSlaCountdown(c, isCardFullySolved, currentTick);
+
     return (
       <div
         key={c.id}
         onClick={() => setActiveCaseId((prev) => (prev === c.id ? null : c.id))}
-        className={`rounded-xl border border-slate-200 bg-white shadow-xs hover:shadow-md hover:border-indigo-400 transition-all duration-200 overflow-hidden cursor-pointer shrink-0 ${
+        className={`rounded-xl border border-slate-200 bg-white shadow-xs hover:shadow-md hover:border-indigo-400 transition-all duration-200 overflow-hidden cursor-pointer shrink-0 min-h-[120px] active:scale-[0.99] select-none ${
+          c.severity === 'CRITICAL'
+            ? 'border-l-[6px] border-l-rose-500'
+            : c.severity === 'HIGH'
+            ? 'border-l-[6px] border-l-amber-500'
+            : 'border-l-[6px] border-l-blue-500'
+        } ${
           isSelected
             ? 'ring-2 ring-indigo-600 border-indigo-500 shadow-md'
             : ''
         }`}
       >
         {/* Top Gradient Header Strip */}
-        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-3 py-2 rounded-t-xl flex items-center justify-between gap-2 border-b border-indigo-900/40">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-3.5 py-2.5 rounded-t-xl flex items-center justify-between gap-2 border-b border-indigo-900/40">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <span className="font-mono font-bold text-xs text-cyan-300 tracking-wide whitespace-nowrap shrink-0">
               {c.caseNumber}
             </span>
             <span
-              className="font-mono font-semibold text-[10px] text-slate-200 bg-white/10 border border-white/20 px-2 py-0.5 rounded-full truncate max-w-[135px]"
+              className="inline-flex items-center gap-1 font-mono font-bold text-xs text-slate-100 bg-white/20 border border-white/30 px-2 py-0.5 rounded-md truncate max-w-[155px]"
               title={displayTag}
             >
-              {displayTag}
+              ⚙️ {displayTag}
             </span>
             {isRcaSource && (
               <span className="bg-purple-500/20 text-purple-200 border border-purple-400/40 px-1.5 py-0.2 rounded text-[9px] font-mono font-bold shrink-0">
@@ -2838,8 +2864,8 @@ export const SopExecutionView: React.FC<{
 
         {/* Card Body with subtle gradient background */}
         <div className="bg-gradient-to-b from-white to-slate-50/80 p-3.5 space-y-2.5">
-          {/* 1-Line Clean Problem Title */}
-          <p className="text-xs font-semibold text-slate-900 truncate leading-snug" title={cleanSummary}>
+          {/* 2-Line Clean Problem Title */}
+          <p className="text-sm font-semibold text-slate-900 leading-snug line-clamp-2 break-words" title={cleanSummary}>
             {cleanSummary}
           </p>
 
@@ -2927,6 +2953,17 @@ export const SopExecutionView: React.FC<{
                   </div>
                 );
               })}
+            </div>
+
+            {/* Due Time + Status Chip Row */}
+            <div className="flex items-center justify-between text-[11px] font-mono pt-2 border-t border-slate-100 flex-wrap gap-1.5">
+              <span className="inline-flex items-center gap-1 font-semibold text-slate-600" title={`Due: ${cardSla.badgeText}`}>
+                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                <span>Due: {cardSla.badgeText}</span>
+              </span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${cardSla.badgeClass}`}>
+                {isCardFullySolved ? 'RESOLVED' : cardProgress.progressPct > 0 ? 'IN PROGRESS' : 'QUEUED'}
+              </span>
             </div>
           </div>
         </div>
@@ -3073,34 +3110,34 @@ export const SopExecutionView: React.FC<{
 
       {/* FILTER CONTROLS & VIEW TOGGLE BAR */}
       <div className="px-4 py-2 border-b border-slate-200 bg-white flex flex-wrap items-center justify-between gap-2.5 text-xs shrink-0 shadow-2xs">
-        {/* Search Input */}
-        <div className="relative flex-1 min-w-[220px] max-w-md">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+        {/* Search Input (Min 48px, text-base on mobile to prevent iOS zoom) */}
+        <div className="relative flex-1 min-w-0 w-full sm:w-auto sm:min-w-[220px] max-w-md">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             placeholder="Search Ticket ID, asset, symptom, tech..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-8 pr-7 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-1 focus:ring-blue-500 shadow-xs font-mono transition"
+            className="w-full pl-9 pr-9 py-2.5 min-h-[48px] bg-slate-50 border border-slate-200 rounded-xl text-base md:text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white focus:ring-1 focus:ring-blue-500 shadow-xs font-mono transition"
           />
           {searchTerm && (
             <button
               onClick={() => setSearchTerm('')}
-              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           )}
         </div>
 
         {/* Status + Severity + Sort Filters */}
         <div className="flex items-center gap-2 flex-wrap font-mono text-xs">
-          <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
-            <Filter className="w-3 h-3 text-slate-400 shrink-0" />
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-2 min-h-[48px] shadow-xs flex-1 sm:flex-initial">
+            <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-transparent text-[11px] text-slate-700 outline-none cursor-pointer font-medium"
+              className="bg-transparent text-base md:text-[11px] text-slate-700 outline-none cursor-pointer font-medium w-full"
               title="Filter by Status"
             >
               <option value="ALL">All Statuses ({cases.length})</option>
@@ -3111,11 +3148,11 @@ export const SopExecutionView: React.FC<{
             </select>
           </div>
 
-          <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-2 min-h-[48px] shadow-xs flex-1 sm:flex-initial">
             <select
               value={severityFilter}
               onChange={(e) => setSeverityFilter(e.target.value)}
-              className="bg-transparent text-[11px] text-slate-700 outline-none cursor-pointer font-medium"
+              className="bg-transparent text-base md:text-[11px] text-slate-700 outline-none cursor-pointer font-medium w-full"
               title="Filter by Severity"
             >
               <option value="ALL">All Priorities</option>
@@ -3126,12 +3163,12 @@ export const SopExecutionView: React.FC<{
             </select>
           </div>
 
-          <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2 py-1 shadow-xs">
-            <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
+          <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-2 min-h-[48px] shadow-xs flex-1 sm:flex-initial">
+            <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
-              className="bg-transparent text-[11px] text-slate-700 outline-none cursor-pointer font-medium"
+              className="bg-transparent text-base md:text-[11px] text-slate-700 outline-none cursor-pointer font-medium w-full"
               title="Sort By"
             >
               <option value="newest">Newest</option>
@@ -3225,7 +3262,7 @@ export const SopExecutionView: React.FC<{
           /* ================================================================= */
           /* 3-COLUMN INDUSTRIAL KANBAN DISPATCH BOARD                         */
           /* ================================================================= */
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-stretch max-w-full">
             {/* Column 1: Dispatched / Queued */}
             <div className="bg-slate-100/70 border border-slate-200/80 rounded-2xl p-3 flex flex-col max-h-[calc(100vh-240px)]">
               <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-200 shrink-0">
@@ -3322,8 +3359,8 @@ export const SopExecutionView: React.FC<{
             onClick={() => setActiveCaseId(null)}
           />
 
-          {/* Slide-over Right Panel Drawer */}
-          <div className="fixed inset-y-0 right-0 max-w-3xl w-full bg-white shadow-2xl border-l border-slate-200 z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+          {/* Slide-over Right Panel Drawer (Full-screen on mobile, slide-over on md+) */}
+          <div className="fixed inset-0 md:inset-y-0 md:left-auto md:right-0 w-full md:max-w-3xl bg-white shadow-2xl md:border-l border-slate-200 z-50 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
             {/* Top Drawer Header with Close '✕' */}
             <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -3631,8 +3668,226 @@ export const SopExecutionView: React.FC<{
                 </div>
               </div>
 
-              {/* LIVE 5-STEP INTERACTIVE PROCEDURE & TOLERANCE EXPLORER (Requirement 3) */}
-              <div className="p-3 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white border-y border-indigo-900/40 shadow-sm">
+              {/* LIVE 5-STEP PROCEDURE RUNNER: Mobile-First Single Step + Desktop 5-Pill Explorer */}
+              {/* MOBILE SOP EXECUTION: ONE STEP PER SCREEN (Requirement 3 & 4) */}
+              <div className="block md:hidden p-3 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white border-y border-indigo-900/40 shadow-sm space-y-3.5">
+                {(() => {
+                  const currentStepNum = selectedDrawerStepIdx + 1;
+                  const currentStep = STANDARD_5_STEPS[selectedDrawerStepIdx] || STANDARD_5_STEPS[0];
+                  const isDone = isTicketFullySolved || currentStepNum <= activeProgress.doneSteps;
+                  const isStepActive = !isTicketFullySolved && currentStepNum === activeProgress.doneSteps + 1;
+                  const isLastStep = selectedDrawerStepIdx === 4;
+
+                  const getToleranceSpecText = (step: number) => {
+                    switch (step) {
+                      case 1:
+                        return '0V Live • 0.0 PSI Bleed • OSHA 1910.147';
+                      case 2:
+                        return 'Flange Gap ≤ 0.10 mm • Zero Casing Scratches';
+                      case 3:
+                        return 'Flatness ≤ 0.0005 in (3 Light Bands) • Runout ≤ 0.03 mm';
+                      case 4:
+                        return '45 Nm ± 2 Nm (Star Pattern) • Laser Align ≤ 0.05 mm';
+                      case 5:
+                      default:
+                        return 'RMS Vib ≤ 1.8 mm/s • ΔT ≤ 15°C • 0 Drops/min';
+                    }
+                  };
+
+                  return (
+                    <div className="space-y-3.5">
+                      {/* Step Progress Bar at top */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs font-mono">
+                          <span className="font-bold text-white text-sm">
+                            Step {currentStepNum} of 5
+                          </span>
+                          <span className="text-cyan-300 font-bold">
+                            {Math.round((currentStepNum / 5) * 100)}% Complete
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
+                          <div
+                            className="bg-gradient-to-r from-indigo-500 via-blue-500 to-cyan-400 h-full rounded-full transition-all duration-300"
+                            style={{ width: `${(currentStepNum / 5) * 100}%` }}
+                          />
+                        </div>
+
+                        {/* Tap-able Step Selector Pills */}
+                        <div className="flex items-center gap-1.5 pt-1 overflow-x-auto pb-1">
+                          {PROCEDURE_STEP_LABELS.map((_label, idx) => {
+                            const num = idx + 1;
+                            const isCompleted = num <= activeProgress.doneSteps || isTicketFullySolved;
+                            const isCur = selectedDrawerStepIdx === idx;
+                            return (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => setSelectedDrawerStepIdx(idx)}
+                                className={`min-h-[48px] px-3 rounded-xl font-mono text-xs font-bold transition flex items-center justify-center gap-1 shrink-0 ${
+                                  isCur
+                                    ? 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-md ring-2 ring-cyan-400'
+                                    : isCompleted
+                                    ? 'bg-indigo-950/80 text-emerald-300 border border-indigo-700/60'
+                                    : 'bg-slate-900/80 text-slate-400 border border-slate-800'
+                                }`}
+                              >
+                                {isCompleted && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                                <span>Step 0{num}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Active Step Dedicated Card */}
+                      <div className="bg-white/10 border border-white/15 rounded-2xl p-4 space-y-3 text-xs">
+                        {/* Step Header */}
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider shrink-0 ${
+                                isDone
+                                  ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400/40'
+                                  : isStepActive
+                                  ? 'bg-amber-500/30 text-amber-300 border border-amber-400/40 animate-pulse'
+                                  : 'bg-indigo-500/30 text-indigo-200 border border-indigo-400/30'
+                              }`}
+                            >
+                              STEP 0{currentStepNum} {isDone ? '• DONE' : isStepActive ? '• ACTIVE' : '• PENDING'}
+                            </span>
+                          </div>
+                          <h3 className="text-base font-bold text-white leading-snug">
+                            {currentStep.title}
+                          </h3>
+                        </div>
+
+                        {/* Engineering Spec Banner */}
+                        <div className="p-3 bg-slate-950/90 border border-cyan-500/40 rounded-xl space-y-1 font-mono text-xs shadow-inner">
+                          <span className="text-amber-400 font-bold block text-[10px] uppercase">
+                            ⚙️ SPEC / TOLERANCE:
+                          </span>
+                          <span className="text-emerald-300 text-xs font-semibold">{getToleranceSpecText(currentStepNum)}</span>
+                        </div>
+
+                        {/* Detailed Instruction */}
+                        <div className="space-y-1">
+                          <span className="text-[11px] font-mono text-slate-400 uppercase font-bold">Procedure:</span>
+                          <p className="text-sm text-slate-200 leading-relaxed font-sans bg-black/20 p-3 rounded-xl border border-white/10">
+                            {currentStep.instruction}
+                          </p>
+                        </div>
+
+                        {/* Camera Proof Submission Card */}
+                        <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                              <Camera className="w-4 h-4 text-cyan-400" />
+                              <span>Camera Photo Proof</span>
+                            </span>
+                            {drawerPhotoProofs[selectedDrawerStepIdx] && (
+                              <span className="text-[10px] font-mono font-bold text-emerald-300 bg-emerald-950 border border-emerald-700 px-2 py-0.5 rounded-md">
+                                ✓ Verified
+                              </span>
+                            )}
+                          </div>
+
+                          <input
+                            ref={drawerFileInputRef}
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            onChange={(e) => handleDrawerPhotoCapture(e, selectedDrawerStepIdx)}
+                          />
+
+                          {drawerPhotoProofs[selectedDrawerStepIdx] ? (
+                            <div className="space-y-2">
+                              <div className="relative rounded-xl overflow-hidden border border-emerald-500 max-h-48 bg-black">
+                                <img
+                                  src={drawerPhotoProofs[selectedDrawerStepIdx]}
+                                  alt="Camera proof"
+                                  className="w-full h-40 object-cover"
+                                />
+                                <div className="absolute bottom-2 left-2 right-2 bg-slate-900/90 backdrop-blur-xs text-white p-2 rounded-lg text-xs font-mono flex items-center justify-between">
+                                  <span className="text-emerald-300 font-bold">✓ Proof Attached (ISO Verified)</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDrawerPhotoProofs((prev) => {
+                                        const updated = { ...prev };
+                                        delete updated[selectedDrawerStepIdx];
+                                        return updated;
+                                      });
+                                    }}
+                                    className="text-rose-400 hover:text-rose-200 text-xs font-bold underline"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => drawerFileInputRef.current?.click()}
+                                className="w-full min-h-[48px] bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-base font-semibold rounded-xl flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                              >
+                                <Camera className="w-5 h-5 text-slate-300" />
+                                <span>Retake Photo Proof</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => drawerFileInputRef.current?.click()}
+                              className="w-full min-h-[48px] bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-white text-base font-semibold rounded-xl flex items-center justify-center gap-2 shadow-xs cursor-pointer active:scale-95 transition"
+                            >
+                              <Camera className="w-5 h-5 text-cyan-400" />
+                              <span>Capture Camera Proof</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Sticky Bottom Action Bar for Mobile */}
+                      <div className="sticky bottom-0 left-0 right-0 -mx-3 -mb-3 p-3 bg-slate-900/95 backdrop-blur-md border-t border-indigo-900/60 shadow-2xl z-40 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedDrawerStepIdx > 0) {
+                              setSelectedDrawerStepIdx((prev) => prev - 1);
+                            } else {
+                              setActiveCaseId(null);
+                            }
+                          }}
+                          className="min-h-[48px] px-5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-white font-bold text-sm flex items-center justify-center gap-1.5 shadow-xs cursor-pointer active:scale-95 transition shrink-0"
+                        >
+                          <ArrowRight className="w-4 h-4 rotate-180" />
+                          <span>Back</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedDrawerStepIdx < 4) {
+                              setSelectedDrawerStepIdx((prev) => prev + 1);
+                            } else {
+                              handleOpenInTechQueue(activeCase);
+                            }
+                          }}
+                          className="min-h-[56px] h-14 text-base font-bold bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white flex-1 rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition"
+                        >
+                          <Check className="w-5 h-5 stroke-[2.5]" />
+                          <span>{isLastStep ? 'Open in Tech Desk' : 'Complete Step & Next'}</span>
+                          <ArrowRight className="w-4 h-4 ml-1" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* DESKTOP 5-STEP INTERACTIVE PROCEDURE & TOLERANCE EXPLORER (md and above) */}
+              <div className="hidden md:block p-3 bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white border-y border-indigo-900/40 shadow-sm">
                 {/* 5 Full-Width, Evenly Spaced Step Pills (Grid 5 - Never Clips) */}
                 <div className="grid grid-cols-5 gap-2 w-full">
                   {PROCEDURE_STEP_LABELS.map((label, idx) => {

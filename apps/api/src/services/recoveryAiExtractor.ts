@@ -19,6 +19,7 @@ import type {
 import { PromptDefenseService } from '../ai/promptSanitizer.js';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { getLlmProvider } from '../providers/llm/index.js';
 
 export interface ExtractionCandidateClaim {
   fieldName: string;
@@ -230,15 +231,7 @@ export class RecoveryAiExtractor {
     documentText: string,
     document: { documentNumber: string; title: string }
   ): Promise<ExtractionCandidateClaim[]> {
-    const apiKey =
-      process.env.GEMINI_API_KEY ||
-      config.CLOUD_AI_API_KEY ||
-      process.env.CLOUD_AI_API_KEY ||
-      process.env.LLM_API_KEY;
-
-    if (!apiKey || apiKey === 'saas_mock_key' || apiKey.includes('***')) {
-      return [];
-    }
+    const provider = getLlmProvider();
 
     const prompt = `You are an expert industrial engineering AI analyzing an equipment manual to extract verified nameplate data and operating limits.
 
@@ -288,60 +281,30 @@ Return ONLY valid JSON matching this schema:
   ]
 }`;
 
-    const modelsToTry = [
-      config.CLOUD_AI_MODEL || 'gemini-2.5-flash',
-      'gemini-1.5-flash',
-    ];
+    try {
+      const response = await provider.generate(prompt, {
+        jsonMode: true,
+        timeoutMs: 4000,
+      });
 
-    for (const model of modelsToTry) {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: {
-                temperature: 0.1,
-                responseMimeType: 'application/json',
-              },
-            }),
-            signal: AbortSignal.timeout(3500),
-          }
-        );
-
-        if (response.ok) {
-          const json: any = await response.json();
-          const rawOutput = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (rawOutput) {
-            const parsed = JSON.parse(rawOutput);
-            if (Array.isArray(parsed.claims) && parsed.claims.length > 0) {
-              return parsed.claims.map((c: any) => ({
-                fieldName: String(c.fieldName),
-                displayName: String(c.displayName || c.fieldName),
-                claimValue: c.claimValue,
-                unit: c.unit || null,
-                confidence: (c.confidence as ClaimConfidence) || 'HIGH',
-                isSafetyCritical: Boolean(c.isSafetyCritical),
-                sourcePageNumber: typeof c.sourcePageNumber === 'number' ? c.sourcePageNumber : 1,
-                applicabilityStatus: (c.applicabilityStatus as ClaimApplicability) || 'APPLICABLE',
-                notes: c.notes || `AI extracted with ${model}`,
-              }));
-            }
-          }
-        } else if (response.status === 400 || response.status === 401 || response.status === 403) {
-          // Invalid API key or permission denied - break immediately rather than hanging on other models
-          logger.warn(
-            { status: response.status, model },
-            'Gemini API key rejected or unauthorized; switching to heuristic extraction'
-          );
-          break;
+      if (response) {
+        const parsed = JSON.parse(response.replace(/```json|```/g, '').trim());
+        if (Array.isArray(parsed.claims) && parsed.claims.length > 0) {
+          return parsed.claims.map((c: any) => ({
+            fieldName: String(c.fieldName),
+            displayName: String(c.displayName || c.fieldName),
+            claimValue: c.claimValue,
+            unit: c.unit || null,
+            confidence: (c.confidence as ClaimConfidence) || 'HIGH',
+            isSafetyCritical: Boolean(c.isSafetyCritical),
+            sourcePageNumber: typeof c.sourcePageNumber === 'number' ? c.sourcePageNumber : 1,
+            applicabilityStatus: (c.applicabilityStatus as ClaimApplicability) || 'APPLICABLE',
+            notes: c.notes || `AI extracted with ${provider.name}`,
+          }));
         }
-      } catch (err: any) {
-        logger.debug({ err: err?.message, model }, 'Gemini API call timed out or failed; proceeding to fallback');
-        break;
       }
+    } catch (err: any) {
+      logger.debug({ err: err?.message, provider: provider.name }, 'LlmProvider extraction timed out or failed; proceeding to fallback');
     }
 
     return [];

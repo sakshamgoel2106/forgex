@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { RuntimeConfigProvider } from './lib/RuntimeConfig';
 import { AuthProvider, useAuth } from './lib/AuthContext';
 import { ToastProvider } from './lib/ToastContext';
 import { PlantProvider } from './lib/PlantContext';
 import { AppShell } from './components/layout/AppShell';
 import type { NavModule } from './components/layout/Sidebar';
 import { ShieldAlert, ArrowRight } from 'lucide-react';
+import { setupBackButtonHandler } from './lib/platform';
 
 import { OverviewView } from './components/views/OverviewView';
 import { AssetDirectoryView } from './components/views/AssetDirectoryView';
@@ -23,6 +25,9 @@ import { TechnicianWorkspaceView } from './components/views/TechnicianWorkspaceV
 import { ReportsAnalyticsView } from './components/views/ReportsAnalyticsView';
 import { NotificationsFeedView } from './components/views/NotificationsFeedView';
 import { OemEscalationsView } from './components/views/OemEscalationsView';
+import { MachineScanView } from './components/mobile/MachineScanView';
+import { MobileLotoView } from './components/mobile/MobileLotoView';
+import { QrPrintView } from './components/views/QrPrintView';
 
 export function getDefaultModuleForRole(role?: string): NavModule {
   switch (role) {
@@ -82,19 +87,39 @@ const AppContent: React.FC = () => {
       const path = window.location.pathname + window.location.hash;
       if (path.includes('ai-copilot')) return 'copilot';
       if (path.includes('troubleshooting')) return 'troubleshooting';
+      if (path.includes('loto')) return 'loto';
+      if (path.includes('scan')) return 'scan';
+
+      const isMobile = window.innerWidth < 768;
+      let cachedRole: string | undefined;
+      try {
+        const mem = localStorage.getItem('forgex_membership');
+        if (mem) cachedRole = JSON.parse(mem).role;
+      } catch {}
+
+      if (isMobile && (cachedRole === 'TECHNICIAN' || cachedRole === 'WORKER')) {
+        return 'tech';
+      }
     }
     return 'overview';
   };
 
   const [activeModule, setActiveModule] = useState<NavModule>(getInitialModule());
   const [navTargetId, setNavTargetId] = useState<string | undefined>(undefined);
+  const [copilotTargetAsset, setCopilotTargetAsset] = useState<string | undefined>(undefined);
+  const [manualsTargetAsset, setManualsTargetAsset] = useState<string | undefined>(undefined);
 
   const role = membership?.role || (() => { if (typeof window !== 'undefined') { try { const mem = localStorage.getItem('forgex_membership'); if (mem) return JSON.parse(mem).role; } catch {} } return 'VIEWER'; })();
 
-  // Role-aware automatic initial routing
+  // Role-aware automatic initial routing (Auto-land on Tasks for TECHNICIAN/WORKER on mobile)
   useEffect(() => {
     if (membership?.role) {
-      if (membership.role === 'WORKER' && activeModule === 'overview') {
+      const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+      if (isMobile && (membership.role === 'WORKER' || membership.role === 'TECHNICIAN')) {
+        if (activeModule === 'overview') {
+          setActiveModule('tech');
+        }
+      } else if (membership.role === 'WORKER' && activeModule === 'overview') {
         setActiveModule('worker');
       } else if (membership.role === 'TECHNICIAN' && activeModule === 'overview') {
         setActiveModule('tech');
@@ -154,6 +179,37 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
+  // Track navigation history for Android hardware back button
+  const [moduleHistory, setModuleHistory] = useState<NavModule[]>(() => [getInitialModule()]);
+
+  useEffect(() => {
+    setModuleHistory((prev) => {
+      if (prev[prev.length - 1] === activeModule) return prev;
+      return [...prev, activeModule];
+    });
+  }, [activeModule]);
+
+  // Handle Android hardware back button via Capacitor App plugin
+  useEffect(() => {
+    return setupBackButtonHandler(() => {
+      if (moduleHistory.length > 1) {
+        const next = [...moduleHistory];
+        next.pop(); // remove current
+        const prevMod = next[next.length - 1];
+        setModuleHistory(next);
+        setActiveModule(prevMod);
+        return true; // handled
+      }
+      const rootMod = getDefaultModuleForRole(role);
+      if (activeModule !== rootMod) {
+        setActiveModule(rootMod);
+        setModuleHistory([rootMod]);
+        return true; // handled
+      }
+      return false; // at root screen: exit app
+    });
+  }, [moduleHistory, activeModule, role]);
+
   // Persistent client-side tab caching to eliminate re-fetch lag on tab switches
   const [visitedTabs, setVisitedTabs] = useState<Set<NavModule>>(
     () => new Set([activeModule, 'copilot', 'overview', 'assets'])
@@ -194,8 +250,14 @@ const AppContent: React.FC = () => {
     return (
       <LoginView
         onSuccess={(loggedRole) => {
-          const target = getDefaultModuleForRole(loggedRole || membership?.role);
-          setActiveModule(target);
+          const effectiveRole = loggedRole || membership?.role;
+          const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+          if (isMobile && (effectiveRole === 'TECHNICIAN' || effectiveRole === 'WORKER')) {
+            setActiveModule('tech');
+          } else {
+            const target = getDefaultModuleForRole(effectiveRole);
+            setActiveModule(target);
+          }
         }}
       />
     );
@@ -222,9 +284,9 @@ const AppContent: React.FC = () => {
       case 'machine-recovery':
         return <MachineRecoveryView onNavigateToCopilot={(_tag) => setActiveModule('copilot')} />;
       case 'knowledge-hub':
-        return <TechnicalManualsView />;
+        return <TechnicalManualsView initialAssetTag={manualsTargetAsset} />;
       case 'copilot':
-        return <CopilotWorkspaceView />;
+        return <CopilotWorkspaceView initialAssetTag={copilotTargetAsset} />;
       case 'troubleshooting':
         return (
           <TroubleshootingView
@@ -298,6 +360,30 @@ const AppContent: React.FC = () => {
         ) : (
           <RBACFallbackBanner moduleName="Security & Audit Ledger" role={role} onRedirect={setActiveModule} />
         );
+      case 'scan':
+        return (
+          <MachineScanView
+            onAskCopilot={(machine) => {
+              setCopilotTargetAsset(machine.assetTag);
+              setActiveModule('copilot');
+            }}
+            onViewManuals={(machine) => {
+              setManualsTargetAsset(machine.assetTag);
+              setActiveModule('knowledge-hub');
+            }}
+            onStartWorkOrder={(machine) => {
+              setNavTargetId(machine.id || machine.assetTag);
+              setActiveModule('maintenance');
+            }}
+            onNavigateToTech={() => setActiveModule('tech')}
+          />
+        );
+      case 'loto':
+        return (
+          <MobileLotoView
+            onComplete={() => setActiveModule('tech')}
+          />
+        );
       case 'settings':
         return <SettingsView initialTab="profile" />;
       default:
@@ -305,7 +391,8 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const isCachedTab = (tab: NavModule) => ['overview', 'assets', 'copilot'].includes(tab);
+  const isCachedTab = (tab: NavModule) =>
+    ['overview', 'assets', 'copilot', 'tech', 'scan', 'loto'].includes(tab);
 
   return (
     <AppShell activeModule={activeModule} onSelectModule={setActiveModule}>
@@ -324,7 +411,45 @@ const AppContent: React.FC = () => {
       </div>
 
       <div className={activeModule === 'copilot' ? 'h-full w-full block' : 'h-full w-full hidden'}>
-        {visitedTabs.has('copilot') && <CopilotWorkspaceView />}
+        {visitedTabs.has('copilot') && <CopilotWorkspaceView initialAssetTag={copilotTargetAsset} />}
+      </div>
+
+      <div className={(activeModule === 'tech' || activeModule === 'worker') ? 'h-full w-full block' : 'h-full w-full hidden'}>
+        {(visitedTabs.has('tech') || visitedTabs.has('worker')) && (
+          <TechnicianWorkspaceView
+            initialTicketId={navTargetId}
+            onLaunchSop={() => setActiveModule('maintenance')}
+            onNavigateToCopilot={(_tag) => setActiveModule('copilot')}
+          />
+        )}
+      </div>
+
+      <div className={activeModule === 'scan' ? 'h-full w-full block' : 'h-full w-full hidden'}>
+        {visitedTabs.has('scan') && (
+          <MachineScanView
+            onAskCopilot={(machine) => {
+              setCopilotTargetAsset(machine.assetTag);
+              setActiveModule('copilot');
+            }}
+            onViewManuals={(machine) => {
+              setManualsTargetAsset(machine.assetTag);
+              setActiveModule('knowledge-hub');
+            }}
+            onStartWorkOrder={(machine) => {
+              setNavTargetId(machine.id || machine.assetTag);
+              setActiveModule('maintenance');
+            }}
+            onNavigateToTech={() => setActiveModule('tech')}
+          />
+        )}
+      </div>
+
+      <div className={activeModule === 'loto' ? 'h-full w-full block' : 'h-full w-full hidden'}>
+        {visitedTabs.has('loto') && (
+          <MobileLotoView
+            onComplete={() => setActiveModule('tech')}
+          />
+        )}
       </div>
 
       {/* 2. Dynamic Views */}
@@ -334,14 +459,30 @@ const AppContent: React.FC = () => {
 };
 
 export const App: React.FC = () => {
+  const isQrPrintRoute =
+    typeof window !== 'undefined' &&
+    (window.location.pathname.startsWith('/qr-print') || window.location.hash.includes('qr-print'));
+
+  if (isQrPrintRoute) {
+    return (
+      <QrPrintView
+        onBack={() => {
+          window.location.href = '/';
+        }}
+      />
+    );
+  }
+
   return (
-    <ToastProvider>
-      <AuthProvider>
-        <PlantProvider>
-          <AppContent />
-        </PlantProvider>
-      </AuthProvider>
-    </ToastProvider>
+    <RuntimeConfigProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <PlantProvider>
+            <AppContent />
+          </PlantProvider>
+        </AuthProvider>
+      </ToastProvider>
+    </RuntimeConfigProvider>
   );
 };
 

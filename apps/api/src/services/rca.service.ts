@@ -3,6 +3,7 @@ import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IEmbeddingAdapter } from '../embeddings/embeddings.interface.js';
 import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import type { IMultimodalGenerationProvider } from '../ai/ai.interface.js';
+import { getLlmProvider } from '../providers/llm/index.js';
 import type {
   RcaAnalysisRequest,
   RcaSession,
@@ -255,13 +256,12 @@ export class RcaService {
     let safetyReadiness: RcaSafetyReadiness | undefined = undefined;
     let detectedFaultCode = 'ALM-DIAG-201 / Operating Tolerance Deviation';
 
-    // Attempt Gemini LLM Inference First
-    const apiKey = process.env.GEMINI_API_KEY || process.env.CLOUD_AI_API_KEY || process.env.LLM_API_KEY;
-    let geminiSuccess = false;
+    // Attempt LLM Inference via active LlmProvider (Gemini in SaaS, Ollama/OpenAI/Mock in Enterprise)
+    const provider = getLlmProvider();
+    let providerSuccess = false;
 
-    if (apiKey && apiKey !== 'saas_mock_key') {
-      try {
-        const prompt = `You are ForgeX Industrial Root Cause Analysis (RCA) Copilot.
+    try {
+      const prompt = `You are ForgeX Industrial Root Cause Analysis (RCA) Copilot.
 Given this equipment context, uploaded technical manuals, expert field notes, and field observations, perform a rigorous Root Cause Analysis.
 
 ASSET TAG: ${assetTag}
@@ -324,77 +324,55 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
   ]
 }`;
 
-        // Attempt Gemini 2.5 Flash with strict 600ms latency budget for instant synthesis
-        try {
-          const gemRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              signal: AbortSignal.timeout(600),
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: {
-                  temperature: 0.1,
-                  maxOutputTokens: 1024,
-                  responseMimeType: 'application/json',
-                },
-              }),
-            }
-          );
+      const res = await provider.generate(prompt, {
+        jsonMode: true,
+        timeoutMs: 3000,
+      });
 
-          if (gemRes.ok) {
-            const gemJson: any = await gemRes.json();
-            const rawText = gemJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (rawText) {
-              const parsed = JSON.parse(rawText);
-              if (Array.isArray(parsed.hypotheses) && parsed.hypotheses.length > 0) {
-                detectedFaultCode = parsed.detectedFaultCode || detectedFaultCode;
-                safetyReadiness = parsed.safetyReadiness;
-                hypotheses = parsed.hypotheses.map((h: any, i: number) => ({
-                  id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
-                  title: h.title,
-                  probability: Number(h.probability) || 80 - i * 15,
-                  severity: h.severity || 'HIGH',
-                  mechanismExplanation: h.mechanismExplanation,
-                  mttr: h.mttr || '45–60 mins',
-                  requiredSkill: h.requiredSkill || 'L2 Mechanical Specialist',
-                  downtimeRisk: h.downtimeRisk || 'High',
-                  fiveWhyChain: Array.isArray(h.fiveWhyChain) && h.fiveWhyChain.length > 0 ? h.fiveWhyChain : undefined,
-                  requiredTools: Array.isArray(h.requiredTools) ? h.requiredTools : [],
-                  spareParts: Array.isArray(h.spareParts) ? h.spareParts : [],
-                  verifiedSources: manualCitations.slice(i, i + 2).concat(expertCitations.slice(0, 1)),
-                  recommendedFix: h.recommendedFix,
-                  status: 'HYPOTHESIS' as const,
-                }));
+      if (res) {
+        const parsed = JSON.parse(res.replace(/```json|```/g, '').trim());
+        if (Array.isArray(parsed.hypotheses) && parsed.hypotheses.length > 0) {
+          detectedFaultCode = parsed.detectedFaultCode || detectedFaultCode;
+          safetyReadiness = parsed.safetyReadiness;
+          hypotheses = parsed.hypotheses.map((h: any, i: number) => ({
+            id: `hyp-${crypto.randomUUID().slice(0, 8)}`,
+            title: h.title,
+            probability: Number(h.probability) || 80 - i * 15,
+            severity: h.severity || 'HIGH',
+            mechanismExplanation: h.mechanismExplanation,
+            mttr: h.mttr || '45–60 mins',
+            requiredSkill: h.requiredSkill || 'L2 Mechanical Specialist',
+            downtimeRisk: h.downtimeRisk || 'High',
+            fiveWhyChain: Array.isArray(h.fiveWhyChain) && h.fiveWhyChain.length > 0 ? h.fiveWhyChain : undefined,
+            requiredTools: Array.isArray(h.requiredTools) ? h.requiredTools : [],
+            spareParts: Array.isArray(h.spareParts) ? h.spareParts : [],
+            verifiedSources: manualCitations.slice(i, i + 2).concat(expertCitations.slice(0, 1)),
+            recommendedFix: h.recommendedFix,
+            status: 'HYPOTHESIS' as const,
+          }));
 
-                if (Array.isArray(parsed.investigationSteps) && parsed.investigationSteps.length > 0) {
-                  investigationSteps = parsed.investigationSteps.map((s: any, idx: number) => ({
-                    id: `step-${idx + 1}`,
-                    stepNumber: idx + 1,
-                    name: s.name || `Field Verification Step ${idx + 1}`,
-                    instruction: s.instruction,
-                    safetyWarning: s.safetyWarning,
-                    requiresLoto: Boolean(s.requiresLoto),
-                    expectedReading: s.expectedReading,
-                    requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools : ['General Hand Tools'],
-                    status: 'PENDING' as const,
-                  }));
-                }
-                geminiSuccess = true;
-              }
-            }
+          if (Array.isArray(parsed.investigationSteps) && parsed.investigationSteps.length > 0) {
+            investigationSteps = parsed.investigationSteps.map((s: any, idx: number) => ({
+              id: `step-${idx + 1}`,
+              stepNumber: idx + 1,
+              name: s.name || `Field Verification Step ${idx + 1}`,
+              instruction: s.instruction,
+              safetyWarning: s.safetyWarning,
+              requiresLoto: Boolean(s.requiresLoto),
+              expectedReading: s.expectedReading,
+              requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools : ['General Hand Tools'],
+              status: 'PENDING' as const,
+            }));
           }
-        } catch (llmFetchErr: any) {
-          console.warn('Fast-resolving deterministic RCA output (LLM exceeded 2.5s or unavailable):', llmFetchErr?.message);
+          providerSuccess = true;
         }
-      } catch (llmErr: any) {
-        console.warn('Gemini LLM inference warning, executing dynamic synthesis fallback:', llmErr?.message);
       }
+    } catch (llmErr: any) {
+      console.warn('LlmProvider RCA inference notice, executing dynamic synthesis fallback:', llmErr?.message);
     }
 
     // 6. Dynamic Machine-Specific Synthesis Engine (Fast-resolved under 2.5s)
-    if (!geminiSuccess || hypotheses.length === 0) {
+    if (!providerSuccess || hypotheses.length === 0) {
       const sym = symptom.toLowerCase();
       const tag = assetTag.toUpperCase();
       const name = machineName.toLowerCase();

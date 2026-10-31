@@ -6,6 +6,7 @@ import type {
   InferenceMode,
 } from './ai.interface.js';
 import { logger } from '../utils/logger.js';
+import { guardedFetch } from '../utils/outboundGuard.js';
 
 export class OllamaEnterpriseAdapter implements IMultimodalGenerationProvider {
   constructor(
@@ -28,7 +29,7 @@ export class OllamaEnterpriseAdapter implements IMultimodalGenerationProvider {
       if (plantContext?.code === 'GENERAL') {
         const generalPrompt = `Technician General Engineering Inquiry: ${query}\nPlease explain the fundamental scientific or engineering principles clearly. Note that this is general knowledge and not verified for a specific plant asset.`;
         try {
-          const response = await fetch(`${this.endpoint}/api/generate`, {
+          const response = await guardedFetch(`${this.endpoint}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -100,7 +101,7 @@ Technician Question: ${query}
 Please formulate an answer citing the exact sources.`;
 
     try {
-      const response = await fetch(`${this.endpoint}/api/generate`, {
+      const response = await guardedFetch(`${this.endpoint}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
