@@ -3513,20 +3513,34 @@ export const SopExecutionView: React.FC<{
                               technicians.find((t) => (t.userId || t.id) === techId);
                             setSelectedTechName(tech?.fullName || 'Technician');
                           }}
-                          className="h-8 max-w-[280px] sm:max-w-[320px] pl-2.5 pr-7 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 hover:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-xs disabled:opacity-50 truncate"
+                          className="h-8 min-w-[340px] pl-2.5 pr-7 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 hover:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer shadow-xs disabled:opacity-50"
                         >
                           <option value="">-- Select Specialist Technician --</option>
-                          {DISPATCH_TECHNICIAN_ROSTER.map((t) => {
-                            const live = computeTechnicianLiveStatus(
-                              { fullName: t.fullName, id: t.id, userId: t.userId },
-                              cases
-                            );
-                            return (
+                          {(() => {
+                            const sortedList = [...DISPATCH_TECHNICIAN_ROSTER]
+                              .map((t) => {
+                                const live = computeTechnicianLiveStatus(
+                                  { fullName: t.fullName, id: t.id, userId: t.userId },
+                                  cases
+                                );
+                                const pendingCount = live.activeTicketsCount || 0;
+                                const isAvailable = pendingCount === 0 && live.statusType === 'AVAILABLE';
+                                return { ...t, live, pendingCount, isAvailable };
+                              })
+                              .sort((a, b) => {
+                                if (a.isAvailable && !b.isAvailable) return -1;
+                                if (!a.isAvailable && b.isAvailable) return 1;
+                                return a.pendingCount - b.pendingCount;
+                              });
+
+                            return sortedList.map((t) => (
                               <option key={t.id} value={t.id}>
-                                {t.fullName} — {t.discipline} • [{live.statusType === 'AVAILABLE' ? 'Available' : 'Busy'}] ★ {t.rating}
+                                {t.isAvailable
+                                  ? `🟢 [Available • 0 Pending] — ${t.fullName} (${t.discipline} ★ ${t.rating})`
+                                  : `🟠 [Busy • ${t.pendingCount} Tasks Pending] — ${t.fullName} (${t.discipline} ★ ${t.rating})`}
                               </option>
-                            );
-                          })}
+                            ));
+                          })()}
                         </select>
 
                         <button
@@ -4805,11 +4819,31 @@ export const SopExecutionView: React.FC<{
                 }}
                 className="w-full px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-900 focus:outline-none focus:border-blue-600 font-mono text-xs cursor-pointer shadow-xs"
               >
-                {technicians.map((t) => (
-                  <option key={t.id || t.userId} value={t.userId}>
-                    {t.fullName} ({t.role} — {t.department || 'Operations'})
-                  </option>
-                ))}
+                {(() => {
+                  const sortedTechs = [...technicians]
+                    .map((t) => {
+                      const live = computeTechnicianLiveStatus(
+                        { fullName: t.fullName, id: t.id, userId: t.userId },
+                        cases
+                      );
+                      const pendingCount = live.activeTicketsCount || 0;
+                      const isAvailable = pendingCount === 0 && live.statusType === 'AVAILABLE';
+                      return { ...t, live, pendingCount, isAvailable };
+                    })
+                    .sort((a, b) => {
+                      if (a.isAvailable && !b.isAvailable) return -1;
+                      if (!a.isAvailable && b.isAvailable) return 1;
+                      return a.pendingCount - b.pendingCount;
+                    });
+
+                  return sortedTechs.map((t) => (
+                    <option key={t.id || t.userId} value={t.userId}>
+                      {t.isAvailable
+                        ? `🟢 [Available • 0 Pending] — ${t.fullName} (${t.role} — ${t.department || 'Operations'})`
+                        : `🟠 [Busy • ${t.pendingCount} Tasks Pending] — ${t.fullName} (${t.role} — ${t.department || 'Operations'})`}
+                    </option>
+                  ));
+                })()}
               </select>
             </div>
           )}

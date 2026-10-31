@@ -667,7 +667,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
             : `Bearing Lubrication Starvation & Hydrodynamic Thermal Runaway`,
           probability: 88,
           severity: 'CRITICAL',
-          mechanismExplanation: `Localized suction pressure drop below fluid vapor pressure on ${assetTag} causes cavitation implosions and thermal seal face micro-cracking.`,
+          mechanismExplanation: `Localized suction pressure drop below fluid vapor pressure causes vapour pocket implosions and thermal micro-cracking across seal faces.`,
           mttr: '45–60 mins',
           requiredSkill: 'L2 Mechanical Rotating Equipment Specialist',
           downtimeRisk: 'Critical',
@@ -681,7 +681,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
           requiredTools: ['Digital Dial Indicator with Magnetic Base', 'Laser Alignment Tool', 'Torque Wrench 85 ft-lbs', 'IR Pyrometer'],
           spareParts: ['Cartridge Mechanical Seal Kit (API 682 Plan 11)', 'Spiral Wound 316SS Casing Gasket', 'Fluoroelastomer O-Ring Set'],
           verifiedSources: manualCitations.slice(0, 2).concat(expertCitations.slice(0, 1)),
-          recommendedFix: `Isolate suction valves, verify zero energy under LOTO, check seal faces for thermal discoloration, and replace seal cartridge if dripping.`,
+          recommendedFix: `Isolate suction valves, verify zero energy under LOTO, check seal faces for thermal discoloration, and replace the mechanical seal cartridge.`,
           status: 'HYPOTHESIS',
         });
 

@@ -1606,7 +1606,7 @@ export const TechnicalManualsView: React.FC = () => {
                   </tr>
                 ) : (
                   filteredDocs.map((doc) => {
-                    const isSelected = isSidePanelOpen && selectedDoc?.id === doc.id;
+                    const isSelected = selectedDoc?.id === doc.id;
                     const isFailed = doc.status === 'FAILED';
                     const isProcessing = doc.status === 'PROCESSING' || doc.status === 'QUEUED';
                     const is3D = doc.category === '3D_MODEL' || CAD_EXTENSIONS.some((e) => doc.mimeType?.includes(e));
@@ -1626,11 +1626,11 @@ export const TechnicalManualsView: React.FC = () => {
                         }}
                         className={`transition cursor-pointer ${
                           isSelected
-                            ? 'bg-blue-50/70 border-l-2 border-l-[#2563EB] text-[#1A202C] font-medium'
-                            : 'hover:bg-[#F8FAFC] text-[#1A202C]'
+                            ? 'bg-indigo-50/50 border-l-4 border-l-indigo-600 text-slate-900 font-medium'
+                            : 'hover:bg-slate-50/80 text-slate-800'
                         }`}
                       >
-                        <td className="py-2.5 px-4 font-mono font-semibold text-[#2563EB] flex items-center gap-2">
+                        <td className="py-3.5 px-4 font-mono font-semibold text-[#2563EB] flex items-center gap-2">
                           {is3D ? (
                             <Boxes className="w-3.5 h-3.5 text-purple-600 shrink-0" />
                           ) : isPID ? (
@@ -1640,7 +1640,7 @@ export const TechnicalManualsView: React.FC = () => {
                           )}
                           <span className="truncate max-w-[150px]">{doc.documentNumber}</span>
                         </td>
-                        <td className="py-2.5 px-4 font-medium max-w-sm text-slate-900 leading-snug">
+                        <td className="py-3.5 px-4 font-medium max-w-sm text-slate-900 leading-snug">
                           <div className="line-clamp-2 break-words text-xs font-semibold text-slate-900 hover:text-indigo-600 transition" title={displayInfo.title}>
                             {displayInfo.title}
                           </div>
@@ -1650,7 +1650,7 @@ export const TechnicalManualsView: React.FC = () => {
                             </div>
                           )}
                         </td>
-                        <td className="py-2.5 px-4">
+                        <td className="py-3.5 px-4">
                           <span
                             className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase shadow-2xs ${
                               is3D
@@ -1665,8 +1665,8 @@ export const TechnicalManualsView: React.FC = () => {
                             {doc.category}
                           </span>
                         </td>
-                        <td className="py-2.5 px-4 font-mono text-slate-500">{doc.revision}</td>
-                        <td className="py-2.5 px-4">
+                        <td className="py-3.5 px-4 font-mono text-slate-500">{doc.revision}</td>
+                        <td className="py-3.5 px-4">
                           {doc.assetTags && doc.assetTags.length > 0 && doc.assetTags[0] !== '—' ? (
                             <span className="inline-flex items-center gap-1 font-mono text-[11px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 border border-slate-300/80 shadow-2xs">
                               <span>⚙️</span>
@@ -1676,7 +1676,7 @@ export const TechnicalManualsView: React.FC = () => {
                             <span className="text-slate-400 font-mono text-xs">—</span>
                           )}
                         </td>
-                        <td className="py-2.5 px-4">
+                        <td className="py-3.5 px-4">
                           {isFailed ? (
                             <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
                               <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
@@ -1701,17 +1701,19 @@ export const TechnicalManualsView: React.FC = () => {
                             </div>
                           )}
                         </td>
-                        <td className="py-2.5 px-4 text-right">
+                        <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5 flex-nowrap" onClick={(e) => e.stopPropagation()}>
-                            {/* 🧠 AI X-Ray Deep Intelligence Inspector */}
-                            <button
-                              onClick={() => setXrayDoc(doc)}
-                              title="AI X-Ray: Inspect Operating Specs, LOTO Points & Spares"
-                              className="px-2 py-1 rounded-md bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-[10px] font-mono font-bold flex items-center gap-1 shadow-2xs transition active:scale-95 cursor-pointer shrink-0"
-                            >
-                              <span>🧠</span>
-                              <span>X-Ray</span>
-                            </button>
+                            {/* ⚡ Inspect X-Ray Deep Intelligence Inspector - Only render on selected row */}
+                            {isSelected && (
+                              <button
+                                onClick={() => setXrayDoc(doc)}
+                                title="AI X-Ray: Inspect Operating Specs, LOTO Points & Spares"
+                                className="px-2.5 py-1 rounded-md bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-[11px] font-semibold flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer shrink-0"
+                              >
+                                <span>⚡</span>
+                                <span>Inspect X-Ray</span>
+                              </button>
+                            )}
 
                             {/* 3D CAD Launcher Button */}
                             {is3D && (
@@ -1826,6 +1828,14 @@ export const TechnicalManualsView: React.FC = () => {
                   <p className="text-xs text-[#64748B] mt-0.5 leading-relaxed">{selectedDoc.title}</p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setXrayDoc(selectedDoc)}
+                    className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0"
+                    title="Open AI X-Ray Deep Intelligence & Audio Brief"
+                  >
+                    <span>🧠</span>
+                    <span>AI X-Ray</span>
+                  </button>
                   <StatusBadge
                     label={selectedDoc.status}
                     tone={selectedDoc.status === 'FAILED' ? 'critical' : 'healthy'}
@@ -1888,10 +1898,31 @@ export const TechnicalManualsView: React.FC = () => {
 
               {/* Tab 1: Overview & Provenance */}
               {activeSideTab === 'METADATA' && (
-                <div className="p-4 space-y-4">
+                <div className="p-4 space-y-3.5">
+                  {/* AI X-Ray & Audio Brief Quick Action Banner */}
+                  <div className="p-3 rounded-xl bg-gradient-to-r from-amber-50 via-orange-50/60 to-rose-50/50 border border-amber-200/90 flex items-center justify-between gap-3 shadow-2xs">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>AI X-Ray Deep Intelligence &amp; Audio Brief</span>
+                      </div>
+                      <p className="text-[11px] text-amber-900/80 mt-0.5 leading-snug">
+                        Extracted Operating Specs, LOTO Rules, Spares &amp; Multilingual Voice Readout.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setXrayDoc(selectedDoc)}
+                      className="px-3.5 py-2 rounded-lg bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0"
+                      title="Inspect Operating Specs, LOTO Points & Spares"
+                    >
+                      <span>🧠</span>
+                      <span>AI X-Ray &amp; Audio Brief</span>
+                    </button>
+                  </div>
+
                   {/* Quick Action CAD / P&ID Launchers */}
                   {(selectedDoc.category === '3D_MODEL' || CAD_EXTENSIONS.some((e) => selectedDoc.mimeType?.includes(e))) && (
-                    <div className="p-3 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-between">
+                    <div className="p-3 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-between gap-2">
                       <div>
                         <div className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
                           <Boxes className="w-4 h-4 text-purple-700" /> Genuine 3D CAD Asset
@@ -1900,12 +1931,22 @@ export const TechnicalManualsView: React.FC = () => {
                           Interactive WebGL inspection with mesh hierarchy
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleOpen3dViewer(selectedDoc)}
-                        className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-sm transition"
-                      >
-                        Launch 3D Viewer
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => setXrayDoc(selectedDoc)}
+                          className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer flex items-center gap-1"
+                          title="Open AI X-Ray Inspector"
+                        >
+                          <span>🧠</span>
+                          <span>X-Ray</span>
+                        </button>
+                        <button
+                          onClick={() => handleOpen3dViewer(selectedDoc)}
+                          className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold shadow-sm transition cursor-pointer"
+                        >
+                          Launch 3D Viewer
+                        </button>
+                      </div>
                     </div>
                   )}
 

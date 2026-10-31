@@ -1547,22 +1547,22 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
             >
               {/* Header: Signature Deep Navy-to-Indigo Gradient Banner */}
               <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white p-4 sm:p-5 rounded-t-2xl shrink-0 space-y-1.5 border-b border-indigo-950 w-full overflow-x-hidden">
-                {/* Row 1: Left: Machine, Category, Severity pills | Right: Edit, Delete, Close */}
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2 flex-wrap">
+                {/* Row 1: Left: Machine, Category, Severity pills | Right: Edit, Delete, Close — strictly on ONE horizontal line */}
+                <div className="flex items-center justify-between gap-2 w-full flex-nowrap overflow-hidden">
+                  <div className="flex items-center gap-1.5 flex-nowrap shrink-0 overflow-x-auto">
                     {rawTags.map((tag, idx) => (
                       <span
                         key={idx}
-                        className="text-xs font-mono font-bold text-slate-100 bg-slate-800/90 border border-slate-700 px-2.5 py-0.5 rounded-md flex items-center gap-1 shadow-2xs"
+                        className="text-[11px] font-mono font-bold text-slate-100 bg-slate-800/90 border border-slate-700 px-2 py-0.5 rounded-md flex items-center gap-1 shadow-2xs whitespace-nowrap shrink-0"
                       >
-                        <Cpu className="w-3.5 h-3.5 text-indigo-400" />
+                        <Cpu className="w-3 h-3 text-indigo-400" />
                         <span>Machine: {formatCleanMachineName(tag)}</span>
                       </span>
                     ))}
-                    <span className="text-[11px] font-mono px-2.5 py-0.5 rounded-md border border-indigo-400/30 bg-indigo-500/20 text-indigo-200 font-bold uppercase tracking-wider">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-md border border-indigo-400/30 bg-indigo-500/20 text-indigo-200 font-bold uppercase tracking-wider whitespace-nowrap shrink-0">
                       {modalNote.category}
                     </span>
-                    <span className={`text-[11px] font-sans px-2.5 py-0.5 rounded-md border font-semibold ${getSeverityBadgeClasses(displaySeverity)}`}>
+                    <span className={`text-[10px] font-sans px-2 py-0.5 rounded-md border font-semibold whitespace-nowrap shrink-0 ${getSeverityBadgeClasses(displaySeverity)}`}>
                       {displaySeverity}
                     </span>
                   </div>
@@ -1581,7 +1581,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                             setSelectedNoteForModal(null);
                             handleOpenEdit(modalNote, e);
                           }}
-                          className="h-7 px-2.5 rounded-lg text-slate-200 hover:text-white bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-mono font-semibold flex items-center gap-1 transition-all cursor-pointer backdrop-blur-sm"
+                          className="h-7 px-2.5 rounded-lg text-slate-200 hover:text-white bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-mono font-semibold flex items-center gap-1 transition-all cursor-pointer backdrop-blur-sm whitespace-nowrap shrink-0"
                           title="Edit Note"
                         >
                           <Pencil className="w-3 h-3 text-indigo-300" />
@@ -1597,7 +1597,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                             setSelectedNoteForModal(null);
                             handleDelete(modalNote, e);
                           }}
-                          className="h-7 px-2.5 rounded-lg text-rose-300 hover:text-rose-100 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-xs font-mono font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                          className="h-7 px-2.5 rounded-lg text-rose-300 hover:text-rose-100 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-xs font-mono font-semibold flex items-center gap-1 transition-all cursor-pointer whitespace-nowrap shrink-0"
                           title="Delete Note"
                         >
                           <Trash2 className="w-3 h-3 text-rose-400" />
@@ -1614,7 +1614,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         }
                         setSelectedNoteForModal(null);
                       }}
-                      className="p-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                      className="p-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0"
                       title="Close modal"
                     >
                       <X className="w-5 h-5" />
@@ -1785,15 +1785,15 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   </div>
                 )}
 
-                {/* Bottom Action Footer: Isolated Horizontal Scroll Container for action buttons */}
-                <div className="pt-3 border-t border-slate-200 w-full overflow-x-hidden">
-                  <div className="w-full overflow-x-auto overflow-y-hidden py-1 px-1 flex items-center justify-between gap-2 flex-nowrap scroll-smooth">
+                {/* Bottom Action Footer: 1 Single Uniform Horizontal Line */}
+                <div className="pt-3 border-t border-slate-200 w-full overflow-hidden">
+                  <div className="flex items-center justify-between gap-1.5 w-full flex-nowrap overflow-x-auto py-0.5">
                     <div className="flex items-center gap-1.5 shrink-0 flex-nowrap">
                       {/* Helpful Upvote Button */}
                       <button
                         type="button"
                         onClick={(e) => handleUpvote(modalNote.id, e)}
-                        className="h-8 flex items-center gap-1 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
+                        className="h-8 px-2.5 text-xs font-medium rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 transition cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0 inline-flex items-center gap-1"
                         title="Endorse this tip as verified in plant"
                       >
                         <ThumbsUp className="w-3.5 h-3.5 text-blue-600 shrink-0" />
@@ -1804,18 +1804,18 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                       <button
                         type="button"
                         onClick={(e) => handleDislike(modalNote.id, e)}
-                        className="h-8 flex items-center gap-1 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg border border-rose-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
+                        className="h-8 px-2.5 text-xs font-medium rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 transition cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0 inline-flex items-center gap-1"
                       >
                         <ThumbsDown className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                         <span>Did Not Work ({modalNote.downvotes || 0})</span>
                       </button>
 
                       {/* 1-Click Hands-Free Voice Readout Button + Multi-Language Voice Selector */}
-                      <div className="flex items-center rounded-lg border border-indigo-200 bg-indigo-50/70 p-0.5 shrink-0">
+                      <div className="h-8 flex items-center rounded-lg border border-indigo-200 bg-indigo-50/70 p-0.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => handleToggleVoiceReadout(modalNote)}
-                          className={`h-7 px-2 rounded-md text-xs font-mono font-semibold transition-all cursor-pointer active:scale-95 flex items-center gap-1 shrink-0 ${
+                          className={`h-7 px-2 rounded-md text-xs font-medium transition cursor-pointer active:scale-95 flex items-center gap-1 shrink-0 ${
                             isSpeaking
                               ? 'bg-amber-500 text-white animate-pulse'
                               : 'hover:bg-indigo-100 text-indigo-700'
@@ -1880,7 +1880,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                       <button
                         type="button"
                         onClick={(e) => toggleReviews(modalNote.id, e)}
-                        className="h-8 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
+                        className="h-8 px-2.5 text-xs font-medium rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0 inline-flex items-center gap-1"
                       >
                         <MessageSquare className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                         <span>Feedback ({reviewsList.length})</span>
@@ -1890,16 +1890,14 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
 
                     <div className="flex items-center gap-1.5 shrink-0 flex-nowrap ml-auto">
                       {/* Copy Note Button */}
-                      <Button
-                        variant="outline"
-                        size="sm"
+                      <button
                         type="button"
                         onClick={() => handleCopyTip(modalNote)}
-                        className="h-8 px-2.5 py-1.5 text-xs font-mono flex items-center gap-1 transition-all active:scale-95 whitespace-nowrap shrink-0"
+                        className="h-8 px-2.5 text-xs font-medium rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 transition cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0 inline-flex items-center gap-1"
                       >
                         <Copy className="w-3.5 h-3.5 shrink-0" />
                         <span>Copy</span>
-                      </Button>
+                      </button>
 
                       {/* Ask AI Copilot (1-Click Apply) */}
                       <button
@@ -1911,7 +1909,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                           }
                           handleAskCopilot(modalNote);
                         }}
-                        className="h-8 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1 text-xs font-mono shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
+                        className="h-8 px-2.5 text-xs font-medium rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1 shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
                         title="Load insight directly into AI Copilot"
                       >
                         <Sparkles className="w-3.5 h-3.5 text-indigo-200 shrink-0" />

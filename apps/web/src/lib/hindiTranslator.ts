@@ -207,13 +207,13 @@ export function formatCleanNoteTitle(title?: string | null, machineName?: string
     // Prefix check (e.g. "COOLING TOWER: ...")
     clean = clean.replace(new RegExp(`^${escaped}\\s*[:\\-–—]\\s*`, 'i'), '');
     // Trailing check with optional parenthetical (e.g. " on COOLING TOWER (COOLING-TOWER)")
-    clean = clean.replace(new RegExp(`\\s*(?:on|for|at|in|[-–—])\\s+${escaped}(?:\\s*\\([^)]*\\))?\\s*$`, 'i'), '');
+    clean = clean.replace(new RegExp(`\\s*(?:\\b(?:on|for|at|in)\\b|[-–—])\\s+${escaped}(?:\\s*\\([^)]*\\))?\\s*$`, 'i'), '');
     // Trailing in parentheses (e.g. " (COOLING TOWER)")
     clean = clean.replace(new RegExp(`\\s*\\(${escaped}\\)\\s*$`, 'i'), '');
   }
 
   // Generic trailing machine/asset patterns (e.g. " on COOLING TOWER...", " on PUMP-001...")
-  clean = clean.replace(/\s*(?:on|for|at|in)\s+[A-Z0-9_\-\s]+(?:\([^)]*\))?\s*$/i, '');
+  clean = clean.replace(/\s*\b(?:on|for|at|in)\b\s+[A-Z0-9_\-\s]+(?:\([^)]*\))?\s*$/i, '');
   // Generic trailing parenthetical with uppercase asset codes or model names
   clean = clean.replace(/\s*\([A-Z0-9_\-\s.]*(?:tower|pump|unit|motor|compressor|press|glb|gltf)[A-Z0-9_\-\s.]*\)\s*$/i, '');
   // Clean any trailing model or asset in parentheses e.g. " (COOLING-TOWER)"
@@ -259,8 +259,9 @@ export function cleanTriggerText(
     }
   }
 
-  // Strip repeated machine names from trigger
-  text = text.replace(/\s*(?:on|for|at|in)\s+[A-Z0-9_\-\s]+(?:\([^)]*\.glb\))?/gi, '');
+  // Strip repeated machine names from trigger (ensuring word boundaries so 'vibration' is never truncated)
+  text = text.replace(/\s*\b(?:on|for|at|in)\b\s+[A-Z0-9_\-\s]+\([^)]*\.(?:glb|gltf)[^)]*\)/gi, '');
+  text = text.replace(/\s*\b(?:on|for|at|in)\b\s+[A-Z0-9_]+-[A-Z0-9_\-]+\b/gi, '');
   text = text.replace(/\.(glb|gltf)\b/gi, '');
 
   // Strip duplicate note title if somehow embedded in symptom

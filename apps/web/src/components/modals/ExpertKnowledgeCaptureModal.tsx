@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, GraduationCap, RefreshCw, Lightbulb, X } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { Button } from '../ui/button';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
 import {
@@ -230,31 +229,30 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
         </div>
       }
       footer={
-        <div className="flex flex-col-reverse sm:flex-row items-center justify-between w-full gap-2.5 pt-2 border-t border-slate-100">
-          <Button
-            variant="outline"
-            size="sm"
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full pt-4 border-t border-slate-200">
+          <button
+            type="button"
             onClick={handleSkipOnlyHistory}
             disabled={isSubmitting}
-            className="w-full sm:w-auto text-slate-600 hover:bg-slate-100 hover:text-slate-900 text-xs font-semibold px-4 py-2 border-slate-300 cursor-pointer"
+            className="w-full h-11 px-3 text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition cursor-pointer disabled:opacity-50 truncate"
           >
-            Skip — Only Save to Maintenance History
-          </Button>
+            <span>Skip — Save to History Only</span>
+          </button>
           <button
             type="button"
             onClick={handlePublishAndClose}
             disabled={isSubmitting}
-            className="w-full sm:w-auto bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white text-xs font-semibold px-5 py-2.5 rounded-lg inline-flex items-center justify-center gap-2 shadow-md hover:shadow-lg transition cursor-pointer active:scale-95 disabled:opacity-50"
+            className="w-full h-11 px-3 text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white shadow-md hover:shadow-lg transition cursor-pointer active:scale-95 disabled:opacity-50 truncate"
           >
             {isSubmitting ? (
               <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Publishing to Expert Knowledge...</span>
+                <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
+                <span className="truncate">Publishing...</span>
               </>
             ) : (
               <>
-                <GraduationCap className="w-4 h-4" />
-                <span>Publish to Expert Knowledge & Close</span>
+                <GraduationCap className="w-4 h-4 shrink-0" />
+                <span className="truncate">🎓 Publish to Expert Knowledge</span>
               </>
             )}
           </button>

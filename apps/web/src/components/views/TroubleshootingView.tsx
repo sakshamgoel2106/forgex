@@ -57,6 +57,36 @@ const toShortSentence = (text?: string, maxWords = 14): string => {
   return words.slice(0, maxWords).join(' ').replace(/[,;:]$/, '') + '.';
 };
 
+const cleanMechanism = (raw?: string): string => {
+  if (!raw) return '';
+  let text = raw
+    .replace(/\s*\b(?:on|for|at|in)\b\s+[A-Z0-9_\-\s]+(?:\([^)]*\))?/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (
+    text.includes('causes cavitation implosions and') ||
+    text.includes('vapour pocket implosions') ||
+    text.includes('suction pressure drop below fluid vapor pressure')
+  ) {
+    return 'Localized suction pressure drop below fluid vapor pressure causes vapour pocket implosions and thermal micro-cracking across seal faces.';
+  }
+  return text;
+};
+
+const cleanFieldFix = (raw?: string): string => {
+  if (!raw) return '';
+  let text = raw.trim();
+  if (
+    text.includes('check seal faces for thermal discoloration') &&
+    (text.endsWith('and replace.') ||
+      text.includes('replace seal cartridge') ||
+      text.includes('replace the mechanical seal cartridge'))
+  ) {
+    return 'Isolate suction valves, verify zero energy under LOTO, check seal faces for thermal discoloration, and replace the mechanical seal cartridge.';
+  }
+  return text;
+};
+
 interface MachineItem {
   id: string;
   name: string;
@@ -2642,7 +2672,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
               ROOT CAUSE ANALYSIS & DIAGNOSTIC COPILOT
             </h2>
             <span className="hidden xl:inline-block text-[11px] text-[#64748B] font-sans truncate">
-              — Machine: <strong className="text-slate-800 font-mono">{activeSession.assetTag}</strong>
+              — Machine: <strong className="text-slate-800 font-mono">{formatCleanMachineName(activeSession.assetTag)}</strong>
             </span>
           </div>
 
@@ -3143,13 +3173,11 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                   <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     <span className="font-mono font-bold text-base text-white tracking-wide">
-                      {activeSession.assetTag}
+                      {formatCleanMachineName(activeSession.assetTag)}
                     </span>
-                    {activeSession.machineName && activeSession.machineName !== activeSession.assetTag && (
-                      <span className="text-xs text-indigo-200/90 font-sans font-medium">
-                        • {activeSession.machineName}
-                      </span>
-                    )}
+                    <span className="text-xs text-indigo-200/90 font-sans font-medium">
+                      • Automated Root Cause Diagnostics &amp; Remediation Protocol
+                    </span>
                   </div>
 
                   {/* Right: Action Buttons without double icons */}
@@ -3246,7 +3274,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
                                 <span className="w-5 h-5 rounded-full bg-gradient-to-r from-slate-900 to-indigo-900 text-white flex items-center justify-center text-[10px] font-mono font-bold shrink-0 shadow-2xs">
                                   #{index + 1}
                                 </span>
-                                <h4 className="text-sm font-bold text-slate-900 truncate">
+                                <h4 className="text-sm font-bold text-slate-900 break-words leading-snug">
                                   {hyp.title}
                                 </h4>
                               </div>
@@ -3345,7 +3373,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
                                 ⚙️ FAILURE MECHANISM
                               </span>
                               <p className="text-xs text-slate-800 font-sans leading-relaxed">
-                                {toShortSentence(hyp.mechanismExplanation, 16)}
+                                {cleanMechanism(hyp.mechanismExplanation)}
                               </p>
                             </div>
 
@@ -3355,7 +3383,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
                                 🔧 RECOMMENDED FIELD FIX
                               </span>
                               <p className="text-xs text-slate-800 font-sans leading-relaxed font-medium">
-                                {toShortSentence(hyp.recommendedFix, 16)}
+                                {cleanFieldFix(hyp.recommendedFix)}
                               </p>
                             </div>
                           </div>

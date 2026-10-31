@@ -1371,7 +1371,7 @@ export const MaintenanceHistoryView: React.FC<MaintenanceHistoryViewProps> = ({
                       <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-2 w-full overflow-hidden">
                         <span className="text-xs text-slate-600 font-medium shrink-0">Restart Authorized:</span>
                         <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold whitespace-nowrap shrink-0">
-                          ✓ Full Operational
+                          ✓ Authorized
                         </span>
                       </div>
 

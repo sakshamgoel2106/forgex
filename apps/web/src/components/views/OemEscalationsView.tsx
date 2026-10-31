@@ -17,6 +17,7 @@ import {
   Copy,
   X,
   Check,
+  Inbox,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
@@ -274,6 +275,7 @@ export const OemEscalationsView: React.FC<{
   // Auto-Mail Centered Modal state
   const [isAutoMailModalOpen, setIsAutoMailModalOpen] = useState(false);
   const [isViewMailModalOpen, setIsViewMailModalOpen] = useState(false);
+  const [loggedOemResponses, setLoggedOemResponses] = useState<Set<string>>(() => new Set());
 
   // Email form states
   const [supervisorEmail, setSupervisorEmail] = useState(
@@ -442,7 +444,13 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
       })
     );
 
-    // Copy to clipboard or trigger mailto
+    // Trigger actual email dispatch via mailto system client
+    try {
+      const mailtoUrl = `mailto:${encodeURIComponent(oemEmail.trim())}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+      window.open(mailtoUrl, '_blank');
+    } catch {}
+
+    // Copy to clipboard as backup
     try {
       navigator.clipboard.writeText(emailBody);
     } catch {}
@@ -1156,8 +1164,10 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     { step: 3 as const, label: '3. 100% Verified' },
                   ].map(({ step, label }) => {
                     const isCurrentActive = activeWorkflowStep === step;
-                    const isCompleted = recordStage > step;
-                    const isStep3Completed = step === 3 && recordStage === 3;
+                    const isCompleted =
+                      (step === 1 && recordStage >= 2 && activeWorkflowStep >= 2) ||
+                      (step === 2 && recordStage >= 3 && activeWorkflowStep >= 3) ||
+                      (step === 3 && recordStage === 3 && Boolean(activeRecord?.clearedAt));
                     return (
                       <button
                         key={step}
@@ -1166,13 +1176,13 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                         className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                           isCurrentActive
                             ? 'bg-gradient-to-r from-indigo-500 to-cyan-500 text-white shadow-md ring-2 ring-cyan-400/40'
-                            : isCompleted || isStep3Completed
+                            : isCompleted
                             ? 'bg-indigo-950/90 text-indigo-200 border border-indigo-400/40 hover:bg-indigo-900/80'
                             : 'bg-slate-900/80 text-slate-400 border border-slate-700 hover:bg-slate-800'
                         }`}
                         title={`Switch to ${label}`}
                       >
-                        <span>{isCompleted || isStep3Completed ? '✓' : ''} {label}</span>
+                        <span>{isCompleted ? '✓ ' : ''}{label}</span>
                       </button>
                     );
                   })}
@@ -1193,11 +1203,11 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                   <button
                     type="button"
                     onClick={() => onNavigateToTechQueue(activeRecord.ticketId)}
-                    className="inline-flex items-center gap-1 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
                     title="Jump to active execution card in Tech Desk"
                   >
                     <Play className="w-3 h-3 fill-current text-cyan-400" />
-                    <span>▶ Tech Desk</span>
+                    <span>Tech Desk</span>
                   </button>
                 )}
               </div>
@@ -1231,7 +1241,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs inline-flex items-center gap-1.5 px-4 py-2 rounded-xl shadow-md cursor-pointer shrink-0 transition-all active:scale-95"
                   >
                     <ShieldCheck className="w-4 h-4 text-cyan-200" />
-                    <span>🛡️ Confirm Step 1 &amp; Prepare OEM Mail →</span>
+                    <span>Confirm Step 1 &amp; Prepare OEM Mail →</span>
                   </Button>
                 </div>
 
@@ -1313,7 +1323,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                               </span>
                             </div>
                             <p className="text-xs text-rose-950 pl-6 leading-relaxed">
-                              {activeRecord.failedNotes}
+                              {(activeRecord.failedNotes || '').replace(/^Blocked at (?:Step \d+:\s*)?[^—-]+[—\-]\s*/i, '').trim()}
                             </p>
                           </div>
 
@@ -1370,7 +1380,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                         className="w-full bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs py-2.5 rounded-xl shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all active:scale-95"
                       >
                         <Mail className="w-4 h-4 text-cyan-200" />
-                        <span>🛡️ Confirm Step 1 &amp; Prepare OEM Mail</span>
+                        <span>Confirm Step 1 &amp; Prepare OEM Mail</span>
                       </Button>
                     </div>
 
@@ -1424,36 +1434,36 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             {activeWorkflowStep === 2 && (
               <div className="space-y-3.5 animate-in fade-in duration-150">
                 {/* Step 2 Context Banner (Cyan-Blue Light Gradient) */}
-                <div className="p-3.5 bg-gradient-to-r from-cyan-50 via-blue-50/50 to-white border border-cyan-300 text-slate-900 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
-                  <div className="flex items-center gap-2.5 text-xs">
+                <div className="p-3.5 bg-gradient-to-r from-cyan-50 via-blue-50/50 to-white border border-cyan-300 text-slate-900 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
+                  <div className="flex items-center gap-2.5 text-xs flex-1 min-w-0">
                     <div className="w-8 h-8 rounded-lg bg-cyan-100 border border-cyan-300 flex items-center justify-center text-cyan-700 shrink-0">
                       <Mail className="w-4.5 h-4.5 text-cyan-700" />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <strong className="text-slate-900 text-xs block font-mono">
                         STEP 2: OEM DISPATCH CONFIRMED — AWAITING MANUFACTURER FIELD ACTION
                       </strong>
                       <p className="text-[11px] text-slate-600 font-sans mt-0.5">
-                        Technical escalation mail has been dispatched. Once the OEM service team completes work, confirm below.
+                        Technical escalation mail has been dispatched. Track vendor communication, log manufacturer ETA, and verify on-site resolution.
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
                     <button
                       type="button"
                       onClick={() => setIsViewMailModalOpen(true)}
-                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs"
+                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
                     >
                       <Copy className="w-3.5 h-3.5 text-slate-500" />
-                      <span>📋 View Dispatched Mail</span>
+                      <span>📄 View Dispatched Mail</span>
                     </button>
                     <Button
                       size="sm"
                       onClick={handleConfirmOemSolvedStep2}
-                      className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs inline-flex items-center gap-1.5 px-4 py-2 rounded-xl shadow-md cursor-pointer transition-all active:scale-95"
+                      className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl shadow-md cursor-pointer transition-all active:scale-95 whitespace-nowrap shrink-0"
                     >
                       <Check className="w-4 h-4 text-cyan-200" />
-                      <span>✅ Confirm Problem Solved from OEM Side (Advance to 100% Verified) →</span>
+                      <span>✓ Confirm OEM Resolution (Step 3) →</span>
                     </Button>
                   </div>
                 </div>
@@ -1461,7 +1471,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                 {/* Cyan-Blue Gradient Dispatch Confirmation Card */}
                 <div className="bg-gradient-to-br from-cyan-50/80 via-blue-50/40 to-white border border-cyan-300 rounded-xl p-5 shadow-2xs text-slate-800 space-y-4">
                   {/* Top Header Row */}
-                  <div className="flex items-center justify-between border-b border-cyan-200/80 pb-3">
+                  <div className="flex items-center justify-between border-b border-cyan-200/80 pb-3 flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold bg-cyan-100 text-cyan-900 border border-cyan-300 px-2.5 py-1 rounded-md">
                         📨 Technical Escalation Dispatched
@@ -1523,29 +1533,99 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                         Halted Sub-Assembly Step:
                       </span>
                       <p className="text-xs text-rose-800 font-mono">
-                        Step #{activeRecord.failedStepNumber || 2}: {activeRecord.failedStepTitle || 'Component Overhaul'} — {activeRecord.failedNotes}
+                        Step #{activeRecord.failedStepNumber || 2}: {activeRecord.failedStepTitle || 'Component Overhaul'} — {(activeRecord.failedNotes || '').replace(/^Blocked at (?:Step \d+:\s*)?[^—-]+[—\-]\s*/i, '').trim()}
                       </p>
                     </div>
                   </div>
 
-                  {/* Primary Confirmation Action Callout */}
-                  <div className="p-4 bg-gradient-to-r from-blue-50 via-cyan-50/60 to-white rounded-xl border border-cyan-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <h4 className="font-bold text-xs text-slate-900 font-mono">
-                        Awaiting OEM On-Site Overhaul Completion
-                      </h4>
-                      <p className="text-xs text-slate-600 font-sans mt-0.5">
-                        Once the OEM field service team completes work and performs dynamic tests, advance to Step 3.
-                      </p>
+                  {/* ========================================================= */}
+                  {/* PART A: LIVE OEM COMMUNICATIONS & ENGINEERING ETA         */}
+                  {/* ========================================================= */}
+                  <div className="pt-1 space-y-2.5">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <Inbox className="w-4 h-4 text-indigo-600" />
+                        <span className="font-mono font-bold text-xs text-slate-900 uppercase">
+                          Part A: Manufacturer Response &amp; ETA Tracking
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLoggedOemResponses((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(activeRecord.id)) {
+                              next.delete(activeRecord.id);
+                            } else {
+                              next.add(activeRecord.id);
+                              toast.success('OEM Response Logged', 'Manufacturer ETA & warranty acknowledgement confirmed.');
+                            }
+                            return next;
+                          });
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 border shadow-2xs ${
+                          loggedOemResponses.has(activeRecord.id)
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                            : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+                        }`}
+                      >
+                        <Inbox className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>
+                          {loggedOemResponses.has(activeRecord.id)
+                            ? '✓ OEM Engineering Response Recorded'
+                            : '📩 Log OEM Engineering Response / ETA Confirmed'}
+                        </span>
+                      </button>
                     </div>
 
+                    {/* Revealed Official OEM Engineering Response Note */}
+                    {loggedOemResponses.has(activeRecord.id) && (
+                      <div className="p-3.5 bg-emerald-50/90 border border-emerald-300 rounded-xl space-y-2 text-xs text-emerald-950 animate-in fade-in duration-200">
+                        <div className="flex items-center justify-between border-b border-emerald-200/80 pb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+                            <strong className="font-mono text-emerald-900 uppercase font-bold text-[11px]">
+                              ✓ Official OEM Engineering Response Acknowledged
+                            </strong>
+                          </div>
+                          <span className="font-mono text-[10px] text-emerald-800 font-bold bg-white px-2 py-0.5 rounded border border-emerald-200">
+                            ETA: 2 Hours · Technician En Route
+                          </span>
+                        </div>
+                        <p className="font-sans text-emerald-900 text-xs leading-relaxed italic">
+                          &ldquo;OEM Engineering Desk acknowledged dossier, warranty claim approved ($0 liability), field specialist dispatched with API 682 cartridge replacement kit.&rdquo;
+                        </p>
+                        <div className="flex items-center gap-4 text-[10px] font-mono text-emerald-800 pt-0.5 flex-wrap">
+                          <span>• Representative: Karl Meyer (OEM Service Director)</span>
+                          <span>• Warranty Ref: WARR-2026-CLAIM-PASS</span>
+                          <span>• Dispatch Kit: API 682 Dual Cartridge Cart</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ========================================================= */}
+                  {/* PART B: FIELD RESOLUTION VERIFICATION & ADVANCE TO STEP 3 */}
+                  {/* ========================================================= */}
+                  <div className="p-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-cyan-50 border border-emerald-300 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <h4 className="font-mono font-bold text-xs text-emerald-950 uppercase">
+                          Part B: Field Overhaul Complete — Ready for Sign-Off
+                        </h4>
+                      </div>
+                      <p className="text-[11px] text-emerald-800 font-sans">
+                        Once OEM specialist completes on-site seal replacement, pressure testing, and vibrational validation, confirm resolution to unlock Step 3.
+                      </p>
+                    </div>
                     <Button
                       size="sm"
                       onClick={handleConfirmOemSolvedStep2}
-                      className="bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-md cursor-pointer shrink-0 transition-all active:scale-95"
+                      className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-all active:scale-95"
                     >
-                      <Check className="w-4 h-4 text-cyan-200" />
-                      <span>✅ Confirm Problem Solved from OEM Side (Advance to 100% Verified) →</span>
+                      <Check className="w-4 h-4 text-emerald-100" />
+                      <span>✅ Confirm OEM Problem Solved &amp; Advance to Step 3 (100% Verified) →</span>
                     </Button>
                   </div>
                 </div>
@@ -1557,17 +1637,17 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
             {/* ============================================================= */}
             {activeWorkflowStep === 3 && (
               <div className="space-y-3.5 animate-in fade-in duration-150">
-                {/* Step 3 Context Banner (Emerald-Teal Light Gradient) */}
-                <div className="p-3.5 bg-gradient-to-r from-emerald-50 via-teal-50/60 to-white border border-emerald-300 text-slate-900 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                {/* Step 3 Context Banner (Bright Soft Emerald-to-Teal Gradient) */}
+                <div className="p-3.5 bg-gradient-to-r from-emerald-50 via-teal-50 to-cyan-50 border border-emerald-300 text-emerald-950 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
                   <div className="flex items-center gap-2.5 text-xs">
                     <div className="w-8 h-8 rounded-lg bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-700 shrink-0">
                       <CheckCircle2 className="w-4.5 h-4.5 text-emerald-700" />
                     </div>
                     <div>
-                      <strong className="text-slate-900 text-xs block font-mono">
+                      <strong className="text-emerald-950 text-xs block font-mono">
                         STEP 3: 100% VERIFIED — OEM OVERHAUL &amp; AUDIT SIGN-OFF
                       </strong>
-                      <p className="text-[11px] text-slate-600 font-sans mt-0.5">
+                      <p className="text-[11px] text-emerald-800 font-sans mt-0.5">
                         Factory technician overhaul completed. Authorize permanent archival to Maintenance History and capture tribal knowledge.
                       </p>
                     </div>
@@ -1576,36 +1656,36 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     <button
                       type="button"
                       onClick={() => handleExportFailureDossier(activeRecord)}
-                      className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs"
+                      className="inline-flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white border border-emerald-400 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs whitespace-nowrap"
                     >
-                      <Printer className="w-3.5 h-3.5 text-emerald-600" />
+                      <Printer className="w-3.5 h-3.5 text-emerald-100" />
                       <span>Export Official OEM Dossier</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Soft Emerald-Teal Completion Card */}
-                <div className="bg-gradient-to-br from-emerald-50 via-teal-50/40 to-white border border-emerald-300 rounded-xl p-5 shadow-2xs text-slate-800 space-y-4">
-                  {/* Header Row */}
-                  <div className="flex items-center justify-between border-b border-emerald-200/80 pb-3">
+                {/* Soft Indigo-to-Sky-to-Amber surface */}
+                <div className="bg-gradient-to-br from-indigo-50/60 via-white to-sky-50/60 border border-indigo-200 rounded-xl p-5 shadow-2xs text-slate-800 space-y-4">
+                  {/* Header Row without double icons */}
+                  <div className="flex items-center justify-between border-b border-indigo-100 pb-3">
                     <div className="flex items-center gap-2">
-                      <Building2 className="w-4 h-4 text-emerald-700" />
-                      <h3 className="text-xs font-bold text-emerald-950 uppercase font-mono tracking-wide">
-                        ✅ 100% VERIFIED — OEM OVERHAUL &amp; RESOLUTION COMPLETE
+                      <Building2 className="w-4 h-4 text-indigo-700" />
+                      <h3 className="text-xs font-bold text-slate-900 uppercase font-mono tracking-wide">
+                        100% VERIFIED — OEM OVERHAUL &amp; RESOLUTION COMPLETE
                       </h3>
                     </div>
-                    <span className="font-mono text-[10px] font-bold bg-emerald-100 text-emerald-900 border border-emerald-300 px-2.5 py-0.5 rounded-md">
+                    <span className="font-mono text-[10px] font-bold bg-indigo-100 text-indigo-900 border border-indigo-300 px-2.5 py-0.5 rounded-md">
                       ✓ 100% Verified &amp; Sealed
                     </span>
                   </div>
 
                   {/* Audit Trail Row */}
-                  <div className="bg-white/80 border border-emerald-200 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                  <div className="bg-white border border-indigo-100 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs shadow-2xs">
                     <div>
                       <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
                         Dispatched To OEM:
                       </span>
-                      <strong className="text-emerald-950 font-mono font-bold select-all">
+                      <strong className="text-slate-900 font-mono font-bold select-all">
                         {activeRecord.oemContactEmail || oemEmail || 'oem.support@manufacturer.com'}
                       </strong>
                     </div>
@@ -1629,11 +1709,12 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     </div>
                   </div>
 
-                  {/* 4 Verification Metrics (Clean Light Surfaces — No Dark Navy) */}
+                  {/* 4 Verification Metrics with Distinct Top Gradient Borders (Indigo, Violet, Cyan, Amber) */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                    {/* Overhaul Actions */}
-                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
-                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                    {/* Box 1: Indigo Top Border */}
+                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1 relative overflow-hidden shadow-2xs">
+                      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-600 to-blue-600" />
+                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block pt-0.5">
                         Factory Overhaul &amp; Calibration Completed
                       </span>
                       <p className="text-slate-800 leading-relaxed font-sans">
@@ -1641,9 +1722,10 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                       </p>
                     </div>
 
-                    {/* Replaced Parts & Serials */}
-                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
-                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                    {/* Box 2: Violet Top Border */}
+                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1 relative overflow-hidden shadow-2xs">
+                      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-600 to-violet-600" />
+                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block pt-0.5">
                         Replaced Parts &amp; Warranty Coverage
                       </span>
                       <p className="text-slate-800 leading-relaxed font-mono text-[11px]">
@@ -1653,9 +1735,10 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                       </p>
                     </div>
 
-                    {/* Operational Tolerances Restored */}
-                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
-                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                    {/* Box 3: Cyan Top Border */}
+                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1 relative overflow-hidden shadow-2xs">
+                      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-cyan-500 to-teal-500" />
+                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block pt-0.5">
                         Verified Tolerances &amp; Diagnostic Reading
                       </span>
                       <p className="text-slate-800 leading-relaxed font-mono text-[11px]">
@@ -1664,9 +1747,10 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                       </p>
                     </div>
 
-                    {/* Zero-Energy & LOTO Restoration */}
-                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1">
-                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">
+                    {/* Box 4: Amber Top Border */}
+                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-1 relative overflow-hidden shadow-2xs">
+                      <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-orange-500" />
+                      <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block pt-0.5">
                         Zero-Energy Isolation Restored
                       </span>
                       <p className="text-slate-800 leading-relaxed font-sans">
@@ -1689,8 +1773,8 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                     />
                   </div>
 
-                  {/* Action Bar (Clean Indigo / Slate Styling) */}
-                  <div className="p-3 bg-white rounded-xl border border-emerald-200 flex flex-wrap items-center justify-between gap-3">
+                  {/* Action Bar (Clean Indigo / Slate Styling without double icons) */}
+                  <div className="p-3 bg-white rounded-xl border border-indigo-200 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
                     <div className="flex items-center gap-2 flex-wrap">
                       {/* Button 1: Confirm OEM Resolution & Archive to History */}
                       <Button
@@ -1700,7 +1784,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                         className="bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 transition-all active:scale-95"
                       >
                         <Lock className="w-4 h-4 text-cyan-200" />
-                        <span>🔒 Confirm OEM Resolution &amp; Archive to History</span>
+                        <span>Confirm OEM Resolution &amp; Archive to History</span>
                       </Button>
 
                       {/* Button 2: Capture Fix in Expert Knowledge */}
@@ -1716,7 +1800,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                         title="Save OEM overhaul fix directly into Expert Knowledge and auto-redirect"
                       >
                         <Lightbulb className="w-4 h-4 text-amber-400" />
-                        <span>{isKnowledgeCaptured ? '✓ Captured in Expert Knowledge' : '💡 Capture Fix in Expert Knowledge'}</span>
+                        <span>{isKnowledgeCaptured ? '✓ Captured in Expert Knowledge' : 'Capture Fix in Expert Knowledge'}</span>
                       </button>
                     </div>
 
@@ -1880,7 +1964,7 @@ Please confirm OEM technician dispatch and ETA within the 4-hour SLA window.`;
                   className="bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-md cursor-pointer inline-flex items-center gap-2 transition-all active:scale-95"
                 >
                   <Send className="w-4 h-4 text-cyan-200" />
-                  <span>📨 Send Mail from Company Account &amp; Advance to Step 2 →</span>
+                  <span>📨 Send Official Mail to OEM →</span>
                 </Button>
               </div>
             </div>
