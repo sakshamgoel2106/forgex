@@ -34,6 +34,11 @@ import { Modal } from '../ui/Modal';
 import { useAuth } from '../../lib/AuthContext';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
+import {
+  formatCleanMachineName,
+  formatCleanNoteTitle,
+  translateExpertNoteToHindi,
+} from '../../lib/hindiTranslator';
 
 export type ExpertCategory =
   | 'Reliability'
@@ -398,8 +403,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
   const [reviewFormData, setReviewFormData] = useState<{ [noteId: string]: ReviewDraft }>({});
   const [submittingReview, setSubmittingReview] = useState<{ [noteId: string]: boolean }>({});
 
-  // 1-Click Hands-Free Voice Readout (SpeechSynthesis) State
+  // 1-Click Hands-Free Voice Readout (SpeechSynthesis) State & Multi-Language Selector
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<'en' | 'hi'>('en');
 
   const handleToggleVoiceReadout = (note: ExpertNote) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
@@ -414,29 +420,61 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
     }
 
     window.speechSynthesis.cancel();
-    const tag = (note.machineAssetTag || note.assetTag || 'PLANT-WIDE').trim();
+    const rawTag = (note.machineAssetTag || note.assetTag || (note.machineAssetTags && note.machineAssetTags[0]) || 'PLANT_WIDE').trim();
+    const cleanMachine = formatCleanMachineName(rawTag);
+    const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
     const category = note.category || 'Reliability';
     const severity = note.severity || 'Pro-Tip';
-    const title = note.title;
-    const trigger = note.symptom ? `Observed trigger is ${note.symptom}` : 'Observed during operational inspection';
-    const task = note.taskDuringIssue ? ` during ${note.taskDuringIssue}` : '';
     const guidance = note.description || note.content || '';
     const aiInsight = getNonRedundantAiInsight(note);
-    const aiText = aiInsight
-      ? ` AI Supplemental Insight and Manual Cross-Check: ${aiInsight.replace(/[•\n]+/g, '. ').trim()}`
-      : '';
 
-    const textToSpeak = `Expert Knowledge Note for Machine ${tag}, Category ${category}, Severity ${severity}. Title: ${title}. When to apply: ${trigger}${task}. Recommended field action: ${guidance}.${aiText}`;
+    let textToSpeak = '';
+    let speechLang = 'en-US';
+
+    if (voiceLang === 'hi') {
+      speechLang = 'hi-IN';
+      const triggerText = note.symptom || (note.taskDuringIssue ? `कार्य के दौरान: ${note.taskDuringIssue}` : 'परिचालन निरीक्षण के दौरान विसंगति');
+      textToSpeak = translateExpertNoteToHindi({
+        machineName: cleanMachine,
+        title: cleanTitle,
+        trigger: triggerText,
+        taskDuringIssue: note.taskDuringIssue || undefined,
+        guidance,
+        aiInsight: aiInsight || undefined,
+      });
+    } else {
+      speechLang = 'en-US';
+      const trigger = note.symptom ? `Observed trigger is ${note.symptom}` : 'Observed during operational inspection';
+      const task = note.taskDuringIssue ? ` during ${note.taskDuringIssue}` : '';
+      const aiText = aiInsight
+        ? ` AI Supplemental Insight and Manual Cross-Check: ${aiInsight.replace(/[•\n]+/g, '. ').trim()}`
+        : '';
+      textToSpeak = `Expert Knowledge Note for ${cleanMachine}, Category ${category}, Severity ${severity}. Title: ${cleanTitle}. When to apply: ${trigger}${task}. Recommended field action: ${guidance}.${aiText}`;
+    }
 
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    utterance.rate = 0.95;
+    utterance.lang = speechLang;
+    utterance.rate = voiceLang === 'hi' ? 0.92 : 0.95;
     utterance.pitch = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voiceLang === 'hi') {
+      const hiVoice = voices.find((v) => v.lang.startsWith('hi')) || voices.find((v) => v.lang.includes('IN')) || null;
+      if (hiVoice) utterance.voice = hiVoice;
+    } else {
+      const enVoice = voices.find((v) => v.lang.startsWith('en')) || null;
+      if (enVoice) utterance.voice = enVoice;
+    }
+
     utterance.onend = () => setIsSpeaking(false);
     utterance.onerror = () => setIsSpeaking(false);
 
     setIsSpeaking(true);
     window.speechSynthesis.speak(utterance);
-    toast.info('Audio Readout Started', 'Playing hands-free equipment guidance aloud...');
+    toast.info(
+      'Audio Readout Started',
+      voiceLang === 'hi' ? 'हिंदी में एक्सपर्ट गाइडेंस सुनाई जा रही है...' : 'Playing hands-free equipment guidance aloud...'
+    );
   };
 
   useEffect(() => {
@@ -826,7 +864,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
       e.preventDefault();
       e.stopPropagation();
     }
-    const textToCopy = `[${note.title}]\nMachine: ${note.machineAssetTag || note.assetTag || 'PLANT_WIDE'}\nGuidance: ${note.description || note.content || ''}`;
+    const cleanMachine = formatCleanMachineName(note.machineAssetTag || note.assetTag || 'PLANT_WIDE');
+    const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
+    const textToCopy = `[${cleanTitle}]\nMachine: ${cleanMachine}\nGuidance: ${note.description || note.content || ''}`;
     try {
       await navigator.clipboard.writeText(textToCopy);
       toast.success('Tip Copied', 'Field guidance copied to clipboard.');
@@ -840,25 +880,26 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
       e.preventDefault();
       e.stopPropagation();
     }
-    const tag = note.machineAssetTag || note.assetTag || (note.machineAssetTags && note.machineAssetTags[0]) || 'PLANT_WIDE';
-    const prompt = `Troubleshooting guidance for ${note.title} on machine ${tag}: ${note.symptom ? `Trigger: ${note.symptom}. ` : ''}${note.description || note.content || ''}`;
+    const cleanMachine = formatCleanMachineName(note.machineAssetTag || note.assetTag || (note.machineAssetTags && note.machineAssetTags[0]) || 'PLANT_WIDE');
+    const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
+    const prompt = `Troubleshooting guidance for ${cleanTitle} on machine ${cleanMachine}: ${note.symptom ? `Trigger: ${note.symptom}. ` : ''}${note.description || note.content || ''}`;
     
     try {
       sessionStorage.setItem(
         'forgex_copilot_handoff',
         JSON.stringify({
-          assetTag: tag !== 'PLANT_WIDE' ? tag : '',
+          assetTag: cleanMachine !== 'PLANT_WIDE' ? cleanMachine : '',
           prompt,
-          issueSummary: note.title,
+          issueSummary: cleanTitle,
         })
       );
     } catch (err) {
       console.warn('Failed to save copilot handoff to sessionStorage:', err);
     }
 
-    window.dispatchEvent(new CustomEvent('open-ai-copilot', { detail: { prompt, assetTag: tag } }));
-    toast.info('Copilot Prompt Ready', `Navigating to AI Copilot with context for ${tag}...`);
-    onNavigateToCopilot?.(tag);
+    window.dispatchEvent(new CustomEvent('open-ai-copilot', { detail: { prompt, assetTag: cleanMachine } }));
+    toast.info('Copilot Prompt Ready', `Navigating to AI Copilot with context for ${cleanMachine}...`);
+    onNavigateToCopilot?.(cleanMachine);
   };
 
   // Delete Handler (Restricted to Admin/Owner only)
@@ -1137,6 +1178,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           .map((t) => t.trim())
           .filter(Boolean);
     const primaryTag = rawTags[0] || 'PLANT_WIDE';
+    const cleanMachine = formatCleanMachineName(primaryTag);
+    const cleanTitle = formatCleanNoteTitle(note.title, cleanMachine);
+    const canDeleteThisNote = canEditOrDeleteNote(note);
 
     return (
       <div
@@ -1144,46 +1188,58 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
         onClick={() => setSelectedNoteForModal(note)}
         className="rounded-xl border border-slate-200/90 bg-white hover:border-indigo-500 hover:shadow-lg transition-all duration-200 overflow-hidden group cursor-pointer flex flex-col justify-between shadow-2xs"
       >
-        {/* Top Mini-Header Strip */}
-        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-3.5 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
+        {/* Top Mini-Header Strip: Dynamic Auto-Height Flex Container */}
+        <div className="bg-gradient-to-r from-slate-950 via-indigo-950 to-slate-900 text-white px-3.5 py-2.5 flex items-start justify-between gap-2 h-auto">
+          <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5 leading-snug break-words">
             <span className="font-bold text-xs font-mono text-slate-100 flex items-center gap-1 shrink-0">
-              <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Machine: {primaryTag}</span>
+              <Cpu className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="break-words">Machine: {cleanMachine}</span>
             </span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-indigo-400/30 bg-indigo-500/20 text-indigo-200 font-bold uppercase tracking-wider truncate">
-              {note.category}
-            </span>
+            {note.category && (
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-indigo-400/30 bg-indigo-500/20 text-indigo-200 font-bold uppercase tracking-wider shrink-0">
+                {note.category}
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-1.5 shrink-0 ml-2">
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-400/30 bg-emerald-500/20 text-emerald-300 font-bold flex items-center gap-1 whitespace-nowrap">
+          <div className="shrink-0 flex items-center gap-1.5 ml-auto">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-400/30 bg-emerald-500/20 text-emerald-300 font-bold flex items-center gap-1 whitespace-nowrap shrink-0">
               <Zap className="w-2.5 h-2.5 text-emerald-400" />
               <span>{getEstTimeSaved(note).replace(' MTTR Saved', ' Saved')}</span>
             </span>
+            {canDeleteThisNote && (
+              <button
+                type="button"
+                onClick={(e) => handleDelete(note, e)}
+                className="p-1 rounded text-rose-300/80 hover:text-rose-100 hover:bg-rose-500/30 transition cursor-pointer shrink-0"
+                title="Delete Note"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
         {/* Card Body */}
         <div className="p-3.5 space-y-2 flex-1 flex flex-col justify-between">
-          {/* Crisp 1-line Note Title */}
+          {/* Crisp Note Title */}
           <h4
-            className="font-bold text-slate-900 text-sm truncate group-hover:text-indigo-600 transition-colors"
-            title={note.title}
+            className="font-bold text-slate-900 text-sm line-clamp-2 break-words group-hover:text-indigo-600 transition-colors leading-snug"
+            title={cleanTitle}
           >
-            {note.title}
+            {cleanTitle}
           </h4>
 
           {/* Structured 2-row visual summary box */}
           <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-2.5 space-y-1.5 text-xs">
-            <div className="flex items-center gap-1.5 text-amber-900">
-              <span className="font-mono text-[10px] font-bold text-amber-600 uppercase shrink-0">⚡ When to Apply:</span>
-              <span className="truncate text-slate-700 font-medium">
+            <div className="flex items-start gap-1.5 text-amber-900">
+              <span className="font-mono text-[10px] font-bold text-amber-600 uppercase shrink-0 mt-0.5">⚡ When to Apply:</span>
+              <span className="line-clamp-2 text-slate-700 font-medium break-words leading-relaxed">
                 {note.symptom ? `${note.symptom}${note.taskDuringIssue ? ` • ${note.taskDuringIssue}` : ''}` : (note.taskDuringIssue || 'Operational Anomaly / Drift')}
               </span>
             </div>
             <div className="flex items-start gap-1.5 text-slate-700">
               <span className="font-mono text-[10px] font-bold text-indigo-600 uppercase shrink-0 mt-0.5">🔧 Field Fix:</span>
-              <span className="line-clamp-1 text-slate-800 font-medium">
+              <span className="line-clamp-2 text-slate-800 font-medium break-words leading-relaxed">
                 {displayContent}
               </span>
             </div>
@@ -1456,7 +1512,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
             }}
           >
             <div
-              className="max-w-2xl w-full bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+              className="max-w-3xl w-full mx-2 sm:mx-auto bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header: Signature Deep Navy-to-Indigo Gradient Banner */}
@@ -1470,7 +1526,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         className="text-xs font-mono font-bold text-slate-100 bg-slate-800/90 border border-slate-700 px-2.5 py-0.5 rounded-md flex items-center gap-1 shadow-2xs"
                       >
                         <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-                        <span>Machine: {tag}</span>
+                        <span>Machine: {formatCleanMachineName(tag)}</span>
                       </span>
                     ))}
                     <span className="text-[11px] font-mono px-2.5 py-0.5 rounded-md border border-indigo-400/30 bg-indigo-500/20 text-indigo-200 font-bold uppercase tracking-wider">
@@ -1536,9 +1592,9 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   </div>
                 </div>
 
-                {/* Row 2: Bold Note Title */}
-                <h3 className="text-base font-bold text-white leading-snug mt-1.5">
-                  {modalNote.title}
+                {/* Row 2: Bold Note Title without redundant machine name */}
+                <h3 className="text-base font-bold text-white leading-snug mt-1.5 break-words">
+                  {formatCleanNoteTitle(modalNote.title, formatCleanMachineName(rawTags[0]))}
                 </h3>
 
                 {/* Row 3: All metadata on single non-wrapping line */}
@@ -1708,14 +1764,14 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   </div>
                 )}
 
-                {/* Bottom Action Footer on a SINGLE horizontal row without wrapping */}
-                <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-2 flex-nowrap overflow-x-auto">
-                  <div className="flex items-center gap-2 flex-nowrap shrink-0">
+                {/* Bottom Action Footer on responsive row with compact padding and zero right clipping */}
+                <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-1.5 flex-wrap sm:flex-nowrap w-full">
+                  <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap shrink-0">
                     {/* Helpful Upvote Button */}
                     <button
                       type="button"
                       onClick={(e) => handleUpvote(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1.5 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-2.5 rounded-lg border border-blue-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
+                      className="h-8 flex items-center gap-1 text-blue-700 hover:text-blue-800 font-bold bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
                       title="Endorse this tip as verified in plant"
                     >
                       <ThumbsUp className="w-3.5 h-3.5 text-blue-600 shrink-0" />
@@ -1726,41 +1782,83 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                     <button
                       type="button"
                       onClick={(e) => handleDislike(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1.5 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-2.5 rounded-lg border border-rose-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
+                      className="h-8 flex items-center gap-1 text-rose-700 hover:text-rose-800 font-bold bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg border border-rose-200 transition-all text-xs font-mono cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
                     >
                       <ThumbsDown className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                       <span>Did Not Work ({modalNote.downvotes || 0})</span>
                     </button>
 
-                    {/* 1-Click Hands-Free Voice Readout Button */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleVoiceReadout(modalNote)}
-                      className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg border text-xs font-mono font-bold transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap ${
-                        isSpeaking
-                          ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse'
-                          : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
-                      }`}
-                      title="Hands-free audio readout of trigger and field fix"
-                    >
-                      {isSpeaking ? (
-                        <>
-                          <VolumeX className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                          <span>Stop Audio</span>
-                        </>
-                      ) : (
-                        <>
-                          <Volume2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                          <span>Listen</span>
-                        </>
-                      )}
-                    </button>
+                    {/* 1-Click Hands-Free Voice Readout Button + Multi-Language Voice Selector */}
+                    <div className="flex items-center rounded-lg border border-indigo-200 bg-indigo-50/70 p-0.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleVoiceReadout(modalNote)}
+                        className={`h-7 px-2 rounded-md text-xs font-mono font-semibold transition-all cursor-pointer active:scale-95 flex items-center gap-1 ${
+                          isSpeaking
+                            ? 'bg-amber-500 text-white animate-pulse'
+                            : 'hover:bg-indigo-100 text-indigo-700'
+                        }`}
+                        title="Hands-free audio readout of trigger and field fix"
+                      >
+                        {isSpeaking ? (
+                          <>
+                            <VolumeX className="w-3.5 h-3.5 shrink-0" />
+                            <span>Stop</span>
+                          </>
+                        ) : (
+                          <>
+                            <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>Listen</span>
+                          </>
+                        )}
+                      </button>
+                      <div className="h-4 w-px bg-indigo-300/60 mx-0.5" />
+                      {/* Language Switcher Pill (EN | हिं) */}
+                      <div className="flex items-center gap-0.5 text-[10px] font-mono font-bold">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setVoiceLang('en');
+                            if (isSpeaking) {
+                              window.speechSynthesis.cancel();
+                              setIsSpeaking(false);
+                            }
+                          }}
+                          className={`px-1.5 py-0.5 rounded transition cursor-pointer ${
+                            voiceLang === 'en'
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-indigo-600 hover:bg-indigo-100/80'
+                          }`}
+                          title="English Voice Readout"
+                        >
+                          🌐 EN
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setVoiceLang('hi');
+                            if (isSpeaking) {
+                              window.speechSynthesis.cancel();
+                              setIsSpeaking(false);
+                            }
+                          }}
+                          className={`px-1.5 py-0.5 rounded transition cursor-pointer ${
+                            voiceLang === 'hi'
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-indigo-600 hover:bg-indigo-100/80'
+                          }`}
+                          title="हिंदी Voice Readout (Hindi Translation)"
+                        >
+                          🇮🇳 हिं
+                        </button>
+                      </div>
+                    </div>
 
                     {/* Worker Feedback Drawer Toggle */}
                     <button
                       type="button"
                       onClick={(e) => toggleReviews(modalNote.id, e)}
-                      className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap"
+                      className="h-8 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-mono font-medium text-slate-700 transition-all cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0"
                     >
                       <MessageSquare className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                       <span>Feedback ({reviewsList.length})</span>
@@ -1768,14 +1866,14 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0 flex-nowrap ml-auto">
+                  <div className="flex items-center gap-1.5 shrink-0 flex-nowrap ml-auto">
                     {/* Copy Note Button */}
                     <Button
                       variant="outline"
                       size="sm"
                       type="button"
                       onClick={() => handleCopyTip(modalNote)}
-                      className="h-8 px-2.5 text-xs font-mono flex items-center gap-1.5 transition-all active:scale-95 whitespace-nowrap shrink-0"
+                      className="h-8 px-2.5 py-1.5 text-xs font-mono flex items-center gap-1 transition-all active:scale-95 whitespace-nowrap shrink-0"
                     >
                       <Copy className="w-3.5 h-3.5 shrink-0" />
                       <span>Copy</span>
@@ -1791,7 +1889,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         }
                         handleAskCopilot(modalNote);
                       }}
-                      className="h-8 px-3 rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1.5 text-xs font-mono shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
+                      className="h-8 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold flex items-center gap-1 text-xs font-mono shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap shrink-0"
                       title="Load insight directly into AI Copilot"
                     >
                       <Sparkles className="w-3.5 h-3.5 text-indigo-200 shrink-0" />

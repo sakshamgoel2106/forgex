@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
 import { useToast } from '../../lib/ToastContext';
 import { apiFetch } from '../../lib/api';
+import { formatCleanMachineName, formatCleanNoteTitle } from '../../lib/hindiTranslator';
 
 export interface ExpertKnowledgePrefill {
   machineAssetTag: string;
@@ -36,16 +37,7 @@ export const PRACTICAL_CATEGORIES = [
  */
 export function sanitizeAssetTag(tag: string): string {
   if (!tag) return 'PLANT-MACHINE';
-  let cleaned = tag.trim();
-  // Strip trailing file formats that sometimes leak into tag from manual ingestion
-  cleaned = cleaned.replace(/\.(glb|gltf|pdf|step|stp|dwg)$/i, '');
-  // Fix cut off trailing dot or single letter artifact like ".G"
-  cleaned = cleaned.replace(/\.[A-Za-z0-9]{1,2}$/, '');
-  // Balance dangling opening parens
-  if (cleaned.includes('(') && !cleaned.includes(')')) {
-    cleaned = `${cleaned})`;
-  }
-  return cleaned;
+  return formatCleanMachineName(tag);
 }
 
 export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalProps> = ({
@@ -66,8 +58,9 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
 
   useEffect(() => {
     if (prefillData) {
-      setMachineAssetTag(sanitizeAssetTag(prefillData.machineAssetTag || ''));
-      setIssueTitle(prefillData.issueTitle || '');
+      const cleanMach = formatCleanMachineName(prefillData.machineAssetTag || '');
+      setMachineAssetTag(cleanMach);
+      setIssueTitle(formatCleanNoteTitle(prefillData.issueTitle || '', cleanMach));
       setCategory(prefillData.category || 'Reliability');
       setResolutionSummary(prefillData.resolutionSummary || '');
       setSymptom(prefillData.symptom || '');
@@ -107,18 +100,19 @@ export const ExpertKnowledgeCaptureModal: React.FC<ExpertKnowledgeCaptureModalPr
       return;
     }
 
-    const cleanTag = sanitizeAssetTag(machineAssetTag);
+    const cleanTag = formatCleanMachineName(machineAssetTag);
+    const cleanTitle = formatCleanNoteTitle(issueTitle, cleanTag);
 
     setIsSubmitting(true);
     try {
       const newNote = {
         id: `note-${Date.now()}`,
-        title: issueTitle.trim(),
+        title: cleanTitle,
         description: resolutionSummary.trim(),
         category: category || 'Reliability',
         severity: 'Pro-Tip / Best Practice',
         symptom: symptom.trim() || null,
-        taskDuringIssue: issueTitle.trim(),
+        taskDuringIssue: cleanTitle,
         machineAssetTag: cleanTag,
         machineAssetTags: [cleanTag],
         upvotes: 1,

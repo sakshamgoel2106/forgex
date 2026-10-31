@@ -132,3 +132,103 @@ export const HINDI_VOICE_PROMPTS = {
     `स्टेप ${num}: ${title}। निर्देश: ${instruction}। अपेक्षित स्थिति: ${expected}।`,
 };
 
+/**
+ * Strips redundant .GLB / .gltf extensions, dangling parentheticals, and repetitive tags from machine names
+ * E.g. "COOLING TOWER (COOLING-TOWER.GLB)" -> "COOLING TOWER"
+ * E.g. "COOLING TOWER (COOLING-TOWER.G" -> "COOLING TOWER"
+ * E.g. "PUMP-01.GLB" -> "PUMP-01"
+ */
+export function formatCleanMachineName(rawName?: string | null): string {
+  if (!rawName) return 'PLANT_WIDE';
+  let name = String(rawName).trim();
+  if (!name || name === 'PLANT_WIDE' || name === 'PLANT-WIDE') return 'PLANT_WIDE';
+
+  // Strip file extensions (.glb, .gltf, .obj, .fbx, .stl, or partial .g/.gl)
+  name = name.replace(/\.(glb|gltf|obj|fbx|stl|g)\b/gi, '');
+  name = name.replace(/\.(glb|gltf|obj|fbx|stl|g)\)/gi, ')');
+
+  // Strip dangling open parenthesis cut off at the end
+  name = name.replace(/\s*\([^)]{0,35}$/, '');
+
+  // If pattern is "Name (Tag)" where Name and Tag are virtually identical, keep only Name
+  const match = name.match(/^([^()]+)\s*\(([^()]+)\)?$/);
+  if (match) {
+    const left = match[1].trim();
+    const right = match[2].trim().replace(/\.(glb|gltf|obj|fbx|stl|g)$/i, '');
+    const normLeft = left.replace(/[-_\s.]+/g, '').toUpperCase();
+    const normRight = right.replace(/[-_\s.]+/g, '').toUpperCase();
+    if (normLeft === normRight || normLeft.includes(normRight) || normRight.includes(normLeft)) {
+      name = left;
+    } else {
+      name = `${left} (${right})`;
+    }
+  }
+
+  // Strip any remaining .glb or extensions
+  name = name.replace(/\.(glb|gltf|obj|fbx|stl)\b/gi, '').trim();
+  return name || 'PLANT_WIDE';
+}
+
+/**
+ * Strips duplicate machine names, prefixes like "RCA Fix: [COOLING TOWER]", and trailing machine references
+ * E.g. "RCA Fix: [COOLING TOWER (COOLING-TOWER.GLB)] Dynamic Hydraulic Cavitation & Impeller Vane Unbalance"
+ *      -> "Dynamic Hydraulic Cavitation & Impeller Vane Unbalance"
+ */
+export function formatCleanNoteTitle(title?: string | null, machineName?: string | null): string {
+  if (!title) return 'Expert Field Guidance';
+  let clean = String(title).trim();
+
+  // Strip prefixes like "RCA Fix: ", "Expert Note: ", "Field Fix: "
+  clean = clean.replace(/^(?:RCA\s*Fix|Expert\s*Note|Field\s*Fix|Troubleshooting\s*Fix)\s*:\s*/i, '');
+
+  // Strip leading brackets like "[COOLING TOWER (COOLING-TOWER.GLB)]" or "[COOLING TOWER]:"
+  clean = clean.replace(/^\[[^\]]+\]\s*:?\s*/i, '');
+
+  // If machine name is known, strip prefix "COOLING TOWER: " or trailing " on COOLING TOWER"
+  const cleanMach = machineName ? formatCleanMachineName(machineName) : '';
+  const rawMach = machineName ? String(machineName).trim() : '';
+
+  const candidates = [cleanMach, rawMach].filter((m) => m && m !== 'PLANT_WIDE');
+  for (const candidate of candidates) {
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Prefix check
+    clean = clean.replace(new RegExp(`^${escaped}\\s*[:\\-–—]\\s*`, 'i'), '');
+    // Trailing check
+    clean = clean.replace(new RegExp(`\\s*(?:on|for|at|in|[-–—])\\s+${escaped}\\s*$`, 'i'), '');
+  }
+
+  // Clean any remaining .GLB or parenthetical asset tags in title
+  clean = clean.replace(/\.(glb|gltf)\b/gi, '');
+  clean = clean.replace(/\s*\([^)]{0,35}\.glb\)/gi, '');
+  clean = clean.replace(/^\s*[:\-–—]\s*/, '').trim();
+
+  return clean || title || 'Expert Field Guidance';
+}
+
+/**
+ * Generates natural Hindi/Hinglish speech script for an Expert Knowledge Note
+ */
+export function translateExpertNoteToHindi(params: {
+  machineName: string;
+  title: string;
+  trigger?: string;
+  taskDuringIssue?: string;
+  guidance: string;
+  aiInsight?: string;
+}): string {
+  const machine = params.machineName && params.machineName !== 'PLANT_WIDE' ? params.machineName : 'उपकरण';
+  const title = params.title;
+  const trigger = params.trigger || params.taskDuringIssue || 'परिचालन निरीक्षण के दौरान विसंगति';
+  const guidance = params.guidance || 'दिशानिर्देश के अनुसार सुधारात्मक फील्ड कार्य करें।';
+
+  let script = `यह एक्सपर्ट नोट ${machine} मशीन के लिए है। विषय: ${title}। कब उपयोग करें: जब ${trigger} दिखे। सुझाया गया समाधान: ${guidance}।`;
+
+  if (params.aiInsight) {
+    const cleanAi = params.aiInsight.replace(/[•\n]+/g, '. ').trim();
+    script += ` AI सुरक्षा निर्देश: ${cleanAi}।`;
+  }
+
+  return script;
+}
+
+
