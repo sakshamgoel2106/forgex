@@ -247,6 +247,7 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
         new CustomEvent('forgex:navigate', { detail: { module: 'troubleshooting', state: ticketPayload } })
       );
       window.dispatchEvent(new CustomEvent('forgex:load_rca', { detail: ticketPayload }));
+      window.location.hash = '#troubleshooting';
     } catch {}
 
     onOpenInRca?.(selectedAssetTag, primarySymptom);

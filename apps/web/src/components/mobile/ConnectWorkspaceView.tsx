@@ -120,7 +120,10 @@ export const ConnectWorkspaceView: React.FC<ConnectWorkspaceViewProps> = ({
     forcedOrgId?: string,
     fallbackName?: string
   ) => {
-    const cleanUrl = normalizeServerUrl(targetBaseUrl);
+    let cleanUrl = normalizeServerUrl(targetBaseUrl);
+    if (cleanUrl.includes('api.forgex.industrial.ai')) {
+      cleanUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000';
+    }
     if (!cleanUrl) {
       setValidationError('Please enter a valid server URL');
       return;

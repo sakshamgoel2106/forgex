@@ -31,6 +31,7 @@ import { SecurityEventService } from './securityEvent.service.js';
 import { SpecialistRoutingService } from './specialistRouting.service.js';
 import { HistoricalFaultService } from './historicalFaultService.js';
 import { isUuid, sanitizeMachineOrAssetId, sanitizeUuid } from '../utils/uuid.js';
+import { evaluateOperationalGuardrails } from './operationalGuardrails.js';
 
 export interface RAGContext {
   organizationId: string;
@@ -299,6 +300,59 @@ export class RAGQueryEngine {
     }
 
     let targetMachineId = machine ? (sanitizeUuid(machine.id) || machine.id) : null;
+    // Pre-LLM Intent Guard: Strict Closed-Domain Industrial Refusal & Emergency Redirects
+    const guardrail = evaluateOperationalGuardrails(query, rawAssetTag || machine?.assetTag);
+    if (guardrail.type !== 'NONE') {
+      let conversation;
+      if (conversationId) {
+        conversation = await this.dataStore.getConversationById(organizationId, conversationId);
+      }
+      if (!conversation) {
+        conversation = await this.dataStore.createConversation({
+          organizationId,
+          plantId: plantId || 'GENERAL',
+          assetId: targetMachineId ?? null,
+          userId,
+          title: query.length > 50 ? `${query.slice(0, 47)}...` : query,
+        });
+      }
+
+      const userMessage = await this.dataStore.createMessage({
+        conversationId: conversation.id,
+        senderType: 'USER',
+        content: query,
+      });
+
+      const assistantMessage = await this.dataStore.createMessage({
+        conversationId: conversation.id,
+        senderType: 'ASSISTANT',
+        content: guardrail.response,
+        confidence: 'HIGH',
+        isInsufficientEvidence: false,
+      });
+
+      const safetyAlerts = (guardrail as any).safetyAlert ? [(guardrail as any).safetyAlert] : [];
+
+      return {
+        conversationId: conversation.id,
+        userMessage,
+        assistantMessage: {
+          ...assistantMessage,
+          questionMode: 'RESTRICTED_SAFETY_CRITICAL',
+          citations: [],
+          ticketId: null,
+          ticketNumber: null,
+          safetyAlerts,
+          isInsufficientEvidence: false,
+        },
+        questionMode: 'RESTRICTED_SAFETY_CRITICAL',
+        ticket: null,
+        safetyAlerts,
+        recurringFaultAnalysis: null,
+        maintenanceRecords: [],
+      };
+    }
+
     const assetId = targetMachineId || (cleanAssetId && isUuid(cleanAssetId) ? cleanAssetId : (rawAssetId && isUuid(rawAssetId) ? rawAssetId : undefined));
     const machineId = targetMachineId || (cleanMachineId && isUuid(cleanMachineId) ? cleanMachineId : (rawMachineId && isUuid(rawMachineId) ? rawMachineId : undefined));
 
@@ -1706,9 +1760,11 @@ Engineering Reviewer Rationale: "${ek.reviewRationale || 'Verified by plant reli
       !request.visionDiagnostic;
 
     if (isUnverifiedQuery) {
+      const isHindi = targetLanguage && targetLanguage.startsWith('hi');
       generationResult = {
-        answerText:
-          '⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.',
+        answerText: isHindi
+          ? `${langConfig?.insufficientEvidenceMessage || 'अधिकृत संयंत्र दस्तावेज़ों में इस प्रश्न का सुरक्षित उत्तर देने के लिए अपर्याप्त साक्ष्य हैं।'} ${langConfig?.missingRecordsMessage || 'इस मशीन के सत्यापित रिकॉर्ड में अनुरोधित विशिष्ट जानकारी उपलब्ध नहीं है।'}`
+          : '⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.',
         confidence: 'INSUFFICIENT_EVIDENCE' as const,
         isInsufficientEvidence: true,
         isUnverified: true,

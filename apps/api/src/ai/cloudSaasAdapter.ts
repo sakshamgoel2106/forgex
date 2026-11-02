@@ -165,6 +165,18 @@ State exact torque limits, pressure/temperature thresholds, LOTO isolation proto
 ### Step-by-Step Remediation Plan
 Provide numbered, unambiguous procedural steps for maintenance engineers to isolate, inspect, and rectify the issue.
 
+CLOSED DOMAIN & OUT-OF-SCOPE REFUSAL RULES:
+- You are strictly a Closed-Domain Industrial Maintenance & Engineering Assistant for active plant equipment.
+- If the user asks casual, personal, sports, weather, entertainment, cooking, jokes, consumer gadgets, non-industrial vehicles (e.g. cars), or non-industrial coding questions, respond ONLY with:
+"⚠️ Out of Operational Scope: I am the ForgeX Industrial AI Copilot, built strictly for plant machinery diagnostics, OEM manual cross-checks, and maintenance workflows. I am not designed to handle personal or non-industrial queries."
+- If the user mentions missing PPE (helmet, boots, goggles, gloves) or HR matters, respond ONLY with:
+"🛑 Scope & PPE Compliance Notice: I do not handle personal logistics or HR matters. However, per mandatory Plant EHS Policy, DO NOT enter the operational shop floor or operate machinery without certified PPE (Safety Helmet, Boots, Eye Protection). Please report to your Shift Supervisor or Plant Tool Crib immediately to obtain replacement gear."
+- If the user mentions any physical accident, human injury, electric shock, fire, explosion, or chemical spill, respond ONLY with:
+"🚨 CRITICAL PLANT EMERGENCY DETECTED: I am an automated technical diagnostic assistant and CANNOT dispatch emergency or medical personnel.
+1. PRESS THE NEAREST EMERGENCY STOP (E-STOP) IMMEDIATELY.
+2. Contact Plant EHS / Medical Emergency Response & your Shift Supervisor immediately.
+3. Do not touch energized equipment until Lockout/Tagout (LOTO) is verified."
+
 CRITICAL INSTRUCTIONS:
 1. Synthesize all retrieved evidence into the 4 structured sections above.
 2. NEVER output raw bracketed metadata tags like "[Asset: ...]", "[Document: ...]", "[OCR EXTRACTED...]", or "[Chunk ID: ...]" in your response text.
@@ -354,8 +366,12 @@ Respond in strict JSON with:
     }
 
     if (!authorizedEvidence || authorizedEvidence.length === 0) {
+      const fallbackMsg =
+        targetLang && targetLang.startsWith('hi')
+          ? `${langConfig?.insufficientEvidenceMessage || 'अधिकृत संयंत्र दस्तावेज़ों में इस प्रश्न का सुरक्षित उत्तर देने के लिए अपर्याप्त साक्ष्य हैं।'} ${langConfig?.missingRecordsMessage || 'इस मशीन के सत्यापित रिकॉर्ड में अनुरोधित विशिष्ट जानकारी उपलब्ध नहीं है।'}`
+          : "⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.";
       return {
-        answerText: "⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.",
+        answerText: fallbackMsg,
         confidence: 'INSUFFICIENT_EVIDENCE',
         isInsufficientEvidence: true,
         isUnverified: true,
@@ -466,8 +482,12 @@ Respond in strict JSON with:
 
     const matchedScored = scoredLines.filter((s) => s.matchCount > 0);
     if (matchedScored.length === 0 && expertNotes.length === 0) {
+      const fallbackMsg =
+        targetLang && targetLang.startsWith('hi')
+          ? `${langConfig?.insufficientEvidenceMessage || 'अधिकृत संयंत्र दस्तावेज़ों में इस प्रश्न का सुरक्षित उत्तर देने के लिए अपर्याप्त साक्ष्य हैं।'} ${langConfig?.missingRecordsMessage || 'इस मशीन के सत्यापित रिकॉर्ड में अनुरोधित विशिष्ट जानकारी उपलब्ध नहीं है।'}`
+          : "⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.";
       return {
-        answerText: "⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.",
+        answerText: fallbackMsg,
         confidence: 'INSUFFICIENT_EVIDENCE',
         isInsufficientEvidence: true,
         isUnverified: true,

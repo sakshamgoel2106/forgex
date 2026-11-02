@@ -2018,14 +2018,20 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                 </div>
               ) : (
                 (() => {
+                  const isEmergencyMessage = msg.content.includes('CRITICAL PLANT EMERGENCY DETECTED');
+                  const isPpeMessage = msg.content.includes('Scope & PPE Compliance Notice');
+                  const isOutOfScopeMessage = msg.content.includes('Out of Operational Scope');
                   const isUnverifiedMessage = Boolean(
-                    msg.isUnverified ||
+                    !isEmergencyMessage &&
+                    !isPpeMessage &&
+                    !isOutOfScopeMessage &&
+                    (msg.isUnverified ||
                     msg.isInsufficientEvidence ||
                     msg.confidence === 'INSUFFICIENT_EVIDENCE' ||
                     msg.content.includes('No verified information was found') ||
                     msg.content.includes('No Verified Plant Records Found') ||
                     msg.content.includes('No Verified Data Found') ||
-                    msg.content.includes('Insufficient evidence in authorized plant documentation')
+                    msg.content.includes('Insufficient evidence in authorized plant documentation'))
                   );
 
                   return (
@@ -2034,7 +2040,31 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                       {/* Status & Grounding Header */}
                       <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
                         <div className="flex items-center gap-2 flex-wrap">
-                          {isUnverifiedMessage ? (
+                          {isEmergencyMessage ? (
+                            <>
+                              <AlertTriangle className="w-4 h-4 text-rose-600 animate-pulse" />
+                              <span className="text-xs font-sans font-bold text-rose-900 tracking-wide">
+                                🚨 CRITICAL PLANT EMERGENCY
+                              </span>
+                              <StatusBadge label="MANDATORY E-STOP" tone="critical" />
+                            </>
+                          ) : isPpeMessage ? (
+                            <>
+                              <AlertTriangle className="w-4 h-4 text-amber-600" />
+                              <span className="text-xs font-sans font-bold text-amber-900 tracking-wide">
+                                🛑 SAFETY & PPE COMPLIANCE
+                              </span>
+                              <StatusBadge label="MANDATORY PLANT EHS POLICY" tone="critical" />
+                            </>
+                          ) : isOutOfScopeMessage ? (
+                            <>
+                              <AlertTriangle className="w-4 h-4 text-slate-600" />
+                              <span className="text-xs font-sans font-bold text-slate-800 tracking-wide">
+                                ⚠️ OUT OF OPERATIONAL SCOPE
+                              </span>
+                              <StatusBadge label="CLOSED INDUSTRIAL DOMAIN" tone="neutral" />
+                            </>
+                          ) : isUnverifiedMessage ? (
                             <>
                               <AlertTriangle className="w-4 h-4 text-amber-600" />
                               <span className="text-xs font-sans font-bold text-amber-900 tracking-wide">
@@ -2113,6 +2143,19 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                       </div>
                       <p className="text-amber-800 text-[11px] leading-relaxed">
                         {currentLangConfig.conflictMessage}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* High-Visibility Emergency Response Banner */}
+                  {isEmergencyMessage && (
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-rose-100 via-rose-50 to-red-100 border-2 border-rose-600 text-rose-950 text-xs space-y-2 shadow-sm animate-pulse">
+                      <div className="flex items-center gap-2 font-black tracking-wide text-rose-900 uppercase">
+                        <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                        <span>MANDATORY EMERGENCY PROTOCOL · IMMEDIATE ACTION REQUIRED</span>
+                      </div>
+                      <p className="text-[11px] text-rose-900 font-semibold leading-relaxed">
+                        Automated technical copilot cannot dispatch emergency or medical personnel. If someone is injured or equipment is in hazardous condition, press the nearest physical E-STOP immediately.
                       </p>
                     </div>
                   )}
