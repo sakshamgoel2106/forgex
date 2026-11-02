@@ -25,22 +25,27 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   private getUrlAndPath(key: string): { url: URL; targetPath: string; host: string } {
-    const cleanKey = key.replace(/^[/\\]+/, '');
+    const cleanKey = key.replace(/^[\/\\]+/, '');
+    const encodedKey = cleanKey.split('/').map((seg) => encodeURIComponent(decodeURIComponent(seg))).join('/');
     const endpointStr = this.config.endpoint || 'http://localhost:9000';
     const baseUrl = new URL(endpointStr);
+    const basePath = baseUrl.pathname.replace(/\/+$/, ''); // e.g. "/storage/v1/s3" or ""
 
-    // MinIO and local S3 require path-style: http://endpoint/bucket/key
+    // MinIO, Supabase S3, and local S3 require path-style: http://endpoint/bucket/key
     const isPathStyle =
       this.config.forcePathStyle ??
       (baseUrl.hostname === 'localhost' ||
         baseUrl.hostname === '127.0.0.1' ||
         baseUrl.hostname.includes('minio') ||
-        Boolean(baseUrl.port));
+        baseUrl.hostname.includes('supabase') ||
+        Boolean(baseUrl.port) ||
+        basePath.length > 0);
 
     if (isPathStyle) {
-      const targetPath = `/${this.config.bucket}/${cleanKey}`;
+      const targetPath = `${basePath}/${this.config.bucket}/${encodedKey}`;
+      const url = new URL(`${baseUrl.origin}${targetPath}`);
       return {
-        url: new URL(targetPath, baseUrl),
+        url,
         targetPath,
         host: baseUrl.host,
       };
@@ -48,7 +53,7 @@ export class S3StorageAdapter implements IStorageAdapter {
 
     // Virtual-hosted style: http://bucket.s3.amazonaws.com/key
     const host = `${this.config.bucket}.${baseUrl.host}`;
-    const targetPath = `/${cleanKey}`;
+    const targetPath = `${basePath}/${encodedKey}`;
     const url = new URL(`${baseUrl.protocol}//${host}${targetPath}`);
     return { url, targetPath, host };
   }
@@ -122,7 +127,7 @@ export class S3StorageAdapter implements IStorageAdapter {
           method: 'PUT',
           headers,
           body: data,
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(180000),
         });
 
         if (res.ok) {
@@ -150,19 +155,29 @@ export class S3StorageAdapter implements IStorageAdapter {
         const res = await guardedFetch(url.href, {
           method: 'GET',
           headers,
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(180000),
         });
 
         if (res.ok) {
           const arrayBuffer = await res.arrayBuffer();
-          return Buffer.from(arrayBuffer);
+          const buf = Buffer.from(arrayBuffer);
+          this.fallbackAdapter.putObject(key, buf, 'application/octet-stream').catch(() => {});
+          return buf;
+        } else {
+          logger.warn({ status: res.status, key }, 'S3/MinIO getObject returned non-200');
         }
       } catch (err: any) {
         logger.warn({ err: err?.message, key }, 'S3/MinIO getObject failed; reading from local fallback');
       }
     }
 
-    return this.fallbackAdapter.getObject(key);
+    const localBuf = await this.fallbackAdapter.getObject(key);
+    if (localBuf && localBuf.length > 0 && this.config.endpoint && this.config.accessKey && this.config.secretKey) {
+      this.putObject(key, localBuf, 'application/octet-stream').catch((e) => {
+        logger.warn({ err: e?.message, key }, 'Background sync of local object to S3 failed');
+      });
+    }
+    return localBuf;
   }
 
   public async deleteObject(key: string): Promise<void> {
@@ -186,7 +201,7 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   public async getSignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {
-    const cleanKey = key.replace(/^[/\\]+/, '');
+    const cleanKey = key.replace(/^[\/\\]+/, '');
     if (this.config.endpoint && this.config.accessKey && this.config.secretKey) {
       try {
         const { url, targetPath, host } = this.getUrlAndPath(cleanKey);
@@ -228,7 +243,7 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   public async getPresignedPutUrl(key: string, contentType: string, expiresInSeconds = 3600): Promise<string> {
-    const cleanKey = key.replace(/^[/\\]+/, '');
+    const cleanKey = key.replace(/^[\/\\]+/, '');
     if (this.config.endpoint && this.config.accessKey && this.config.secretKey) {
       try {
         const { url, targetPath, host } = this.getUrlAndPath(cleanKey);

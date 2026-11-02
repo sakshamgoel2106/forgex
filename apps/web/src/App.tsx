@@ -34,13 +34,14 @@ export function getDefaultModuleForRole(role?: string): NavModule {
     case 'ORGANIZATION_OWNER':
     case 'ORGANIZATION_ADMIN':
     case 'PLANT_MANAGER':
-      return 'overview';
-    case 'TECHNICIAN':
-    case 'WORKER':
-      return 'tech';
+    case 'SUPERVISOR':
     case 'ENGINEER':
     case 'ENGINEER_TECHNICIAN':
       return 'overview';
+    case 'TECHNICIAN':
+      return 'tech';
+    case 'WORKER':
+      return 'maintenance';
     default:
       return 'overview';
   }
@@ -90,14 +91,16 @@ const AppContent: React.FC = () => {
       if (path.includes('loto')) return 'loto';
       if (path.includes('scan')) return 'scan';
 
-      const isMobile = window.innerWidth < 768;
       let cachedRole: string | undefined;
       try {
         const mem = localStorage.getItem('forgex_membership');
         if (mem) cachedRole = JSON.parse(mem).role;
       } catch {}
 
-      if (isMobile && (cachedRole === 'TECHNICIAN' || cachedRole === 'WORKER')) {
+      if (cachedRole === 'WORKER') {
+        return 'maintenance';
+      }
+      if (cachedRole === 'TECHNICIAN') {
         return 'tech';
       }
     }
@@ -111,18 +114,23 @@ const AppContent: React.FC = () => {
 
   const role = membership?.role || (() => { if (typeof window !== 'undefined') { try { const mem = localStorage.getItem('forgex_membership'); if (mem) return JSON.parse(mem).role; } catch {} } return 'VIEWER'; })();
 
-  // Role-aware automatic initial routing (Auto-land on Tasks for TECHNICIAN/WORKER on mobile)
+  // Role-aware automatic initial routing (Auto-land on authorized module)
   useEffect(() => {
     if (membership?.role) {
-      const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-      if (isMobile && (membership.role === 'WORKER' || membership.role === 'TECHNICIAN')) {
-        if (activeModule === 'overview') {
+      if (membership.role === 'WORKER') {
+        const workerAllowed: NavModule[] = ['assets', 'copilot', 'knowledge-hub', 'maintenance', 'scan', 'loto', 'notifications'];
+        if (!workerAllowed.includes(activeModule)) {
+          setActiveModule('maintenance');
+        }
+      } else if (membership.role === 'TECHNICIAN') {
+        const techForbidden: NavModule[] = ['engineering-assets', 'oem-escalations', 'reports', 'team'];
+        if (activeModule === 'overview' || techForbidden.includes(activeModule)) {
           setActiveModule('tech');
         }
-      } else if (membership.role === 'WORKER' && activeModule === 'overview') {
-        setActiveModule('worker');
-      } else if (membership.role === 'TECHNICIAN' && activeModule === 'overview') {
-        setActiveModule('tech');
+      } else if (membership.role === 'SUPERVISOR') {
+        if (activeModule === 'team') {
+          setActiveModule('overview');
+        }
       }
     }
   }, [membership?.role]);
@@ -273,21 +281,23 @@ const AppContent: React.FC = () => {
       case 'assets':
         return <AssetDirectoryView />;
       case 'engineering-assets':
-        if (role === 'WORKER') {
-          return <RBACFallbackBanner moduleName="Engineering Asset Center" role={role} onRedirect={setActiveModule} />;
+        if (role === 'WORKER' || role === 'TECHNICIAN' || role === 'VIEWER') {
+          return <RBACFallbackBanner moduleName="Engineering Workspace" role={role} onRedirect={setActiveModule} />;
         }
-        return isOwnerOrAdmin || role === 'ENGINEER' || role === 'PLANT_MANAGER' ? (
-          <EngineeringAssetCenterView />
-        ) : (
-          <RBACFallbackBanner moduleName="Engineering Asset Center" role={role} onRedirect={setActiveModule} />
-        );
+        return <EngineeringAssetCenterView />;
       case 'machine-recovery':
+        if (role === 'WORKER' || role === 'VIEWER') {
+          return <RBACFallbackBanner moduleName="Machine Recovery" role={role} onRedirect={setActiveModule} />;
+        }
         return <MachineRecoveryView onNavigateToCopilot={(_tag) => setActiveModule('copilot')} />;
       case 'knowledge-hub':
         return <TechnicalManualsView initialAssetTag={manualsTargetAsset} />;
       case 'copilot':
         return <CopilotWorkspaceView initialAssetTag={copilotTargetAsset} />;
       case 'troubleshooting':
+        if (role === 'WORKER' || role === 'VIEWER') {
+          return <RBACFallbackBanner moduleName="Troubleshooting & RCA" role={role} onRedirect={setActiveModule} />;
+        }
         return (
           <TroubleshootingView
             onNavigateToSop={() => setActiveModule('maintenance')}
@@ -309,10 +319,16 @@ const AppContent: React.FC = () => {
           />
         );
       case 'expert':
+        if (role === 'WORKER' || role === 'VIEWER') {
+          return <RBACFallbackBanner moduleName="Expert Knowledge Specialists" role={role} onRedirect={setActiveModule} />;
+        }
         return <ExpertKnowledgeView onNavigateToCopilot={(_assetTag) => setActiveModule('copilot')} />;
       case 'maintenance':
         return <MaintenanceWorkspaceView initialCaseId={navTargetId} />;
       case 'history':
+        if (role === 'WORKER') {
+          return <RBACFallbackBanner moduleName="Maintenance History" role={role} onRedirect={setActiveModule} />;
+        }
         return (
           <MaintenanceHistoryView
             onNavigate={(mod) => setActiveModule(mod as NavModule)}
@@ -320,6 +336,10 @@ const AppContent: React.FC = () => {
           />
         );
       case 'tech':
+      case 'worker':
+        if (role === 'WORKER' || role === 'VIEWER') {
+          return <RBACFallbackBanner moduleName="Tech Execution Desk" role={role} onRedirect={setActiveModule} />;
+        }
         return (
           <TechnicianWorkspaceView
             initialTicketId={navTargetId}
@@ -328,6 +348,9 @@ const AppContent: React.FC = () => {
           />
         );
       case 'oem-escalations':
+        if (role === 'WORKER' || role === 'TECHNICIAN' || role === 'VIEWER') {
+          return <RBACFallbackBanner moduleName="OEM Escalations" role={role} onRedirect={setActiveModule} />;
+        }
         return (
           <OemEscalationsView
             onNavigateToTechQueue={(ticketId) => {
@@ -336,15 +359,10 @@ const AppContent: React.FC = () => {
             }}
           />
         );
-      case 'worker':
-        return (
-          <TechnicianWorkspaceView
-            initialTicketId={navTargetId}
-            onLaunchSop={() => setActiveModule('maintenance')}
-            onNavigateToCopilot={(_tag) => setActiveModule('copilot')}
-          />
-        );
       case 'reports':
+        if (role === 'WORKER' || role === 'TECHNICIAN') {
+          return <RBACFallbackBanner moduleName="Reports & Reliability Analytics" role={role} onRedirect={setActiveModule} />;
+        }
         return <ReportsAnalyticsView onDrillDown={(_m) => setActiveModule('history')} />;
       case 'notifications':
         return <NotificationsFeedView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
@@ -381,10 +399,13 @@ const AppContent: React.FC = () => {
       case 'loto':
         return (
           <MobileLotoView
-            onComplete={() => setActiveModule('tech')}
+            onComplete={() => setActiveModule(role === 'WORKER' ? 'maintenance' : 'tech')}
           />
         );
       case 'settings':
+        if (role === 'WORKER' || role === 'VIEWER') {
+          return <RBACFallbackBanner moduleName="Plant Settings" role={role} onRedirect={setActiveModule} />;
+        }
         return <SettingsView initialTab="profile" />;
       default:
         return <OverviewView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
@@ -415,12 +436,16 @@ const AppContent: React.FC = () => {
       </div>
 
       <div className={(activeModule === 'tech' || activeModule === 'worker') ? 'h-full w-full block' : 'h-full w-full hidden'}>
-        {(visitedTabs.has('tech') || visitedTabs.has('worker')) && (
-          <TechnicianWorkspaceView
-            initialTicketId={navTargetId}
-            onLaunchSop={() => setActiveModule('maintenance')}
-            onNavigateToCopilot={(_tag) => setActiveModule('copilot')}
-          />
+        {role === 'WORKER' || role === 'VIEWER' ? (
+          <RBACFallbackBanner moduleName="Tech Execution Desk" role={role} onRedirect={setActiveModule} />
+        ) : (
+          (visitedTabs.has('tech') || visitedTabs.has('worker')) && (
+            <TechnicianWorkspaceView
+              initialTicketId={navTargetId}
+              onLaunchSop={() => setActiveModule('maintenance')}
+              onNavigateToCopilot={(_tag) => setActiveModule('copilot')}
+            />
+          )
         )}
       </div>
 

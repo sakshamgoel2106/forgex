@@ -639,9 +639,11 @@ export function createEngineeringRouter(
         'ORGANIZATION_OWNER',
         'ORGANIZATION_ADMIN',
         'PLANT_MANAGER',
+        'SUPERVISOR',
         'ENGINEER',
         'ENGINEER_TECHNICIAN',
         'TECHNICIAN',
+        'WORKER',
       ].includes(role);
 
       if (!canView) {
@@ -884,7 +886,7 @@ export function createEngineeringRouter(
    */
   router.post(
     '/machines/:machineId/3d-model/upload',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'SUPERVISOR', 'ENGINEER', 'TECHNICIAN']),
     (req, res, next) => {
       engineeringUpload.single('file')(req, res, (err) => {
         if (err) {
@@ -1019,7 +1021,7 @@ export function createEngineeringRouter(
    */
   router.post(
     '/machines/:machineId/3d-model/replace',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'TECHNICIAN']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'ENGINEER', 'ENGINEER_TECHNICIAN', 'SUPERVISOR', 'TECHNICIAN']),
     (req, res, next) => {
       engineeringUpload.single('file')(req, res, (err) => {
         if (err) {
@@ -2333,6 +2335,8 @@ export function createEngineeringRouter(
         'ENGINEER',
         'ENGINEER_TECHNICIAN',
         'TECHNICIAN',
+        'SUPERVISOR',
+        'WORKER',
       ].includes(role);
 
       if (!canView) {

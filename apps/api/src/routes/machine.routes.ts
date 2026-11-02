@@ -16,7 +16,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
    */
   router.post(
     '/',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'SUPERVISOR', 'ENGINEER', 'ENGINEER_TECHNICIAN']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
@@ -442,7 +442,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
    */
   router.get(
     '/',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'WORKER', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'SUPERVISOR', 'ENGINEER', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'WORKER', 'VIEWER']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
@@ -500,7 +500,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
    */
   router.get(
     '/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'WORKER', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'SUPERVISOR', 'ENGINEER', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'WORKER', 'VIEWER']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
@@ -637,7 +637,7 @@ export function createMachineRouter(dataStore: IDataStore): Router {
    */
   router.patch(
     '/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'SUPERVISOR', 'ENGINEER', 'ENGINEER_TECHNICIAN', 'TECHNICIAN']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;

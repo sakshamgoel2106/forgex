@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { RefreshCw, AlertCircle } from 'lucide-react';
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import {
@@ -10,13 +11,17 @@ import {
 } from './pidConstants';
 
 // Configure locally bundled pdfjs worker (Air-Gapped, Zero CDN Egress)
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString();
+if (typeof window !== 'undefined') {
+  try {
+    pdfjs.GlobalWorkerOptions.workerSrc = workerUrl || `${window.location.origin}/pdf.worker.min.mjs`;
+  } catch {
+    pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  }
+}
 
 export interface PidPdfViewerProps {
   fileUrl: string;
+  fileData?: ArrayBuffer | null;
   drawingTitle?: string;
   zoom?: number;
   pan?: { x: number; y: number };
@@ -34,6 +39,7 @@ export interface PidPdfViewerProps {
 
 export const PidPdfViewer: React.FC<PidPdfViewerProps> = ({
   fileUrl,
+  fileData,
   drawingTitle: _drawingTitle,
   zoom = 1,
   pan = { x: 0, y: 0 },
@@ -63,8 +69,25 @@ export const PidPdfViewer: React.FC<PidPdfViewerProps> = ({
     height: 595,
   });
 
+  const [docLoaded, setDocLoaded] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<Error | null>(null);
   const [retryKey, setRetryKey] = useState<number>(0);
+  const [useNativeViewer, setUseNativeViewer] = useState<boolean>(false);
+
+  // Reset docLoaded when fileUrl changes
+  useEffect(() => {
+    setDocLoaded(false);
+    setLoadError(null);
+  }, [fileUrl]);
+
+  // Safe file source configuration: Clone buffer if using fileData to avoid neutering
+  const documentSource = useMemo(() => {
+    if (fileUrl) return fileUrl;
+    if (fileData && fileData.byteLength > 0) {
+      return { data: new Uint8Array(fileData.slice(0)) };
+    }
+    return null;
+  }, [fileUrl, fileData, retryKey]);
 
   // 1. ResizeObserver to track container width and height accurately
   useEffect(() => {
@@ -94,27 +117,31 @@ export const PidPdfViewer: React.FC<PidPdfViewerProps> = ({
   }, []);
 
   // 2. Document & Page Load Handlers
-  const handleDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
-    setLoadError(null);
-    onLoadSuccess?.(numPages);
-  };
+  const handleDocumentLoadSuccess = useCallback(
+    ({ numPages }: { numPages: number }) => {
+      setLoadError(null);
+      setDocLoaded(true);
+      onLoadSuccess?.(numPages);
+    },
+    [onLoadSuccess]
+  );
 
-  const handleDocumentLoadError = (error: Error) => {
-    console.error('Failed to load P&ID PDF document:', error);
+  const handleDocumentLoadError = useCallback((error: Error) => {
+    console.warn('[P&ID Canvas Notice]:', error?.message || error);
     setLoadError(error);
-  };
+    setDocLoaded(false);
+  }, []);
 
-  const handlePageLoadSuccess = (page: any) => {
+  const handlePageLoadSuccess = useCallback((page: any) => {
     const w = page.originalWidth || page.width || (page.view && page.view[2]) || 842;
     const h = page.originalHeight || page.height || (page.view && page.view[3]) || 595;
     setPageDims({ width: w, height: h });
-  };
+  }, []);
 
   // 3. Dynamic Auto-Fit Calculation for Landscape Schematics
-  // p-6 applies 24px padding on each side (total 48px horizontal and vertical)
   const isQuarterTurn = rotation === 90 || rotation === 270;
-  const effectiveW = isQuarterTurn ? pageDims.height : pageDims.width;
-  const effectiveH = isQuarterTurn ? pageDims.width : pageDims.height;
+  const effectiveW = Math.max(1, isQuarterTurn ? pageDims.height : pageDims.width);
+  const effectiveH = Math.max(1, isQuarterTurn ? pageDims.width : pageDims.height);
 
   const containerW = containerDims.width || 900;
   const containerH = containerDims.height || 600;
@@ -122,7 +149,10 @@ export const PidPdfViewer: React.FC<PidPdfViewerProps> = ({
   const availHeight = Math.max(100, containerH - 48);
 
   const fitScale = Math.min(availWidth / effectiveW, availHeight / effectiveH);
-  const renderedPageWidth = pageDims.width * fitScale;
+  const renderedPageWidth = Math.max(
+    100,
+    (pageDims.width || 842) * (Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1)
+  );
 
   // 4. Mouse Pan and Drag Handlers
   const handleMouseDown = useCallback(
@@ -174,6 +204,41 @@ export const PidPdfViewer: React.FC<PidPdfViewerProps> = ({
   // List of tags to display on drawing
   const activeTagsList = equipmentTags.length > 0 ? equipmentTags : STANDARD_PID_EQUIPMENT_TAGS;
 
+  if (useNativeViewer) {
+    return (
+      <div className="relative w-full h-full flex flex-col bg-slate-900 overflow-hidden">
+        <div className="px-3 py-1.5 bg-slate-800 border-b border-slate-700 flex items-center justify-between text-xs text-white">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[11px] text-amber-400 font-bold uppercase">Native Browser PDF Engine</span>
+            <span className="text-slate-400 text-[10px]">({_drawingTitle || 'P&ID Schematic'})</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setLoadError(null);
+              setUseNativeViewer(false);
+              setRetryKey((k) => k + 1);
+            }}
+            className="px-2.5 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold transition cursor-pointer"
+          >
+            Switch to Interactive Canvas Mode
+          </button>
+        </div>
+        <object
+          data={`${fileUrl}#toolbar=1`}
+          type="application/pdf"
+          className="w-full flex-1 border-0 bg-white"
+        >
+          <iframe
+            src={`${fileUrl}#toolbar=1`}
+            className="w-full h-full border-0 bg-white"
+            title={_drawingTitle || 'P&ID Schematic PDF'}
+          />
+        </object>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}
@@ -184,118 +249,148 @@ export const PidPdfViewer: React.FC<PidPdfViewerProps> = ({
       onWheel={handleWheel}
       className="flex items-center justify-center overflow-hidden relative w-full h-full bg-[#F1F5F9] p-6 select-none cursor-grab active:cursor-grabbing"
     >
-      <Document
-        key={`${fileUrl}-${retryKey}`}
-        file={fileUrl}
-        onLoadSuccess={handleDocumentLoadSuccess}
-        onLoadError={handleDocumentLoadError}
-        loading={
-          <div className="flex flex-col items-center justify-center gap-2.5 p-8 bg-white/90 backdrop-blur-md rounded-2xl border border-slate-200 shadow-md">
-            <RefreshCw className="w-5 h-5 animate-spin text-[#2563EB]" />
-            <span className="text-xs font-mono font-semibold text-slate-800">
-              Streaming P&ID Schematic PDF...
-            </span>
-          </div>
-        }
-        error={
-          <div className="max-w-md bg-white border border-rose-200 rounded-2xl p-6 shadow-xl text-center space-y-3 z-30">
-            <div className="w-12 h-12 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto">
-              <AlertCircle className="w-6 h-6" />
+      {documentSource ? (
+        <Document
+          key={`${fileUrl}-${retryKey}`}
+          file={documentSource}
+          onLoadSuccess={handleDocumentLoadSuccess}
+          onLoadError={handleDocumentLoadError}
+          loading={
+            <div className="flex flex-col items-center justify-center gap-2.5 p-8 bg-white/90 backdrop-blur-md rounded-2xl border border-slate-200 shadow-md">
+              <RefreshCw className="w-5 h-5 animate-spin text-[#2563EB]" />
+              <span className="text-xs font-mono font-semibold text-slate-800">
+                Streaming P&ID Schematic PDF...
+              </span>
             </div>
-            <h4 className="text-sm font-bold text-slate-900 font-mono">
-              {isCorsOrNetworkError ? 'Storage Bucket CORS / Network Notice' : 'P&ID PDF Load Error'}
-            </h4>
-            <p className="text-xs text-rose-700 font-mono bg-rose-50 border border-rose-200 rounded-lg p-2.5 leading-relaxed">
-              {isCorsOrNetworkError
-                ? 'Failed to fetch P&ID PDF. If stored in Supabase Storage, please ensure the storage bucket has public read or CORS policy allowing web origins.'
-                : loadError?.message || 'Failed to render PDF document.'}
-            </p>
-            <button
-              type="button"
-              onClick={() => setRetryKey((k) => k + 1)}
-              className="px-3.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition"
-            >
-              Retry Load
-            </button>
-          </div>
-        }
-      >
-        {/* Pan / Zoom / Rotation Wrapper with Centered Transform Origin */}
-        <div
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
-            transformOrigin: 'center center',
-            transition: isDragging ? 'none' : 'transform 120ms ease-out',
-          }}
-          className="relative flex items-center justify-center shrink-0 shadow-2xl rounded-xl border border-slate-300 bg-white"
-        >
-          {/* Render PDF Canvas at auto-fitted crisp dimensions without text layer displacement */}
-          <Page
-            pageNumber={pageNumber}
-            width={renderedPageWidth}
-            rotate={0}
-            onLoadSuccess={handlePageLoadSuccess}
-            renderAnnotationLayer={false}
-            renderTextLayer={false}
-            className="max-w-none block rounded-xl overflow-hidden"
-          />
-
-          {/* Interactive P&ID Equipment Tags Overlay Layer */}
-          <div className="absolute inset-0 pointer-events-none rounded-xl overflow-hidden">
-            {activeTagsList.map((tagKey) => {
-              const tagDetail = tagCatalog[tagKey] || STANDARD_PID_TAG_CATALOG[tagKey];
-              if (!tagDetail) return null;
-
-              const isSelected = activeTag === tagKey;
-
-              return (
-                <div
-                  key={tagKey}
-                  style={{
-                    left: `${tagDetail.bbox.x}%`,
-                    top: `${tagDetail.bbox.y}%`,
-                    width: `${tagDetail.bbox.w}%`,
-                    height: `${tagDetail.bbox.h}%`,
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onTagClick?.(tagKey);
-                  }}
-                  className={`absolute pointer-events-auto cursor-pointer rounded-lg transition-all duration-150 ${
-                    isSelected
-                      ? 'border-2 border-[#2563EB] bg-[#2563EB]/20 shadow-[0_0_18px_rgba(37,99,235,0.7)] animate-pulse z-30'
-                      : 'border border-dashed border-slate-400/40 hover:border-[#2563EB] hover:bg-[#2563EB]/10 z-20 group'
-                  }`}
-                  title={`${tagKey}: ${tagDetail.name} (${tagDetail.type})`}
+          }
+          error={
+            <div className="max-w-md bg-white border border-rose-200 rounded-2xl p-6 shadow-xl text-center space-y-3 z-30">
+              <div className="w-12 h-12 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto">
+                <AlertCircle className="w-6 h-6" />
+              </div>
+              <h4 className="text-sm font-bold text-slate-900 font-mono">
+                {isCorsOrNetworkError ? 'Storage Bucket CORS / Network Notice' : 'P&ID PDF Canvas Notice'}
+              </h4>
+              <p className="text-xs text-rose-700 font-mono bg-rose-50 border border-rose-200 rounded-lg p-2.5 leading-relaxed">
+                {isCorsOrNetworkError
+                  ? 'Failed to fetch P&ID PDF. If stored in Supabase Storage, please ensure the storage bucket has public read or CORS policy allowing web origins.'
+                  : loadError?.message || 'Failed to render PDF in interactive canvas.'}
+              </p>
+              <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setUseNativeViewer(true)}
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-semibold transition shadow-sm cursor-pointer"
                 >
-                  {isSelected ? (
+                  Switch to Native PDF View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoadError(null);
+                    setRetryKey((k) => k + 1);
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-xs font-semibold transition cursor-pointer"
+                >
+                  Retry Canvas Engine
+                </button>
+              </div>
+            </div>
+          }
+        >
+          {/* Pan / Zoom / Rotation Wrapper with Centered Transform Origin */}
+          <div
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+              transformOrigin: 'center center',
+              transition: isDragging ? 'none' : 'transform 120ms ease-out',
+            }}
+            className="relative flex items-center justify-center shrink-0 shadow-2xl rounded-xl border border-slate-300 bg-white"
+          >
+            {/* Render PDF Canvas ONLY once document has parsed successfully */}
+            {docLoaded ? (
+              <Page
+                pageNumber={pageNumber}
+                width={renderedPageWidth}
+                rotate={0}
+                onLoadSuccess={handlePageLoadSuccess}
+                renderAnnotationLayer={false}
+                renderTextLayer={false}
+                className="max-w-none block rounded-xl overflow-hidden"
+              />
+            ) : (
+              <div
+                style={{ width: renderedPageWidth, height: renderedPageWidth * 0.7 }}
+                className="flex items-center justify-center bg-slate-50 text-slate-400 font-mono text-xs rounded-xl"
+              >
+                <RefreshCw className="w-5 h-5 animate-spin mr-2 text-blue-500" />
+                Preparing Canvas Page...
+              </div>
+            )}
+
+            {/* Interactive P&ID Equipment Tags Overlay Layer */}
+            {docLoaded && (
+              <div className="absolute inset-0 pointer-events-none rounded-xl overflow-hidden">
+                {activeTagsList.map((tagKey) => {
+                  const tagDetail = tagCatalog[tagKey] || STANDARD_PID_TAG_CATALOG[tagKey];
+                  if (!tagDetail) return null;
+
+                  const isSelected = activeTag === tagKey;
+
+                  return (
                     <div
+                      key={tagKey}
                       style={{
-                        transform: `translateX(-50%) rotate(${-rotation}deg)`,
+                        left: `${tagDetail.bbox.x}%`,
+                        top: `${tagDetail.bbox.y}%`,
+                        width: `${tagDetail.bbox.w}%`,
+                        height: `${tagDetail.bbox.h}%`,
                       }}
-                      className="absolute -top-7 left-1/2 px-2 py-0.5 rounded-md bg-[#2563EB] text-white font-mono font-bold text-[10px] whitespace-nowrap shadow-lg flex items-center gap-1.5 z-40"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                      <span>
-                        {tagKey}: {tagDetail.name}
-                      </span>
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        transform: `translateX(-50%) rotate(${-rotation}deg)`,
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTagClick?.(tagKey);
                       }}
-                      className="opacity-0 group-hover:opacity-100 absolute -top-5 left-1/2 px-1.5 py-0.5 rounded bg-slate-900/90 text-white font-mono text-[9px] font-semibold whitespace-nowrap transition-opacity shadow pointer-events-none z-30"
+                      className={`absolute pointer-events-auto cursor-pointer rounded-lg transition-all duration-150 ${
+                        isSelected
+                          ? 'border-2 border-[#2563EB] bg-[#2563EB]/20 shadow-[0_0_18px_rgba(37,99,235,0.7)] animate-pulse z-30'
+                          : 'border border-dashed border-slate-400/40 hover:border-[#2563EB] hover:bg-[#2563EB]/10 z-20 group'
+                      }`}
+                      title={`${tagKey}: ${tagDetail.name} (${tagDetail.type})`}
                     >
-                      {tagKey} • {tagDetail.name}
+                      {isSelected ? (
+                        <div
+                          style={{
+                            transform: `translateX(-50%) rotate(${-rotation}deg)`,
+                          }}
+                          className="absolute -top-7 left-1/2 px-2 py-0.5 rounded-md bg-[#2563EB] text-white font-mono font-bold text-[10px] whitespace-nowrap shadow-lg flex items-center gap-1.5 z-40"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                          <span>
+                            {tagKey}: {tagDetail.name}
+                          </span>
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            transform: `translateX(-50%) rotate(${-rotation}deg)`,
+                          }}
+                          className="opacity-0 group-hover:opacity-100 absolute -top-5 left-1/2 px-1.5 py-0.5 rounded bg-slate-900/90 text-white font-mono text-[9px] font-semibold whitespace-nowrap transition-opacity shadow pointer-events-none z-30"
+                        >
+                          {tagKey} • {tagDetail.name}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            )}
           </div>
+        </Document>
+      ) : (
+        <div className="flex flex-col items-center justify-center p-8 text-slate-500 font-mono text-xs">
+          No PDF source document provided.
         </div>
-      </Document>
+      )}
     </div>
   );
 };

@@ -1093,11 +1093,46 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
         return;
       }
 
-      const normalizedCode = code.trim().toUpperCase();
-      const normalizedEmail = email.trim().toLowerCase();
-      const codeHash = crypto.createHash('sha256').update(normalizedCode).digest('hex');
+      let cleanCode = code.trim();
+      if (cleanCode.includes('token=')) {
+        const match = cleanCode.match(/token=([a-zA-Z0-9_-]+)/);
+        if (match) cleanCode = match[1];
+      } else if (cleanCode.includes('invite=')) {
+        const match = cleanCode.match(/invite=([a-zA-Z0-9_-]+)/);
+        if (match) cleanCode = match[1];
+      } else if (cleanCode.includes('qr=')) {
+        const match = cleanCode.match(/qr=([a-zA-Z0-9_-]+)/);
+        if (match) cleanCode = match[1];
+      }
 
-      const invitation = await dataStore.getInvitationByActivationCodeHash(codeHash);
+      const normalizedEmail = email.trim().toLowerCase();
+      const upperCode = cleanCode.toUpperCase();
+
+      // Variations to test against activation_code_hash
+      const codeVariations = new Set<string>([
+        upperCode,
+        cleanCode,
+        upperCode.replace(/[^A-Z0-9]/g, ''),
+        upperCode.replace(/-/g, ''),
+        upperCode.startsWith('FORGEX-') ? upperCode.replace('FORGEX-', '') : `FORGEX-${upperCode}`,
+        upperCode.startsWith('FORGEX') ? upperCode.replace('FORGEX', '') : `FORGEX${upperCode}`,
+      ]);
+
+      let invitation: any = null;
+      for (const variation of codeVariations) {
+        const cHash = crypto.createHash('sha256').update(variation).digest('hex');
+        invitation = await dataStore.getInvitationByActivationCodeHash(cHash);
+        if (invitation) break;
+      }
+
+      // If not matched by activation code, check invite token or QR token hash
+      if (!invitation) {
+        const rawTokenHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
+        invitation = await dataStore.getInvitationByTokenHash(rawTokenHash);
+        if (!invitation) {
+          invitation = await dataStore.getInvitationByQrTokenHash(rawTokenHash);
+        }
+      }
 
       if (!invitation || invitation.email.toLowerCase() !== normalizedEmail) {
         if (invitation) {

@@ -16,6 +16,71 @@ const PidPdfViewer = React.lazy(() =>
   import('../views/PidPdfViewer').then((m) => ({ default: m.PidPdfViewer }))
 );
 
+interface CitationPdfErrorBoundaryProps {
+  children: React.ReactNode;
+  fallbackFileUrl?: string | null;
+  documentTitle?: string;
+}
+
+interface CitationPdfErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class CitationPdfErrorBoundary extends React.Component<CitationPdfErrorBoundaryProps, CitationPdfErrorBoundaryState> {
+  constructor(props: CitationPdfErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): CitationPdfErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.warn('[Citation PDF Viewer Error caught locally]:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const url = this.props.fallbackFileUrl;
+      return (
+        <div className="relative w-full h-full flex flex-col bg-slate-900 overflow-hidden">
+          <div className="px-3 py-1.5 bg-slate-800 border-b border-slate-700 flex items-center justify-between text-xs text-white">
+            <span className="font-mono text-[11px] text-amber-400 font-bold uppercase">Native Browser PDF View</span>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-2.5 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold transition cursor-pointer"
+            >
+              Retry Canvas
+            </button>
+          </div>
+          {url ? (
+            <object
+              data={url + '#toolbar=1'}
+              type="application/pdf"
+              className="w-full flex-1 border-0 bg-white"
+            >
+              <iframe
+                src={url + '#toolbar=1'}
+                className="w-full h-full border-0 bg-white"
+                title={this.props.documentTitle || 'Technical Manual PDF'}
+              />
+            </object>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-slate-400 font-mono text-xs">
+              PDF preview unavailable
+            </div>
+          )}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+
 export interface CitationPdfViewerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -137,6 +202,7 @@ export const CitationPdfViewerModal: React.FC<CitationPdfViewerModalProps> = ({
           }
         >
           <div className="w-full h-full overflow-auto flex items-center justify-center p-2 sm:p-4">
+            <CitationPdfErrorBoundary fallbackFileUrl={fileUrl} documentTitle={documentTitle}>
             <PidPdfViewer
               fileUrl={fileUrl}
               drawingTitle={documentTitle}
@@ -146,6 +212,7 @@ export const CitationPdfViewerModal: React.FC<CitationPdfViewerModalProps> = ({
               onPageChange={(p) => setCurrentPage(p)}
               onZoomChange={(z) => setZoom(z)}
             />
+            </CitationPdfErrorBoundary>
           </div>
         </Suspense>
       </div>

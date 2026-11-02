@@ -72,7 +72,7 @@ export function createTaskRouter(dataStore: IDataStore): Router {
    */
   router.get(
     '/',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'SUPERVISOR', 'ENGINEER', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'WORKER', 'VIEWER']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;
@@ -102,7 +102,7 @@ export function createTaskRouter(dataStore: IDataStore): Router {
    */
   router.get(
     '/:id',
-    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'ENGINEER', 'TECHNICIAN', 'VIEWER']),
+    requireRole(['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN', 'PLANT_MANAGER', 'SUPERVISOR', 'ENGINEER', 'ENGINEER_TECHNICIAN', 'TECHNICIAN', 'WORKER', 'VIEWER']),
     async (req: Request, res: Response): Promise<void> => {
       try {
         const orgId = req.auth!.organization.id;

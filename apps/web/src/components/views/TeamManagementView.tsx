@@ -66,7 +66,7 @@ export const TeamManagementView: React.FC = () => {
   const [inviteRole, setInviteRole] = useState<OrgRole>('TECHNICIAN');
   const [invitePlantScope, setInvitePlantScope] = useState('');
   const [inviteMachineIds, setInviteMachineIds] = useState<string[]>([]);
-  const [generateActivationCode, setGenerateActivationCode] = useState(false);
+  const [generateActivationCode, setGenerateActivationCode] = useState(true);
 
   const [submittingInvite, setSubmittingInvite] = useState(false);
   const [createdInviteResult, setCreatedInviteResult] = useState<{
@@ -1184,7 +1184,7 @@ export const TeamManagementView: React.FC = () => {
                   {createdInviteResult.activationCode}
                 </div>
                 <p className="text-[10px] text-amber-800">
-                  Deliver this 8-character code securely to the factory worker. Valid for workstation activation. Strictly locked after 5 failed attempts.
+                  Deliver this shop-floor activation code securely to the factory worker. Valid for workstation activation. Strictly locked after 5 failed attempts.
                 </p>
               </div>
             )}

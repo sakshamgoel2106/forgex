@@ -33,6 +33,74 @@ const PidPdfViewer = React.lazy(() =>
   import('./PidPdfViewer').then((m) => ({ default: m.PidPdfViewer }))
 );
 
+interface PidPdfErrorBoundaryProps {
+  children: React.ReactNode;
+  fallbackFileUrl?: string | null;
+  drawingTitle?: string;
+}
+
+interface PidPdfErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class PidPdfErrorBoundary extends React.Component<PidPdfErrorBoundaryProps, PidPdfErrorBoundaryState> {
+  constructor(props: PidPdfErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): PidPdfErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.warn('[P&ID PDF Canvas Error caught locally]:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const url = this.props.fallbackFileUrl;
+      return (
+        <div className="relative w-full h-full flex flex-col bg-slate-900 overflow-hidden">
+          <div className="px-3 py-1.5 bg-slate-800 border-b border-slate-700 flex items-center justify-between text-xs text-white">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[11px] text-amber-400 font-bold uppercase">Native Browser PDF Engine (Fallback)</span>
+              <span className="text-slate-400 text-[10px]">({this.props.drawingTitle || 'P&ID Schematic'})</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-2.5 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-semibold transition cursor-pointer"
+            >
+              Retry Interactive Canvas
+            </button>
+          </div>
+          {url ? (
+            <object
+              data={url + '#toolbar=1'}
+              type="application/pdf"
+              className="w-full flex-1 border-0 bg-white"
+            >
+              <iframe
+                src={url + '#toolbar=1'}
+                className="w-full h-full border-0 bg-white"
+                title={this.props.drawingTitle || 'P&ID Schematic PDF'}
+              />
+            </object>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-slate-400 font-mono text-xs">
+              PDF preview unavailable
+            </div>
+          )}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+
 interface PidEngineeringViewerModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -102,6 +170,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
   const [svgContent, setSvgContent] = useState<string | null>(null);
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [rawPdfData, setRawPdfData] = useState<ArrayBuffer | null>(null);
 
   const activePdfUrl = pdfBlobUrl;
 
@@ -120,6 +189,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
       setSvgContent(null);
       setImageBlobUrl(null);
       setPdfBlobUrl(null);
+      setRawPdfData(null);
       setContentError(null);
       setUnsupportedInfo(null);
       setIsLoadingMetadata(false);
@@ -294,6 +364,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
       setSvgContent(null);
       setImageBlobUrl(null);
       setPdfBlobUrl(null);
+      setRawPdfData(null);
       setContentError(null);
       setUnsupportedInfo(null);
       return;
@@ -306,6 +377,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     setSvgContent(null);
     setImageBlobUrl(null);
     setPdfBlobUrl(null);
+    setRawPdfData(null);
 
     // Reset pan and zoom for new drawing
     setZoom(1);
@@ -335,34 +407,53 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
           throw new Error(errJson?.error?.message || `Failed to fetch diagram content (Status ${res.status})`);
         }
 
-        const contentType = res.headers.get('content-type') || '';
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
+        const arrayBuffer = await res.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
 
-        if (contentType.includes('svg') || drawingRecord.fileFormat === 'SVG') {
-          const svgText = await res.text();
+        const isPdf = (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) || contentType.includes('pdf');
+        const isPng = (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) || contentType.includes('png');
+        const isJpg = (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) || contentType.includes('jpeg') || contentType.includes('jpg');
+        const headerText = new TextDecoder().decode(bytes.slice(0, 120)).trim().toLowerCase();
+        const isSvg = headerText.startsWith('<svg') || headerText.includes('xmlns="http://www.w3.org/2000/svg"') || contentType.includes('svg');
+
+        if (isSvg) {
+          const svgText = new TextDecoder().decode(arrayBuffer);
           if (isMounted) {
             setSvgContent(svgText);
+            setImageBlobUrl(null);
+            setPdfBlobUrl(null);
+            setRawPdfData(null);
             setIsLoadingContent(false);
           }
-        } else if (contentType.includes('pdf') || drawingRecord.fileFormat === 'PDF') {
-          const blob = await res.blob();
+        } else if (isPdf) {
+          const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
           const url = URL.createObjectURL(blob);
           if (isMounted) {
             setPdfBlobUrl(url);
+            setRawPdfData(arrayBuffer);
+            setImageBlobUrl(null);
+            setSvgContent(null);
             setIsLoadingContent(false);
           }
-        } else if (contentType.startsWith('image/') || ['PNG', 'JPG', 'JPEG', 'WEBP'].includes(drawingRecord.fileFormat || '')) {
-          const blob = await res.blob();
+        } else if (isPng || isJpg || contentType.startsWith('image/')) {
+          const blob = new Blob([arrayBuffer], { type: isPng ? 'image/png' : 'image/jpeg' });
           const url = URL.createObjectURL(blob);
           if (isMounted) {
             setImageBlobUrl(url);
+            setPdfBlobUrl(null);
+            setRawPdfData(null);
+            setSvgContent(null);
             setIsLoadingContent(false);
           }
         } else {
-          // Fallback text or binary
-          const text = await res.text();
-          if (text.trim().startsWith('<svg')) {
+          if (headerText.startsWith('<svg')) {
+            const svgText = new TextDecoder().decode(arrayBuffer);
             if (isMounted) {
-              setSvgContent(text);
+              setSvgContent(svgText);
+              setImageBlobUrl(null);
+              setPdfBlobUrl(null);
+              setRawPdfData(null);
               setIsLoadingContent(false);
             }
           } else {
@@ -563,9 +654,20 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
     if (ext === 'pdf') {
       localPreviewUrl = URL.createObjectURL(file);
       setPdfBlobUrl(localPreviewUrl);
+      setImageBlobUrl(null);
+      setSvgContent(null);
+      file.arrayBuffer().then((buf) => setRawPdfData(buf)).catch(() => {});
     } else if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'webp') {
       localPreviewUrl = URL.createObjectURL(file);
       setImageBlobUrl(localPreviewUrl);
+      setPdfBlobUrl(null);
+      setRawPdfData(null);
+      setSvgContent(null);
+    } else if (ext === 'svg') {
+      file.text().then((text) => setSvgContent(text)).catch(() => {});
+      setPdfBlobUrl(null);
+      setImageBlobUrl(null);
+      setRawPdfData(null);
     }
 
     try {
@@ -1015,8 +1117,10 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                       </div>
                     }
                   >
+                    <PidPdfErrorBoundary fallbackFileUrl={activePdfUrl} drawingTitle={drawingRecord?.drawingTitle}>
                     <PidPdfViewer
                       fileUrl={activePdfUrl}
+                      fileData={rawPdfData}
                       drawingTitle={drawingRecord?.drawingTitle || 'P&ID Schematic'}
                       zoom={zoom}
                       pan={pan}
@@ -1034,6 +1138,7 @@ export const PidEngineeringViewerModal: React.FC<PidEngineeringViewerModalProps>
                         onSelectTag?.(tag);
                       }}
                     />
+                    </PidPdfErrorBoundary>
                   </React.Suspense>
                 ) : (
                   /* Actual Diagram Rendering */

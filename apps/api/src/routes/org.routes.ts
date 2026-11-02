@@ -556,13 +556,11 @@ export function createOrgRouter(dataStore: IDataStore): Router {
       const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-      // Optional factory activation code (for factory workers with limited email access)
-      let rawActivationCode: string | undefined = undefined;
-      let activationCodeHash: string | undefined = undefined;
-      if (req.body.generateActivationCode) {
-        rawActivationCode = `FORGEX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-        activationCodeHash = crypto.createHash('sha256').update(rawActivationCode).digest('hex');
-      }
+      // Shop-floor factory activation code (always generated or accepts custom code if specified)
+      let rawActivationCode: string = (req.body.activationCode && typeof req.body.activationCode === 'string')
+        ? req.body.activationCode.trim().toUpperCase()
+        : `FORGEX-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      let activationCodeHash: string = crypto.createHash('sha256').update(rawActivationCode).digest('hex');
 
       // Optional or default QR activation token (30 minute expiration for secure in-person scanning)
       const rawQrToken = crypto.randomBytes(32).toString('hex');

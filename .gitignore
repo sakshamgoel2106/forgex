@@ -51,7 +51,6 @@ apps/api/data/test-*/
 test-results/
 playwright-report/
 blob-report/
-<<<<<<< HEAD
 
-=======
->>>>>>> feature/knowledge-hub-hardening
+# Nested clone / workspace mirrors
+forgex/

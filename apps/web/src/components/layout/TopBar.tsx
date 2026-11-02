@@ -165,7 +165,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           {/* Brand mark with official branding icon */}
           <div
             className="flex items-center gap-2.5 cursor-pointer group"
-            onClick={() => onNavigate('overview')}
+            onClick={() => onNavigate(membership?.role === 'WORKER' ? 'maintenance' : 'overview')}
           >
             <img
               src={branding.logoUrl || '/forgex_icon.png'}
@@ -284,20 +284,24 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <div className="text-[10px] text-gray-400 truncate mt-0.5">{orgName}</div>
                 </div>
               </div>
-              <DropdownMenuItem
-                onClick={() => onNavigate('settings')}
-                className="text-xs cursor-pointer focus:bg-gray-50 gap-2 py-2"
-              >
-                <Settings className="w-3.5 h-3.5 text-[#1D4ED8]" />
-                Account & Org Settings
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onNavigate('audit')}
-                className="text-xs cursor-pointer focus:bg-gray-50 gap-2 py-2"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
-                Security & Audit
-              </DropdownMenuItem>
+              {membership?.role !== 'WORKER' && membership?.role !== 'VIEWER' && (
+                <DropdownMenuItem
+                  onClick={() => onNavigate('settings')}
+                  className="text-xs cursor-pointer focus:bg-gray-50 gap-2 py-2"
+                >
+                  <Settings className="w-3.5 h-3.5 text-[#1D4ED8]" />
+                  Account & Org Settings
+                </DropdownMenuItem>
+              )}
+              {(membership?.role === 'ORGANIZATION_OWNER' || membership?.role === 'ORGANIZATION_ADMIN' || membership?.role === 'PLANT_MANAGER') && (
+                <DropdownMenuItem
+                  onClick={() => onNavigate('audit')}
+                  className="text-xs cursor-pointer focus:bg-gray-50 gap-2 py-2"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
+                  Security & Audit
+                </DropdownMenuItem>
+              )}
               {memberships.length > 1 && (
                 <>
                   <DropdownMenuSeparator className="bg-gray-100" />

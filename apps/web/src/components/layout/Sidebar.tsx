@@ -74,27 +74,190 @@ interface NavItemDef {
 
 const NAV_ITEMS: NavItemDef[] = [
   // 1. OPERATIONS
-  { id: 'overview',           label: 'Overview',             icon: LayoutDashboard, group: 'operations' },
-  { id: 'assets',             label: 'Assets & Machines',    icon: Factory,         group: 'operations' },
-  { id: 'engineering-assets', label: 'Engineering Workspace',icon: Layers,          group: 'operations' },
-  { id: 'machine-recovery',   label: 'Machine Recovery',     icon: Cpu,             group: 'operations' },
+  {
+    id: 'overview',
+    label: 'Overview',
+    icon: LayoutDashboard,
+    group: 'operations',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'TECHNICIAN',
+      'ENGINEER_TECHNICIAN',
+      'VIEWER',
+    ],
+  },
+  {
+    id: 'assets',
+    label: 'Assets & Machines',
+    icon: Factory,
+    group: 'operations',
+  },
+  {
+    id: 'engineering-assets',
+    label: 'Engineering Workspace',
+    icon: Layers,
+    group: 'operations',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'ENGINEER_TECHNICIAN',
+    ],
+  },
+  {
+    id: 'machine-recovery',
+    label: 'Machine Recovery',
+    icon: Cpu,
+    group: 'operations',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'TECHNICIAN',
+      'ENGINEER_TECHNICIAN',
+    ],
+  },
 
   // 2. KNOWLEDGE
-  { id: 'copilot',            label: 'AI Copilot',           icon: MessageSquare,   group: 'knowledge' },
-  { id: 'troubleshooting',    label: 'Troubleshooting & RCA',icon: HelpCircle,      group: 'knowledge' },
-  { id: 'expert',             label: 'Expert Knowledge',     icon: GraduationCap,   group: 'knowledge' },
-  { id: 'knowledge-hub',      label: 'Knowledge Hub',        icon: FileText,        group: 'knowledge' },
+  {
+    id: 'copilot',
+    label: 'AI Copilot',
+    icon: MessageSquare,
+    group: 'knowledge',
+  },
+  {
+    id: 'troubleshooting',
+    label: 'Troubleshooting & RCA',
+    icon: HelpCircle,
+    group: 'knowledge',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'TECHNICIAN',
+      'ENGINEER_TECHNICIAN',
+    ],
+  },
+  {
+    id: 'expert',
+    label: 'Expert Knowledge',
+    icon: GraduationCap,
+    group: 'knowledge',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'TECHNICIAN',
+      'ENGINEER_TECHNICIAN',
+    ],
+  },
+  {
+    id: 'knowledge-hub',
+    label: 'Knowledge Hub',
+    icon: FileText,
+    group: 'knowledge',
+  },
 
   // 3. EXECUTION
-  { id: 'maintenance',        label: 'Raised Tickets',       icon: HardHat,         group: 'execution' },
-  { id: 'tech',               label: 'Tech Execution Desk',  icon: Wrench,          group: 'execution' },
-  { id: 'oem-escalations',    label: 'OEM Escalations',      icon: ShieldAlert,     group: 'execution' },
-  { id: 'history',            label: 'Maintenance History',  icon: History,         group: 'execution' },
+  {
+    id: 'maintenance',
+    label: 'Raised Tickets',
+    icon: HardHat,
+    group: 'execution',
+  },
+  {
+    id: 'tech',
+    label: 'Tech Execution Desk',
+    icon: Wrench,
+    group: 'execution',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'TECHNICIAN',
+      'ENGINEER_TECHNICIAN',
+    ],
+  },
+  {
+    id: 'oem-escalations',
+    label: 'OEM Escalations',
+    icon: ShieldAlert,
+    group: 'execution',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+    ],
+  },
+  {
+    id: 'history',
+    label: 'Maintenance History',
+    icon: History,
+    group: 'execution',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'TECHNICIAN',
+      'ENGINEER_TECHNICIAN',
+      'VIEWER',
+    ],
+  },
 
   // 4. GOVERNANCE
-  { id: 'reports',            label: 'Reports & Analytics',  icon: BarChart3,       group: 'governance' },
-  { id: 'team',               label: 'Team & Access',        icon: Users,           group: 'governance', roles: ['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN'] },
-  { id: 'settings',           label: 'Settings',             icon: Settings,        group: 'governance' },
+  {
+    id: 'reports',
+    label: 'Reports & Analytics',
+    icon: BarChart3,
+    group: 'governance',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'VIEWER',
+    ],
+  },
+  {
+    id: 'team',
+    label: 'Team & Access',
+    icon: Users,
+    group: 'governance',
+    roles: ['ORGANIZATION_OWNER', 'ORGANIZATION_ADMIN'],
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    icon: Settings,
+    group: 'governance',
+    roles: [
+      'ORGANIZATION_OWNER',
+      'ORGANIZATION_ADMIN',
+      'PLANT_MANAGER',
+      'SUPERVISOR',
+      'ENGINEER',
+      'TECHNICIAN',
+    ],
+  },
 ];
 
 const GROUP_LABELS: Record<string, string> = {
@@ -249,7 +412,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Clickable Company Name to navigate to Overview */}
             <div
-              onClick={() => onSelectModule('overview')}
+              onClick={() => onSelectModule(role === 'WORKER' ? 'maintenance' : 'overview')}
               className="min-w-0 flex-1 cursor-pointer group"
               title={`Active Company: ${companyName}`}
             >

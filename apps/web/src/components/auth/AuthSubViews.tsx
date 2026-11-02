@@ -726,9 +726,18 @@ export const FactoryCodeActivationView: React.FC<ViewProps> = ({ onBackToLogin, 
     if (submitting) return;
     setError(null);
 
-    const cleanCode = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (cleanCode.length < 6) {
-      setError('Please enter a valid 8-character activation code.');
+    let cleanCode = code.trim();
+    if (cleanCode.includes('token=')) {
+      const match = cleanCode.match(/token=([a-zA-Z0-9_-]+)/);
+      if (match) cleanCode = match[1];
+    } else if (cleanCode.includes('invite=')) {
+      const match = cleanCode.match(/invite=([a-zA-Z0-9_-]+)/);
+      if (match) cleanCode = match[1];
+    }
+
+    cleanCode = cleanCode.trim().toUpperCase();
+    if (cleanCode.length < 4) {
+      setError('Please enter a valid activation code or invitation token.');
       return;
     }
     if (!email.trim() || !email.includes('@')) {
@@ -783,7 +792,7 @@ export const FactoryCodeActivationView: React.FC<ViewProps> = ({ onBackToLogin, 
 
       <div>
         <label htmlFor="act-code" className="block text-xs font-semibold text-[#1A202C] mb-1.5">
-          8-CHARACTER ACTIVATION CODE
+          ACTIVATION CODE OR INVITE TOKEN
         </label>
         <div className="relative">
           <KeyRound className="w-4 h-4 text-[#94A3B8] absolute left-3 top-3" />
@@ -791,8 +800,8 @@ export const FactoryCodeActivationView: React.FC<ViewProps> = ({ onBackToLogin, 
             id="act-code"
             type="text"
             required
-            maxLength={10}
-            placeholder="K9X2-7M4P"
+            maxLength={64}
+            placeholder="FORGEX-9A4B2C or Code"
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             className="w-full pl-9 pr-3 py-2.5 bg-white border border-[#CBD5E1] rounded-md text-sm text-[#1A202C] font-mono uppercase tracking-widest focus:outline-none focus:border-[#2563EB]"
