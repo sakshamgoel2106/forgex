@@ -3,8 +3,8 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 
 const isTestEnv = process.env.NODE_ENV === 'test';
-dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
-dotenv.config({ path: path.resolve(process.cwd(), 'apps/api/.env'), override: true });
+dotenv.config({ path: path.resolve(process.cwd(), 'apps/api/.env') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 dotenv.config({ path: path.resolve(process.cwd(), '../../.env') });
 if (isTestEnv) {
   process.env.NODE_ENV = 'test';

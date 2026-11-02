@@ -296,6 +296,12 @@ export class InMemoryDataStore implements IDataStore {
       externalAuthId: dto.externalAuthId,
       email: dto.email,
       fullName: dto.fullName,
+      emailVerified: dto.emailVerified,
+      status: dto.status as User['status'],
+      passwordHash: dto.passwordHash,
+      googleId: dto.googleId,
+      googleEmail: dto.googleEmail,
+      authProvider: dto.authProvider as User['authProvider'],
       createdAt: now,
       updatedAt: now,
     };
