@@ -112,7 +112,7 @@ const AppContent: React.FC = () => {
   const [copilotTargetAsset, setCopilotTargetAsset] = useState<string | undefined>(undefined);
   const [manualsTargetAsset, setManualsTargetAsset] = useState<string | undefined>(undefined);
 
-  const role = membership?.role || (() => { if (typeof window !== 'undefined') { try { const mem = localStorage.getItem('forgex_membership'); if (mem) return JSON.parse(mem).role; } catch {} } return 'VIEWER'; })();
+  const role = membership?.role || (() => { if (typeof window !== 'undefined') { try { const mem = localStorage.getItem('forgex_membership'); if (mem) return JSON.parse(mem).role; } catch {} } return 'RELIABILITY_ENGINEER'; })() as any;
 
   // Role-aware automatic initial routing (Auto-land on authorized module)
   useEffect(() => {

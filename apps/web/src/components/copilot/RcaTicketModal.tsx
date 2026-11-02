@@ -227,21 +227,26 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
   // 1. Open in RCA Copilot
   const handleOpenInRca = () => {
     const primarySymptom = symptoms[0] || title || `Operational anomaly on ${selectedAssetTag}`;
+    const cleanCause = rootCauseAnalysis
+      ? rootCauseAnalysis.replace(/^[#\s*•-]+/, '').slice(0, 140)
+      : 'Mechanical vibration & alignment deviation';
+
     try {
       const ticketPayload = {
         assetTag: selectedAssetTag,
         symptom: primarySymptom,
         errorCode: 'DIAG-ALERT-01',
-        topRootCause: rootCauseAnalysis ? rootCauseAnalysis.slice(0, 100) : 'Mechanical vibration & alignment deviation',
+        topRootCause: cleanCause,
         loadDirectRca: true,
         createdAt: new Date().toISOString(),
       };
       sessionStorage.setItem('forgex_rca_ticket', JSON.stringify(ticketPayload));
       sessionStorage.setItem('forgex_rca_handoff', JSON.stringify(ticketPayload));
 
-      window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: 'troubleshooting' }));
-      window.dispatchEvent(new CustomEvent('forgex:load_rca'));
-      window.location.hash = '#troubleshooting';
+      window.dispatchEvent(
+        new CustomEvent('forgex:navigate', { detail: { module: 'troubleshooting', state: ticketPayload } })
+      );
+      window.dispatchEvent(new CustomEvent('forgex:load_rca', { detail: ticketPayload }));
     } catch {}
 
     onOpenInRca?.(selectedAssetTag, primarySymptom);

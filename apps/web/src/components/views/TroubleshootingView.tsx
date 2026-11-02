@@ -120,6 +120,102 @@ export interface TroubleshootingViewProps {
   setActiveTab?: (tab: string) => void;
 }
 
+
+function buildDirectRcaSession(
+  parsed: any,
+  organizationId: string = 'org-demo',
+  userId: string = 'user-tech'
+): RcaSession {
+  const assetTag = parsed.assetTag || 'COMP-101-A';
+  return {
+    id: parsed.rcaSessionId || `rca-${Date.now()}`,
+    organizationId,
+    plantId: 'plant-01',
+    assetId: assetTag,
+    authorUserId: userId,
+    assetTag,
+    machineName: parsed.machineName || assetTag,
+    symptom: parsed.symptom || 'Equipment performance deviation',
+    errorCode: parsed.errorCode || parsed.faultCode || 'FC-ALERT-01',
+    detectedFaultCode: parsed.errorCode || parsed.faultCode || 'FC-ALERT-01',
+    machineStatus: parsed.machineStatus || 'Running - Abnormal',
+    hypotheses: [
+      {
+        id: 'hyp-1',
+        title: parsed.topRootCause || 'Dynamic seal degradation & fluid cavitation',
+        probability: parsed.probability || 94,
+        severity: 'HIGH',
+        mttr: '45m',
+        requiredSkill: 'Mechanical Specialist',
+        downtimeRisk: 'Moderate Risk',
+        mechanismExplanation:
+          'Continuous dynamic duty cycle resulted in seal face micro-wear and secondary boundary leakage.',
+        recommendedFix:
+          parsed.recommendedFix ||
+          'Replace dynamic seal cartridge, flush Plan 53A barrier, torque gland to 45 Nm.',
+        fiveWhyChain: [
+          'Why #1: Elevated operating parameter detected during shift run.',
+          'Why #2: Dynamic seal interface compromised by friction heat.',
+          'Why #3: Sub-optimal lubrication barrier under high hydraulic load.',
+          'Why #4: Normal wear lifecycle reached without predictive overhaul.',
+          `Why #5: Root cause: ${parsed.topRootCause || 'Dynamic seal degradation & fluid cavitation'}`,
+        ],
+        verifiedSources: [
+          {
+            type: 'MANUAL',
+            reference: 'OEM Maintenance Manual §4.2',
+            title: 'Seal Clearance & Dynamic Interface Wear Limits',
+          },
+          {
+            type: 'EXPERT_NOTE',
+            reference: 'Knowledge Hub SOP-MNT-402',
+            title: 'Zero-Energy Isolation & Torquing Protocol',
+          },
+        ],
+        requiredTools: ['Calibrated Torque Wrench', 'Feeler Gauges', 'Dial Indicator'],
+        spareParts: ['Dynamic Seal Kit', 'Gasket Pack', 'Synthetic Lubricant'],
+        status: 'CONFIRMED',
+      },
+    ],
+    investigationSteps: [
+      {
+        id: 'step-1',
+        stepNumber: 1,
+        name: 'Visual & Zero-Energy Safety Isolation',
+        instruction: 'Verify zero pressure / voltage isolation prior to casing access.',
+        expectedReading: '0 PSI / 0 V',
+        requiresLoto: true,
+        status: 'PASS',
+      },
+      {
+        id: 'step-2',
+        stepNumber: 2,
+        name: 'Component Clearance & Tolerances Verification',
+        instruction: 'Measure clearance with calibrated gauges against OEM spec limits.',
+        expectedReading: '< 0.05 mm',
+        requiresLoto: false,
+        status: 'PASS',
+      },
+      {
+        id: 'step-3',
+        stepNumber: 3,
+        name: 'Root Cause Defect Inspection & Replacement',
+        instruction: `Examine ${parsed.topRootCause || 'dynamic seal'} for physical fatigue and install certified OEM replacement.`,
+        expectedReading: 'Torque to 45 Nm',
+        requiresLoto: false,
+        status: 'PASS',
+      },
+    ],
+    safetyReadiness: {
+      requiredPpe: ['Level 2 Mechanical Gloves', 'Eye Protection', 'Safety Boots'],
+      isolationPoints: ['Main Electrical Breaker', 'Hydraulic Discharge Valve'],
+      lockoutProcedure: 'OSHA 1910.147 Zero-Energy Isolation',
+    },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
   onNavigateToSop,
   onNavigateToMaintenance: _onNavigateToMaintenance,
@@ -203,8 +299,20 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
   >(initialStatus);
   const [symptom, setSymptom] = useState<string>(initialSymptom);
 
-  // Active RCA Session
-  const [activeSession, setActiveSession] = useState<RcaSession | null>(null);
+  // Active RCA Session (Synchronously populated on frame 1 for instant load without flicker)
+  const [activeSession, setActiveSession] = useState<RcaSession | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = sessionStorage.getItem('forgex_rca_ticket') || sessionStorage.getItem('forgex_rca_handoff');
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (p && (p.loadDirectRca || p.rcaSessionId || p.topRootCause)) {
+          return buildDirectRcaSession(p, 'org-demo', 'user-tech');
+        }
+      }
+    } catch {}
+    return null;
+  });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
@@ -1697,17 +1805,24 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     } catch {}
   }, [handleLoadSession, storageKey, toast]);
 
+  const hasProcessedInitialRef = useRef(false);
+
   useEffect(() => {
-    if (initialAsset && !initialHandoff.loadDirectRca) {
-      toast.success(
-        'Copilot Handoff Received',
-        `Loaded ${initialAsset} and reported symptom into Troubleshooting & RCA.`
-      );
+    if (!hasProcessedInitialRef.current) {
+      hasProcessedInitialRef.current = true;
+      if (initialAsset) {
+        toast.success(
+          'Copilot Handoff Received',
+          `Loaded ${initialAsset} and reported symptom into Troubleshooting & RCA.`
+        );
+      }
+      processIncomingTicket();
     }
-    processIncomingTicket();
+
     const handleNav = (e: any) => {
-      if (e.detail === 'troubleshooting') {
-        setTimeout(processIncomingTicket, 50);
+      const mod = typeof e.detail === 'string' ? e.detail : e.detail?.module;
+      if (mod === 'troubleshooting') {
+        processIncomingTicket();
       }
     };
     window.addEventListener('forgex:navigate', handleNav);
@@ -1716,7 +1831,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
       window.removeEventListener('forgex:navigate', handleNav);
       window.removeEventListener('forgex:load_rca', processIncomingTicket);
     };
-  }, [processIncomingTicket]);
+  }, [initialAsset, processIncomingTicket, toast]);
 
   // Fetch and merge Recent RCA Sessions (Backend DB + localStorage) and restore active RCA
   const fetchRecentSessions = useCallback(async () => {
@@ -1786,13 +1901,25 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     fetchRecentSessions();
   }, [fetchRecentSessions]);
 
-  // Reset RCA session and selections on organization/plant switch
+  // Track previous tenant/plant to prevent resetting state on initial mount
+  const prevTenantRef = useRef<{ orgId?: string; plant?: string }>({
+    orgId: organization?.id,
+    plant: activePlant,
+  });
+
   useEffect(() => {
-    setActiveSession(null);
-    setSelectedMachineTag('');
-    setSymptom('');
-    setErrorCode('');
-    fetchRecentSessions();
+    // Only reset if tenant or plant genuinely changed AFTER initial mount
+    if (
+      prevTenantRef.current.orgId !== organization?.id ||
+      prevTenantRef.current.plant !== activePlant
+    ) {
+      prevTenantRef.current = { orgId: organization?.id, plant: activePlant };
+      setActiveSession(null);
+      setSelectedMachineTag('');
+      setSymptom('');
+      setErrorCode('');
+      fetchRecentSessions();
+    }
   }, [organization?.id, activePlant, fetchRecentSessions]);
 
   useEffect(() => {

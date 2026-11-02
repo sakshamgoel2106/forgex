@@ -498,7 +498,6 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
         })
       );
       window.dispatchEvent(new CustomEvent('forgex:load_rca', { detail: handoffPayload }));
-      window.location.hash = '#troubleshooting';
     } catch {}
 
     onNavigate?.('troubleshooting');
