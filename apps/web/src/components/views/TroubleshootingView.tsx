@@ -149,18 +149,59 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     window.speechSynthesis.onvoiceschanged = updateVoices;
   }, []);
 
-  // Machine state restricted strictly to Knowledge Hub uploaded machines
-  const [machines, setMachines] = useState<MachineItem[]>([]);
+  // Synchronous State Handoff Extraction (Zero Flicker & Immediate First-Frame Population)
+  const [initialHandoff] = useState<Record<string, any>>(() => {
+    if (typeof window === 'undefined') return {};
+    let handoff: Record<string, any> = {};
+    try {
+      const raw = sessionStorage.getItem('forgex_rca_handoff') || sessionStorage.getItem('forgex_rca_ticket');
+      if (raw) {
+        handoff = JSON.parse(raw) || {};
+        // Clean up storage immediately after synchronous read so subsequent manual refreshes start clean
+        sessionStorage.removeItem('forgex_rca_handoff');
+        sessionStorage.removeItem('forgex_rca_ticket');
+      }
+    } catch {}
+    if (!handoff.assetTag && !handoff.machine && !handoff.symptom) {
+      try {
+        const historyState = (window.history && window.history.state) ? window.history.state : null;
+        if (historyState && typeof historyState === 'object' && (historyState.assetTag || historyState.machine || historyState.symptom)) {
+          handoff = historyState;
+        }
+      } catch {}
+    }
+    return handoff;
+  });
+
+  const initialAsset = (initialHandoff.assetTag || initialHandoff.machine || initialHandoff.assetId || '').trim();
+  const initialSymptom = initialHandoff.symptom || '';
+  const initialErrorCode = initialHandoff.faultCode || initialHandoff.errorCode || '';
+  const initialStatus = (initialHandoff.machineStatus as any) || (initialAsset || initialSymptom ? 'Running - Abnormal' : '');
+
+  // Machine state restricted strictly to Knowledge Hub uploaded machines (synchronously seeded to eliminate flicker)
+  const [machines, setMachines] = useState<MachineItem[]>(() => {
+    if (initialAsset) {
+      return [
+        {
+          id: initialAsset,
+          name: initialHandoff.machineName || `Equipment (${initialAsset})`,
+          asset_tag: initialAsset,
+          assetTag: initialAsset,
+        },
+      ];
+    }
+    return [];
+  });
   const [isLoadingMachines, setIsLoadingMachines] = useState(true);
   const [hasNoDocuments, setHasNoDocuments] = useState(false);
-  const [selectedMachineTag, setSelectedMachineTag] = useState<string>('');
+  const [selectedMachineTag, setSelectedMachineTag] = useState<string>(initialAsset);
 
-  // Diagnostic Inputs
-  const [errorCode, setErrorCode] = useState('');
+  // Diagnostic Inputs initialized synchronously on frame 1
+  const [errorCode, setErrorCode] = useState<string>(initialErrorCode);
   const [machineStatus, setMachineStatus] = useState<
     'Running - Abnormal' | 'Tripped / Offline' | 'Startup Failure' | ''
-  >('');
-  const [symptom, setSymptom] = useState('');
+  >(initialStatus);
+  const [symptom, setSymptom] = useState<string>(initialSymptom);
 
   // Active RCA Session
   const [activeSession, setActiveSession] = useState<RcaSession | null>(null);
@@ -1462,6 +1503,21 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
           }
         });
 
+        if (selectedMachineTag || initialAsset) {
+          const targetTag = selectedMachineTag || initialAsset;
+          const hasTag = filtered.some((m) =>
+            (m.asset_tag || m.assetTag || m.id || '').toUpperCase() === targetTag.toUpperCase() ||
+            (m.name || '').toUpperCase().includes(targetTag.toUpperCase())
+          );
+          if (!hasTag) {
+            filtered.unshift({
+              id: targetTag,
+              name: initialHandoff.machineName || `Equipment (${targetTag})`,
+              asset_tag: targetTag,
+              assetTag: targetTag,
+            });
+          }
+        }
         setMachines(filtered);
         // Start completely clean with "-- Select Uploaded Machine --" (no pre-selected default)
       })
@@ -1642,6 +1698,12 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
   }, [handleLoadSession, storageKey, toast]);
 
   useEffect(() => {
+    if (initialAsset && !initialHandoff.loadDirectRca) {
+      toast.success(
+        'Copilot Handoff Received',
+        `Loaded ${initialAsset} and reported symptom into Troubleshooting & RCA.`
+      );
+    }
     processIncomingTicket();
     const handleNav = (e: any) => {
       if (e.detail === 'troubleshooting') {
