@@ -23,32 +23,6 @@ export async function runMigrations(pool: pg.Pool): Promise<string[]> {
       );
     `);
 
-    // Ensure WORKER is permitted in organization_memberships_role_check
-    await client.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.constraint_column_usage 
-          WHERE table_name = 'organization_memberships' AND constraint_name = 'organization_memberships_role_check'
-        ) THEN
-          ALTER TABLE organization_memberships DROP CONSTRAINT organization_memberships_role_check;
-        END IF;
-        ALTER TABLE organization_memberships ADD CONSTRAINT organization_memberships_role_check 
-        CHECK (role IN (
-          'ORGANIZATION_OWNER',
-          'ORGANIZATION_ADMIN',
-          'PLANT_MANAGER',
-          'ENGINEER',
-          'TECHNICIAN',
-          'VIEWER',
-          'WORKER',
-          'ENGINEER_TECHNICIAN'
-        ));
-      EXCEPTION
-        WHEN duplicate_object THEN NULL;
-      END $$;
-    `);
-
     let migrationsDir = path.resolve(__dirname, 'migrations');
     if (!fs.existsSync(migrationsDir)) {
       migrationsDir = path.resolve(__dirname, '../../src/db/migrations');
@@ -90,6 +64,37 @@ export async function runMigrations(pool: pg.Pool): Promise<string[]> {
         }
       }
     }
+
+    // Ensure WORKER is permitted in organization_memberships_role_check
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.tables 
+          WHERE table_name = 'organization_memberships'
+        ) THEN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.constraint_column_usage 
+            WHERE table_name = 'organization_memberships' AND constraint_name = 'organization_memberships_role_check'
+          ) THEN
+            ALTER TABLE organization_memberships DROP CONSTRAINT organization_memberships_role_check;
+          END IF;
+          ALTER TABLE organization_memberships ADD CONSTRAINT organization_memberships_role_check 
+          CHECK (role IN (
+            'ORGANIZATION_OWNER',
+            'ORGANIZATION_ADMIN',
+            'PLANT_MANAGER',
+            'ENGINEER',
+            'TECHNICIAN',
+            'VIEWER',
+            'WORKER',
+            'ENGINEER_TECHNICIAN'
+          ));
+        END IF;
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
 
     return appliedMigrations;
   } finally {

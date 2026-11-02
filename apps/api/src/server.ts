@@ -33,7 +33,7 @@ async function startServer() {
   const vectorStore = createVectorStoreAdapter();
 
   // 3. Ensure baseline demo organization is initialized strictly when explicitly enabled or in local development
-  if (process.env.ALLOW_DEMO_BOOTSTRAP === 'true' || config.DEPLOYMENT_MODE === 'local_dev') {
+  if (process.env.ALLOW_DEMO_BOOTSTRAP === 'true') {
     try {
       await bootstrapInitialData(dataStore, storageAdapter, embeddingAdapter, vectorStore);
       logger.info('Demo baseline data and user credentials initialized successfully');
