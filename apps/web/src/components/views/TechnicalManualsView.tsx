@@ -664,39 +664,38 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
 
   // Filter out any stale dummy or unmapped plants
   const validPlantOptions = React.useMemo(() => {
-    const list = plantOptions.filter(
+    return plantOptions.filter(
       (p) => !['RIVERSIDE', 'GULF', 'MIDWEST', 'ALL'].includes((p.code || p.id || '').toUpperCase())
     );
-    if (list.length > 0) return list;
-    return [
-      {
-        id: 'PLANT-TX-04',
-        code: 'PLANT-TX-04',
-        name: 'Texas Petrochemical Refinery Train 4',
-      },
-    ];
   }, [plantOptions]);
 
   // Initialize target plant when plantOptions or activePlant change
   const currentPlantDefault = React.useMemo(() => {
+    if (validPlantOptions.length === 0) return '';
     const matched = validPlantOptions.find(
       (p) =>
         p.id === activePlant ||
         p.code?.toUpperCase() === activePlant?.toUpperCase()
     );
     if (matched) return matched.code || matched.id;
-    return validPlantOptions[0]?.code || validPlantOptions[0]?.id || 'PLANT-TX-04';
+    return validPlantOptions[0]?.code || validPlantOptions[0]?.id || '';
   }, [activePlant, validPlantOptions]);
 
   useEffect(() => {
-    const isLegacy = (code: string) => !code || ['RIVERSIDE', 'GULF', 'MIDWEST', 'ALL'].includes(code.toUpperCase());
-    if (isLegacy(uploadForm.plantCode) && currentPlantDefault) {
+    const isFormPlantValid = validPlantOptions.some(
+      (p) => p.id === uploadForm.plantCode || p.code?.toUpperCase() === uploadForm.plantCode?.toUpperCase()
+    );
+    if (!isFormPlantValid && currentPlantDefault) {
       setUploadForm((prev) => ({ ...prev, plantCode: currentPlantDefault }));
     }
-    if (isLegacy(bulkDefaults.plantCode) && currentPlantDefault) {
+
+    const isBulkPlantValid = validPlantOptions.some(
+      (p) => p.id === bulkDefaults.plantCode || p.code?.toUpperCase() === bulkDefaults.plantCode?.toUpperCase()
+    );
+    if (!isBulkPlantValid && currentPlantDefault) {
       setBulkDefaults((prev) => ({ ...prev, plantCode: currentPlantDefault }));
     }
-  }, [currentPlantDefault, uploadForm.plantCode, bulkDefaults.plantCode]);
+  }, [currentPlantDefault, validPlantOptions, uploadForm.plantCode, bulkDefaults.plantCode]);
 
   // Load machines for viewer association
   const fetchMachines = async () => {
@@ -1168,7 +1167,6 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
 
     const docNum = uploadForm.documentNumber.trim().toUpperCase();
     const title = uploadForm.title.trim();
-    const plantId = uploadForm.plantCode.trim() || currentPlantDefault;
     const category = uploadForm.category || 'SOP';
     const revision = (uploadForm.revision || 'REV-A').trim().toUpperCase();
     const assetTags = uploadForm.assetTags.trim();
@@ -1187,7 +1185,6 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
       formData.append('title', title);
       formData.append('category', category);
       formData.append('revision', revision);
-      formData.append('plantId', plantId);
       formData.append('assetTags', assetTags);
       formData.append('assetIds', JSON.stringify(singleSelectedAssetIds));
 
@@ -1241,8 +1238,6 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
       return;
     }
 
-    const plantId = bulkDefaults.plantCode.trim() || currentPlantDefault || 'PLANT-TX-04';
-
     setIsUploading(true);
 
     // Update statuses to UPLOADING
@@ -1250,7 +1245,6 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
 
     try {
       const formData = new FormData();
-      formData.append('plantId', plantId);
       formData.append('defaultCategory', bulkDefaults.defaultCategory);
       formData.append('defaultRevision', (bulkDefaults.defaultRevision || 'REV-A').trim().toUpperCase());
       formData.append('defaultAssetTags', bulkDefaults.defaultAssetTags.trim());
@@ -1983,8 +1977,8 @@ export const TechnicalManualsView: React.FC<TechnicalManualsViewProps> = ({
                       <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.totalPages}</div>
                     </div>
                     <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
-                      <div className="text-[10px] text-[#64748B] font-semibold">FACILITY / PLANT</div>
-                      <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{selectedDoc.plantCode}</div>
+                      <div className="text-[10px] text-[#64748B] font-semibold">ORGANIZATION / SCOPE</div>
+                      <div className="text-[#1A202C] font-bold mt-0.5 font-mono">{organization?.name || selectedDoc.plantCode}</div>
                     </div>
                     <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
                       <div className="text-[10px] text-[#64748B] font-semibold">PAYLOAD SIZE</div>

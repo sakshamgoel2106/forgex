@@ -1,13 +1,12 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Request, Response } from 'express';
-import type { DocumentType, TechnicalDocument, DocumentVersion } from '@forgex/shared-types';
+import type { DocumentType, TechnicalDocument, DocumentVersion, Plant } from '@forgex/shared-types';
 import type { IDataStore } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
 import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import type { IngestionQueue } from '../jobs/ingestionQueue.js';
 import { validateUpload, sanitizeFilename } from '../ingestion/fileValidator.js';
-import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
 export class DocumentController {
@@ -118,33 +117,17 @@ export class DocumentController {
         return;
       }
 
-      // Resolve an explicitly selected plant within this organization only.
-      let plant = null;
-      if (req.body.plantId) {
-        plant = await this.dataStore.getPlantById(organizationId, req.body.plantId);
-        if (!plant) {
-          res.status(400).json({
-            success: false,
-            error: {
-              code: 'FORGEX_INVALID_PLANT',
-              message: 'The selected plant does not exist in this organization.',
-            },
-          });
-          return;
-        }
-      }
-
+      // Resolve target plant within organization boundaries
+      const plant = await this.resolveTargetPlant(organizationId, req.body.plantId);
       if (!plant) {
-        const existingPlants = await this.dataStore.listPlants(organizationId);
-        if (existingPlants.length > 0) {
-          plant = existingPlants[0];
-        } else {
-          plant = await this.dataStore.createPlant(organizationId, {
-            code: config.PLANT_SITE_CODE || 'PLANT-TX-04',
-            name: 'Main Facility',
-            location: 'Single Factory',
-          });
-        }
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FORGEX_INVALID_PLANT',
+            message: 'The selected plant does not exist in this organization.',
+          },
+        });
+        return;
       }
 
       // Parse and resolve relational asset IDs and asset tags
@@ -336,11 +319,9 @@ export class DocumentController {
 
       const ext = path.extname(filename).toLowerCase().replace('.', '') || 'pdf';
 
-      // 1. Resolve Plant (Single factory / multi-plant)
-      let plant = requestedPlantId
-        ? await this.dataStore.getPlantById(organizationId, requestedPlantId)
-        : null;
-      if (requestedPlantId && !plant) {
+      // 1. Resolve Plant within organization boundaries
+      const plant = await this.resolveTargetPlant(organizationId, requestedPlantId);
+      if (!plant) {
         res.status(400).json({
           success: false,
           error: {
@@ -349,18 +330,6 @@ export class DocumentController {
           },
         });
         return;
-      }
-      if (!plant) {
-        const existingPlants = await this.dataStore.listPlants(organizationId);
-        if (existingPlants.length > 0) {
-          plant = existingPlants[0];
-        } else {
-          plant = await this.dataStore.createPlant(organizationId, {
-            code: config.PLANT_SITE_CODE || 'PLANT-TX-04',
-            name: 'Main Facility',
-            location: 'Single Factory',
-          });
-        }
       }
 
       // 2. Resolve target assets
@@ -617,33 +586,17 @@ export class DocumentController {
         metadataOverrides,
       } = req.body;
 
-      // Resolve an explicitly selected plant within this organization only.
-      let plant = null;
-      if (req.body.plantId) {
-        plant = await this.dataStore.getPlantById(organizationId, req.body.plantId);
-        if (!plant) {
-          res.status(400).json({
-            success: false,
-            error: {
-              code: 'FORGEX_INVALID_PLANT',
-              message: 'The selected plant does not exist in this organization.',
-            },
-          });
-          return;
-        }
-      }
-
+      // Resolve target plant within organization boundaries
+      const plant = await this.resolveTargetPlant(organizationId, req.body.plantId);
       if (!plant) {
-        const existingPlants = await this.dataStore.listPlants(organizationId);
-        if (existingPlants.length > 0) {
-          plant = existingPlants[0];
-        } else {
-          plant = await this.dataStore.createPlant(organizationId, {
-            code: config.PLANT_SITE_CODE || 'PLANT-TX-04',
-            name: 'Main Facility',
-            location: 'Single Factory',
-          });
-        }
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FORGEX_INVALID_PLANT',
+            message: 'The selected plant does not exist in this organization.',
+          },
+        });
+        return;
       }
 
       // Parse metadata overrides if supplied as JSON
@@ -1274,6 +1227,76 @@ export class DocumentController {
   /**
    * Helper: Resolves machine records, relational asset IDs, and authoritative asset tags
    */
+  
+  /**
+   * Helper: Resolves target plant within organization boundaries.
+   * - Matches direct ID or code within the active organization.
+   * - Fallback gracefully if passed a default/generic placeholder (PLANT-TX-04, UUID, default, undefined, null, all)
+   * - Auto-provisions default facility if organization has 0 plants.
+   * - Returns null strictly for intentional unknown/cross-tenant IDs (security enforcement).
+   */
+  private async resolveTargetPlant(organizationId: string, rawPlantIdInput?: string): Promise<Plant | null> {
+    const rawPlantId = typeof rawPlantIdInput === 'string' ? rawPlantIdInput.trim() : '';
+
+    let plant: Plant | null = null;
+    if (rawPlantId) {
+      plant = await this.dataStore.getPlantById(organizationId, rawPlantId);
+    }
+
+    if (!plant) {
+      const existingPlants = await this.dataStore.listPlants(organizationId);
+
+      if (existingPlants.length > 0) {
+        const KNOWN_DEFAULT_PLANTS = [
+          'plant-tx-04',
+          '02cb963e-461a-4e42-a29b-cce6f7c0a7cf',
+          'plant-demo-01',
+          'default',
+          'undefined',
+          'null',
+          'all',
+          'site-01',
+          'plant-machine',
+          'plant-wide',
+          'plant-facility',
+          'plant-custom',
+          'primary',
+          'general',
+          'factory',
+        ];
+        const isGenericDefault =
+          !rawPlantId || KNOWN_DEFAULT_PLANTS.includes(rawPlantId.toLowerCase());
+
+        if (isGenericDefault) {
+          plant = existingPlants[0];
+        } else {
+          const matched = existingPlants.find(
+            (p) =>
+              p.id.toLowerCase() === rawPlantId.toLowerCase() ||
+              p.code.toLowerCase() === rawPlantId.toLowerCase() ||
+              p.name.toLowerCase() === rawPlantId.toLowerCase()
+          );
+          if (matched) {
+            plant = matched;
+          } else {
+            // Explicit unknown or foreign cross-tenant plant passed
+            return null;
+          }
+        }
+      } else {
+        // Zero plants exist in this tenant: auto-create the organization's primary facility
+        plant = await this.dataStore.createPlant(organizationId, {
+          code: `PLANT-${organizationId.slice(0, 4).toUpperCase()}`,
+          name: 'Primary Operations Facility',
+          location: 'Single Factory',
+          airGappedMode: false,
+        });
+      }
+    }
+
+    return plant;
+  }
+
   private async resolveAssetsAndTags(
     organizationId: string,
     rawAssetIds: any,

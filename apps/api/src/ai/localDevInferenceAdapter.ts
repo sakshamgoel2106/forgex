@@ -145,7 +145,7 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
       }
 
       return {
-        answerText: langConfig.insufficientEvidenceMessage,
+        answerText: `No verified information was found across your plant manuals, expert notes, or maintenance history for this specific issue. ${langConfig.insufficientEvidenceMessage}`,
         confidence: 'INSUFFICIENT_EVIDENCE',
         isInsufficientEvidence: true,
         conflictDetected: false,
@@ -245,6 +245,7 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
         .filter((l) => {
           if (l.length <= 10) return false;
           if (l.startsWith('--')) return false;
+          if (l.startsWith('[Asset:') || l.startsWith('[OCR EXTRACTED') || l.startsWith('[Chunk ID:')) return false;
           if (/^page\s+\d+/i.test(l)) return false;
           if (/\b\d+\s+e-sv\s+series\b/i.test(l)) return false;
           if (/^en\s*-\s*original/i.test(l)) return false;
@@ -265,6 +266,7 @@ export class LocalDevInferenceAdapter implements IMultimodalGenerationProvider {
         .filter((l) => {
           if (l.length <= 10) return false;
           if (l.startsWith('--')) return false;
+          if (l.startsWith('[Asset:') || l.startsWith('[OCR EXTRACTED') || l.startsWith('[Chunk ID:')) return false;
           if (/^page\s+\d+/i.test(l)) return false;
           if (/\b\d+\s+e-sv\s+series\b/i.test(l)) return false;
           if (/^en\s*-\s*original/i.test(l)) return false;

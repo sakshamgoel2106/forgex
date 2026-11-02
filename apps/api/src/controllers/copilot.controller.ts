@@ -85,7 +85,12 @@ export class CopilotController {
       const candidateTagOrId = machineId || assetId || rawAssetTag;
       let resolvedMachine = null;
       if (candidateTagOrId) {
-        resolvedMachine = await this.dataStore.getMachineById(organizationId, candidateTagOrId);
+        if (isUuid(candidateTagOrId)) {
+          resolvedMachine = await this.dataStore.getMachineById(organizationId, candidateTagOrId);
+        }
+        if (!resolvedMachine) {
+          resolvedMachine = await this.dataStore.getMachineByAssetTag(organizationId, candidateTagOrId);
+        }
         if (!resolvedMachine && rawAssetTag) {
           resolvedMachine = await this.dataStore.getMachineByAssetTag(organizationId, rawAssetTag);
         }
@@ -183,9 +188,12 @@ export class CopilotController {
               exactVerbatimQuote: undefined,
             }
       );
+      const isUnverifiedResult = Boolean(result.assistantMessage.isUnverified);
+      const effectiveCitations = isUnverifiedResult ? [] : citations;
       const sanitizedAssistantMessage = {
         ...result.assistantMessage,
-        citations,
+        citations: effectiveCitations,
+          isUnverified: isUnverifiedResult,
       };
 
       const userMessageWithTelemetry = {
@@ -202,11 +210,12 @@ export class CopilotController {
           conversationId: result.conversationId,
           messageId: result.assistantMessage.id,
           answer: result.assistantMessage.content,
-          confidence: result.assistantMessage.confidence,
+          confidence: isUnverifiedResult ? 'INSUFFICIENT_EVIDENCE' : result.assistantMessage.confidence,
           questionMode: result.questionMode,
-          citations,
+          citations: effectiveCitations,
+          isUnverified: isUnverifiedResult,
           safetyAlerts: result.safetyAlerts || result.assistantMessage.safetyAlerts || [],
-          isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
+          isInsufficientEvidence: isUnverifiedResult || result.assistantMessage.isInsufficientEvidence,
           conflictDetected: result.assistantMessage.conflictDetected,
           conflictDetails: result.assistantMessage.conflictDetails,
           ticket: result.ticket,
@@ -230,8 +239,8 @@ export class CopilotController {
           assetId,
           machineId,
           citationsCount: result.assistantMessage.citations.length,
-          confidence: result.assistantMessage.confidence,
-          isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
+          confidence: isUnverifiedResult ? 'INSUFFICIENT_EVIDENCE' : result.assistantMessage.confidence,
+          isInsufficientEvidence: isUnverifiedResult || result.assistantMessage.isInsufficientEvidence,
           ticketNumber: result.assistantMessage.ticketNumber,
           hasAcousticTelemetry: Boolean(acousticTelemetry),
           acousticPattern: acousticTelemetry?.detectedPattern,

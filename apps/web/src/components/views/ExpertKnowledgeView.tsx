@@ -1347,7 +1347,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                 </h2>
                 <p className="text-xs text-[#64748B] leading-tight mt-0.5 font-sans">
                   Frontline senior technician wisdom, undocumented field tricks & startup protocols for{' '}
-                  <span className="font-semibold text-slate-700">{organization?.name || 'Your Plant'}</span>
+                  <span className="font-semibold text-slate-700">{organization?.name || 'Your Organization'}</span>
                 </p>
               </div>
             </div>
@@ -1491,7 +1491,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           <div>
             <h3 className="text-base font-bold text-gray-900">No Expert Knowledge Notes Recorded Yet</h3>
             <p className="text-xs text-gray-500 mt-1.5 leading-relaxed font-sans">
-              Capture frontline tribal wisdom, unofficial maintenance tricks, non-standard tooling tips, and undocumented operational behaviors across your plant machinery. Notes are automatically indexed for AI Copilot queries.
+              Capture frontline tribal wisdom, unofficial maintenance tricks, non-standard tooling tips, and undocumented operational behaviors across your equipment & machinery. Notes are automatically indexed for AI Copilot queries.
             </p>
           </div>
           <Button
@@ -1696,7 +1696,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                   <span className="text-slate-500">•</span>
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 shrink-0">
                     <Flame className="w-3 h-3 text-amber-300" />
-                    <span>Applied {getPlantAppliedCount(modalNote)}x in Plant</span>
+                    <span>Applied {getPlantAppliedCount(modalNote)}x in Production</span>
                   </span>
                 </div>
               </div>
@@ -1716,7 +1716,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         <strong>Observed Trigger:</strong> {cleanModalTrigger || modalNote.symptom || 'High vibration in machine during Running - Abnormal operation'}
                       </p>
                       <p className="text-xs text-amber-950 font-sans leading-relaxed mt-1 break-words">
-                        <strong>Task During Issue:</strong> {cleanTaskDuringIssue || 'Standard Plant Operation / AI RCA Diagnostic'}
+                        <strong>Task During Issue:</strong> {cleanTaskDuringIssue || 'Standard Operations / AI RCA Diagnostic'}
                       </p>
                     </div>
                   </div>
@@ -1840,7 +1840,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
                         type="button"
                         onClick={(e) => handleUpvote(modalNote.id, e)}
                         className="h-8 px-2.5 text-xs font-medium rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 transition cursor-pointer active:scale-95 shadow-2xs whitespace-nowrap shrink-0 inline-flex items-center gap-1"
-                        title="Endorse this tip as verified in plant"
+                        title="Endorse this tip as verified in production"
                       >
                         <ThumbsUp className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                         <span>Helpful ({modalNote.upvotes || 0})</span>
@@ -1977,7 +1977,7 @@ export const ExpertKnowledgeView: React.FC<ExpertKnowledgeViewProps> = ({ onNavi
           if (!isSubmitting) setIsSubmitOpen(false);
         }}
         title="Submit Frontline Expert Note(s)"
-        subtitle="Capture plant wisdom, non-standard tooling tips, or preventive observations. Automatically indexed for AI Copilot."
+        subtitle="Capture expert wisdom, non-standard tooling tips, or preventive observations. Automatically indexed for AI Copilot."
         maxWidth="2xl"
         bodyClassName="p-4 overflow-y-auto flex-1 text-xs text-slate-700 bg-white"
       >

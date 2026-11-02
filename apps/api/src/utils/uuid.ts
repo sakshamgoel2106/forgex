@@ -69,15 +69,19 @@ export function sanitizeMachineOrAssetId(value: unknown): string {
   const uuid = sanitizeUuid(trimmed);
   if (uuid) return uuid;
 
+  // Extract base tag if parenthesized e.g. "COMP-101-A (Atlas Copco GA-75)" -> "COMP-101-A"
+  const tagMatch = trimmed.match(/^([A-Za-z0-9_\-]+)\s*(?:\(|$|\s*-\s*)/);
+  const candidate = tagMatch && tagMatch[1] && tagMatch[1].length >= 2 ? tagMatch[1].trim() : trimmed;
+
   // Fallback: If it's a non-UUID string with prefix (e.g., machine_PUMP-101), strip prefix
-  if (trimmed.toLowerCase().startsWith('machine_')) {
-    return trimmed.slice(8).trim();
+  if (candidate.toLowerCase().startsWith('machine_')) {
+    return candidate.slice(8).trim();
   }
-  if (trimmed.toLowerCase().startsWith('asset_')) {
-    return trimmed.slice(6).trim();
+  if (candidate.toLowerCase().startsWith('asset_')) {
+    return candidate.slice(6).trim();
   }
 
-  return trimmed;
+  return candidate;
 }
 
 /**

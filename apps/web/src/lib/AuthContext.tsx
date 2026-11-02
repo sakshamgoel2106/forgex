@@ -280,6 +280,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (typeof window !== 'undefined') {
         try {
+          const prevOrgId = localStorage.getItem(ORG_ID_KEY);
+          if (prevOrgId && prevOrgId !== newOrg.id) {
+            localStorage.removeItem('forgex_active_plant');
+          }
           localStorage.setItem(TOKEN_KEY, newToken);
           localStorage.setItem(ORG_ID_KEY, newOrg.id);
           clearTransientSessionState();

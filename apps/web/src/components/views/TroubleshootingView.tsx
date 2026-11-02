@@ -1424,15 +1424,19 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
           }
         });
 
-        if (docAssetTags.size === 0) {
-          setHasNoDocuments(true);
-          setMachines([]);
-          setSelectedMachineTag('');
-          return;
-        }
+
 
         setHasNoDocuments(false);
         const filtered: MachineItem[] = [];
+        allMachines.forEach((m) => {
+          filtered.push({
+            id: m.id,
+            name: m.name,
+            asset_tag: m.asset_tag || m.assetTag || m.name || m.id,
+            assetTag: m.assetTag || m.asset_tag || m.name || m.id,
+            plant_area: m.plant_area || m.area,
+          });
+        });
 
         docAssetTags.forEach((tag) => {
           const matched = allMachines.find(
@@ -1440,7 +1444,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
               (m.asset_tag || m.assetTag || '').toUpperCase() === tag ||
               (m.name || '').toUpperCase().includes(tag)
           );
-          if (matched) {
+          if (matched && !filtered.some((f) => f.id === matched.id)) {
             filtered.push({
               id: matched.id,
               name: matched.name,
@@ -1478,18 +1482,39 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
   // Check for incoming ticket or direct RCA redirect from AI Copilot / Tech Execution Desk
   const processIncomingTicket = useCallback(() => {
     try {
-      const raw = sessionStorage.getItem('forgex_rca_ticket');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed.assetTag) {
-          setSelectedMachineTag(parsed.assetTag);
+      const historyState = (window.history && window.history.state) ? window.history.state : null;
+      const raw = sessionStorage.getItem('forgex_rca_handoff') || sessionStorage.getItem('forgex_rca_ticket');
+      const parsedHandoff = raw ? JSON.parse(raw) : (historyState?.assetTag ? historyState : null);
+      if (parsedHandoff) {
+        const parsed = parsedHandoff;
+        const rawTag = (parsed.assetTag || parsed.assetId || '').trim();
+        if (rawTag) {
+          setMachines((prev) => {
+            const hasTag = prev.some(
+              (m) =>
+                (m.asset_tag || m.assetTag || m.id || '').toUpperCase() === rawTag.toUpperCase() ||
+                (m.name || '').toUpperCase().includes(rawTag.toUpperCase())
+            );
+            if (!hasTag) {
+              return [
+                {
+                  id: rawTag,
+                  name: parsed.machineName || `Equipment (${rawTag})`,
+                  asset_tag: rawTag,
+                  assetTag: rawTag,
+                },
+                ...prev,
+              ];
+            }
+            return prev;
+          });
+          setSelectedMachineTag(rawTag);
         }
         if (parsed.symptom) {
           setSymptom(parsed.symptom);
         }
-        if (parsed.errorCode) {
-          setErrorCode(parsed.errorCode);
-        }
+        setErrorCode(parsed.faultCode || parsed.errorCode || '');
+        setMachineStatus((parsed.machineStatus as any) || 'Running - Abnormal');
 
         if (parsed.loadDirectRca || parsed.rcaSessionId) {
           let targetSession: RcaSession | null = null;
@@ -1602,12 +1627,14 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
           }
           toast.success('RCA Report Loaded', `Active investigation loaded for ${parsed.assetTag}.`);
         } else {
-          toast.info(
-            'Ticket Received from AI Copilot',
-            `Loaded anomaly context for ${parsed.assetTag}. Ready for higher officer root cause analysis.`
+          setActiveSession(null);
+          toast.success(
+            'Copilot Handoff Received',
+            `Loaded ${rawTag || parsed.assetTag} and reported symptom into Troubleshooting & RCA.`
           );
         }
         sessionStorage.removeItem('forgex_rca_ticket');
+        sessionStorage.removeItem('forgex_rca_handoff');
       } else {
         sessionStorage.removeItem('forgex_active_rca_id');
       }
@@ -2341,7 +2368,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
     } else if (stepIndex === 3) {
       reference = `OEM Assembly Manual §5.4 (Shaft Runout Tolerances < 0.05mm); ASTM D395 Elastomer Compression Set.`;
     } else if (stepIndex >= 4) {
-      reference = `Plant Environmental & Safety LOTO Standard SOP-MNT-402; OSHA 1910.147 Zero-Energy Isolation.`;
+      reference = `Environmental & Safety LOTO Standard SOP-MNT-402; OSHA 1910.147 Zero-Energy Isolation.`;
     }
 
     return {
@@ -2388,7 +2415,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
             ? 'Critical Machine Warning'
             : 'Pro-Tip / Best Practice',
         symptom: cleanTriggerText(activeSession.symptom, null, cleanTitle),
-        taskDuringIssue: 'Standard Plant Operation / AI RCA Diagnostic',
+        taskDuringIssue: 'Standard Operations / AI RCA Diagnostic',
         observedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
         description: cleanFix || topHypothesis.recommendedFix || topHypothesis.mechanismExplanation || '',
@@ -4389,7 +4416,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
                 className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs font-mono text-[#0F172A] focus:outline-none focus:border-[#2563EB]"
               >
                 <option value="" className="text-slate-500 font-normal bg-white">-- Select Priority --</option>
-                <option value="CRITICAL" className="text-slate-900 font-medium bg-white">Critical - Plant / Line Down</option>
+                <option value="CRITICAL" className="text-slate-900 font-medium bg-white">Critical - Production Line Down</option>
                 <option value="HIGH" className="text-slate-900 font-medium bg-white">High - Immediate Dispatch</option>
                 <option value="MEDIUM" className="text-slate-900 font-medium bg-white">Medium - Non-Urgent Inspection</option>
               </select>
@@ -4434,7 +4461,7 @@ export const TroubleshootingView: React.FC<TroubleshootingViewProps> = ({
               rows={3}
               value={escalateNotes}
               onChange={(e) => setEscalateNotes(e.target.value)}
-              placeholder="Provide specific plant conditions, tooling constraints, or requested vendor specialist..."
+              placeholder="Provide specific operating conditions, tooling constraints, or requested vendor specialist..."
               className="w-full px-3 py-1.5 bg-white border border-[#CBD5E1] rounded-lg text-xs text-[#0F172A] placeholder-[#94A3B8] focus:outline-none focus:border-[#2563EB] font-sans"
             />
           </div>

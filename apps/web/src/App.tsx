@@ -277,7 +277,7 @@ const AppContent: React.FC = () => {
         if (role === 'WORKER') {
           return <RBACFallbackBanner moduleName="Plant Overview" role={role} onRedirect={setActiveModule} />;
         }
-        return <OverviewView onNavigate={(mod) => setActiveModule(mod as NavModule)} />;
+        return <OverviewView onNavigate={(mod: string) => setActiveModule(mod as NavModule)} />;
       case 'assets':
         return <AssetDirectoryView />;
       case 'engineering-assets':
@@ -293,7 +293,7 @@ const AppContent: React.FC = () => {
       case 'knowledge-hub':
         return <TechnicalManualsView initialAssetTag={manualsTargetAsset} />;
       case 'copilot':
-        return <CopilotWorkspaceView initialAssetTag={copilotTargetAsset} />;
+        return <CopilotWorkspaceView initialAssetTag={copilotTargetAsset} onNavigate={(mod: string) => setActiveModule(mod as NavModule)} />;
       case 'troubleshooting':
         if (role === 'WORKER' || role === 'VIEWER') {
           return <RBACFallbackBanner moduleName="Troubleshooting & RCA" role={role} onRedirect={setActiveModule} />;
@@ -432,7 +432,7 @@ const AppContent: React.FC = () => {
       </div>
 
       <div className={activeModule === 'copilot' ? 'h-full w-full block' : 'h-full w-full hidden'}>
-        {visitedTabs.has('copilot') && <CopilotWorkspaceView initialAssetTag={copilotTargetAsset} />}
+        {visitedTabs.has('copilot') && <CopilotWorkspaceView initialAssetTag={copilotTargetAsset} onNavigate={(mod) => setActiveModule(mod as NavModule)} />}
       </div>
 
       <div className={(activeModule === 'tech' || activeModule === 'worker') ? 'h-full w-full block' : 'h-full w-full hidden'}>

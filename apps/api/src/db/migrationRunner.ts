@@ -83,6 +83,7 @@ export async function runMigrations(pool: pg.Pool): Promise<string[]> {
           CHECK (role IN (
             'ORGANIZATION_OWNER',
             'ORGANIZATION_ADMIN',
+            'SUPERVISOR',
             'PLANT_MANAGER',
             'ENGINEER',
             'TECHNICIAN',

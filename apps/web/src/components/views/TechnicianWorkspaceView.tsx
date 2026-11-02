@@ -4247,7 +4247,7 @@ export const TechnicianWorkspaceView: React.FC<{
 
             {/* Footer */}
             <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs font-mono text-slate-500 shrink-0">
-              <span>Plant Field Bench: {organization?.name || 'Plant'}</span>
+              <span>{organization?.name || 'Operations Field Bench'}</span>
               <button
                 type="button"
                 onClick={() => setIsWorkforceModalOpen(false)}

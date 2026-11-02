@@ -115,6 +115,7 @@ export interface CopilotMessage {
   safetyAlerts?: string[];
   questionMode?: QuestionHandlingMode;
   isInsufficientEvidence?: boolean;
+  isUnverified?: boolean;
   conflictDetected?: boolean;
   conflictDetails?: string | null;
   ticketId?: string | null;

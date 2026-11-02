@@ -1,3 +1,23 @@
+export function sanitizeCopilotContent(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/\[Asset:[^\]]*\]/gi, '')
+    .replace(/\[OCR EXTRACTED[^\]]*\]/gi, '')
+    .replace(/\[Chunk ID:[^\]]*\]/gi, '')
+    .replace(/\[Doc ID:[^\]]*\]/gi, '')
+    .replace(/\[Section:[^\]]*\]/gi, '')
+    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '')
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim();
+      if (/^[-*•]\s*$/.test(trimmed)) return '';
+      return line;
+    })
+    .filter((line, idx, arr) => !(line === '' && arr[idx - 1] === ''))
+    .join('\n')
+    .trim();
+}
+
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Send,
@@ -73,7 +93,8 @@ import { SEEDED_MACHINES_CATALOG } from '../mobile/MachineScanView';
 const CopilotMarkdown: React.FC<{ content: string }> = ({ content }) => {
   const blocks = useMemo(() => {
     if (!content) return [];
-    const rawParagraphs = content.split(/\n\s*\n/);
+    const cleanContent = sanitizeCopilotContent(content);
+    const rawParagraphs = cleanContent.split(/\n\s*\n/);
     const parsedBlocks: Array<{
       type: 'h1' | 'h2' | 'h3' | 'table' | 'ul' | 'ol' | 'p';
       content: string;
@@ -239,9 +260,10 @@ const CopilotMarkdown: React.FC<{ content: string }> = ({ content }) => {
 
 export interface CopilotWorkspaceViewProps {
   initialAssetTag?: string;
+  onNavigate?: (module: string) => void;
 }
 
-export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ initialAssetTag }) => {
+export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ initialAssetTag, onNavigate }) => {
   const { user, organization } = useAuth();
   const { toast } = useToast();
   const { activePlant, plants } = usePlant();
@@ -288,6 +310,8 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
 
   // 1-Click Auto-Filled RCA Ticket Modal
   const [isRcaModalOpen, setIsRcaModalOpen] = useState(false);
+  
+
 
   // Active Language Configuration
   const currentLangConfig = useMemo(() => getLanguageConfig(speechLanguage), [speechLanguage]);
@@ -358,10 +382,106 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
       id: selectedMachineId,
       assetTag: selectedMachineId,
       name: `Industrial Equipment (${selectedMachineId})`,
-      area: 'Plant Facility Floor',
+      area: 'Operations Floor',
       documentationReadiness: 'READY',
     } as Machine;
   }, [machines, selectedMachineId]);
+
+  // Triangulate active machine & symptom strictly from current thread and selected machine
+  const activeMachineContext = useMemo(() => {
+    if (selectedMachine) {
+      const lastUser = [...messages].reverse().find((m) => m.senderType === 'USER');
+      return {
+        assetTag: selectedMachine.assetTag,
+        name: selectedMachine.name,
+        symptom: lastUser?.content || `${selectedMachine.name} operational issue`,
+      };
+    }
+
+    const allText = messages.map((m) => m.content).join(' ');
+    for (const m of machines) {
+      const tagRe = new RegExp(`\\b${m.assetTag}\\b`, 'i');
+      if (tagRe.test(allText)) {
+        const lastUser = [...messages].reverse().find((msg) => msg.senderType === 'USER');
+        return {
+          assetTag: m.assetTag,
+          name: m.name,
+          symptom: lastUser?.content || `${m.name} investigation`,
+        };
+      }
+    }
+
+    const tagMatch = allText.match(/\b([A-Z]{3,5}-\d{2,4}-[A-Z0-9]+|[A-Z]{3,5}-\d{2,4})\b/i);
+    const detectedTag = tagMatch ? tagMatch[1].toUpperCase() : '';
+    const lastUser = [...messages].reverse().find((m) => m.senderType === 'USER');
+    const matchingMachine = machines.find((m) => m.assetTag.toUpperCase() === detectedTag);
+
+    if (matchingMachine) {
+      return {
+        assetTag: matchingMachine.assetTag,
+        name: matchingMachine.name,
+        symptom: lastUser?.content || `${matchingMachine.name} investigation`,
+      };
+    }
+
+    if (machines.length > 0) {
+      return {
+        assetTag: detectedTag || machines[0].assetTag,
+        name: machines[0].name,
+        symptom: lastUser?.content || 'Equipment operational check',
+      };
+    }
+
+    return {
+      assetTag: detectedTag || 'COMP-101-A',
+      name: detectedTag || 'Industrial Machine',
+      symptom: lastUser?.content || 'Equipment operational check',
+    };
+  }, [selectedMachine, messages, machines]);
+
+  const handleDeepDiveRca = useCallback((msg?: CopilotMessage) => {
+    const targetTag = activeMachineContext.assetTag;
+    const userMsg = msg?.content ? [...messages].reverse().find((m) => m.senderType === 'USER') : null;
+    const symptomText = userMsg?.content || activeMachineContext.symptom || 'Vibration anomaly and equipment check';
+
+    // Extract any fault/alarm code mentioned in symptom or message
+    const faultMatch = (symptomText + ' ' + (msg?.content || '')).match(/\b(ALM-[A-Z0-9-]+|ERR-[A-Z0-9-]+|FC-[A-Z0-9-]+|F-[0-9]{3,4}|E-[0-9]{3,4})\b/i);
+    const faultCode = faultMatch ? faultMatch[1].toUpperCase() : '';
+
+    try {
+      const handoffPayload = {
+        assetTag: targetTag,
+        symptom: symptomText,
+        faultCode: faultCode,
+        errorCode: faultCode || 'DIAG-ALERT-01',
+        machineStatus: 'Running - Abnormal',
+        loadDirectRca: false,
+        createdAt: new Date().toISOString(),
+      };
+      sessionStorage.setItem('forgex_rca_handoff', JSON.stringify(handoffPayload));
+      sessionStorage.setItem('forgex_rca_ticket', JSON.stringify(handoffPayload));
+
+      if (window.history && window.history.pushState) {
+        window.history.pushState(handoffPayload, '', '#troubleshooting');
+      }
+
+      window.dispatchEvent(
+        new CustomEvent('forgex:navigate', {
+          detail: { module: 'troubleshooting', state: handoffPayload },
+        })
+      );
+      window.dispatchEvent(new CustomEvent('forgex:load_rca', { detail: handoffPayload }));
+      window.location.hash = '#troubleshooting';
+    } catch {}
+
+    onNavigate?.('troubleshooting');
+    toast.success('Navigating to RCA Copilot', `Loaded ${targetTag} into Troubleshooting & RCA.`);
+  }, [activeMachineContext, messages, onNavigate, toast]);
+
+  const handleEscalateToTechnician = useCallback((_msg?: CopilotMessage) => {
+    setIsRcaModalOpen(true);
+  }, []);
+
 
   // Filtered Machines for Sidebar
   const filteredMachines = useMemo(() => {
@@ -659,15 +779,6 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
     }
   };
 
-  // Helper to identify answers addressing failures or abnormal conditions
-  const isFailureAnalysisAnswer = useCallback((msg: CopilotMessage): boolean => {
-    if (msg.senderType !== 'ASSISTANT') return false;
-    if (msg.questionMode === 'RESTRICTED_SAFETY_CRITICAL') return true;
-    if (Boolean((msg as any).acousticTelemetry && (msg as any).acousticTelemetry.detectedPattern !== 'NOMINAL')) return true;
-    if (Boolean((msg as any).visionDiagnostic && (msg as any).visionDiagnostic.safetyStatus !== 'SAFE_ZERO_ENERGY')) return true;
-    const failureRegex = /failure|fault|cavitation|vibration|leak|overheat|overpressure|rca|root cause|abnormal|alarm|critical|wear|broken|damage|shutdown|trip|error|overhaul|defective/i;
-    return failureRegex.test(msg.content);
-  }, []);
 
   // Execute Grounded RAG Query
   const handleSendQuery = async (
@@ -1056,7 +1167,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
 
   // Dynamic 2x2 Smart Prompts for Empty State
   const smartPrompts = useMemo(() => {
-    const tag = selectedMachine ? selectedMachine.assetTag : 'Plant Machinery';
+    const tag = selectedMachine ? selectedMachine.assetTag : 'across uploaded machines';
     return [
       {
         id: 'loto',
@@ -1123,10 +1234,6 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 text-slate-700 border border-indigo-200/80 shadow-2xs">
                 {machines.length} Units
               </span>
-              <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-gradient-to-r from-indigo-50 via-blue-50/80 to-slate-50 text-indigo-700 border border-indigo-200/80 font-bold uppercase tracking-wider flex items-center gap-1 shadow-2xs">
-                <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-indigo-600 to-blue-600" />
-                Single Factory
-              </span>
             </div>
           </div>
 
@@ -1154,7 +1261,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono font-bold text-xs text-[#2563EB] truncate">
-                      {selectedMachine ? selectedMachine.assetTag : 'All Factory Equipment'}
+                      {selectedMachine ? selectedMachine.assetTag : 'All Uploaded Machines'}
                     </span>
                     {selectedMachine && (
                       <span
@@ -1171,7 +1278,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     )}
                   </div>
                   <div className="text-[11px] text-[#64748B] truncate font-medium">
-                    {selectedMachine ? selectedMachine.name : 'Factory-Wide Scope & All Authorized Equipment'}
+                    {selectedMachine ? selectedMachine.name : 'All Uploaded Machines'}
                   </div>
                 </div>
               </div>
@@ -1214,7 +1321,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
 
               {/* Scrollable Capped Container (max-h-[240px] with smooth scrolling) */}
               <div className="max-h-[240px] overflow-y-auto space-y-1.5 pr-1 border border-[#E2E8F0] rounded-lg p-1.5 bg-white shadow-inner">
-                {/* Option 1: Factory-Wide Scope */}
+                {/* Option 1: All Uploaded Machines Scope */}
                 <button
                   type="button"
                   onClick={() => {
@@ -1229,10 +1336,10 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                 >
                   <div className="flex items-center gap-2 truncate">
                     <Layers className="w-3.5 h-3.5 text-[#2563EB] shrink-0" />
-                    <span className="truncate font-medium">All Factory Equipment</span>
+                    <span className="truncate font-medium">All Uploaded Machines</span>
                   </div>
                   <span className="text-[9px] font-mono font-bold text-white bg-gradient-to-r from-indigo-600 to-blue-600 px-1.5 py-0.5 rounded uppercase shadow-2xs">
-                    FACTORY-WIDE
+                    ALL MACHINES
                   </span>
                 </button>
 
@@ -1362,7 +1469,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                   <div className="flex-1 min-w-0 pr-2">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-mono text-[10px] px-1.5 py-0.2 rounded font-bold bg-gradient-to-r from-indigo-600 to-blue-600 text-white border border-indigo-600/30 truncate shadow-2xs">
-                        {c.assetId || 'FACTORY-WIDE'}
+                        {c.assetId || 'ALL MACHINES'}
                       </span>
                       <span className="text-[10px] text-slate-400">·</span>
                       <span className="text-[10px] font-mono text-[#94A3B8]">
@@ -1455,7 +1562,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                         : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
                     }`}
                   >
-                    <div className="font-mono text-[10px] text-blue-600 font-bold">{c.assetId || 'FACTORY-WIDE'}</div>
+                    <div className="font-mono text-[10px] text-blue-600 font-bold">{c.assetId || 'ALL MACHINES'}</div>
                     <div className="truncate text-slate-800 mt-0.5">{c.title}</div>
                   </div>
                 ))
@@ -1484,11 +1591,6 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
               <Sparkles className="w-4 h-4 text-[#2563EB] shrink-0" />
               <span className="font-bold text-[#1A202C] tracking-wide text-xs sm:text-sm truncate">
                 AI COPILOT
-              </span>
-              <span className="text-slate-300 hidden sm:inline">|</span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                <span>Single-Factory</span>
               </span>
             </div>
           </div>
@@ -1565,103 +1667,23 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     {selectedMachine.documentationReadiness || 'INDEXED'}
                   </span>
 
-                  {/* Switch Machine Quick Trigger & Floating Popover */}
-                  <div className="relative inline-block" ref={headerPickerRef}>
-                    <button
-                      type="button"
-                      onClick={() => setIsHeaderMachinePickerOpen(!isHeaderMachinePickerOpen)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-blue-600/30 hover:bg-blue-600/50 active:bg-blue-600/70 text-blue-200 border border-blue-400/40 text-[11px] font-semibold transition cursor-pointer shadow-2xs"
-                      title="Switch active machine context directly from header"
-                    >
-                      <span>Switch Machine</span>
-                      <ChevronDown
-                        className={`w-3.5 h-3.5 transition-transform ${
-                          isHeaderMachinePickerOpen ? 'rotate-180 text-white' : 'text-blue-300'
-                        }`}
-                      />
-                    </button>
-
-                    {/* Quick Floating Machine Switcher Popover */}
-                    {isHeaderMachinePickerOpen && (
-                      <div className="absolute left-0 top-full mt-2 w-80 bg-white text-[#1A202C] rounded-xl shadow-2xl border border-slate-200 p-2.5 z-50 animate-fadeIn space-y-2">
-                        <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 px-1">
-                          <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-                            <Filter className="w-3.5 h-3.5 text-blue-600" />
-                            Quick Switch Equipment
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-500 font-semibold bg-slate-100 px-1.5 py-0.5 rounded">
-                            {machines.length} Total
-                          </span>
-                        </div>
-
-                        {/* Search Input in Popover */}
-                        <div className="relative">
-                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
-                          <input
-                            type="text"
-                            placeholder="Search tag, name, or area..."
-                            value={machineSearchQuery}
-                            onChange={(e) => setMachineSearchQuery(e.target.value)}
-                            className="w-full pl-8 pr-7 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
-                            autoFocus
-                          />
-                          {machineSearchQuery && (
-                            <button
-                              onClick={() => setMachineSearchQuery('')}
-                              className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Scrollable List */}
-                        <div className="max-h-60 overflow-y-auto space-y-1 pr-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedMachineId('');
-                              setIsHeaderMachinePickerOpen(false);
-                            }}
-                            className="w-full text-left p-2 rounded-lg hover:bg-slate-100 text-xs flex items-center justify-between transition cursor-pointer"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <Layers className="w-3.5 h-3.5 text-blue-600" />
-                              <span className="font-semibold text-slate-800">All Factory Equipment</span>
-                            </div>
-                            <span className="text-[9px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded uppercase font-bold">
-                              FACTORY-WIDE
-                            </span>
-                          </button>
-
-                          {filteredMachines.map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedMachineId(m.id);
-                                setIsHeaderMachinePickerOpen(false);
-                              }}
-                              className={`w-full text-left p-2 rounded-lg text-xs transition flex flex-col gap-0.5 cursor-pointer border ${
-                                m.id === selectedMachine.id
-                                  ? 'bg-blue-50 border-blue-300 text-blue-900 font-semibold'
-                                  : 'hover:bg-slate-50 border-transparent text-slate-700'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <span className="font-mono font-bold text-blue-600">{m.assetTag}</span>
-                                <span className="text-[9px] font-mono text-slate-500 font-semibold">{m.area || 'General Area'}</span>
-                              </div>
-                              <span className="truncate text-slate-800 font-medium">{m.name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  {/* Synced Machine Switcher */}
+                  <select
+                    aria-label="Filter by Machine"
+                    value={selectedMachineId}
+                    onChange={(e) => setSelectedMachineId(e.target.value)}
+                    className="bg-slate-800 hover:bg-slate-700 text-blue-200 border border-blue-400/40 text-[11px] font-semibold rounded-md px-2 py-0.5 focus:outline-none focus:border-blue-400 cursor-pointer transition shadow-2xs"
+                  >
+                    <option value="" className="bg-slate-900 text-white">All Uploaded Machines</option>
+                    {machines.map((m) => (
+                      <option key={m.id} value={m.id} className="bg-slate-900 text-white">
+                        {m.assetTag} — {m.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5 flex-wrap">
-                  <span>Area: <strong className="text-slate-200">{selectedMachine.area || 'General Factory'}</strong></span>
+                  <span>Area: <strong className="text-slate-200">{selectedMachine.area || 'Production Line'}</strong></span>
                   <span>·</span>
                   <span>OEM: <strong className="text-slate-200">{[selectedMachine.manufacturer, selectedMachine.modelNumber].filter(Boolean).join(' · ') || 'OEM Specification Standard'}</strong></span>
                   <span>·</span>
@@ -1672,26 +1694,35 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
             <button
               onClick={() => setSelectedMachineId('')}
               className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs flex items-center gap-1.5 transition shrink-0 ml-3 cursor-pointer"
-              title="Clear machine context and search factory-wide"
+              title="Clear machine context and search all uploaded machines"
             >
               <X className="w-3.5 h-3.5" />
-              <span>Clear Machine Filter (Ask Factory-Wide)</span>
+              <span>Clear Filter (All Machines)</span>
             </button>
           </div>
         ) : (
           <div className="px-4 py-2 bg-gradient-to-r from-indigo-50/80 via-white to-blue-50/80 border-b border-indigo-100 text-[#64748B] text-[11px] flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2">
               <Layers className="w-3.5 h-3.5 text-[#2563EB]" />
-              <span>Context Scope: <strong className="bg-gradient-to-r from-indigo-950 via-slate-900 to-blue-950 bg-clip-text text-transparent font-bold">Factory-Wide SOPs &amp; All Authorized Equipment</strong></span>
+              <span>Context Scope: <strong className="bg-gradient-to-r from-indigo-950 via-slate-900 to-blue-950 bg-clip-text text-transparent font-bold">All Uploaded Machine Manuals &amp; Expert Notes</strong></span>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsEquipmentSelectorOpen(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gradient-to-r from-white to-indigo-50/40 border border-indigo-200/80 hover:border-indigo-400 hover:text-indigo-700 text-[11px] font-semibold text-slate-700 transition shadow-2xs cursor-pointer"
-            >
-              <Filter className="w-3 h-3 text-indigo-600" />
-              <span>Filter by Specific Machine ▾</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <label htmlFor="top-machine-select" className="text-[11px] font-semibold text-slate-600 hidden sm:inline">Filter by Specific Machine:</label>
+              <select
+                id="top-machine-select"
+                aria-label="Filter by Specific Machine"
+                value={selectedMachineId}
+                onChange={(e) => setSelectedMachineId(e.target.value)}
+                className="bg-white border border-indigo-200/80 hover:border-indigo-400 text-slate-800 text-xs rounded-md px-2.5 py-1 focus:outline-none focus:border-indigo-500 font-medium cursor-pointer shadow-2xs"
+              >
+                <option value="">All Uploaded Machines</option>
+                {machines.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.assetTag} — {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         )}
 
@@ -1716,7 +1747,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     </span>
                   ) : (
                     <span className="block mt-1 text-[#64748B]">
-                      Select an equipment asset or ask general plant-wide procedures below.
+                      Select an equipment asset or ask general procedures across uploaded machines below.
                     </span>
                   )}
                 </p>
@@ -1960,19 +1991,44 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                   )}
                 </div>
               ) : (
-                /* Assistant Grounded Response Card */
-                <div className="w-full max-w-4xl bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm space-y-4">
-                  {/* Status & Grounding Header */}
-                  <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <FileCheck2 className="w-4 h-4 text-[#2563EB]" />
-                      <span className="text-xs font-sans font-bold text-[#1A202C] tracking-wide">
-                        GROUNDED ENGINEERING RESPONSE
-                      </span>
-                      {renderQuestionModeBadge(msg.questionMode || (selectedMachine ? 'MACHINE_SPECIFIC' : 'GENERAL'))}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {renderConfidenceBadge(msg.confidence)}
+                (() => {
+                  const isUnverifiedMessage = Boolean(
+                    msg.isUnverified ||
+                    msg.isInsufficientEvidence ||
+                    msg.confidence === 'INSUFFICIENT_EVIDENCE' ||
+                    msg.content.includes('No verified information was found') ||
+                    msg.content.includes('No Verified Plant Records Found') ||
+                    msg.content.includes('No Verified Data Found') ||
+                    msg.content.includes('Insufficient evidence in authorized plant documentation')
+                  );
+
+                  return (
+                    /* Assistant Grounded Response Card */
+                    <div className="w-full max-w-4xl bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm space-y-4">
+                      {/* Status & Grounding Header */}
+                      <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {isUnverifiedMessage ? (
+                            <>
+                              <AlertTriangle className="w-4 h-4 text-amber-600" />
+                              <span className="text-xs font-sans font-bold text-amber-900 tracking-wide">
+                                ⚠️ UNVERIFIED INQUIRY
+                              </span>
+                              <StatusBadge label="⚠️ UNVERIFIED / NO MANUAL MATCH" tone="critical" />
+                              <StatusBadge label="INSUFFICIENT EVIDENCE" tone="critical" />
+                            </>
+                          ) : (
+                            <>
+                              <FileCheck2 className="w-4 h-4 text-[#2563EB]" />
+                              <span className="text-xs font-sans font-bold text-[#1A202C] tracking-wide">
+                                GROUNDED ENGINEERING RESPONSE
+                              </span>
+                              {renderQuestionModeBadge(msg.questionMode || (selectedMachine ? 'MACHINE_SPECIFIC' : 'GENERAL'))}
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!isUnverifiedMessage && renderConfidenceBadge(msg.confidence)}
 
                       {/* TTS Play / Stop Button (Real Browser Text-to-Speech) */}
                       <button
@@ -2036,23 +2092,33 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                   )}
 
                   {/* Insufficient Evidence State Banner */}
-                  {msg.isInsufficientEvidence && (
-                    <div className="p-4 rounded-lg bg-rose-50 border border-rose-200 text-xs space-y-2">
-                      <div className="flex items-center gap-2 text-rose-800 font-bold">
-                        <AlertTriangle className="w-4 h-4 text-rose-600" />
-                        <span>{currentLangConfig.insufficientDocHeader}</span>
+                  {isUnverifiedMessage && (
+                    <div className="p-4 rounded-xl bg-amber-50 border-2 border-amber-300 text-xs space-y-3 shadow-xs">
+                      <div className="flex items-center gap-2 text-amber-900 font-bold">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>⚠️ No Verified Plant Records Found in Uploaded Manuals/Notes</span>
                       </div>
-                      <p className="text-rose-700 text-xs leading-relaxed">
-                        {currentLangConfig.insufficientDocMessage}
+                      <p className="text-amber-800 text-xs leading-relaxed">
+                        We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. To prevent guessing and ensure operational safety, please escalate this directly to a field technician or specialist.
                       </p>
+                      <div className="pt-2 border-t border-amber-200/80 flex items-center justify-between">
+                        <span className="text-[11px] text-amber-700 font-medium">Unresolved machine issue requiring specialist review</span>
+                        <button
+                          type="button"
+                          onClick={() => handleEscalateToTechnician(msg)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-bold text-xs shadow-xs transition cursor-pointer"
+                        >
+                          <span>🚨 Escalate to Technician</span>
+                        </button>
+                      </div>
                     </div>
                   )}
 
                   {/* Structured Markdown Body Content */}
                   <CopilotMarkdown content={msg.content} />
 
-                  {/* Citations as Tappable Chips (Opens PDF Viewer Full-Screen on Mobile) */}
-                  {msg.citations && msg.citations.length > 0 ? (
+                  {/* Citations as Tappable Chips (Strictly hidden if unverified or insufficient evidence) */}
+                  {!isUnverifiedMessage && msg.citations && msg.citations.length > 0 ? (
                     <div className="pt-2 space-y-1.5 border-t border-slate-100">
                       <div className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
                         <FileText className="w-3 h-3 text-blue-600" />
@@ -2078,7 +2144,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                         ))}
                       </div>
                     </div>
-                  ) : selectedMachine ? (
+                  ) : (!isUnverifiedMessage && selectedMachine) ? (
                     <div className="pt-1.5 border-t border-slate-100">
                       <button
                         type="button"
@@ -2103,20 +2169,6 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                       </button>
                     </div>
                   ) : null}
-
-                  {/* Prominent Full-Width 1-Click RCA Button for Failure-Analysis Answers */}
-                  {isFailureAnalysisAnswer(msg) && (
-                    <div className="pt-2 w-full">
-                      <button
-                        type="button"
-                        onClick={() => setIsRcaModalOpen(true)}
-                        className="w-full min-h-[48px] py-3 px-4 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 active:scale-[0.98] text-white font-bold text-xs sm:text-sm shadow-md shadow-blue-900/20 flex items-center justify-center gap-2 transition cursor-pointer"
-                      >
-                        <Zap className="w-4 h-4 text-amber-300 fill-amber-300 shrink-0" />
-                        <span>⚡ 1-Click RCA Ticket · Create Failure Investigation Work Order</span>
-                      </button>
-                    </div>
-                  )}
 
                   {/* Specialist Ticket Banner if Dispatched */}
                   {msg.ticketNumber && (
@@ -2212,15 +2264,25 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                             </button>
                           )}
 
-                          {/* Unified 1-Click Auto-Filled RCA Ticket Button */}
+                          {/* Raise Ticket Button */}
                           <button
                             type="button"
                             onClick={() => setIsRcaModalOpen(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-rose-50 to-red-50 hover:from-rose-100 hover:to-red-100 active:from-rose-200 active:to-red-200 border border-rose-300 text-rose-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                            title="Raise and dispatch a technician ticket for this issue"
+                          >
+                            <span>🚨 Raise Ticket</span>
+                          </button>
+
+                          {/* 1-Click RCA / Deep-Dive in RCA Copilot */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeepDiveRca(msg)}
                             className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                            title="Generate verified Root Cause Analysis Work Order from this engineering solution"
+                            title="Open full 5-Why and Investigation Steps workflow in RCA Copilot"
                           >
                             <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
-                            <span>⚡ 1-Click RCA Ticket</span>
+                            <span>1-Click RCA / Deep-Dive &rarr;</span>
                           </button>
 
                           <span className="text-[10px] text-[#64748B] font-mono">
@@ -2231,7 +2293,9 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     })()}
                   </div>
                 </div>
-              )}
+              );
+              })()
+            )}
             </div>
           ))}
 
@@ -2563,22 +2627,25 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
         isOpen={isRcaModalOpen}
         onClose={() => setIsRcaModalOpen(false)}
         conversationId={activeConversationId || undefined}
-        assetId={selectedMachine?.assetTag || selectedMachine?.id || 'PUMP-001'}
-        assetTag={
-          selectedMachine
-            ? `${selectedMachine.assetTag} (${selectedMachine.name})`
-            : 'PUMP-001 (Lowara 10SV08F030T)'
-        }
+        assetId={activeMachineContext.assetTag}
+        assetTag={activeMachineContext.assetTag}
+        machines={machines}
         messages={messages}
         acousticTelemetry={latestAcousticTelemetry}
         visionDiagnostic={latestVisionDiagnostic}
         lotoVerified={isLotoVerifiedZeroEnergy}
         language={speechLanguage}
         onWorkOrderCreated={(createdCase) => {
-          toast.success(
-            'Enterprise Work Order Created',
-            `Case ${createdCase?.caseNumber || createdCase?.id || ''} successfully logged in Maintenance Queue`
-          );
+          const ticketId = createdCase?.caseNumber || createdCase?.id;
+          try {
+            sessionStorage.setItem('forgex_selected_case_id', ticketId);
+            window.dispatchEvent(new CustomEvent('forgex:navigate', { detail: { module: 'tech', ticketId } }));
+            window.location.hash = '#tech';
+          } catch {}
+          onNavigate?.('tech');
+        }}
+        onOpenInRca={() => {
+          onNavigate?.('troubleshooting');
         }}
       />
 

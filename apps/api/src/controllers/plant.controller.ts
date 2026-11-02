@@ -66,7 +66,24 @@ export class PlantController {
 
   public list = async (req: Request, res: Response): Promise<void> => {
     const orgId = req.auth!.organization.id;
-    const plants = await this.dataStore.listPlants(orgId);
+    let plants = await this.dataStore.listPlants(orgId);
+
+    // Auto-heal empty organization: ensure every registered organization has its primary plant
+    if (plants.length === 0) {
+      const cleanCode = `PLANT-${orgId.slice(0, 4).toUpperCase()}`;
+      try {
+        const defaultPlant = await this.dataStore.createPlant(orgId, {
+          code: cleanCode,
+          name: 'Primary Operations Facility',
+          location: 'Industrial Complex',
+          airGappedMode: false,
+        });
+        plants = [defaultPlant];
+      } catch {
+        // In case of concurrent creation race, re-fetch
+        plants = await this.dataStore.listPlants(orgId);
+      }
+    }
 
     const role = req.auth?.membership.role;
     const assigned = req.auth?.membership.assignedPlantIds ?? [];

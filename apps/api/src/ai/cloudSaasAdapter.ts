@@ -11,10 +11,25 @@ import { getLanguageConfig } from '@forgex/shared-types';
 import { synthesizeAcousticReport } from './acousticSynthesisHelper.js';
 import { guardedFetch } from '../utils/outboundGuard.js';
 
+export function cleanChunkEvidenceText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/\[Asset:[^\]]*\]/gi, '')
+    .replace(/\[OCR EXTRACTED[^\]]*\]/gi, '')
+    .replace(/\[Chunk ID:[^\]]*\]/gi, '')
+    .replace(/\[Doc ID:[^\]]*\]/gi, '')
+    .replace(/\[Section:[^\]]*\]/gi, '')
+    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '')
+    .replace(/^Page\s+\d+.*$/gim, '')
+    .replace(/^en\s*-\s*original\s*instructions.*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export class CloudSaasAdapter implements IMultimodalGenerationProvider {
   constructor(
     private _apiKey = process.env.CLOUD_AI_API_KEY || 'saas_mock_key',
-    private modelName = process.env.CLOUD_AI_MODEL || 'gemini-3.8-flash'
+    private modelName = process.env.CLOUD_AI_MODEL || 'gemini-2.5-flash'
   ) {}
 
   public getApiKey(): string {
@@ -96,7 +111,7 @@ export class CloudSaasAdapter implements IMultimodalGenerationProvider {
       }
 
       return {
-        answerText: langConfig.insufficientEvidenceMessage,
+        answerText: `No verified information was found across your plant manuals, expert notes, or maintenance history for this specific issue. ${langConfig.insufficientEvidenceMessage}`,
         confidence: 'INSUFFICIENT_EVIDENCE',
         isInsufficientEvidence: true,
         conflictDetected: false,
@@ -125,44 +140,38 @@ export class CloudSaasAdapter implements IMultimodalGenerationProvider {
             : 'The specific information requested is not available in the verified records for this machine.';
 
         // Trim Prompt Context Size: Top 4 highest-scoring chunks, max ~650 chars each for 3x faster TTFT
-        const trimmedEvidence = (authorizedEvidence || []).slice(0, 4).map((e) => ({
-          ...e,
-          content: e.content.length > 650 ? `${e.content.slice(0, 620)}...` : e.content,
-        }));
+        const trimmedEvidence = (authorizedEvidence || []).slice(0, 4).map((e) => {
+          const cleanText = cleanChunkEvidenceText(e.content);
+          return {
+            ...e,
+            content: cleanText.length > 650 ? `${cleanText.slice(0, 620)}...` : cleanText,
+          };
+        });
 
         const prompt = `You are ForgeX AI, an authoritative industrial reliability and plant operations engineering copilot.
-Your objective is to answer the user inquiry directly, clearly, and naturally in clean, professional engineering language, strictly synthesized from the authorized context provided below.
+Your objective is to synthesize a clean, authoritative, highly actionable engineering response based STRICTLY on the authorized plant documentation provided below.
+
+MANDATORY RESPONSE STRUCTURE:
+Format your answer with clear Markdown headings:
+### Root Causes
+Explain the likely mechanical, electrical, thermal, or operational root causes directly matching the equipment and symptom.
+
+### Immediate Checks & Diagnostic Inspection
+List physical checks (e.g. vibration FFT spectrum, shaft alignment, bearing play, foundation bolt torque, dynamic pressure, lubrication quality).
+
+### Safety & Engineering Specifications
+State exact torque limits, pressure/temperature thresholds, LOTO isolation protocols, or vibration velocity tolerances mentioned in the authorized documentation.
+
+### Step-by-Step Remediation Plan
+Provide numbered, unambiguous procedural steps for maintenance engineers to isolate, inspect, and rectify the issue.
 
 CRITICAL INSTRUCTIONS:
-1. Answer ONLY the exact question asked by the user. Do not add unrequested filler sections, unnecessary boilerplates, or generic disclaimers.
-2. Synthesize facts directly into coherent, complete sentences or concise bullet points/tables where appropriate.
-3. Strictly forbid outputting raw OCR fragments, broken words, table-of-contents lines, or page footers (such as "-- 12 of 56 --" or "en - Original Instructions").
-4. Never mention internal manual filenames, document IDs, or internal file paths in your response text.
-5. Only mention safety or Lockout/Tagout (LOTO) precautions naturally if the user inquiry explicitly asks how to perform physical maintenance, isolation, or repair.
-6. If the provided context does not contain the answer to the user's question, respond concisely in one clear sentence: "${missingSpecSentence}" Never dump random, low-relevance text.${languageInstruction}
-
-${request.assetContext ? `EQUIPMENT PROFILE & ACTIVE SPECIFICATIONS:
-- Asset Tag: ${request.assetContext.assetTag}
-- Name: ${request.assetContext.name}
-${(request.assetContext as any).specs ? (request.assetContext as any).specs.join('\n') : ''}
-` : ''}
-${request.acousticTelemetry ? `ACOUSTIC FREQUENCY SPECTRUM & PHYSICAL DSP TELEMETRY:
-- Dominant Peak Frequency: ${Math.round(request.acousticTelemetry.dominantFrequencyHz)} Hz
-- Peak Decibel Level: ${request.acousticTelemetry.peakDecibels.toFixed(1)} dB
-- RMS Level: ${request.acousticTelemetry.rmsLevelDbfs !== undefined ? `${request.acousticTelemetry.rmsLevelDbfs.toFixed(1)} dBFS` : 'Calculated'}
-- Crest Factor: ${request.acousticTelemetry.crestFactorDb !== undefined ? `${request.acousticTelemetry.crestFactorDb.toFixed(1)} dB` : request.acousticTelemetry.crestFactor || 'NORMAL'}
-- Spectral Centroid: ${request.acousticTelemetry.spectralCentroidHz ? `${Math.round(request.acousticTelemetry.spectralCentroidHz)} Hz` : 'N/A'}
-- Energy Distribution: Low (20–500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.low || 0) * 100)}%, Mid (500–2,500 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.mid || 0) * 100)}%, High (2,500–12,000 Hz): ${Math.round((request.acousticTelemetry.bandEnergy?.high || 0) * 100)}%
-- Automated Spectral Anomaly Classification: ${request.acousticTelemetry.detectedPattern}
-- Audio Source Mode: ${request.acousticTelemetry.sourceMode || 'LIVE_MIC'} (${request.acousticTelemetry.inputDeviceName || 'Hardware Stream'})
-- Sampling Window: ${request.acousticTelemetry.sampleDurationMs} ms
-
-Acoustic Diagnostic Instructions:
-1. Provide an authoritative acoustic diagnostic breakdown: state what this frequency pattern indicates for ${request.assetContext?.assetTag || 'the machine'}.
-2. Explain the physical mechanism (e.g. fluid cavitation / bubble implosion vs. mechanical unbalance vs. high-frequency bearing raceway spalling).
-3. Provide practical, sequential field verification steps (including pressure checks, vibration checks, and safe LOTO de-energization if physical inspection is required).
-4. Output the response natively in ${langConfig.name} without boilerplate or document filenames.
-` : ''}
+1. Synthesize all retrieved evidence into the 4 structured sections above.
+2. NEVER output raw bracketed metadata tags like "[Asset: ...]", "[Document: ...]", "[OCR EXTRACTED...]", or "[Chunk ID: ...]" in your response text.
+3. Strictly forbid echoing raw OCR markers, unformatted page numbers, or internal file paths.
+4. If the provided context does not contain verified information to answer the question, output ONLY:
+"No verified information was found across your plant manuals, expert notes, or maintenance history for this specific issue. ${missingSpecSentence}"
+Do not invent or estimate specs.${languageInstruction}
 AUTHORIZED CONTEXT:
 ${trimmedEvidence
   .map(
@@ -178,13 +187,13 @@ Respond in strict JSON with:
 - "answer": the clean, direct synthesized answer.
 - "citations": array of internal source references, each with chunkId, docId, pageNumber, and exactVerbatimQuote.`;
 
-        let targetModel = 'gemini-3.8-flash';
-        if (this.modelName && !this.modelName.includes('3.5')) {
+        let targetModel = 'gemini-2.5-flash';
+        if (this.modelName && !this.modelName.includes('3.8') && !this.modelName.includes('3.5')) {
           targetModel = this.modelName;
         }
 
         const candidateModels = Array.from(
-          new Set([targetModel, 'gemini-3.8-flash'])
+          new Set([targetModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'])
         );
 
         // Prepare multimodal parts: Text prompt + inline audio/image data if present
@@ -306,8 +315,9 @@ Respond in strict JSON with:
 
           return {
             answerText: parsedResult.answer || 'No response generated',
-            confidence: 'HIGH',
-            isInsufficientEvidence: false,
+            confidence: (parsedResult.answer || '').toLowerCase().includes('no verified') ? 'INSUFFICIENT_EVIDENCE' : 'HIGH',
+            isInsufficientEvidence: (parsedResult.answer || '').toLowerCase().includes('no verified'),
+            isUnverified: (parsedResult.answer || '').toLowerCase().includes('no verified'),
             conflictDetected: false,
             usedEvidenceChunkIds: rawCitations.map((c) => c.chunkId),
             rawCitations,
@@ -343,13 +353,29 @@ Respond in strict JSON with:
       };
     }
 
+    if (!authorizedEvidence || authorizedEvidence.length === 0) {
+      return {
+        answerText: "⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.",
+        confidence: 'INSUFFICIENT_EVIDENCE',
+        isInsufficientEvidence: true,
+        isUnverified: true,
+        conflictDetected: false,
+        usedEvidenceChunkIds: [],
+        rawCitations: [],
+        modelUsed: this.modelName,
+      };
+    }
+
     const candidateLines: string[] = [];
     for (const ev of authorizedEvidence.slice(0, 4)) {
-      const lines = ev.content
+      const cleanContent = cleanChunkEvidenceText(ev.content);
+      const lines = cleanContent
         .split('\n')
         .map((l) => l.trim())
         .filter((l) => {
           if (l.length < 15) return false;
+          if (l.startsWith('[') && l.endsWith(']')) return false;
+          if (l.startsWith('[Asset:') || l.startsWith('[OCR EXTRACTED')) return false;
           if (/^--\s*\d+\s+of\s+\d+\s*--$/i.test(l)) return false;
           if (/^page\s+\d+/i.test(l)) return false;
           if (/\b\d+\s+e-sv\s+series\b/i.test(l)) return false;
@@ -374,28 +400,58 @@ Respond in strict JSON with:
 
     scoredLines.sort((a, b) => b.matchCount - a.matchCount);
 
-    const relevantLines = scoredLines
-      .filter((s) => s.matchCount > 0 || scoredLines[0]?.matchCount === 0)
-      .map((s) => s.line)
-      .slice(0, 5);
+    const matchedScored = scoredLines.filter((s) => s.matchCount > 0);
+    if (matchedScored.length === 0) {
+      return {
+        answerText: "⚠️ No Verified Plant Records Found: We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. Please escalate this directly to a field technician or specialist.",
+        confidence: 'INSUFFICIENT_EVIDENCE',
+        isInsufficientEvidence: true,
+        isUnverified: true,
+        conflictDetected: false,
+        usedEvidenceChunkIds: [],
+        rawCitations: [],
+        modelUsed: this.modelName,
+      };
+    }
 
-    const uniqueLines = Array.from(new Set(relevantLines));
+    const toCleanSentenceCase = (text: string) => {
+      const trimmed = text.trim();
+      const letters = trimmed.replace(/[^a-zA-Z]/g, '');
+      const isShouting = letters.length > 6 && letters.split('').filter((c) => c === c.toUpperCase()).length / letters.length > 0.7;
+      if (isShouting) {
+        return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+      }
+      return trimmed;
+    };
+
+    const uniqueLines = Array.from(new Set(matchedScored.map((s) => toCleanSentenceCase(s.line)))).slice(0, 6);
     let answerText = '';
     if (uniqueLines.length > 0) {
-      answerText = `### Verified Equipment Specifications & Operational Guidance\n\n` +
-        uniqueLines.map((l) => `- ${l}`).join('\n\n');
+      const mid = Math.ceil(uniqueLines.length / 2);
+      const rootCauseFindings = uniqueLines.slice(0, mid);
+      const remediationSteps = uniqueLines.slice(mid);
+
+      answerText = `### Root Causes\n` +
+        rootCauseFindings.map((l) => `- ${l}`).join('\n') +
+        `\n\n### Immediate Checks & Remediation Steps\n` +
+        remediationSteps.map((l, i) => `${i + 1}. ${l}`).join('\n') +
+        `\n\n### Safety & Operational Specifications\n` +
+        `- Follow standard Lockout/Tagout (LOTO) de-energization procedures before physical contact.\n` +
+        `- Verify operating parameters against manufacturer specifications prior to restarting asset.`;
     } else {
-      answerText = langConfig.missingRecordsMessage;
+      answerText = `No verified information was found across your plant manuals, expert notes, or maintenance history for this specific issue. ${langConfig.insufficientEvidenceMessage}`;
     }
 
     return {
       answerText,
       confidence: uniqueLines.length > 0 ? 'HIGH' : 'INSUFFICIENT_EVIDENCE',
       isInsufficientEvidence: uniqueLines.length === 0,
+      isUnverified: uniqueLines.length === 0,
       conflictDetected: false,
       usedEvidenceChunkIds: authorizedEvidence.slice(0, 3).map((e) => e.chunkId),
       rawCitations: authorizedEvidence.slice(0, 3).map((e) => {
-        const contentLines = e.content
+        const cleanContent = cleanChunkEvidenceText(e.content);
+        const contentLines = cleanContent
           .split('\n')
           .map((l) => l.trim())
           .filter((l) => l.length > 5 && !l.startsWith('[Asset:') && !l.startsWith('--') && !l.startsWith('#'));
@@ -406,7 +462,7 @@ Respond in strict JSON with:
           specLine ||
           contentLines.find((l) => domainTokens.some((t) => l.toLowerCase().includes(t))) ||
           contentLines[0] ||
-          e.content;
+          cleanContent;
         return {
           chunkId: e.chunkId,
           docId: e.documentId,

@@ -3118,11 +3118,17 @@ export class PgDataStore implements IDataStore {
       }
     }
 
+    let safePlantId = dto.plantId && isUuid(dto.plantId) ? dto.plantId : toSafeUuidParam(dto.plantId);
+    if (!safePlantId) {
+      const plants = await this.listPlants(dto.organizationId);
+      safePlantId = plants[0]?.id || null;
+    }
+
     const res = await this.pool.query(
       `INSERT INTO conversations (organization_id, plant_id, asset_id, user_id, title)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, organization_id, plant_id, asset_id, user_id, title, created_at, updated_at`,
-      [dto.organizationId, dto.plantId, safeAssetId || null, dto.userId, dto.title]
+      [dto.organizationId, safePlantId, safeAssetId || null, dto.userId, dto.title]
     );
     const row = res.rows[0];
     return {

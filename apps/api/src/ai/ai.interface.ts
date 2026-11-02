@@ -82,6 +82,7 @@ export interface GenerationResult {
   answerText: string;
   confidence: 'HIGH' | 'MEDIUM' | 'UNCERTAIN' | 'INSUFFICIENT_EVIDENCE';
   isInsufficientEvidence: boolean;
+  isUnverified?: boolean;
   conflictDetected: boolean;
   conflictDetails?: string | null;
   usedEvidenceChunkIds: string[];
