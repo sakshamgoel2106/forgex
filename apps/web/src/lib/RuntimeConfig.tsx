@@ -9,6 +9,7 @@ import {
   resolveApiUrl,
   getStoredWorkspaceConfig,
   clearStoredWorkspaceConfig,
+  setStoredWorkspaceConfig,
   type StoredWorkspaceConfig,
 } from './api';
 import { ConnectWorkspaceView } from '../components/mobile/ConnectWorkspaceView';
@@ -227,7 +228,11 @@ export const RuntimeConfigProvider: React.FC<RuntimeConfigProviderProps> = ({ ch
     const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
     const forceConnect = urlParams?.has('connect') || (typeof window !== 'undefined' && window.location.hash.includes('connect'));
 
-    const activeWorkspace = getStoredWorkspaceConfig();
+    let activeWorkspace = getStoredWorkspaceConfig();
+    if (activeWorkspace?.baseUrl?.includes('api.forgex.industrial.ai')) {
+      clearStoredWorkspaceConfig();
+      activeWorkspace = null;
+    }
     setStoredWorkspace(activeWorkspace);
 
     if (forceConnect) {
@@ -238,25 +243,32 @@ export const RuntimeConfigProvider: React.FC<RuntimeConfigProviderProps> = ({ ch
 
     if (!activeWorkspace) {
       if (isNative()) {
-        // Native mobile container has no same-origin backend: always show ConnectWorkspaceView on first launch
         setNeedsWorkspaceConnect(true);
         setIsReady(true);
         return;
       }
 
-      // No stored server config: probe current origin to determine if origin is a ForgeX API
       const isOriginApi = await probeCurrentOriginApi();
       const isLocalhost =
         typeof window !== 'undefined' &&
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
       if (!isOriginApi && !isLocalhost) {
-        // App is NOT served from a ForgeX API origin and has no stored config:
-        // Show first-launch "Connect to your workspace" screen
         setNeedsWorkspaceConnect(true);
         setIsReady(true);
         return;
       }
+
+      // Auto-bind local workspace configuration for web environment
+      const defaultOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000';
+      const autoConfig: StoredWorkspaceConfig = {
+        baseUrl: defaultOrigin,
+        mode: 'saas',
+        name: 'ForgeX Local Workspace',
+        connectedAt: new Date().toISOString(),
+      };
+      setStoredWorkspaceConfig(autoConfig);
+      setStoredWorkspace(autoConfig);
     }
 
     setNeedsWorkspaceConnect(false);
@@ -323,15 +335,20 @@ export const RuntimeConfigProvider: React.FC<RuntimeConfigProviderProps> = ({ ch
           setIsReady(false);
           initConfig();
         }}
-        onCancel={
-          storedWorkspace
-            ? () => {
-                setNeedsWorkspaceConnect(false);
-                setIsReady(false);
-                initConfig();
-              }
-            : undefined
-        }
+        onCancel={() => {
+          const defaultOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000';
+          const autoConfig: StoredWorkspaceConfig = {
+            baseUrl: defaultOrigin,
+            mode: 'saas',
+            name: 'ForgeX Workspace',
+            connectedAt: new Date().toISOString(),
+          };
+          setStoredWorkspaceConfig(autoConfig);
+          setStoredWorkspace(autoConfig);
+          setNeedsWorkspaceConnect(false);
+          setIsReady(false);
+          initConfig();
+        }}
       />
     );
   }

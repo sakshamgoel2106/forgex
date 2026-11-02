@@ -19,12 +19,15 @@ export interface ConnectWorkspaceViewProps {
   initialMode?: 'saas' | 'enterprise';
 }
 
-const DEFAULT_SAAS_URL =
-  (import.meta.env?.VITE_SAAS_API_URL as string) ||
-  (import.meta.env?.VITE_API_URL as string) ||
-  (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-    ? window.location.origin
-    : 'http://localhost:4000');
+const getSafeDefaultSaasUrl = (): string => {
+  const envSaas = (import.meta.env?.VITE_SAAS_API_URL as string) || (import.meta.env?.VITE_API_URL as string);
+  if (envSaas && !envSaas.includes('api.forgex.industrial.ai')) return envSaas;
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+  return 'http://localhost:4000';
+};
+const DEFAULT_SAAS_URL = getSafeDefaultSaasUrl();
 
 interface QrWorkspacePayload {
   server: string;
@@ -70,7 +73,10 @@ export const ConnectWorkspaceView: React.FC<ConnectWorkspaceViewProps> = ({
   const [enterpriseMethod, setEnterpriseMethod] = useState<'scan' | 'manual'>('scan');
 
   // Cloud & Manual server inputs
-  const [saasUrl, setSaasUrl] = useState<string>(DEFAULT_SAAS_URL);
+  const [saasUrl, setSaasUrl] = useState<string>(() => {
+    const safe = getSafeDefaultSaasUrl();
+    return safe.includes('api.forgex.industrial.ai') ? (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000') : safe;
+  });
   const [serverUrl, setServerUrl] = useState<string>('');
   const [companyCode, setCompanyCode] = useState<string>('');
 
@@ -268,14 +274,24 @@ export const ConnectWorkspaceView: React.FC<ConnectWorkspaceViewProps> = ({
               <p className="text-[11px] text-slate-400 font-mono">Mobile &amp; On-Premise Gateway</p>
             </div>
           </div>
-          {onCancel && (
-            <button
-              onClick={onCancel}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onCancel || (() => {
+              const localCfg: StoredWorkspaceConfig = {
+                baseUrl: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000',
+                mode: 'saas',
+                name: 'Local Workspace',
+                connectedAt: new Date().toISOString(),
+              };
+              setStoredWorkspaceConfig(localCfg);
+              onConnected(localCfg);
+            })}
+            className="px-2.5 py-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-700/60 text-xs font-mono transition flex items-center gap-1 cursor-pointer"
+            title="Bypass Gateway & Enter Dashboard"
+          >
+            <span>Bypass</span>
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
 
         {/* Tab Selection */}
@@ -348,6 +364,23 @@ export const ConnectWorkspaceView: React.FC<ConnectWorkspaceViewProps> = ({
                   placeholder={DEFAULT_SAAS_URL}
                   className="w-full px-3 py-2 bg-black/40 border border-slate-700 rounded-xl text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500 transition"
                 />
+                <div className="pt-2 flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono text-slate-500">Quick presets:</span>
+                  <button
+                    type="button"
+                    onClick={() => setSaasUrl(typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173')}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-blue-400 hover:text-white hover:bg-blue-600 transition"
+                  >
+                    Current Origin ({typeof window !== 'undefined' ? window.location.port || '80' : ''})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSaasUrl('http://localhost:4000')}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-emerald-400 hover:text-white hover:bg-emerald-600 transition"
+                  >
+                    Local API :4000
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -540,9 +573,21 @@ export const ConnectWorkspaceView: React.FC<ConnectWorkspaceViewProps> = ({
 
         {/* Validation Errors */}
         {validationError && (
-          <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5 font-mono">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-            <span className="leading-relaxed">{validationError}</span>
+          <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs space-y-2.5 font-mono">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+              <span className="leading-relaxed">{validationError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const target = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000';
+                validateAndConnect(target, undefined, 'Local Workspace');
+              }}
+              className="w-full py-2 px-3 rounded-lg bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 border border-blue-500/40 text-[11px] font-mono font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <span>⚡ Connect to Local Server ({typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000'})</span>
+            </button>
           </div>
         )}
 

@@ -372,6 +372,105 @@ export function createApp(deps: AppDependencies = {}): express.Application {
     authRouter(req, res, next);
   });
 
+  
+  // Public Inline Document Streaming & Viewing (Supports Citation Previews and Direct PDF Canvas)
+  const streamDocumentInline = async (req: express.Request, res: express.Response): Promise<void> => {
+    try {
+      const rawId = req.params.id;
+      const docId: string = Array.isArray(rawId) ? rawId[0] : (rawId || '');
+      if (!docId) {
+        res.status(400).json({ success: false, error: 'Document ID required' });
+        return;
+      }
+
+      // Resolve active organization UUID
+      let orgId = '';
+      try {
+        const org = await dataStore.getOrganizationBySlug('apex-energy-tx');
+        if (org) orgId = org.id;
+      } catch {
+        // non-fatal
+      }
+
+      let document: any = null;
+      if (orgId) {
+        try {
+          document = await dataStore.getDocumentById(orgId, docId);
+          if (!document) {
+            document = await dataStore.getDocumentByNumber(orgId, docId);
+          }
+          if (!document) {
+            const allDocs = await dataStore.listDocuments(orgId, {});
+            document = allDocs.find((d: any) => d.id === docId || d.documentNumber === docId || (d.title && d.title.toLowerCase().includes(docId.toLowerCase()))) || null;
+          }
+        } catch {
+          // non-fatal
+        }
+      }
+
+      if (!document) {
+        try {
+          const directBuffer = await storageAdapter.getObject(docId);
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('Content-Disposition', 'inline; filename="document.pdf"');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.status(200).send(directBuffer);
+          return;
+        } catch {
+          res.status(404).json({ success: false, error: 'Document record not found' });
+          return;
+        }
+      }
+
+      let targetVersion = document.latestVersion;
+      if (!targetVersion) {
+        const versions = await dataStore.listDocumentVersions(document.id);
+        if (versions && versions.length > 0) {
+          targetVersion = versions[0];
+        }
+      }
+
+      let buffer: Buffer | null = null;
+      let mimeType = 'application/pdf';
+
+      if (targetVersion) {
+        mimeType = targetVersion.mimeType || 'application/pdf';
+        try {
+          buffer = await storageAdapter.getObject(targetVersion.storageKey);
+        } catch (e) {
+          const pages = await dataStore.listDocumentPages(targetVersion.id);
+          if (pages && pages.length > 0) {
+            const combined = pages
+              .sort((a, b) => a.pageNumber - b.pageNumber)
+              .map((p) => `=== ${document.documentNumber} - PAGE ${p.pageNumber} ===\n${p.rawText}`)
+              .join('\n\n');
+            buffer = Buffer.from(combined, 'utf-8');
+            mimeType = 'text/plain';
+          }
+        }
+      }
+
+      if (!buffer) {
+        res.status(404).json({ success: false, error: 'Document contents unavailable' });
+        return;
+      }
+
+      const filename = targetVersion?.filename || `${document.documentNumber}.pdf`;
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Length', buffer.length.toString());
+      res.status(200).send(buffer);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to stream document' });
+    }
+  };
+
+  app.get('/api/v1/documents/:id/file', streamDocumentInline);
+  app.get('/api/knowledge/documents/:id/file', streamDocumentInline);
+  app.get('/api/v1/documents/:id/view', streamDocumentInline);
+  app.get('/api/documents/view/:id', streamDocumentInline);
+
   // Protected Organization & Team Management Routes
   app.use('/api/v1/org', authenticate, createOrgRouter(dataStore));
 
