@@ -2,7 +2,7 @@
 
 ## 1. Relational Database Schema (PostgreSQL 16)
 
-ForgeX AI uses PostgreSQL 16 as its system of record for tenancy, identity, document cataloging, asset hierarchies, procedure execution state, and immutable compliance audit logs.
+ForgeX AI uses PostgreSQL 16 as its system of record for tenancy, identity, document cataloging, asset hierarchies, procedure execution state, and audit events. Migration 033 requires chain fields on new audit inserts, adds a per-organization SHA-256 chain, and triggers that reject ordinary row updates/deletes and table truncation. Events written before migration 033 remain legacy and are not retroactively verified. A database owner/superuser can bypass or alter database controls; the chain is tamper-evident, not an immutable ledger. The API provides a verifier and an opt-in AWS S3 Object Lock Compliance archive command; successful archival depends on a separately administered, correctly configured bucket and credentials.
 
 ```mermaid
 erDiagram
@@ -63,7 +63,7 @@ erDiagram
 | `category` | `VARCHAR(32)` | `NOT NULL` | `SOP`, `OEM_MANUAL`, `SCHEMATIC_PID`. |
 | `revision` | `VARCHAR(16)` | `NOT NULL` | Engineering revision code. |
 | `storage_key` | `TEXT` | `NOT NULL` | S3 / MinIO object key. |
-| `checksum_sha256` | `CHAR(64)` | `NOT NULL` | Tamper-prevention file hash. |
+| `checksum_sha256` | `CHAR(64)` | `NOT NULL` | File-integrity checksum; not an audit-log immutability control. |
 | `total_pages` | `INTEGER` | `NOT NULL` | Extracted page count. |
 | `status` | `VARCHAR(32)` | `DEFAULT 'PENDING'` | `PENDING`, `PARSING`, `INDEXED`. |
 
@@ -79,18 +79,21 @@ erDiagram
 | `is_figure` | `BOOLEAN` | `DEFAULT FALSE` | True if cropped diagram snippet. |
 | `qdrant_point_id` | `UUID` | `UNIQUE` | Corresponding vector ID in Qdrant. |
 
-#### `audit_logs` (Append-Only Ledger)
+#### `audit_events` (Current Event Log; Integrity Controls Not Yet Implemented)
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
-| `id` | `BIGSERIAL` | `PRIMARY KEY` | Monotonically increasing sequential ID. |
-| `tenant_id` | `UUID` | `NOT NULL` | Tenant boundary. |
-| `actor_id` | `UUID` | `NOT NULL` | User identifier. |
-| `actor_role` | `VARCHAR(32)` | `NOT NULL` | Role active during operation. |
-| `action` | `VARCHAR(64)` | `NOT NULL` | `DIAGNOSTIC_QUERY`, `LOTO_SIGNOFF`, etc. |
-| `asset_tag` | `VARCHAR(64)` | `NULLABLE` | Associated asset tag. |
-| `citations` | `JSONB` | `NOT NULL` | Document IDs, pages & coordinates returned. |
-| `request_hash` | `CHAR(64)` | `NOT NULL` | SHA-256 hash of query & context. |
-| `timestamp` | `TIMESTAMPTZ` | `DEFAULT NOW()` | Immutable UTC timestamp. |
+| `id` | `UUID` | `PRIMARY KEY, DEFAULT gen_random_uuid()` | Event identifier. |
+| `organization_id` | `UUID` | `NOT NULL, REFERENCES organizations(id)` | Organization scope. |
+| `actor_user_id` | `UUID` | `REFERENCES users(id)` | Actor when available. |
+| `action` | `VARCHAR(64)` | `NOT NULL` | Event action. |
+| `resource_type` | `VARCHAR(64)` | `NOT NULL` | Resource kind. |
+| `resource_id` | `VARCHAR(64)` | `NOT NULL` | Resource identifier. |
+| `metadata` | `JSONB` | `NOT NULL, DEFAULT '{}'` | Event metadata; sensitive data handling must be reviewed per event type. |
+| `ip_address` | `VARCHAR(45)` | Nullable | Caller IP when supplied. |
+| `user_agent` | `TEXT` | Nullable | Caller user-agent when supplied. |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL, DEFAULT NOW()` | Database timestamp; not independently tamper-proof. |
+
+Migration 033 adds the nullable `chain_sequence`, `previous_hash`, and `event_hash` columns. Rows written before that migration remain unchained. The migration trigger rejects ordinary updates/deletes, but a database owner can bypass it. Independently administered Object Lock archival is opt-in and deployment-configured. SHA-256 document checksums can detect file-content differences when compared to a trusted checksum; they do not prevent an authorized database operator from changing both a record and its checksum.
 
 ---
 

@@ -6,6 +6,7 @@ import type {
   IRerankingProvider,
   GenerationEvidenceItem,
   RerankCandidate,
+  RerankResult,
 } from '../ai/ai.interface.js';
 import {
   type RAGQueryRequest,
@@ -39,6 +40,24 @@ export interface RAGContext {
   userAssignedPlantIds?: string[];
   disclosurePolicy?: string;
 }
+
+const isSupervisoryRole = (role?: string): boolean =>
+  role === 'ORGANIZATION_OWNER' ||
+  role === 'ORGANIZATION_ADMIN' ||
+  role === 'SUPERVISOR' ||
+  role === 'PLANT_MANAGER' ||
+  role === 'ENGINEER' ||
+  role === 'ENGINEER_TECHNICIAN';
+
+const isConfidentialClassification = (classification?: unknown): boolean =>
+  typeof classification === 'string' &&
+  /(RESTRICTED|CONFIDENTIAL)/i.test(classification);
+
+const isConfidentialDocument = (document: any, vectorPayload?: Record<string, unknown>): boolean =>
+  Boolean(document?.isConfidential) ||
+  isConfidentialClassification(document?.dataClassification) ||
+  Boolean(vectorPayload?.isConfidential) ||
+  isConfidentialClassification(vectorPayload?.dataClassification);
 
 export class RAGQueryEngine {
   private securityService: SecurityEventService;
@@ -466,6 +485,7 @@ export class RAGQueryEngine {
     const hasSpecificMachineTag = Boolean(query.match(/\b([A-Z0-9]+-[0-9]+-[A-Z0-9]+|[A-Z]+-[0-9]+)\b/gi));
     const isGeneralKnowledgeQuery =
       (!plantId || plantId === 'GENERAL') &&
+      intent === 'GENERAL_KNOWLEDGE' &&
       !assetId &&
       !request.machineId &&
       !hasSpecificMachineTag;
@@ -773,7 +793,6 @@ ${generalKnowledgeText}
 
     if (
       isImmediateHazard ||
-      deterministicHazards.length > 0 ||
       /\b(hazardous|danger|dangerous|arc flash|toxic|loto|lockout|high pressure|emergency shutdown|radiation|chemical leak|explosion|lethal|critical failure|overheat|overheating|abnormal vibration)\b/i.test(
         combinedQueryForClassification
       )
@@ -991,7 +1010,11 @@ ${generalKnowledgeText}
       if (payload.type === 'EXPERT_KNOWLEDGE' || payload.isExpertKnowledge) {
         const ekId = (payload.expertKnowledgeId || payload.documentId) as string;
         const ek = await this.dataStore.getExpertKnowledgeEntryById(organizationId, ekId);
-        if (ek) {
+        if (
+          ek &&
+          ek.status === 'APPROVED' &&
+          (isSupervisoryRole(userRole) || !isConfidentialDocument(ek, payload))
+        ) {
           if (machine) {
             const hasTag =
               (ek.machineAssetTags && ek.machineAssetTags.includes(machine.assetTag)) ||
@@ -1047,16 +1070,7 @@ ${generalKnowledgeText}
       }
 
       // Confidential document protection: Non-supervisory members cannot retrieve confidential manuals/chunks
-      const isSupervisory =
-        userRole === 'ORGANIZATION_ADMIN' ||
-        userRole === 'ORGANIZATION_OWNER' ||
-        userRole === 'ENGINEER_TECHNICIAN';
-      const isConfidential =
-        Boolean((doc as any).isConfidential) ||
-        (doc as any).dataClassification === 'RESTRICTED_CONFIDENTIAL' ||
-        (doc as any).dataClassification === 'RESTRICTED' ||
-        (doc as any).dataClassification === 'CONFIDENTIAL';
-      if (isConfidential && !isSupervisory) {
+      if (isConfidentialDocument(doc, payload) && !isSupervisoryRole(userRole)) {
         continue;
       }
 
@@ -1124,10 +1138,6 @@ ${generalKnowledgeText}
             }
           }
         }
-        if (fallbackDocList.length === 0) {
-          fallbackDocList.push(...allPlantDocs);
-        }
-
         // Sort fallback docs so documents matching specific query model/title terms (e.g. e-SV, Lowara, pump, compressor) are prioritized
         const queryLower = effectiveSearchQuery.toLowerCase();
         const mTypeLower = (machine?.machineType || '').toLowerCase();
@@ -1174,6 +1184,10 @@ ${generalKnowledgeText}
         });
 
         for (const doc of fallbackDocList) {
+          if (isConfidentialDocument(doc) && !isSupervisoryRole(userRole)) {
+            continue;
+          }
+
           const versionId =
             doc.latestVersion?.id ||
             (await this.dataStore.listDocumentVersions(doc.id))[0]?.id;
@@ -1291,13 +1305,41 @@ ${generalKnowledgeText}
       }
     }
 
-    // 6. Fast In-Memory Lexical + Alphanumeric Tag Booster (<5ms)
-    // Avoids slow CPU cross-encoder Python worker timeouts while delivering superior precision
+    // Keep the existing heuristic ranker as the default until a learned model is configured.
     const targetAssetTag = machine?.assetTag || (rawAssetTag as string);
-    const scoredCandidates = dedupedCandidates.map((cand) => ({
-      ...cand,
-      rerankScore: RAGQueryEngine.scoreCandidateInMemory(effectiveSearchQuery, cand, targetAssetTag),
-    }));
+    let scoredCandidates: RerankResult[];
+    const learnedRerankingEnabled = Boolean(
+      process.env.RERANKER_MODEL && process.env.RERANKER_MODEL !== 'heuristic-v1'
+    );
+    if (learnedRerankingEnabled && !this.rerankingProvider) {
+      throw new Error('A learned reranker is configured, but no reranking provider is available.');
+    }
+    if (learnedRerankingEnabled && this.rerankingProvider) {
+      scoredCandidates = await this.rerankingProvider.rerank(
+        effectiveSearchQuery,
+        dedupedCandidates,
+        dedupedCandidates.length
+      );
+      if (targetAssetTag) {
+        const targetAssetTagLower = targetAssetTag.toLowerCase();
+        scoredCandidates = scoredCandidates.map((candidate) => {
+          const searchableText =
+            `${candidate.content} ${candidate.sectionHeading || ''} ${candidate.documentTitle}`.toLowerCase();
+          return searchableText.includes(targetAssetTagLower)
+            ? { ...candidate, rerankScore: Math.min(1, candidate.rerankScore + 0.35) }
+            : candidate;
+        });
+      }
+    } else {
+      scoredCandidates = dedupedCandidates.map((cand) => ({
+        ...cand,
+        rerankScore: RAGQueryEngine.scoreCandidateInMemory(
+          effectiveSearchQuery,
+          cand,
+          targetAssetTag
+        ),
+      }));
+    }
 
     scoredCandidates.sort((a, b) => b.rerankScore - a.rerankScore);
 
@@ -1506,14 +1548,8 @@ ${generalKnowledgeText}
     });
 
     if (expertKnowledgeList.length > 0) {
-      const isSupervisory =
-        userRole === 'ORGANIZATION_ADMIN' ||
-        userRole === 'ORGANIZATION_OWNER' ||
-        userRole === 'ENGINEER_TECHNICIAN';
-
       for (const ek of expertKnowledgeList) {
-        const isConfidentialEK = ek.dataClassification === 'RESTRICTED' || ek.dataClassification === 'CONFIDENTIAL';
-        if (isConfidentialEK && !isSupervisory) continue;
+        if (isConfidentialClassification(ek.dataClassification) && !isSupervisoryRole(userRole)) continue;
 
         authorizedEvidence.unshift({
           chunkId: `expert_${ek.id}`,
@@ -1730,7 +1766,12 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
 4. Do NOT attempt troubleshooting or manual inspection until declared safe by incident command.
 
 [MANDATORY NOTICE] ForgeX AI cannot execute physical shutdowns; you must activate the physical emergency stop button on the unit control panel or contact control room operations. Ticket ${createdTicket.ticketNumber} created with CRITICAL priority.`;
-    } else if (machine && isOldOrIncompleteMachine && (generationResult.isInsufficientEvidence || shouldEscalate)) {
+    } else if (
+      machine &&
+      isOldOrIncompleteMachine &&
+      (generationResult.isInsufficientEvidence || shouldEscalate) &&
+      !(createdTicket && isSafetyCritical)
+    ) {
       let oldMachineResponse = `Insufficient evidence in authorized plant documentation: I cannot safely answer this inquiry from authorized company evidence without guessing.\n\n`;
       oldMachineResponse += `### [GENERAL ENGINEERING CONCEPTS — NOT VERIFIED FOR THIS ASSET]\n`;
       oldMachineResponse += `For ${machine.machineType} equipment in general: operational limits and mechanical tolerances depend strictly on manufacturer frame sizing, impeller geometry, and thermal duty ratings. Standard engineering principles apply, but exact ratings cannot be inferred.\n\n`;
@@ -1767,7 +1808,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
 
       finalAnswer = oldMachineResponse;
     } else if (createdTicket && isSafetyCritical) {
-      finalAnswer = `[SAFETY ESCALATION] This inquiry involves safety-critical or hazardous operating parameters. ForgeX AI strictly prohibits guessing or generating unverified operating procedures. Ticket ${createdTicket.ticketNumber} has been created (${createdTicket.assignmentStatus.replace(/_/g, ' ')}) and routed to ${createdTicket.assignedSpecialistName || 'the specialist queue'} for qualified human review.`;
+      finalAnswer = `[SAFETY ESCALATION] Insufficient evidence is available to safely verify this safety-critical inquiry. ForgeX AI strictly prohibits guessing or generating unverified operating procedures. Ticket ${createdTicket.ticketNumber} has been created (${createdTicket.assignmentStatus.replace(/_/g, ' ')}) and routed to ${createdTicket.assignedSpecialistName || 'the specialist queue'} for qualified human review.`;
     } else if (createdTicket) {
       finalAnswer = `${langConfig.insufficientEvidenceMessage} Ticket ${createdTicket.ticketNumber} has been automatically created and routed to ${createdTicket.assignedSpecialistName || 'the specialist queue'} (${createdTicket.assignmentStatus.replace(/_/g, ' ')}).`;
     } else {
@@ -1801,11 +1842,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
 
     // 10. Construct and Validate Citations with Verbatim Substring Check & Confidentiality Controls
     const citationsToSave = [];
-    const isNonAdmin =
-      userRole &&
-      userRole !== 'ORGANIZATION_OWNER' &&
-      userRole !== 'ORGANIZATION_ADMIN' &&
-      userRole !== 'ENGINEER_TECHNICIAN';
+    const isNonAdmin = !isSupervisoryRole(userRole);
 
     const normalizeWhitespace = (str: string) => str.replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -1835,7 +1872,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
 
           let snippetText: string;
           if (isNonAdmin) {
-            snippetText = `Reference: [APPROVED GUIDANCE: ${evidenceMatch.documentNumber} - ${evidenceMatch.sectionHeading || 'Approved Section'} (Page ${evidenceMatch.pageNumber})]`;
+            snippetText = 'Reference: approved operational guidance';
           } else {
             snippetText = rawCit.exactVerbatimQuote.slice(0, 280);
           }
@@ -1849,7 +1886,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
             pageNumber: rawCit.pageNumber || evidenceMatch.pageNumber,
             knowledgeChunkId: evidenceMatch.chunkId,
             snippet: snippetText,
-            exactVerbatimQuote: rawCit.exactVerbatimQuote,
+            exactVerbatimQuote: isNonAdmin ? undefined : rawCit.exactVerbatimQuote,
             confidenceScore: evidenceMatch.score,
             sectionHeading: evidenceMatch.sectionHeading,
           });
@@ -1866,11 +1903,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
             if (normQuote && normContent.includes(normQuote)) {
               let snippetText: string;
               if (isNonAdmin) {
-                if (evidenceMatch.chunkId.startsWith('guidance_')) {
-                  snippetText = `Reference: [APPROVED OPERATIONAL GUIDANCE] ${evidenceMatch.documentTitle}`;
-                } else {
-                  snippetText = `Reference: [APPROVED GUIDANCE: ${evidenceMatch.documentNumber} - ${evidenceMatch.sectionHeading || 'Approved Section'} (Page ${evidenceMatch.pageNumber})]`;
-                }
+                snippetText = 'Reference: approved operational guidance';
               } else {
                 snippetText = evidenceMatch.content.slice(0, 280);
               }
@@ -1884,7 +1917,7 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
                 pageNumber: evidenceMatch.pageNumber,
                 knowledgeChunkId: evidenceMatch.chunkId,
                 snippet: snippetText,
-                exactVerbatimQuote: verbatimQuote,
+                exactVerbatimQuote: isNonAdmin ? undefined : verbatimQuote,
                 confidenceScore: evidenceMatch.score,
                 sectionHeading: evidenceMatch.sectionHeading,
               });
@@ -1905,8 +1938,8 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
             documentVersionId: evidenceMatch.documentVersionId,
             pageNumber: evidenceMatch.pageNumber,
             knowledgeChunkId: evidenceMatch.chunkId,
-            snippet: evidenceMatch.content.slice(0, 280),
-            exactVerbatimQuote: verbatimQuote,
+            snippet: isNonAdmin ? 'Reference: approved operational guidance' : evidenceMatch.content.slice(0, 280),
+            exactVerbatimQuote: isNonAdmin ? undefined : verbatimQuote,
             confidenceScore: evidenceMatch.score,
             sectionHeading: evidenceMatch.sectionHeading,
           });
@@ -1921,6 +1954,8 @@ Please specify the machine asset tag (e.g., PUMP-101, COMP-202) or select the un
       determinedQuestionMode = 'RESTRICTED_SAFETY_CRITICAL';
     } else if (machine || assetId || hasSpecificMachineTag) {
       determinedQuestionMode = 'MACHINE_SPECIFIC';
+    } else if (intent === 'GENERAL_KNOWLEDGE') {
+      determinedQuestionMode = 'GENERAL';
     } else {
       determinedQuestionMode = 'COMPANY_SPECIFIC';
     }

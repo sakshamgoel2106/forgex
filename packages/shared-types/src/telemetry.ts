@@ -57,6 +57,9 @@ export interface AuditEvent {
   ipAddress?: string;
   userAgent?: string;
   createdAt: string;
+  chainSequence?: number;
+  previousHash?: string;
+  eventHash?: string;
 }
 
 /**

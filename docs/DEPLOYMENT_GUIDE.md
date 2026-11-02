@@ -18,8 +18,8 @@ ForgeX AI supports two first-class deployment paradigms sharing identical domain
 | **Object Storage** | AWS S3 / Cloudflare R2 | MinIO (S3-compatible) |
 | **Async Queues** | AWS ElastiCache / Redis Cloud | Redis 7 Container with BullMQ |
 | **Inference Provider** | Explicit Cloud AI (`Azure OpenAI` / `OpenAI`) | Air-Gapped Local Ollama (`llama3.2`, `llava`) |
-| **Fallback Policy** | Fails closed on provider error | **Strictly no cloud fallback**; fails closed |
-| **External Egress** | Allowed for configured cloud API endpoints | **Strictly disabled** (`AIR_GAPPED_MODE=true`) |
+| **Fallback Policy** | Depends on the configured provider and explicit fallback configuration | No system-wide no-fallback guarantee from the repository alone |
+| **External Egress** | Allowed for configured cloud API endpoints | Docker internal network limits container egress; host/plant egress still needs firewall and packet-capture validation |
 | **Telemetry** | Optional sanitized metrics | **Disabled** (`TELEMETRY_ENABLED=false`) |
 
 ---
@@ -86,6 +86,7 @@ cd /opt/forgex-ai
 cp .env.example infra/.env
 # Edit infra/.env to set your secure passwords, secrets, and domain bindings:
 # - POSTGRES_PASSWORD
+# - FORGEX_APP_PASSWORD (separate runtime API database role)
 # - KEYCLOAK_ADMIN_PASSWORD
 # - JWT_SECRET
 # - S3_SECRET_ACCESS_KEY
@@ -93,7 +94,7 @@ cp .env.example infra/.env
 # 3. Pull or build container images and launch the stack
 docker compose -f infra/docker-compose.yml up -d
 
-# 4. Verify that all 9 containers are running and healthy
+# 4. Verify that services are running and healthy (the migration job exits after setup)
 docker compose -f infra/docker-compose.yml ps
 ```
 
@@ -112,20 +113,27 @@ docker exec -it forgex-ollama ollama pull llava
 docker exec -it forgex-ollama ollama pull nomic-embed-text
 ```
 
+The learned passage reranker remains optional and defaults to `heuristic-v1`. If
+enabling a learned model, stage the reviewed model snapshot at
+`infra/models/reranker/`, set the same `RERANKER_MODEL` for API and worker, and
+validate its output on an approved holdout benchmark before production use.
+
 ### 4.3 Database Migration & Initialization
 
-Database migrations execute automatically on container startup if `DATABASE_URL` is configured. To manually run or dry-run migrations:
+The Enterprise Compose stack runs a one-shot `migrate` service with the privileged database account, applies pending migrations, and provisions a separate runtime API role with audit rows restricted to `SELECT`/`INSERT`. The API uses that non-owner role with `AUTO_MIGRATE=false`. To rerun the deployment migration job:
 
 ```bash
-# Execute standalone migration runner inside the API container
-docker exec -it forgex-api pnpm run db:migrate
+docker compose -f infra/docker-compose.yml run --rm migrate
 ```
+
+For SaaS or other deployments, use a separately controlled migration identity and set `AUTO_MIGRATE=false` for the runtime API identity. Do not use a PostgreSQL superuser or table owner as the API's `DATABASE_URL`; apply migrations through an approved one-off job instead. Existing Enterprise data volumes need the API role provisioned by rerunning the migration service before starting the API.
 
 ### 4.4 Air-Gapped Egress Controls
 
-In strictly air-gapped industrial, nuclear, or defense environments:
-- Set `internal: true` in `infra/docker-compose.yml` under `forgex_internal` network to disable internet gateway routing.
-- Set `AIR_GAPPED_MODE=true` in `infra/.env`. The ForgeX API strictly forbids external network egress and refuses to initialize third-party cloud SDKs. If an external model is requested, the system immediately rejects the operation with an explicit security fault without leaking data.
+For an Enterprise deployment intended to run without internet:
+- The included stack sets `internal: true` on `forgex_internal`, limiting outbound routing for containers attached only to that Docker network.
+- `AIR_GAPPED_MODE=true` applies application-level outbound guards to supported code paths; it is not a host firewall and does not control every Node/Python client or host process.
+- Use the egress validation procedure in [SECURITY.md](./SECURITY.md), enforce host/plant firewall policy, and retain representative packet-capture results. Do not claim system-wide zero egress based on this Compose file or environment flag alone.
 
 ---
 

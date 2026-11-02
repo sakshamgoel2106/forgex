@@ -1,6 +1,6 @@
 """
 ForgeX AI — Document, Multimodal Extraction & Reranking Worker
-Provides asynchronous layout-aware PDF table parsing, Cross-Encoder reranking (/rerank),
+Provides layout-aware PDF table parsing, heuristic or locally staged learned ranking (/rerank),
 and direct Redis queue consumer for heavy ingestion and CAD/STEP conversions.
 """
 
@@ -11,6 +11,8 @@ import io
 import json
 import asyncio
 import logging
+import threading
+from functools import lru_cache
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File
@@ -37,7 +39,7 @@ class Passage(BaseModel):
         return self.text or self.content or ""
 
 class RerankRequest(BaseModel):
-    model: str = Field(default="BAAI/bge-reranker-v2-m3")
+    model: str = Field(default_factory=lambda: os.getenv("RERANKER_MODEL", "heuristic-v1"))
     query: str
     passages: List[Passage]
 
@@ -65,14 +67,13 @@ class PdfTableExtractionResponse(BaseModel):
     pages: List[PdfTablePageResult]
 
 # -----------------------------------------------------------------------------
-# 2. Cross-Encoder Reranker Scoring Engine (BAAI/bge-reranker-v2-m3 compatible)
+# 2. Deterministic Heuristic Relevance Scoring (not a learned cross-encoder)
 # -----------------------------------------------------------------------------
 
-def score_passage_cross_encoder(query: str, text: str) -> float:
+def score_passage_heuristic(query: str, text: str) -> float:
     """
-    Computes calibrated cross-encoder precision score for passage against query,
-    prioritizing exact alphanumeric equipment tags, torque/pressure specs,
-    and term-frequency cross-attention.
+    Computes an uncalibrated heuristic relevance score for passage against query,
+    prioritizing exact alphanumeric equipment tags and torque/pressure specs.
     """
     query_lower = query.lower()
     text_lower = text.lower()
@@ -91,7 +92,7 @@ def score_passage_cross_encoder(query: str, text: str) -> float:
         matches = sum(1.0 for spec in specs if spec in text_lower)
         spec_score = min(1.0, matches / len(specs))
 
-    # 3. Token-level cross-attention overlap with stopword filtering & stemming
+    # 3. Token overlap with stopword filtering and stemming
     STOPWORDS = {
         "what", "are", "the", "and", "for", "with", "from", "that", "this",
         "how", "why", "can", "should", "does", "did", "was", "were", "about",
@@ -134,6 +135,47 @@ def score_passage_cross_encoder(query: str, text: str) -> float:
         final_score = (token_score * 0.70) + (spec_score * 0.20) + min(0.10, heading_boost) + joint_boost
 
     return float(max(0.01, min(0.99, final_score)))
+
+
+_cross_encoder_lock = threading.Lock()
+
+
+@lru_cache(maxsize=1)
+def load_cross_encoder(model_name: str):
+    """Load a pre-staged Hugging Face sequence-classification model; never download at runtime."""
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    model_path = os.getenv("RERANKER_MODEL_PATH", model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+    model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+    return tokenizer, model, torch, device
+
+
+def score_passages_with_cross_encoder(query: str, passages: List[Passage], model_name: str) -> List[float]:
+    with _cross_encoder_lock:
+        tokenizer, model, torch, device = load_cross_encoder(model_name)
+        encoded = tokenizer(
+            [query] * len(passages),
+            [passage.get_text() for passage in passages],
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="pt",
+        )
+        encoded = {key: value.to(device) for key, value in encoded.items()}
+        with torch.inference_mode():
+            logits = model(**encoded).logits
+            if logits.ndim != 2 or logits.shape[1] not in (1, 2):
+                raise ValueError("Cross-encoder must return one relevance logit or two class logits.")
+            if logits.shape[1] == 1:
+                scores = torch.sigmoid(logits[:, 0]).detach().cpu().tolist()
+            else:
+                scores = torch.softmax(logits, dim=-1)[:, 1].detach().cpu().tolist()
+    return [float(score) for score in scores]
 
 # -----------------------------------------------------------------------------
 # 3. Layout-Aware Markdown Table Extraction & Chunking
@@ -445,7 +487,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ForgeX AI Document Processing & Reranking Worker",
     version="0.3.0",
-    description="Multimodal ingestion, layout-aware PDF table parsing, Cross-Encoder reranking (/rerank), and asynchronous Redis job consumer",
+    description="Layout-aware PDF table parsing, configured heuristic or learned passage ranking (/rerank), and asynchronous Redis job consumer",
     lifespan=lifespan,
 )
 
@@ -465,18 +507,52 @@ def readyz():
 async def rerank_passages(request: RerankRequest):
     """
     POST /rerank
-    Cross-Encoder Reranking endpoint (BAAI/bge-reranker-v2-m3 compatible).
-    Takes a query and candidate passages, returning calibrated scores in descending order.
+    Configured heuristic or learned passage ranking. Scores are not calibrated
+    correctness probabilities or model-confidence estimates.
     """
     if not request.passages:
         return RerankResponse(results=[])
 
+    if len(request.passages) > 64:
+        raise HTTPException(status_code=400, detail="At most 64 passages may be reranked per request.")
+
+    configured_model = os.getenv("RERANKER_MODEL", "heuristic-v1")
+    if configured_model != "heuristic-v1" and not os.path.isdir(
+        os.getenv("RERANKER_MODEL_PATH", configured_model)
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Configured cross-encoder '{configured_model}' is not staged locally.",
+        )
+    if request.model != configured_model:
+        raise HTTPException(status_code=400, detail="Requested reranker does not match the configured model.")
+
     results: List[RerankResultItem] = []
-    for passage in request.passages:
-        pid = passage.get_id()
-        ptext = passage.get_text()
-        score = score_passage_cross_encoder(request.query, ptext)
-        results.append(RerankResultItem(id=pid, score=score))
+    if configured_model == "heuristic-v1":
+        results = [
+            RerankResultItem(
+                id=passage.get_id(),
+                score=score_passage_heuristic(request.query, passage.get_text()),
+            )
+            for passage in request.passages
+        ]
+    else:
+        try:
+            scores = score_passages_with_cross_encoder(
+                request.query,
+                request.passages,
+                configured_model,
+            )
+        except Exception as error:
+            logger.exception("Configured cross-encoder failed to load or score passages")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Configured cross-encoder '{configured_model}' is unavailable.",
+            ) from error
+        results = [
+            RerankResultItem(id=passage.get_id(), score=score)
+            for passage, score in zip(request.passages, scores, strict=True)
+        ]
 
     # Sort descending by score
     results.sort(key=lambda r: r.score, reverse=True)

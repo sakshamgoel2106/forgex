@@ -160,6 +160,19 @@ describe('Master Prompt: Three-Company Multi-Tenant Isolation Verification', () 
 
     const casesA = await dataStore.listMaintenanceCases(orgA.id);
     caseA = casesA.find((c: any) => c.caseNumber === 'CASE-DEMO-001');
+    if (!caseA) {
+      caseA = await dataStore.createMaintenanceCase({
+        organizationId: orgA.id,
+        plantId: plantA.id,
+        assetId: machineA.id,
+        caseNumber: 'CASE-DEMO-001',
+        title: 'Company A Isolated Pump Inspection',
+        severity: 'MEDIUM',
+        status: 'REPORTED',
+        reportedByUserId: userOwnerA.id,
+        symptomDescription: 'Company A pump inspection fixture for tenant isolation tests.',
+      });
+    }
 
     // Create a Company B Work Order and Maintenance Record
     caseB = await dataStore.createMaintenanceCase({
@@ -198,6 +211,21 @@ describe('Master Prompt: Three-Company Multi-Tenant Isolation Verification', () 
 
     const ticketsA = await dataStore.listSpecialistTickets(orgA.id);
     ticketA = ticketsA[0];
+    if (!ticketA) {
+      ticketA = await dataStore.createSpecialistTicket(orgA.id, {
+        ticketNumber: 'TKT-DEMO-001',
+        plantId: plantA.id,
+        machineId: machineA.id,
+        machineAssetTag: machineA.assetTag,
+        reportedByUserId: userOwnerA.id,
+        originalQuestion: 'How to inspect the Company A pump?',
+        diagnosticDetails: 'Company A pump inspection fixture.',
+        escalationReason: 'Fixture for tenant isolation tests.',
+        severity: 'MEDIUM',
+        assignmentStatus: 'UNASSIGNED',
+        status: 'OPEN',
+      });
+    }
 
     ticketB = await dataStore.createSpecialistTicket(orgB.id, {
       ticketNumber: 'TKT-ISOL-B-001',

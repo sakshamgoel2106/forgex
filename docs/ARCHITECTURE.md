@@ -37,7 +37,7 @@ ForgeX AI is architected as an industrial-grade, modular monorepo. It isolates f
 | - User & RBAC Entities  |  | - Dense Vectors   |  | - Original PDFs    |  | - Ingestion Queue  |
 | - Document Catalog      |  | - Chunk Payloads  |  | - Extracted Visuals|  | - Heavy OCR Jobs   |
 | - Asset Hierarchy       |  | - Tenant Filters  |  | - Plant Schematics |  | - Export Tasks     |
-| - Immutable Audit Logs  |  | - Payload Indices |  | - Encrypted at Rest|  |                    |
+| - Audit Events             |  | - Payload Indices  |  | - Encrypted at Rest|  |                    |
 +-------------------------+  +-------------------+  +--------------------+  +---------+----------+
                                                                                       |
                                                                               Worker Jobs
@@ -145,7 +145,7 @@ sequenceDiagram
     API->>API: Merge & Rerank Candidates
     API->>LLM: Generate Grounded Answer (Context Passages + Strict System Prompt)
     LLM-->>API: Streamed Answer with Direct Citation Tokens [DocID, Page]
-    API->>DB: Write Immutable Audit Log (User, QueryHash, RetreivedDocs)
+    API->>DB: Write audit event (where configured)
     API-->>Web: Streamed Diagnostic Response with Interactive Citations & BBoxes
     Web-->>Tech: Render Verified Step Guidance + Side-by-Side Schematic View
 ```
@@ -156,9 +156,11 @@ sequenceDiagram
 
 | Deployment Topology | Target Environment | Inference Engine | Storage & Database | Network Isolation |
 | :--- | :--- | :--- | :--- | :--- |
-| **Fully Air-Gapped (OT Network)** | Nuclear, defense, chemical refineries, off-grid plants. | Local GPU server running Ollama / vLLM (local weights). | On-prem PostgreSQL, Qdrant cluster, MinIO SAN/NAS. | Zero external Internet access. Strictly contained in Plant Level 3 / DMZ. |
-| **Hybrid Enterprise** | Multi-site manufacturing with centralized corporate engineering. | Local plant inference for real-time SOPs; central LLM for cross-plant analytics. | Local edge cache with replicated cloud PostgreSQL & MinIO. | Encrypted VPN / IPsec tunnel between plants and private cloud. |
-| **Sovereign Cloud VPC** | Dedicated single-tenant GovCloud / AWS / Azure / GCP. | Private LLM endpoints (e.g. Azure OpenAI on dedicated virtual network). | Managed RDS Postgres, Managed Qdrant Cloud / ECS, S3. | Isolated VPC, PrivateLink endpoints, SOC 2 / FedRAMP boundary. |
+| **Enterprise local network (prototype)** | Plant installation with a locally reachable ForgeX server. | Local inference adapter (for example Ollama); runtime integration must be validated. | Local PostgreSQL, Qdrant, MinIO, Redis. | Internet is not required by the intended runtime path. Clients still require local network/server connectivity. The Compose internal network constrains its containers only; host and plant egress need separate controls and validation. |
+| **SaaS/cloud (prototype)** | Hosted service configuration. | Cloud provider adapters are present; provider credentials, data handling, availability, and production controls require deployment validation. | Configurable managed services. | Not air-gapped. Network and data-retention claims depend on the actual provider configuration and contract. |
+| **Standalone mobile with no network/server** | No verified implementation. | No verified on-device inference/runtime. | No verified server-free storage/sync. | **Planned / unverified**; do not claim this capability. |
+
+The API's outbound guard wraps Node.js `globalThis.fetch`; it is not a universal process/network egress firewall. The included Enterprise Compose file additionally configures an internal Docker network. Neither control alone proves zero packets from the host or physical plant. Validate the deployed host, containers, and plant boundary with firewall policy and packet capture.
 
 ---
 

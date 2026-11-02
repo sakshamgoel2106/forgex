@@ -2041,7 +2041,7 @@ export function createEngineeringRouter(
           storageKey,
           originalFileName: originalFileName || `${uniqueDrawingNumber}.${fileFormat.toLowerCase()}`,
           fileFormat: fileFormat.toUpperCase() as any,
-          fileSizeBytes: Number(fileSizeBytes || 1024),
+          fileSizeBytes: fileSizeBytes === undefined || fileSizeBytes === null ? 1024 : Number(fileSizeBytes),
           fileHashSha256: fileHashSha256 || 'hash_placeholder',
           dataClassification: dataClassification || 'INTERNAL',
           equipmentTags: Array.isArray(equipmentTags) ? equipmentTags : [],
@@ -2067,12 +2067,6 @@ export function createEngineeringRouter(
         if (drawing.machineId) {
           const machine = await dataStore.getMachineById(orgId, drawing.machineId);
           if (machine) {
-            await dataStore.updateMachine(orgId, machine.id, {
-              pidStorageKey: drawing.storageKey,
-              hasPidDiagram: true,
-              pAndIdUrl: drawing.storageKey,
-            });
-
             await syncToKnowledgeHub({
               organizationId: orgId,
               machine,
@@ -2412,6 +2406,17 @@ export function createEngineeringRouter(
         return;
       }
 
+      if (dwg.fileSizeBytes <= 0) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FORGEX_CORRUPTED_FILE',
+            message: `Drawing file '${dwg.originalFileName}' is empty (0 bytes) or corrupted.`,
+          },
+        });
+        return;
+      }
+
       if (!storageAdapter) {
         res.status(500).json({
           success: false,
@@ -2429,7 +2434,7 @@ export function createEngineeringRouter(
       }
 
       // Universal Auto-Healing: If drawing file is missing or empty, dynamically synthesize authentic diagram
-      if (drawingNotFound || !buffer || buffer.length === 0) {
+      if (drawingNotFound || !buffer) {
         logger.warn({ drawingId: dwg.id, key: dwg.storageKey, format: dwg.fileFormat }, 'Drawing file not in storage; dynamically synthesizing authentic diagram');
         try {
           buffer = await generateEngineeringDrawingBuffer(dwg);

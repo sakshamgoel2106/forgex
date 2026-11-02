@@ -1,5 +1,7 @@
 # ForgeX AI — Product Specification
 
+This document states product vision and target requirements; it is not evidence that a feature is implemented, production-ready, accurate, safe, or certified. For current implementation status and evidence limits, see the feature matrix in [README.md](../README.md).
+
 ## 1. Executive Summary & Vision
 
 **ForgeX AI** is a purpose-built, multimodal Generative AI assistant engineered specifically for industrial operations, heavy manufacturing, energy facilities, and plant maintenance teams. 
@@ -50,7 +52,7 @@ Unlike generic conversational enterprise chatbots, ForgeX AI bridges the gap bet
 ### 4.2 Evidence-Backed Knowledge Retrieval & Inspection
 1. **Query Ingestion**: Field engineer inputs natural language questions, exact fault codes, or uploads equipment photos (e.g., burned relay, damaged impeller).
 2. **Context Routing & Authorization Filtering**: Query parsed with user role, assigned plant location, and equipment tags. Vector retrieval applies hard tenant and security filters prior to semantic distance computation.
-3. **Reranking & Grounding**: Candidate passages scored via Cross-Encoder reranker. Low-confidence thresholds trigger an explicit *"Information not found in authorized documentation"* response rather than speculative synthesis.
+3. **Reranking & Grounding (target)**: Candidate passages should be ranked and grounded; current heuristic ranking scores are not calibrated confidence values. A learned cross-encoder and validated answer threshold remain future work.
 4. **Interactive Evidence Viewer**: Frontend renders the verified answer alongside a PDF/image viewer highlighting exact snippet coordinates, revision dates, and active change notices.
 
 ### 4.3 Guided Troubleshooting & Interactive Maintenance Procedures
@@ -75,10 +77,10 @@ To maintain safety, compliance, and rigorous engineering focus, the following ar
 
 ---
 
-## 6. Regulatory & Compliance Context
+## 6. Regulatory & Compliance Goals (Not Certifications)
 
-ForgeX AI is designed in alignment with:
+Potential deployment requirements may include:
 - **OSHA 1910.147**: The Control of Hazardous Energy (Lockout/Tagout).
 - **ISO 9001 / ISO 55001**: Quality Management and Asset Lifecycle Management Documentation.
 - **NIST SP 800-82 Rev 3**: Guide to Operational Technology (OT) Security.
-- **SOC 2 Type II & GDPR**: Data protection, immutable audit trails, and strict organizational tenant isolation.
+- **SOC 2 Type II & GDPR**: Applicable only where service scope, controls, contracts, and independent assessments satisfy relevant requirements. This repository does not establish certification, immutable audit trails, or legal compliance.

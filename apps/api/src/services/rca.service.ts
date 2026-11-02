@@ -645,7 +645,7 @@ Return ONLY a valid JSON object matching this schema. Keep mechanismExplanation 
             : `Bearing Lubrication Starvation & Hydrodynamic Thermal Runaway`,
           probability: 88,
           severity: 'CRITICAL',
-          mechanismExplanation: `Localized suction pressure drop below fluid vapor pressure causes vapour pocket implosions and thermal micro-cracking across seal faces.`,
+          mechanismExplanation: `On ${assetTag}, localized suction pressure drop below fluid vapor pressure causes vapour pocket implosions and thermal micro-cracking across seal faces.`,
           mttr: '45–60 mins',
           requiredSkill: 'L2 Mechanical Rotating Equipment Specialist',
           downtimeRisk: 'Critical',

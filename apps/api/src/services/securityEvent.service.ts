@@ -111,7 +111,7 @@ export class SecurityEventService {
 
     // 7. Company-specific knowledge (SOP, plant policy, shift handover, plant layout)
     if (
-      /\b(sop|plant procedure|shift handover|operator round|company policy|work order|service bulletin|bulletin|vendor note|vendor notes|operating manual)\b/i.test(
+      /\b(sop|plant procedure|shift handover|operator round|company policy|work order|service bulletin|bulletin|vendor note|vendor notes|operating manual|our plant|our company|for our (?:plant|facility|site)|safety standards|personal protective equipment|\bppe\b|site policy|local policy)\b/i.test(
         q
       )
     ) {
@@ -403,7 +403,7 @@ export class SecurityEventService {
       throw new Error(`Failed to update security alert '${alertId}'.`);
     }
 
-    // Record review in immutable audit ledger
+    // Record review as an audit event; database-level immutability is not enforced here.
     await this.dataStore.recordAuditEvent({
       organizationId,
       actorUserId: reviewerUserId,

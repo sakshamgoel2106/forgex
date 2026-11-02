@@ -118,18 +118,19 @@ export class DocumentController {
         return;
       }
 
-      // Single-Factory MVP: Automatically resolve the tenant's primary facility
+      // Resolve an explicitly selected plant within this organization only.
       let plant = null;
       if (req.body.plantId) {
         plant = await this.dataStore.getPlantById(organizationId, req.body.plantId);
         if (!plant) {
-          const existingPlants = await this.dataStore.listPlants(organizationId);
-          plant = existingPlants.find(
-            (p) =>
-              p.id === req.body.plantId ||
-              p.code?.toLowerCase() === req.body.plantId.toLowerCase() ||
-              p.name?.toLowerCase().includes(req.body.plantId.toLowerCase())
-          ) || null;
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_INVALID_PLANT',
+              message: 'The selected plant does not exist in this organization.',
+            },
+          });
+          return;
         }
       }
 
@@ -336,7 +337,19 @@ export class DocumentController {
       const ext = path.extname(filename).toLowerCase().replace('.', '') || 'pdf';
 
       // 1. Resolve Plant (Single factory / multi-plant)
-      let plant = requestedPlantId ? await this.dataStore.getPlantById(organizationId, requestedPlantId) : null;
+      let plant = requestedPlantId
+        ? await this.dataStore.getPlantById(organizationId, requestedPlantId)
+        : null;
+      if (requestedPlantId && !plant) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'FORGEX_INVALID_PLANT',
+            message: 'The selected plant does not exist in this organization.',
+          },
+        });
+        return;
+      }
       if (!plant) {
         const existingPlants = await this.dataStore.listPlants(organizationId);
         if (existingPlants.length > 0) {
@@ -604,18 +617,19 @@ export class DocumentController {
         metadataOverrides,
       } = req.body;
 
-      // Single-Factory MVP: Automatically resolve the tenant's primary facility
+      // Resolve an explicitly selected plant within this organization only.
       let plant = null;
       if (req.body.plantId) {
         plant = await this.dataStore.getPlantById(organizationId, req.body.plantId);
         if (!plant) {
-          const existingPlants = await this.dataStore.listPlants(organizationId);
-          plant = existingPlants.find(
-            (p) =>
-              p.id === req.body.plantId ||
-              p.code?.toLowerCase() === req.body.plantId.toLowerCase() ||
-              p.name?.toLowerCase().includes(req.body.plantId.toLowerCase())
-          ) || null;
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'FORGEX_INVALID_PLANT',
+              message: 'The selected plant does not exist in this organization.',
+            },
+          });
+          return;
         }
       }
 

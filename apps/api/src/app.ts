@@ -28,6 +28,7 @@ import { createMappingRouter } from './routes/mapping.routes.js';
 import { createBadgeRouter } from './routes/badge.routes.js';
 import { createEngineeringRouter } from './routes/engineering.routes.js';
 import { createMaintenanceRecordRouter } from './routes/maintenanceHistory.routes.js';
+import { createGuidanceRouter } from './routes/guidance.routes.js';
 import { createRecoveryRouter } from './routes/recovery.routes.js';
 import { MachineRecoveryService } from './services/machineRecovery.service.js';
 import { createRcaRouter } from './routes/rca.routes.js';
@@ -419,6 +420,7 @@ export function createApp(deps: AppDependencies = {}): express.Application {
   app.use('/api/v1/machines', authenticate, createMachineRouter(dataStore));
   app.use('/api/v1/machines', authenticate, createMappingRouter(dataStore));
   app.use('/api/v1/knowledge', authenticate, createPublicKnowledgeRouter(dataStore));
+  app.use('/api/v1/guidance', authenticate, createGuidanceRouter(dataStore));
   app.use('/api/v1/tasks', authenticate, createTaskRouter(dataStore));
   app.use('/api/v1/badges', authenticate, createBadgeRouter(dataStore));
   app.use('/api/v1/engineering', authenticate, createEngineeringRouter(dataStore, storageAdapter, ingestionQueue, vectorStore));

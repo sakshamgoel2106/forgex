@@ -1,16 +1,18 @@
-# ForgeX AI — Visual Industrial Intelligence Evaluation & Benchmark Guide
+# ForgeX AI — Visual Intelligence Test Fixtures & Evaluation Plan
 
-## 1. Executive Summary & Purpose
+## 1. Scope and Evidence Limit
+
+This document describes intended behavior and automated test fixtures, not a representative industrial dataset or measured field-accuracy benchmark. Fixture assertions and model-returned confidence values do not establish fault-detection accuracy, calibration, or operational safety. No numerical accuracy claims below should be used for deployment or safety decisions.
 
 In industrial operations, field technicians and reliability engineers frequently inspect physical plant equipment, walkdown photographs, equipment nameplates, and complex engineering drawings (such as piping and instrumentation diagrams [P&IDs] and mechanical exploded views).
 
 A standard text-only RAG system is blind to physical component conditions (e.g. fluid weepage, packing degradation, misalignment) and schematic callouts. However, naive multimodal approaches that hallucinate pipe connectivity, misread faded valve tags, or exfiltrate proprietary facility photos to third-party public clouds pose existential safety and intellectual property risks.
 
-**ForgeX AI Phase 5: Visual Industrial Intelligence** extends the existing document ingestion and RAG pipeline to ingest, analyze, and cross-reference industrial visual assets without breaking text-based RAG.
+Visual-analysis APIs and test fixtures exist in the repository. Their behavior on real plant images, supported operating conditions, and production model backends still requires independent evaluation.
 
 ---
 
-## 2. Architectural Blueprint
+## 2. Intended Architectural Blueprint (Not Proof of Deployment)
 
 ```
 [ Field Engineer / Walkdown Camera ]
@@ -25,9 +27,9 @@ A standard text-only RAG system is blind to physical component conditions (e.g. 
 │ 2. Enforce supported visual MIME types (PNG, JPEG, WebP)               │
 │ 3. Generate server-controlled storage key (visual/org_id/uuid-file)    │
 │ 4. Put image in Object Storage Adapter (Private encrypted bucket)      │
-│ 5. Vision Provider Adapter (LocalDev, Ollama Enterprise, Cloud SaaS)  │
-│    - Extract visual descriptions, OCR equipment tags, component bboxes│
-│    - Strict Air-Gapped Policy: Zero Cloud Fallback on Ollama failures │
+│ 5. Configured Vision Provider Adapter                                 │
+│    - Intended outputs include descriptions, tags, and component boxes │
+│    - Enterprise provider policy rejects cloud fallback in code paths  │
 │ 6. Component Confidence Filter: Link equipment tags only if conf ≥ 0.70│
 │ 7. Anomaly & Ambiguity Detection (UNCERTAIN or INSUFFICIENT_EVIDENCE)  │
 │ 8. Cross-Retrieval Query Engine:                                       │
@@ -42,21 +44,21 @@ A standard text-only RAG system is blind to physical component conditions (e.g. 
 
 ---
 
-## 3. Core Implementation Specifications
+## 3. Intended Behavior and Testable Contracts
 
 ### 3.1 Normalized Bounding Box Coordinate System
-All detected mechanical components, valve callouts, and instrument bubbles are stored using normalized coordinates:
+Where a processing path returns a component box, the intended representation uses normalized coordinates:
 - Scale: `0` to `1000` integer range mapped to image dimensions.
 - Format: `{ x1: number, y1: number, x2: number, y2: number }`.
-- Purpose: Guarantees resolution-independent rendering across mobile handheld walkdown tablets, 4K control room monitors, and zoomed blueprint displays.
+- Rendering behavior and coordinate accuracy must be checked for each supported provider and image pipeline.
 
 ### 3.2 Conditional Equipment Label Connection Policy
-- **Threshold Rule**: Equipment tags (e.g. `P-101-A`, `MOV-101`, `V-101-D`) are connected to a component label **only if confidence $\ge 0.70$**.
+- **Application Rule**: Some implementation paths use a `0.70` threshold for linking a tag to a component. This is a software rule, not a calibrated probability threshold.
 - **Low-Confidence Handling**: Components with extraction confidence $< 0.70$ (such as unverified auxiliary fittings or degraded valve symbols) retain their descriptive label but have their `equipmentTag` set to `null` (`UNLINKED`).
-- **Safety Objective**: Prevents automated false equipment linkage in work orders and safety procedures.
+- **Safety Objective**: Intended to reduce false links; effectiveness has not been measured on a representative field dataset.
 
 ### 3.3 Rendered P&ID Page Handling & Engineering Disclaimer Contract
-- **Supported Capabilities**: Tag OCR, equipment identification, bubble callout reading, and cross-referencing relevant manual procedures (e.g. LOTO isolation procedures for identified valves).
+- **Prototype Capabilities**: Image-analysis paths include tag/component extraction and cross-referencing flows; supported accuracy and formats depend on the selected provider.
 - **Explicit Limitations**: P&ID visual processing does not claim full topological pipe connectivity, flow direction verification, or CAD-grade engineering interpretation.
 - **Mandatory Notice**: All P&ID analyses include the mandatory disclaimer:
   > *"P&ID Notice: Visual extraction reads equipment tags and callouts. Complete symbol topology and pipe connectivity require certified engineering walkdown."*
@@ -71,23 +73,23 @@ All detected mechanical components, valve callouts, and instrument bubbles are s
    - Classification: `isInsufficientEvidence: true`, confidence set to `INSUFFICIENT_EVIDENCE`.
    - Behavior: Informs user that visual features are undetectable and provides actionable recapture guidelines.
 
-### 3.5 Security & Air-Gapped Privacy Isolation
-1. **Zero Cloud Exfiltration Guarantee**:
-   - In Enterprise deployments (`OllamaEnterpriseVisionAdapter`), images are processed exclusively on sovereign on-premises GPU nodes.
-   - If the local Ollama node fails or is unreachable, the system raises an explicit `Enterprise Vision Failure`.
-   - **Under no circumstances does the system silently fall back to cloud providers.**
-2. **Pre-Generation Tenant & Document Authorization**:
+### 3.5 Enterprise Network Boundary
+1. The Enterprise provider path is intended to reject cloud fallback when local inference is required; relevant unit tests can verify that code path.
+3. Unit tests do not prove zero packets leave the host or plant network. The Docker internal network, host firewall, other processes, and physical network boundary must be independently configured and packet-capture tested before making an egress claim.
+4. **Pre-Generation Tenant & Document Authorization**:
    - Plant ownership is verified before any storage or model analysis occurs.
    - Cross-retrieval against technical manuals strictly enforces tenant boundaries and user RBAC roles.
    - Raw image streaming (`GET /api/v1/visual/assets/:id/image`) enforces organization ownership checks before serving binary content.
 
 ---
 
-## 4. Evaluation Dataset & Benchmark Results
+## 4. Synthetic/Automated Test Fixture Scenarios
 
-The evaluation test suite is codified in `apps/api/tests/visualIntelligence.test.ts`.
+Related automated scenarios exist in API test files including `visualIntelligence.test.ts` and `visualIntelligenceUploadAndSecurity.test.ts`. These are software fixtures, not a curated and independently labeled field dataset. Verify exact current test coverage before relying on an individual scenario.
 
-### 4.1 Test Dataset Matrix
+### 4.1 Fixture Matrix
+
+The examples below describe asserted fixture behavior; they are not measured model accuracy.
 
 | Test ID | Asset Type | File Name | Target Asset | Known Question | Expected Behavior & Ground Truth Evidence |
 |---|---|---|---|---|---|
@@ -102,30 +104,22 @@ The evaluation test suite is codified in `apps/api/tests/visualIntelligence.test
 
 ---
 
-## 5. Quantitative Evaluation Metrics
+## 5. Field Metrics: Not Yet Measured
 
-All metrics evaluated across automated Vitest runs:
+The repository does not currently provide a representative labeled field dataset or independently measured values for:
 
-```
-Test Suites: 5 passed (5)
-Tests:       47 passed (47)
-Duration:    21.24s
-```
+- Visual retrieval accuracy or citation correctness on real plant assets.
+- Component/tag precision, recall, or confidence calibration.
+- Fault-detection false-positive and false-negative rates.
+- Performance across camera, lighting, occlusion, image quality, and equipment variation.
+- End-to-end cloud-egress packet measurements for a deployed air-gapped installation.
 
-| Metric | Measured Value | Target SLA | Evaluation Methodology |
-|---|---|---|---|
-| **Retrieval Accuracy** | **100.0%** | $\ge 95.0\%$ | Validated across industrial walkdown photos and P&ID schematics matching plant SOPs |
-| **Citation Correctness** | **100.0%** | $100.0\%$ | Exact match on Document ID, Version ID, Page Number, and Section Heading |
-| **Component-Label Accuracy** | **100.0%** | $\ge 98.0\%$ | Tags linked when conf $\ge 0.70$; dropped to `null` when conf $< 0.70$ |
-| **Unsupported-Answer Rate** | **0.00%** | $\le 1.0\%$ | Zero hallucinated citations or unverified mechanical specifications |
-| **Ambiguity Identification Rate** | **100.0%** | $100.0\%$ | Degraded diagrams accurately flagged as `UNCERTAIN` |
-| **Insufficient Evidence Catch Rate** | **100.0%** | $100.0\%$ | Blank/low-contrast captures accurately classified as `INSUFFICIENT_EVIDENCE` |
-| **Cloud Leakage Rate (Air-Gapped)** | **0.00%** | $0.00\%$ | Verified via offline endpoint unit tests enforcing strict rejection over fallback |
+Before publishing such metrics, record dataset provenance and labeling protocol, split data by site/equipment to prevent leakage, report confidence intervals and failure cases, and have domain experts independently review the results.
 
 ---
 
-## 6. Completion Verification
+## 6. What Automated Tests Can Establish
 
-1. **Text RAG Integrity**: Existing text-based RAG test suite (`ragCopilot.test.ts`, 14 tests) and document ingestion pipeline (`documentIngestion.test.ts`, 13 tests) remain 100% operational with zero regressions.
-2. **Visual Evidence Inspection**: Users can inspect the original image side-by-side with bounding boxes and cross-retrieved manual citations.
-3. **Uncertain Interpretations**: Uncertain visual interpretations are clearly labeled as `UNCERTAIN` or `INSUFFICIENT_EVIDENCE`.
+1. Tests can verify selected API/UI contracts using fixtures.
+2. Tests cannot establish field accuracy or prove general failure-free operation.
+3. Keep all visual results advisory; require qualified field verification before maintenance, isolation, or control decisions.

@@ -62,17 +62,22 @@ Multi-tenancy is enforced at three distinct architectural levels:
 
 ---
 
-## 6. Immutable Audit Logging & Telemetry
+## 6. Audit Event Logging and WORM Export
 
-Every interaction with ForgeX AI is logged to an append-only audit trail:
+Migration 033 requires sequence and hash fields on new audit inserts, adds a concurrency-safe per-organization SHA-256 chain and sequence uniqueness, and rejects ordinary `UPDATE`, `DELETE`, and `TRUNCATE` operations. The `db:verify-audit-chain` command recomputes the chain and reports pre-migration legacy records separately. This provides tamper evidence; a database owner/superuser can bypass these controls, and a hash chain alone is not immutable storage or regulatory certification.
+
+The Enterprise Compose deployment separates the privileged migration job from the runtime API account. Its provisioner grants the API role general application DML but explicitly removes audit-event `UPDATE`, `DELETE`, and `TRUNCATE` rights, then verifies those privileges are absent. Do not run the API as a PostgreSQL superuser or audit-table owner; SaaS deployments must provision the same separation independently.
 - **Event Structure**:
   - `timestamp`: UTC ISO-8601 string.
-  - `actor`: User ID, IP address, user agent, and verified role.
-  - `action`: `QUERY_EXECUTE`, `SOP_STEP_CONFIRM`, `DOCUMENT_INGEST`, `DEVIATION_RAISE`.
-  - `context`: Plant ID, Equipment Tag ID, Query Hash.
-  - `retrieved_citations`: List of Document IDs, revision versions, and page numbers.
-  - `ai_response_hash`: Cryptographic SHA-256 hash of the generated response.
-- **Tamper Evidence**: Audit logs are written to an isolated, append-only PostgreSQL table with cryptographic hash chaining and periodic off-site archival to write-once-read-many (WORM) storage.
+  - `actor_user_id`, `action`, `resource_type`, `resource_id`, and event `metadata`.
+  - IP address and user agent when supplied by the caller.
+- **WORM export**: `db:archive-audit-chain <organization-id>` verifies the full chain before uploading a JSON snapshot with S3 Object Lock `COMPLIANCE` retention. It requires `AUDIT_WORM_BUCKET`, `AUDIT_WORM_RETENTION_DAYS`, `AUDIT_ARCHIVE_CONFIRM=YES`, AWS CLI credentials with narrowly scoped `GetBucketObjectLockConfiguration`, `PutObject`, and retention permissions, and a separately administered bucket with Object Lock enabled. Optionally set `AUDIT_ARCHIVE_ENDPOINT_URL` for an endpoint that supports S3 Object Lock. The command fails closed if chain verification or the bucket Object Lock check fails.
+- Pre-migration records are included in exports but remain explicitly unverified. The export currently creates a complete per-organization snapshot on each invocation; operate it with approved retention, access, and data-minimization policies.
+- No WORM bucket, production credentials, restore drill, or independent deployment validation is supplied by this repository. Do not claim that a deployment is immutable or compliant until its controls, IAM separation, retention, recovery, and monitoring are independently tested.
+
+### Enterprise egress validation boundary
+
+Run `python scripts\verify_enterprise_egress.py` after bringing up the full stack to check resolved Compose isolation and the networks attached to running containers. The script does not inspect host routes, host firewall rules, Docker's host forwarding rules, or physical plant uplinks. Separately review the host's default-deny egress policy (including Docker's forwarding chain), allow only required client ingress and approved internal service flows, then capture traffic on each external uplink during representative startup, inference, ingestion, and failure scenarios. Retain the firewall policy, interface/filter, capture interval, generated test traffic, and packet-capture results with deployment evidence. A Docker-internal network setting by itself is not a zero-egress certification.
 
 ---
 
@@ -82,10 +87,12 @@ Every interaction with ForgeX AI is logged to an append-only audit trail:
 +-----------------------------------------------------------------------------------------+
 |                                    DATA FLOW POLICIES                                   |
 +-----------------------------------------------------------------------------------------+
-| LOCAL AIR-GAPPED MODE:                                                                  |
-| - Ingestion, Storage, Vector Indexing, and Inference (Ollama) remain within OT DMZ.   |
-| - 0 bytes transmitted outside plant boundary.                                           |
-| - Approved for Defense, Nuclear, and High-IP Proprietary Facilities.                    |
+| ENTERPRISE LOCAL MODE:                                                                  |
+| - The included Compose stack uses a Docker internal network for service-to-service traffic.|
+| - Client devices still connect to the local ForgeX server; this is not standalone mobile.|
+| - Host processes, other networks, firewalls, and physical plant egress require separate  |
+|   enforcement and packet-capture validation before claiming zero external traffic.       |
+| - No regulatory or industry approval is implied.                                        |
 +-----------------------------------------------------------------------------------------+
 | HYBRID ENTERPRISE MODE:                                                                 |
 | - Metadata and audit logs synchronized to central corporate cloud via TLS 1.3 VPN.      |

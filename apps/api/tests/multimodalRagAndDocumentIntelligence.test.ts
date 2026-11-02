@@ -291,7 +291,9 @@ Lubrication oil viscosity requirement: ISO VG 46 synthetic turbine oil.`;
       expect(data.confidence).toBe('HIGH');
       expect(data.answer).toContain('25.0 PSI');
       expect(data.citations).toBeInstanceOf(Array);
-      expect(data.citations.length).toBe(0);
+      expect(data.citations.length).toBeGreaterThan(0);
+      expect(data.citations[0].documentNumber).toBe('SOP-MECH-401');
+      expect(data.citations[0].pageNumber).toBe(2);
 
       // Verify internal database audit trail retains full document citations
       const dbMsg = await dataStore.getMessageWithCitations(data.messageId);
@@ -418,7 +420,8 @@ All torque sequences must follow star crisscross pattern.`;
 
       expect(queryRes.status).toBe(200);
       expect(queryRes.body.data.citations).toBeInstanceOf(Array);
-      expect(queryRes.body.data.citations.length).toBe(0);
+      expect(queryRes.body.data.citations.length).toBeGreaterThan(0);
+      expect(queryRes.body.data.citations[0].documentNumber).toBe('SOP-TORQ-501');
 
       const dbMsg = await dataStore.getMessageWithCitations(queryRes.body.data.messageId);
       expect(dbMsg).toBeDefined();
@@ -700,7 +703,13 @@ CONFIDENTIAL FORMULATION: Mix Catalyst Alpha-9 at 450 RPM.`;
       expect(queryRes.status).toBe(200);
       const data = queryRes.body.data;
       expect(data.citations).toBeInstanceOf(Array);
-      expect(data.citations.length).toBe(0);
+      expect(data.citations.length).toBeGreaterThan(0);
+      for (const citation of data.citations) {
+        expect(citation.documentTitle).toBe('Approved operational guidance');
+        expect(citation.documentNumber).toBe('APPROVED-GUIDANCE');
+        expect(citation.snippet).toBe('Reference: approved operational guidance');
+        expect(citation.exactVerbatimQuote).toBeUndefined();
+      }
 
       // Audit log in dataStore maintains citations for internal verification
       const dbMsg = await dataStore.getMessageWithCitations(data.messageId);

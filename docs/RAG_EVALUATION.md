@@ -1,10 +1,12 @@
 # ForgeX AI — Industrial RAG & AI Copilot Evaluation Guide
 
+The metric values and safety targets in this guide are proposed evaluation goals, not measured results or production guarantees. The repository does not include a representative human-reviewed answer-correctness benchmark; passing automated fixtures must not be reported as achieving these targets.
+
 ## 1. Executive Summary & Purpose
 
 In industrial operational environments (refineries, petrochemical plants, offshore turbines, manufacturing lines), general-purpose Retrieval-Augmented Generation (RAG) is hazardous. Providing an inaccurate torque spec, an outdated differential pressure limit, or fabricating a Lockout/Tagout (LOTO) step can cause catastrophic equipment failure, environmental discharge, or loss of life.
 
-ForgeX AI enforces strict **pre-generation authorization filtering**, **auditable evidence grounding**, and **adversarial prompt-injection defense**. This document specifies the architectural implementation, known retrieval limitations, and the evaluation framework.
+The implementation contains **pre-generation authorization**, **citation handling**, and **prompt-injection defenses** with automated tests for selected paths. Their coverage and effectiveness have not been independently measured across all deployments. This document specifies desired evaluation methods and known limitations.
 
 ---
 

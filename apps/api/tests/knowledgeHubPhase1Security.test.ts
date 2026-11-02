@@ -448,7 +448,7 @@ Differential pressure must read zero.`;
       .set('Authorization', `Bearer ${tokenEngineerB}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('FORGEX_RBAC_FORBIDDEN');
+    expect(res.body.error.code).toBe('FORGEX_CROSS_TENANT_FORBIDDEN');
     expect(res.body.error.message).toContain('Access denied');
 
     // Verify audit event was logged for Org B

@@ -136,6 +136,9 @@ export class MaintenanceWorkflowEngine {
 
     let plant = targetPlantId ? await this.dataStore.getPlantById(organizationId, targetPlantId) : null;
     if (!plant) {
+      if (plantId) {
+        throw new Error(`Unauthorized or invalid plant: Plant '${plantId}' does not belong to organization.`);
+      }
       const plants = await this.dataStore.listPlants(organizationId);
       if (plants.length > 0) {
         plant = plants[0];
@@ -146,46 +149,7 @@ export class MaintenanceWorkflowEngine {
     }
 
     if (!resolvedAsset) {
-      try {
-        resolvedAsset = await this.dataStore.createAsset(organizationId, {
-          plantId: plant.id,
-          assetTag: assetId.toUpperCase(),
-          name: (request as any).assetName || request.title || `Industrial Asset (${assetId})`,
-          area: 'Sector 4 Heavy Machinery Hub',
-          manufacturer: 'OEM Industrial Systems',
-          modelNumber: 'MOD-2026-X',
-          serialNumber: `SN-${assetId.toUpperCase()}`,
-          operationalState: 'OPTIMAL',
-        });
-      } catch {
-        const allAssets = await this.dataStore.listAssets(organizationId);
-        resolvedAsset =
-          allAssets.find(
-            (a) => a.id === assetId || a.assetTag.toLowerCase() === assetId.toLowerCase()
-          ) || null;
-      }
-    }
-
-    if (!resolvedAsset) {
-      resolvedAsset = {
-        id: `asset-${assetId.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-        organizationId,
-        plantId: plant.id,
-        parentAssetId: null,
-        assetTag: assetId.toUpperCase(),
-        name: (request as any).assetName || request.title || `Industrial Machinery (${assetId})`,
-        area: 'Sector 4 Heavy Machinery Hub',
-        manufacturer: 'OEM Industrial Systems',
-        modelNumber: 'MOD-2026-X',
-        serialNumber: `SN-${assetId.toUpperCase()}`,
-        operationalState: 'OPTIMAL',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-    }
-
-    if (!resolvedAsset) {
-      throw new Error(`Unauthorized or invalid asset: Asset '${assetId}' could not be resolved.`);
+      throw new Error(`Unauthorized or invalid asset: Asset '${assetId}' does not belong to organization.`);
     }
 
     if (resolvedAsset.plantId && plant.id && resolvedAsset.plantId !== plant.id) {
@@ -1429,6 +1393,20 @@ export class MaintenanceWorkflowEngine {
       return existing;
     }
 
+    // Authorize approval/rejection before evaluating workflow validation so
+    // unauthorized callers cannot infer lifecycle state from validation errors.
+    if (nextStatus === 'RESOLVED' || nextStatus === 'REJECTED') {
+      const isReviewer =
+        userRole === 'ORGANIZATION_OWNER' ||
+        userRole === 'ORGANIZATION_ADMIN' ||
+        userRole === 'SUPERVISOR' ||
+        userRole === 'PLANT_MANAGER' ||
+        userRole === 'ENGINEER_TECHNICIAN';
+      if (!isReviewer) {
+        throw new Error(`Unauthorized: Role '${userRole}' is not permitted to approve or reject work orders.`);
+      }
+    }
+
     // Direct transitions from CLOSED are forbidden (must use /reopen)
     if (existing.status === 'CLOSED') {
       throw new Error('Invalid state transition: Cannot transition a closed maintenance case directly. Use the reopen endpoint.');
@@ -1441,12 +1419,12 @@ export class MaintenanceWorkflowEngine {
       REPORTED: ['INVESTIGATING', 'DIAGNOSED', 'IN_PROGRESS', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
       INVESTIGATING: ['DIAGNOSED', 'IN_PROGRESS', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
       DIAGNOSED: ['IN_PROGRESS', 'PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
-      IN_PROGRESS: ['PENDING_APPROVAL', 'RESOLVED', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
+      IN_PROGRESS: ['PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
       PENDING_APPROVAL: ['RESOLVED', 'REJECTED', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
       RESOLVED: ['CLOSED'],
       CLOSED: [],
-      ESCALATED_HUMAN: ['IN_PROGRESS', 'DIAGNOSED', 'CLOSED', 'ESCALATED_TO_OEM', 'RESOLVED'],
-      ESCALATED_TO_OEM: ['IN_PROGRESS', 'CLOSED', 'RESOLVED'],
+      ESCALATED_HUMAN: ['IN_PROGRESS', 'DIAGNOSED', 'CLOSED', 'ESCALATED_TO_OEM'],
+      ESCALATED_TO_OEM: ['IN_PROGRESS', 'CLOSED'],
       REJECTED: ['IN_PROGRESS', 'PENDING_APPROVAL', 'CLOSED', 'ESCALATED_HUMAN', 'ESCALATED_TO_OEM'],
     };
 
@@ -1457,19 +1435,9 @@ export class MaintenanceWorkflowEngine {
       );
     }
 
-    // Role-based authorization for specific target statuses
+    // Role-based authorization for specific target statuses (revalidated only
+    // here for role-specific transition constraints, not authorization order).
     if (nextStatus === 'RESOLVED' || nextStatus === 'REJECTED') {
-      const isReviewer =
-        userRole === 'ORGANIZATION_OWNER' ||
-        userRole === 'ORGANIZATION_ADMIN' ||
-        userRole === 'SUPERVISOR' ||
-        userRole === 'PLANT_MANAGER' ||
-        userRole === 'ENGINEER_TECHNICIAN' ||
-        userRole === 'TECHNICIAN' ||
-        userRole === 'ENGINEER';
-      if (!isReviewer) {
-        throw new Error(`Unauthorized: Role '${userRole}' is not permitted to approve or reject work orders.`);
-      }
       if (nextStatus === 'REJECTED' && (!request.notes || request.notes.trim().length < 3)) {
         throw new Error('Validation failed: notes are mandatory when rejecting a work order.');
       }

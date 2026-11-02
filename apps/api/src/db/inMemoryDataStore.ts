@@ -881,16 +881,16 @@ export class InMemoryDataStore implements IDataStore {
       status: 'ACTIVE',
     });
 
-    // 5. Create initial site/plant if specified or default site
-    const siteName = dto.initialSiteName?.trim() || `${org.name} Primary Site`;
-    const cleanSlug = org.slug.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '01';
-    try {
+    // Keep a newly registered workspace empty until the owner adds a site.
+    const siteName = dto.initialSiteName?.trim();
+    if (siteName) {
+      const cleanSlug = org.slug.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '01';
       await this.createPlant(org.id, {
         code: `SITE-${cleanSlug}`,
         name: siteName,
         location: dto.country || 'Primary Manufacturing Facility',
       });
-    } catch {}
+    }
 
     return {
       organization: org,
@@ -1745,8 +1745,8 @@ export class InMemoryDataStore implements IDataStore {
     const saved: Citation[] = [];
     for (const c of citations) {
       // Look up document details for display
-      let docNumber = 'DOC-UNKNOWN';
-      let docTitle = 'Unknown Document';
+      let docNumber = c.documentNumber || 'DOC-UNKNOWN';
+      let docTitle = c.documentTitle || 'Unknown Document';
       for (const d of this.documents.values()) {
         if (d.id === c.documentId) {
           docNumber = d.documentNumber;
@@ -1922,6 +1922,20 @@ export class InMemoryDataStore implements IDataStore {
   // Maintenance Cases & Troubleshooting Workflows (Phase 6)
   // --------------------------------------------------------------------------
   public async createMaintenanceCase(dto: CreateMaintenanceCaseDTO): Promise<MaintenanceCase> {
+    const plant = this.plants.get(dto.plantId);
+    if (plant && plant.organizationId !== dto.organizationId) {
+      throw new Error(`Cross-tenant security violation: Plant ${dto.plantId} belongs to another organization.`);
+    }
+
+    const asset = this.assets.get(dto.assetId);
+    const machine = this.machines.get(dto.assetId);
+    if (
+      (asset && asset.organizationId !== dto.organizationId) ||
+      (machine && machine.organizationId !== dto.organizationId)
+    ) {
+      throw new Error(`Cross-tenant security violation: Asset ${dto.assetId} belongs to another organization.`);
+    }
+
     const now = new Date().toISOString();
     const caseNumber = dto.caseNumber || `CASE-${Date.now().toString().slice(-6)}`;
     const maintenanceCase: MaintenanceCase = {
@@ -3380,7 +3394,9 @@ export class InMemoryDataStore implements IDataStore {
     const now = new Date().toISOString();
     let status: EngineeringAssetStatus = data.status ?? 'NEEDS_REVIEW';
     let errorMessage: string | undefined = undefined;
-    const sizeBytes = Number(data.fileSizeBytes) || 1024;
+    const sizeBytes = data.fileSizeBytes === undefined || data.fileSizeBytes === null
+      ? 1024
+      : Number(data.fileSizeBytes);
     if (sizeBytes <= 0) {
       status = 'PROCESSING_FAILED';
       errorMessage = 'Empty or unreadable drawing file payload.';
@@ -3562,7 +3578,12 @@ export class InMemoryDataStore implements IDataStore {
     };
     this.engineeringDrawings.set(drawingId, updated);
 
-    if (updated.status === 'APPROVED' && updated.machineId && (updated.drawingType === 'PID' || updated.drawingType === 'PROCESS_FLOW')) {
+    if (
+      dwg.status !== 'APPROVED' &&
+      updated.status === 'APPROVED' &&
+      updated.machineId &&
+      (updated.drawingType === 'PID' || updated.drawingType === 'PROCESS_FLOW')
+    ) {
       const machine = this.machines.get(updated.machineId);
       if (machine && machine.organizationId === organizationId) {
         machine.hasPidDiagram = true;
@@ -6694,6 +6715,3 @@ function resolveRequirementsForCategory(machineType: string): CategoryFieldRequi
   if (norm.includes('BOILER') || norm.includes('VESSEL') || norm.includes('PRESSURE')) return CATEGORY_REQUIREMENTS.BOILER;
   return CATEGORY_REQUIREMENTS.GENERAL;
 }
-
-
-

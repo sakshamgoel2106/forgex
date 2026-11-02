@@ -10,7 +10,7 @@ Modern web browsers enforce the **W3C Secure Context Specification** for all har
 
 1. **Service Workers & PWA Installation**:
    - `navigator.serviceWorker.register()` is disabled on insecure origins.
-   - Without HTTPS, mobile tablets and phones cannot install ForgeX as a standalone PWA or cache offline technical manuals.
+   - Without HTTPS, mobile tablets and phones cannot install ForgeX as a PWA or use service-worker caching. A cached PWA shell does not provide server-free AI, API, or document operations.
 2. **Camera Hardware (`getUserMedia({ video: true })`)**:
    - Machine QR tag scanning and camera capture for **Vision-Guided Lockout/Tagout (LOTO)** will fail with `SecurityError: Only secure origins are allowed`.
 3. **Microphone Hardware (`getUserMedia({ audio: true })`)**:
@@ -109,7 +109,7 @@ A production-ready Nginx configuration is provided at `deploy/nginx/nginx-tls.co
 
 In on-premise environments, running the frontend and backend under a single port eliminates CORS configuration and simplifies TLS termination:
 
-1. Set `SERVE_WEB=true` in `apps/api/.env` or in `docker-compose.enterprise.yml`.
+1. Set `SERVE_WEB=true` in `apps/api/.env` or in the Enterprise service environment in `infra/docker-compose.yml`.
 2. Ensure the production web bundle is built:
    ```bash
    npm --prefix apps/web run build
@@ -118,4 +118,4 @@ In on-premise environments, running the frontend and backend under a single port
    ```bash
    npm --prefix apps/api run start
    ```
-4. Access `https://192.168.1.100:4000/`. The API serves both the SPA frontend and all `/api/*` endpoints from the same origin, enabling immediate offline PWA installation with zero external egress.
+4. Access `https://192.168.1.100:4000/`. The API can serve the SPA frontend and `/api/*` from one origin. The phone/tablet still needs local network connectivity to this server; this does not establish standalone mobile operation or zero system-wide egress.

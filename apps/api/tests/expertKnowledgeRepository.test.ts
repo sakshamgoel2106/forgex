@@ -155,7 +155,7 @@ describe('Expert Knowledge Repository & Frontline Multi-Note Submissions', () =>
 
     // Vector search check in vectorStore
     const hits = await vectorStore.search(
-      'forgex_knowledge',
+      process.env.QDRANT_COLLECTION || 'forgex_knowledge',
       await embeddingAdapter.generateEmbedding('Cold weather cavitation hydraulic pump'),
       { organizationId: orgId, plantId }
     );

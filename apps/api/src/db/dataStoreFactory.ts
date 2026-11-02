@@ -13,7 +13,7 @@ export interface DataStoreInitResult {
 
 /**
  * Initializes the appropriate DataStore based on runtime configuration.
- * - In Production / SaaS / Enterprise: Connects to PostgreSQL via pg.Pool and executes schema migrations.
+ * - In Production / SaaS / Enterprise: Connects to PostgreSQL via pg.Pool and optionally executes schema migrations.
  * - In Local Development: Gracefully falls back to InMemoryDataStore if PostgreSQL is not active.
  */
 export async function createDataStore(cfg: EnvConfig): Promise<DataStoreInitResult> {
@@ -56,17 +56,20 @@ export async function createDataStore(cfg: EnvConfig): Promise<DataStoreInitResu
       client.release();
       logger.info('Connected to PostgreSQL database');
 
-      // Auto-run schema migrations
-      try {
-        const applied = await runMigrations(pool);
-        if (applied.length > 0) {
-          logger.info({ appliedCount: applied.length, applied }, 'Applied pending schema migrations on startup');
-        } else {
-          logger.info('Database schema verified up to date');
+      if (cfg.AUTO_MIGRATE) {
+        try {
+          const applied = await runMigrations(pool);
+          if (applied.length > 0) {
+            logger.info({ appliedCount: applied.length, applied }, 'Applied pending schema migrations on startup');
+          } else {
+            logger.info('Database schema verified up to date');
+          }
+        } catch (migErr: any) {
+          logger.error({ err: migErr?.message }, 'Database migration failed');
+          throw migErr;
         }
-      } catch (migErr: any) {
-        logger.error({ err: migErr?.message }, 'Database migration failed');
-        throw migErr;
+      } else {
+        logger.info('Automatic migrations disabled; use a privileged deployment migration job.');
       }
 
       return { dataStore: new PgDataStore(pool), pool };

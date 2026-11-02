@@ -88,6 +88,7 @@ import type {
   RcaSession,
 } from '@forgex/shared-types';
 import { DEFAULT_INDUSTRY_PROFILES } from '@forgex/shared-types';
+import { auditChainGenesisHash, calculateAuditEventHash } from '../services/auditChain.js';
 import type {
   IDataStore,
   CreateOrganizationDTO,
@@ -1539,16 +1540,18 @@ export class PgDataStore implements IDataStore {
         user: adminUser,
       };
 
-      // 5. Create initial site if specified or default facility
-      const siteName = dto.initialSiteName?.trim() || `${organization.name} Primary Site`;
-      const cleanSlug = organization.slug.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '01';
-      const plantCode = `SITE-${cleanSlug}`;
-      await client.query(
-        `INSERT INTO plants (organization_id, code, name, location, air_gapped_mode)
-         VALUES ($1, $2, $3, $4, FALSE)
-         ON CONFLICT (organization_id, code) DO NOTHING`,
-        [organization.id, plantCode, siteName, dto.country || 'Primary Manufacturing Facility']
-      );
+      // Keep a newly registered workspace empty until the owner adds a site.
+      const siteName = dto.initialSiteName?.trim();
+      if (siteName) {
+        const cleanSlug = organization.slug.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '01';
+        const plantCode = `SITE-${cleanSlug}`;
+        await client.query(
+          `INSERT INTO plants (organization_id, code, name, location, air_gapped_mode)
+           VALUES ($1, $2, $3, $4, FALSE)
+           ON CONFLICT (organization_id, code) DO NOTHING`,
+          [organization.id, plantCode, siteName, dto.country || 'Primary Manufacturing Facility']
+        );
+      }
 
       await client.query('COMMIT');
       return { organization, adminUser, membership };
@@ -1749,44 +1752,103 @@ export class PgDataStore implements IDataStore {
   // Audit Events
   // --------------------------------------------------------------------------
   public async recordAuditEvent(dto: CreateAuditEventDTO): Promise<AuditEvent> {
-    const res = await this.pool.query(
-      `INSERT INTO audit_events (
-         organization_id, actor_user_id, action, resource_type, resource_id,
-         metadata, ip_address, user_agent
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, organization_id, actor_user_id, action, resource_type,
-                 resource_id, metadata, ip_address, user_agent, created_at`,
-      [
-        dto.organizationId,
-        dto.actorUserId ?? null,
-        dto.action,
-        dto.resourceType,
-        dto.resourceId,
-        JSON.stringify(dto.metadata ?? {}),
-        dto.ipAddress ?? null,
-        dto.userAgent ?? null,
-      ]
-    );
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      organizationId: row.organization_id,
-      actorUserId: row.actor_user_id,
-      action: row.action,
-      resourceType: row.resource_type,
-      resourceId: row.resource_id,
-      metadata: row.metadata,
-      ipAddress: row.ip_address,
-      userAgent: row.user_agent,
-      createdAt: row.created_at.toISOString(),
-    };
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SET LOCAL search_path TO forgex, public');
+      await client.query(
+        `SELECT set_config('app.current_tenant_id', $1, true),
+                set_config('app.current_organization_id', $1, true),
+                set_config('app.is_admin', 'false', true)`,
+        [dto.organizationId]
+      );
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [dto.organizationId]);
+
+      const previous = await client.query(
+        `SELECT chain_sequence, event_hash
+         FROM audit_events
+         WHERE organization_id = $1 AND chain_sequence IS NOT NULL
+         ORDER BY chain_sequence DESC
+         LIMIT 1`,
+        [dto.organizationId]
+      );
+      const chainSequence = Number(previous.rows[0]?.chain_sequence ?? 0) + 1;
+      if (previous.rows[0] && !previous.rows[0].event_hash) {
+        throw new Error(`Latest audit event for organization '${dto.organizationId}' has no chain hash.`);
+      }
+      const previousHash = previous.rows[0]?.event_hash || auditChainGenesisHash(dto.organizationId);
+      const id = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const eventHash = calculateAuditEventHash({
+        id,
+        organizationId: dto.organizationId,
+        actorUserId: dto.actorUserId ?? null,
+        action: dto.action,
+        resourceType: dto.resourceType,
+        resourceId: dto.resourceId,
+        metadata: dto.metadata ?? {},
+        ipAddress: dto.ipAddress ?? null,
+        userAgent: dto.userAgent ?? null,
+        createdAt,
+        chainSequence,
+        previousHash,
+      });
+
+      const res = await client.query(
+        `INSERT INTO audit_events (
+           id, organization_id, actor_user_id, action, resource_type, resource_id,
+           metadata, ip_address, user_agent, created_at, chain_sequence, previous_hash, event_hash
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING id, organization_id, actor_user_id, action, resource_type,
+                   resource_id, metadata, ip_address, user_agent, created_at,
+                   chain_sequence, previous_hash, event_hash`,
+        [
+          id,
+          dto.organizationId,
+          dto.actorUserId ?? null,
+          dto.action,
+          dto.resourceType,
+          dto.resourceId,
+          JSON.stringify(dto.metadata ?? {}),
+          dto.ipAddress ?? null,
+          dto.userAgent ?? null,
+          createdAt,
+          chainSequence,
+          previousHash,
+          eventHash,
+        ]
+      );
+      await client.query('COMMIT');
+      const row = res.rows[0];
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        actorUserId: row.actor_user_id,
+        action: row.action,
+        resourceType: row.resource_type,
+        resourceId: row.resource_id,
+        metadata: row.metadata,
+        ipAddress: row.ip_address,
+        userAgent: row.user_agent,
+        createdAt: row.created_at.toISOString(),
+        chainSequence: Number(row.chain_sequence),
+        previousHash: row.previous_hash,
+        eventHash: row.event_hash,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   public async listAuditEvents(organizationId: string, limit = 50): Promise<AuditEvent[]> {
     const res = await this.pool.query(
       `SELECT id, organization_id, actor_user_id, action, resource_type,
-              resource_id, metadata, ip_address, user_agent, created_at
+              resource_id, metadata, ip_address, user_agent, created_at,
+              chain_sequence, previous_hash, event_hash
        FROM audit_events
        WHERE organization_id = $1
        ORDER BY created_at DESC
@@ -1804,6 +1866,9 @@ export class PgDataStore implements IDataStore {
       ipAddress: row.ip_address,
       userAgent: row.user_agent,
       createdAt: row.created_at.toISOString(),
+      chainSequence: row.chain_sequence === null ? undefined : Number(row.chain_sequence),
+      previousHash: row.previous_hash?.trim() || undefined,
+      eventHash: row.event_hash?.trim() || undefined,
     }));
   }
 
@@ -5924,7 +5989,9 @@ export class PgDataStore implements IDataStore {
     const id = crypto.randomUUID();
     const drawingNumber = data.uniqueDrawingNumber || data.drawingNumber || `DWG-${id.slice(0, 8)}`;
     const drawingTitle = data.drawingTitle || data.title || drawingNumber;
-    const sizeBytes = Number(data.fileSizeBytes) || 1024;
+    const sizeBytes = data.fileSizeBytes === undefined || data.fileSizeBytes === null
+      ? 1024
+      : Number(data.fileSizeBytes);
     let status = data.status ?? 'NEEDS_REVIEW';
     let errorMessage: string | null = null;
     if (sizeBytes <= 0) {
@@ -10323,5 +10390,3 @@ function resolveRequirementsForCategory(machineType: string): CategoryFieldRequi
   if (norm.includes('BOILER') || norm.includes('VESSEL') || norm.includes('PRESSURE')) return CATEGORY_REQUIREMENTS.BOILER;
   return CATEGORY_REQUIREMENTS.GENERAL;
 }
-
-

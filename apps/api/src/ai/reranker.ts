@@ -5,13 +5,13 @@ import type {
 } from './ai.interface.js';
 
 /**
- * Cross-Encoder Reranker using BAAI/bge-reranker-v2-m3 endpoint or deterministic
- * exact-tag + cross-attention scoring to narrow down Top-25 candidates to Top-5
+ * Queries the configured local worker reranker; deterministic heuristic scoring
+ * is used only when the explicitly configured model is heuristic-v1.
  */
 export class CrossEncoderReranker implements IRerankingProvider {
   constructor(
     private workerEndpoint = process.env.WORKER_ENDPOINT || 'http://localhost:8000',
-    private modelName = 'BAAI/bge-reranker-v2-m3'
+    private modelName = process.env.RERANKER_MODEL || 'heuristic-v1'
   ) {}
 
   public async rerank(
@@ -21,7 +21,6 @@ export class CrossEncoderReranker implements IRerankingProvider {
   ): Promise<RerankResult[]> {
     if (!candidates || candidates.length === 0) return [];
 
-    // Attempt Cross-Encoder inference via worker endpoint (BAAI/bge-reranker-v2-m3)
     try {
       const batch = [...candidates].sort((a, b) => b.initialScore - a.initialScore).slice(0, 40);
       const response = await fetch(`${this.workerEndpoint}/rerank`, {
@@ -38,26 +37,33 @@ export class CrossEncoderReranker implements IRerankingProvider {
         signal: AbortSignal.timeout(2500),
       });
 
-      if (response.ok) {
-        const data = (await response.json()) as {
-          results: Array<{ id: string; score: number }>;
-        };
-        if (Array.isArray(data.results) && data.results.length > 0) {
-          const scoreMap = new Map(data.results.map((r) => [r.id, r.score]));
-          return batch
-            .map((c) => ({
-              ...c,
-              rerankScore: scoreMap.get(c.chunkId) ?? 0,
-            }))
-            .sort((a, b) => b.rerankScore - a.rerankScore)
-            .slice(0, topK);
-        }
+      if (!response.ok) {
+        throw new Error(`Reranker worker returned HTTP ${response.status}.`);
       }
-    } catch {
-      // Fall through to deterministic exact-tag + cross-attention scoring
+
+      const data = (await response.json()) as {
+        results: Array<{ id: string; score: number }>;
+      };
+      if (Array.isArray(data.results) && data.results.length > 0) {
+        const scoreMap = new Map(data.results.map((r) => [r.id, r.score]));
+        return batch
+          .map((c) => ({
+            ...c,
+            rerankScore: scoreMap.get(c.chunkId) ?? 0,
+          }))
+          .sort((a, b) => b.rerankScore - a.rerankScore)
+          .slice(0, topK);
+      }
+    } catch (error) {
+      if (this.modelName !== 'heuristic-v1') {
+        throw new Error(
+          `Configured reranker '${this.modelName}' is unavailable; refusing heuristic fallback.`,
+          { cause: error }
+        );
+      }
     }
 
-    // Deterministic exact-tag + cross-attention scoring fallback
+    // Deterministic exact-tag + term-overlap scoring fallback
     return this.deterministicRerank(query, candidates, topK);
   }
 
@@ -121,7 +127,7 @@ export class CrossEncoderReranker implements IRerankingProvider {
       const specScore = specTokens.length > 0 ? Math.min(1.0, specMatchCount / specTokens.length) : 0.5;
       score += specScore * 0.2;
 
-      // 3. Token-level Cross-Attention / Term Overlap with simple Stemming (Weight: 25%)
+      // 3. Token overlap with simple stemming (Weight: 25%)
       let matchedTokens = 0;
       for (const token of queryTokens) {
         const stem = token.endsWith('s') && token.length > 4 ? token.slice(0, -1) : token;

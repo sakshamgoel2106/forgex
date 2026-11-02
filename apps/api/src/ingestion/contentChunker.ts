@@ -72,7 +72,7 @@ export class ContentChunker {
     let detectedTableHeader: string | null = null;
 
     // Check if entire text fits in one chunk
-    if (text.length <= this.targetChunkSizeChars) {
+    if (text.length <= this.targetChunkSizeChars && !page.hasTables) {
       const isTable = page.hasTables || (/\|.+\|/.test(text) && text.includes('---'));
       if (isTable) {
         const lines = text.split('\n').filter((l) => l.trim().startsWith('|'));

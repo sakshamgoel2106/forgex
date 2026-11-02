@@ -109,14 +109,6 @@ export class CopilotController {
         conversationId = undefined;
       }
 
-      // Auto-Resolve Single-Plant Context if plantId is still not explicitly provided
-      if (!plantId || plantId === 'GENERAL') {
-        const orgPlants = await this.dataStore.listPlants(organizationId);
-        if (orgPlants.length > 0) {
-          plantId = orgPlants[0].id || orgPlants[0].code;
-        }
-      }
-
       const language = (req.body?.language || req.body?.locale || 'en-US') as string;
 
       // Inline Gemini Multimodal Vision analysis if image payload provided
@@ -160,10 +152,40 @@ export class CopilotController {
         }
       );
 
-      // Sanitize client payload: Block all internal manual names, document IDs, citations, and excerpts
+      const userRole = req.auth?.membership.role;
+      const isSupervisory =
+        userRole === 'ORGANIZATION_OWNER' ||
+        userRole === 'ORGANIZATION_ADMIN' ||
+        userRole === 'SUPERVISOR' ||
+        userRole === 'PLANT_MANAGER' ||
+        userRole === 'ENGINEER' ||
+        userRole === 'ENGINEER_TECHNICIAN';
+      const citations = result.assistantMessage.citations.map((citation) =>
+        isSupervisory
+          ? citation
+          : citation.documentTitle.startsWith('Approved Guidance:')
+          ? {
+              ...citation,
+              documentId: 'approved-reference',
+              documentNumber: 'APPROVED-GUIDANCE',
+              documentTitle: 'Approved operational guidance',
+              documentVersionId: '',
+              chunkId: '',
+              snippet: 'Reference: approved operational guidance',
+              exactVerbatimQuote: undefined,
+              sectionHeading: null,
+            }
+          : {
+              ...citation,
+              snippet: citation.snippet.startsWith('Reference:')
+                ? citation.snippet
+                : 'Reference: approved operational guidance',
+              exactVerbatimQuote: undefined,
+            }
+      );
       const sanitizedAssistantMessage = {
         ...result.assistantMessage,
-        citations: [],
+        citations,
       };
 
       const userMessageWithTelemetry = {
@@ -182,7 +204,7 @@ export class CopilotController {
           answer: result.assistantMessage.content,
           confidence: result.assistantMessage.confidence,
           questionMode: result.questionMode,
-          citations: [],
+          citations,
           safetyAlerts: result.safetyAlerts || result.assistantMessage.safetyAlerts || [],
           isInsufficientEvidence: result.assistantMessage.isInsufficientEvidence,
           conflictDetected: result.assistantMessage.conflictDetected,

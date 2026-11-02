@@ -24,6 +24,7 @@ const booleanFromString = (defaultValue: boolean) =>
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   DEPLOYMENT_MODE: z.enum(['saas', 'enterprise', 'local_dev']).default('saas'),
+  AUTO_MIGRATE: booleanFromString(true),
   ALLOW_ORG_SIGNUP: z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
   ALLOW_GOOGLE_AUTH: z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
   ALLOW_EXTERNAL_NETWORK: z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),

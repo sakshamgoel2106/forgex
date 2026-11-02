@@ -1,10 +1,12 @@
-# ForgeX AI — Multimodal AI Pipeline Specification
+# ForgeX AI — AI Pipeline: Implemented Behavior and Target Design
 
-## 1. High-Level AI Pipeline Overview
+This document distinguishes current repository behavior from the target architecture. A diagram or model name is not evidence that a component is deployed. The default RAG ranking path and Python `/rerank` endpoint use deterministic heuristics. The worker now supports an explicitly configured Hugging Face sequence-classification cross-encoder, but model weights are not bundled or staged by this repository.
 
-The ForgeX AI intelligence architecture operates on two decoupled, asynchronous pipelines:
-1. **Multimodal Ingestion & Indexing Pipeline**: Asynchronous parsing, layout segmentation, tabular extraction, diagram cropping, and hybrid vector indexing.
-2. **Grounded Retrieval & Diagnostic Inference Pipeline**: Sub-second pre-retrieval authorization, dense + sparse retrieval, cross-encoder reranking, and citation-verified LLM generation.
+## 1. Target Pipeline (Not a Deployment or Accuracy Claim)
+
+The target architecture contains two decoupled pipelines:
+1. **Multimodal Ingestion & Indexing**: Parsing, layout segmentation, tabular extraction, diagram processing, and vector indexing; exact capabilities depend on the configured parser and storage adapters.
+2. **Retrieval & Diagnostic Inference**: Authorization, retrieval, heuristic ranking, and generated responses with citations. Latency and answer correctness are not guaranteed by this diagram.
 
 ```
 +---------------------------------------------------------------------------------------------------+
@@ -18,7 +20,7 @@ The ForgeX AI intelligence architecture operates on two decoupled, asynchronous 
 |       |                                                                                           |
 |       +---> Diagram Cropper: Generate WebP Figures + Store BBox [x1, y1, x2, y2]                  |
 |       |                                                                                           |
-|       +---> Embedding Engine: BGE-M3 Dense Vectors (1024-dim)                                     |
+|       +---> Embedding Engine: configured embedding adapter                                       |
 |       |                                                                                           |
 |       v                                                                                           |
 | [Qdrant Vector Store] (Dense Vectors + Payloads) & [PostgreSQL] (Lexical FTS & Metadata)           |
@@ -34,14 +36,14 @@ The ForgeX AI intelligence architecture operates on two decoupled, asynchronous 
 |       |                                                                                           |
 |       +---> Hybrid Search: Qdrant Cosine Sim + PostgreSQL tsvector Exact Part Match              |
 |       |                                                                                           |
-|       +---> Reciprocal Rank Fusion (RRF) + BGE-Reranker-Large Scoring                             |
+|       +---> Rank fusion / deterministic lexical and technical relevance scoring                  |
 |       |                                                                                           |
 |       +---> Pluggable Enterprise Inference (Local Ollama vs SaaS Cloud)                           |
 |       |                                                                                           |
-|       +---> Grounding & Citation Validator: Enforce BBox & Page Coordinate Evidence              |
+|       +---> Citation handling (available paths vary; no universal BBox validator is claimed)     |
 |       |                                                                                           |
 |       v                                                                                           |
-| [Verified Diagnostic Response with Interactive Bounding Boxes & LOTO Safety Directives]          |
+| [Advisory response with citations; human verification remains required]                           |
 +---------------------------------------------------------------------------------------------------+
 ```
 
@@ -49,16 +51,16 @@ The ForgeX AI intelligence architecture operates on two decoupled, asynchronous 
 
 ## 2. Multimodal Extraction Specifications
 
-### 2.1 Layout Hierarchy & Safety Block Extraction
+### 2.1 Target Layout Hierarchy & Safety Block Extraction
 - Technical manuals often contain critical safety callouts: `DANGER`, `WARNING`, `CAUTION`, and `NOTICE`.
-- The layout parser isolates these blocks and assigns them elevated weight and explicit metadata tags (`is_safety_directive: true`), guaranteeing they are injected into diagnostic contexts before general text passages.
+- The target is to isolate these blocks and assign elevated weight and explicit metadata tags (`is_safety_directive: true`). Do not treat this target description as a guarantee that every supported parser currently detects or prioritizes every safety block.
 
 ### 2.2 Tabular Specification Extraction
-- Complex torque charts, clearance tables, and maintenance intervals are parsed directly into structured Markdown tables and JSON matrices.
-- Numerical columns (e.g. `Nominal Torque: 34 Nm`, `Tolerance: ± 1.5 Nm`) are indexed as structured metadata to support deterministic range checks in guided SOP workflows.
+- The repository includes Markdown/table parsing paths. Coverage of complex scanned charts and structured numerical extraction depends on the selected parser and needs evaluation against representative documents.
+- Do not assume numerical values are universally normalized into structured metadata or validated against a procedure without checking that workflow's implementation and tests.
 
-### 2.3 Visual Schematic & Diagram Segmentation
-- Exploded assembly diagrams, wiring schematics, and P&ID drawings are cropped from source pages.
+### 2.3 Target Visual Schematic & Diagram Segmentation
+- Diagram cropping and segmentation are target capabilities; support and provenance vary across ingestion paths.
 - Each cropped figure receives:
   - Normalized page bounding box coordinates: `{ page: number, x1: number, y1: number, x2: number, y2: number }` (0-1000 scale).
   - High-resolution compressed WebP asset saved to MinIO S3 (`figures/{document_id}/fig_p{page}_{idx}.webp`).
@@ -68,8 +70,8 @@ The ForgeX AI intelligence architecture operates on two decoupled, asynchronous 
 
 ## 3. Grounded Retrieval & Anti-Hallucination Kernel
 
-### 3.1 Pre-Retrieval Tenant & Role Scoping
-Vector distance is **never** calculated across open collections. In ForgeX AI:
+### 3.1 Authorization and Retrieval
+The API includes tenant/plant authorization and vector payload filtering paths with automated tests. The following illustrates the intended policy; do not treat it as a claim that every adapter or deployment has been independently audited:
 1. The user's JWT establishes `tenant_id`, `plant_id`, and `allowed_asset_tags`.
 2. The Qdrant query filter enforces:
    ```json
@@ -80,11 +82,21 @@ Vector distance is **never** calculated across open collections. In ForgeX AI:
      ]
    }
    ```
-3. Chunks from unauthorized manuals are physically excluded from candidate consideration.
+3. Unauthorized records should be excluded from candidate consideration; validate the active adapter and deployed database policies for each deployment.
 
-### 3.2 Strict Grounding Verification Thresholds
-- Generated diagnostic guidance must trace every numerical claim (torque, pressure, clearance) to an exact citation token `[DocNumber:Page:BBox]`.
-- If candidate passages yield a cross-encoder confidence score `< 0.85`, the system emits a deterministic `NO_GROUNDED_EVIDENCE_FOUND` signal and prompts the engineer to consult a human lead rather than synthesizing speculative advice.
+### 3.2 Retrieval Scores Are Not Answer Confidence
+- The current reranking scores are heuristic relevance/ranking signals. They are not calibrated probabilities, do not prove answer correctness, and must not be presented as a confidence threshold.
+- The repository does not establish a validated `0.85` cross-encoder threshold or a benchmark proving answer correctness. The earlier threshold/model claim is withdrawn.
+
+### Optional locally staged cross-encoder
+
+- The default is `RERANKER_MODEL=heuristic-v1`. To enable learned reranking, choose and review a specific model/revision, set the same non-`heuristic-v1` `RERANKER_MODEL` for API and worker, and stage its complete tokenizer/model snapshot in `infra/models/reranker/`.
+- The live RAG query path invokes the configured reranking provider only when a non-`heuristic-v1` model is selected; otherwise it preserves the existing in-memory heuristic ranker. Exact target-asset matches retain an explicit ranking boost.
+- The Enterprise Compose worker mounts that directory read-only at `/models/reranker` and loads with `local_files_only=True`; no model is downloaded at runtime. The image installs the `torch` and `transformers` dependencies. No model artifact, revision pin, weights checksum, or deployment inference benchmark is included in this repository.
+- A missing snapshot, load failure, or worker error returns an error; a configured learned model is never silently replaced by heuristic scores. Keep `heuristic-v1` explicitly selected until the chosen artifact has been staged and tested.
+- Ranking outputs are uncalibrated signals (sigmoid/softmax scores), not correctness probabilities or diagnostic accuracy measurements. Evaluate the selected model on the approved held-out benchmark before production use.
+- Citation and grounding behavior has automated tests, but there is no representative, human-reviewed benchmark here for numerical-claim accuracy, answer recall, or unsafe false negatives.
+- Before making accuracy claims, publish the benchmark dataset scope, labels, model/configuration, threshold calibration method, measured metrics, and limitations. Evaluate retrieval relevance separately from generated-answer correctness.
 
 ---
 
@@ -102,5 +114,5 @@ export interface IInferenceProvider {
 
 | Deployment Mode | Provider Implementation | Model Target | Operational Security |
 | :--- | :--- | :--- | :--- |
-| **Local Private (Air-Gapped)** | `OllamaInferenceProvider` | `llama3.2`, `qwen2.5-vl`, `deepseek-r1` | 100% on-premise GPU runtime; zero internet egress. Approved for defense, nuclear, and chemical plants. |
-| **Enterprise Cloud SaaS** | `CloudInferenceProvider` | Azure OpenAI GPT-4o / Bedrock Claude | Dedicated private endpoints, customer-managed keys, zero data retention (ZDR) policy. |
+| **Local Private (Enterprise prototype)** | `OllamaEnterpriseAdapter` | Configured local model | Intended for on-prem inference. Internet isolation depends on deployment/network controls; no industry or regulatory approval is implied. |
+| **Cloud SaaS prototype** | `CloudSaasAdapter` | Configured cloud provider/model | Requires explicit provider configuration. Private endpoints, customer-managed keys, and zero data retention are provider/deployment requirements, not guaranteed by this repository. |

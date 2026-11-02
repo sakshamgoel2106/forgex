@@ -1,5 +1,5 @@
 -- ForgeX AI — Migration 011: Persistent Machine Maintenance History, Resolution Records & Recurring Fault Intelligence
--- Multi-tenant isolation with append-only audit trail and cascade safety
+-- Multi-tenant isolation, maintenance history, and event logging with cascade safety
 
 CREATE TABLE IF NOT EXISTS maintenance_records (
   id VARCHAR(36) PRIMARY KEY,

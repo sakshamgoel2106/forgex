@@ -92,7 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_assets_parent ON assets (parent_asset_id);
 CREATE INDEX IF NOT EXISTS idx_assets_state ON assets (organization_id, operational_state);
 
 -- ----------------------------------------------------------------------------
--- 6. Audit Events (Tamper-Evident Security and Operational Log)
+-- 6. Audit Events (Security and Operational Event Log)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import type { Application } from 'express';
 import { createApp } from '../src/app.js';
@@ -390,9 +390,11 @@ describe('Phase 4: Industrial RAG & AI Copilot Workflow', () => {
       expect(data.answer).toContain('Seal oil differential pressure');
       expect(data.answer).toContain('25 psi');
 
-      // 3. Citations array sanitization (client payload strictly blocks manual leaks)
+      // 3. Grounded answers expose the matching verified source citation.
       expect(data.citations).toBeInstanceOf(Array);
-      expect(data.citations.length).toBe(0);
+      expect(data.citations.length).toBeGreaterThan(0);
+      expect(data.citations[0].pageNumber).toBe(4);
+      expect(data.citations[0].documentNumber).toBe('SOP-PUMP-101');
 
       // 4. Conversation and message persistence
       expect(data.conversationId).toBeDefined();
@@ -409,6 +411,28 @@ describe('Phase 4: Industrial RAG & AI Copilot Workflow', () => {
       expect(msgWithCitations).toBeDefined();
       expect(msgWithCitations?.citations.length).toBeGreaterThan(0);
       expect(msgWithCitations?.citations[0].pageNumber).toBe(4);
+    });
+
+    it('uses the configured learned reranker in the live RAG retrieval path', async () => {
+      const rerankSpy = vi.spyOn(rerankingProvider, 'rerank');
+      vi.stubEnv('RERANKER_MODEL', 'test-cross-encoder');
+      try {
+        await ragEngine.query(
+          {
+            query: 'What is the required seal oil differential pressure for Pump P-101?',
+            plantId: plantA.id,
+            assetId: assetPumpA.id,
+          },
+          {
+            organizationId: orgA.id,
+            userId: userEngineerA.id,
+          }
+        );
+        expect(rerankSpy).toHaveBeenCalled();
+        expect(rerankSpy.mock.calls[0][1].length).toBeGreaterThan(0);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it('rejects hallucinated citations and validates citation references against real evidence', async () => {
@@ -559,7 +583,13 @@ describe('Phase 4: Industrial RAG & AI Copilot Workflow', () => {
 
       expect(data.isInsufficientEvidence).toBe(false);
       expect(data.citations).toBeInstanceOf(Array);
-      expect(data.citations.length).toBe(0);
+      expect(data.citations.length).toBeGreaterThan(0);
+      expect(
+        data.citations.some(
+          (citation: any) =>
+            citation.documentNumber === 'CONFIDENTIAL-TURBINE-TRX' && citation.pageNumber === 22
+        )
+      ).toBe(true);
 
       const msgWithCitations = await dataStore.getMessageWithCitations(data.messageId);
       expect(msgWithCitations).toBeDefined();

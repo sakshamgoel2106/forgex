@@ -109,6 +109,6 @@ Records technician rating (`HELPFUL` / `UNHELPFUL`), feedback comments, and `nom
 
 ## 5. Audit Ledger & Compliance Traceability
 
-Every lifecycle transition records two immutable audit artifacts:
+Lifecycle transitions record history and audit events in the configured data store. PostgreSQL audit events use the migration 033 hash chain and ordinary update/delete/truncate triggers, but a database owner can bypass those controls. Object Lock archival is opt-in and deployment-dependent; do not treat these records as a compliance-certified ledger:
 1. **`case_history` Table**: Logs the specific action, actor, timestamp, and metadata diff directly linked to the case ID.
 2. **`audit_events` Table**: Logs tenant-level regulatory compliance events (`MAINTENANCE_CASE_CREATED`, `MAINTENANCE_WORK_ORDER_APPROVED`, `MAINTENANCE_ESCALATED_TO_HUMAN`).

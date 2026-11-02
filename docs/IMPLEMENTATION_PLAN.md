@@ -75,7 +75,7 @@ gantt
 - **Goal**: Implement hybrid vector-lexical retrieval, reranking, and pluggable enterprise LLM inference.
 - **Key Modules**:
   1. Hybrid retrieval pipeline combining Qdrant dense vector search with PostgreSQL Full-Text Search.
-  2. Reciprocal Rank Fusion (RRF) and Cross-Encoder reranking.
+  2. Rank fusion and reranking; a learned cross-encoder remains a target until a real model is loaded and benchmarked.
   3. Pluggable `IInferenceProvider` supporting local Ollama (`qwen2.5`, `llama3.3`) and Azure OpenAI.
   4. Grounding engine enforcing strict citation tokens and rejecting out-of-context queries.
 - **Acceptance Criteria**:

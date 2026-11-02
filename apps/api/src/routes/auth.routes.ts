@@ -201,6 +201,46 @@ export function createAuthRouter(dataStore: IDataStore, authAdapter: IAuthAdapte
       // Check if slug is already taken
       const existingOrg = await dataStore.getOrganizationBySlug(slug);
       if (existingOrg) {
+        const existingUser = await dataStore.getUserByEmail(email);
+        const existingMembership = existingUser
+          ? await dataStore.getMembership(existingUser.id, existingOrg.id)
+          : null;
+        const verifiedOwnerRetry =
+          existingUser &&
+          existingMembership?.role === 'ORGANIZATION_OWNER' &&
+          existingMembership.status === 'ACTIVE' &&
+          ((Boolean(password) &&
+            Boolean(existingUser.passwordHash) &&
+            verifyPassword(password, existingUser.passwordHash!)) ||
+            (emailVerifiedByOtp && existingUser.emailVerified));
+
+        if (verifiedOwnerRetry && existingUser && existingMembership) {
+          const token = LocalDevAuthAdapter.generateDevToken(
+            {
+              id: existingUser.externalAuthId,
+              email: existingUser.email,
+              fullName: existingUser.fullName,
+              emailVerified: Boolean(existingUser.emailVerified),
+              metadata: { role: existingMembership.role, organizationId: existingOrg.id },
+            },
+            config.JWT_SECRET,
+            '24h'
+          );
+          res.status(200).json({
+            success: true,
+            message: 'Existing organization owner session restored.',
+            data: {
+              organization: existingOrg,
+              user: existingUser,
+              membership: existingMembership,
+              memberships: [existingMembership],
+              permissions: ORG_ROLE_PERMISSIONS[existingMembership.role] || [],
+              token,
+            },
+          });
+          return;
+        }
+
         res.status(409).json({
           success: false,
           error: {

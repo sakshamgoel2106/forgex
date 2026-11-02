@@ -392,11 +392,25 @@ export class MaintenanceController {
         return;
       }
 
-      const { observations, measuredValues, correctiveActions, resolutionSummary, partsUsed } = req.body;
+      const {
+        observations,
+        measuredValues,
+        correctiveActions,
+        resolutionSummary,
+        partsUsed,
+        rootCauseDescription,
+        correctiveActionsTaken,
+      } = req.body;
 
       const result = await this.workflowEngine.recordFindingsAndSubmit(
         id,
-        { observations, measuredValues, correctiveActions, resolutionSummary, partsUsed },
+        {
+          observations: observations ?? rootCauseDescription,
+          measuredValues,
+          correctiveActions: correctiveActions ?? correctiveActionsTaken,
+          resolutionSummary,
+          partsUsed,
+        },
         { organizationId, userId, userRole }
       );
 

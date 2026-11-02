@@ -3,9 +3,9 @@
 > **Phase 1: Greenfield Engineering Foundation**  
 > Operational Boundary: OT Network / Purdue Level 3.5 Industrial Engineering Workspace
 
-ForgeX AI is a purpose-built, multimodal AI assistant designed for industrial plants, refineries, chemical facilities, and discrete manufacturing complexes. It ingests complex technical documents (SOPs, OEM manuals, P&IDs, wiring schematics), segments engineering diagrams, extracts tabular tolerances, and delivers strictly evidence-grounded diagnostic guidance with audit-verifiable citations and OSHA 1910.147 Lockout/Tagout (LOTO) safety enforcement.
+ForgeX AI is a software prototype for industrial document workflows, maintenance guidance, and AI-assisted troubleshooting. The repository contains API/UI features and automated tests, but tests do not establish production readiness, diagnostic accuracy, regulatory compliance, or suitability for safety-critical decisions. Feature status and evidence boundaries are listed below.
 
-Both **SaaS Cloud Inference** (Azure OpenAI / FedRAMP isolated) and **Private Enterprise Inference** (Local Ollama / vLLM air-gapped runtimes) share the exact same business logic and API contracts.
+The codebase has SaaS/cloud and private Enterprise deployment adapters. They are prototype deployment paths, not independently certified or operationally validated offerings.
 
 ---
 
@@ -153,20 +153,32 @@ Run the backend gateway and frontend engineering workspace concurrently:
 
 ---
 
-## 4. Proposed Navigation Modules (Available in Web Shell)
+## 4. Feature Status & Evidence Snapshot
 
-| Module ID | Navigation Label | Operational Functionality |
+Statuses describe repository evidence, not a production-readiness or safety approval:
+- **Working (software workflow)**: relevant code paths and automated tests exist; external integrations and operational suitability may still be unverified.
+- **Prototype**: code paths or tests exist, but real-world performance, model accuracy, or deployment behavior has not been validated.
+- **Planned / unverified**: no complete supported implementation and verification evidence were found in this repository.
+
+| Feature | Status | Evidence and limits |
 | :--- | :--- | :--- |
-| `overview` | **Overview** | Facility-wide KPI cards, active vibration anomalies, priority SOP shortcuts. |
-| `plants-assets` | **Plants & Assets** | P&ID hierarchy, machine operational states, vibration RMS & bearing temperatures. |
-| `knowledge-hub` | **Knowledge Hub** | Catalog of ingested technical documents, OEM manuals, page counts, SHA-256 hashes. |
-| `ai-copilot` | **AI Copilot** | Grounded diagnostic reasoning terminal with strict citations and grounding scores. |
-| `visual-intelligence` | **Visual Intelligence** | Exploded schematic diagram viewer with interactive AI bounding box overlay (`[x1,y1,x2,y2]`). |
-| `troubleshooting` | **Troubleshooting** | Interactive fault code catalog (`E-402`, `E-704`), root cause triage, and linked SOPs. |
-| `maintenance` | **Maintenance** | Interactive SOP procedure execution runner with OSHA 1910.147 LOTO gate and torque verification. |
-| `expert-knowledge` | **Expert Knowledge** | Tacit field notes repository, tribal knowledge capture, and technician lessons learned. |
-| `security-audit` | **Security & Audit** | Tamper-evident ledger with SHA-256 request hashes and OSHA/ISO verification states. |
-| `settings` | **Settings** | Inference mode selection (Local Ollama vs Managed SaaS Cloud) and air-gap toggles. |
+| Overview dashboard | **Prototype** | UI exists; KPI/anomaly values depend on configured and seeded data. Production telemetry integration is not established by the UI alone. |
+| Plants and assets | **Working (software workflow)** | API/UI paths and tests exist for plant/asset records. Live PLC/SCADA telemetry or equipment control is not implied. |
+| Document ingestion and Knowledge Hub | **Working (software workflow)** | API integration tests cover supported upload, parsing, and indexing flows. Parser/model coverage and production storage operations depend on configuration. SHA-256 file checksums detect content changes; they do not make audit records immutable. |
+| Troubleshooting and RCA | **Prototype** | RCA/case workflows have automated tests; hypothesis correctness and field outcomes have not been benchmarked. |
+| Maintenance/SOP workflows | **Working (software workflow)** | Workflow and safety-gate API tests exist. No PLC, actuator, or other control-system execution is implied; a qualified person remains responsible for field safety. |
+| Expert knowledge repository | **Working (software workflow)** | Note submission, review, retrieval, and related API flows have automated tests; knowledge quality depends on human review and source data. |
+| AI Copilot / RAG | **Prototype** | Retrieval, authorization, generation, and citation tests exist. No calibrated answer-correctness benchmark or verified confidence threshold is published. |
+| Voice assistant / speech | **Prototype** | Voice UI and provider interfaces exist. Current provider paths include deterministic fallback behavior; real speech recognition/synthesis accuracy and service integration are not established by unit tests. |
+| Acoustic diagnosis | **Prototype** | Diagnostic logic and automated tests exist. No representative, labeled field dataset or measured sensitivity/false-alarm rate is supplied. |
+| Visual intelligence | **Prototype** | Image-analysis code and tests exist. No field-validated fault-detection accuracy, supported-condition matrix, or safety certification is supplied. |
+| 3D/CAD viewers | **Prototype** | Viewer and file-processing paths exist. Geometric fidelity and engineering-use validation across OEM CAD files are not established. |
+| SaaS and Enterprise deployment modes | **Prototype** | Provider/configuration paths exist. End-to-end hosted SaaS and isolated plant deployments have not been independently operationally validated here. |
+| Audit event logging | **Working (event logging)** | Audit-event persistence and tests exist. Hash chaining, append-only enforcement, WORM archival, and compliance certification are **not implemented/verified** by this repository. |
+| Settings and inference-mode selection | **Prototype** | Configuration/UI paths exist; some settings are presentation-only and do not persist a runtime deployment change. |
+| Mobile use without internet | **Prototype (local server required)** | A client can be used over a plant/local network without internet when the server and dependencies are available locally. Standalone mobile inference or server-free operation is not established. |
+| Direct hardware/sensor integration | **Planned / unverified** | No supported PLC, Modbus, OPC UA, or equivalent hardware-control integration was established in this repository. |
+| Automated production disaster recovery | **Planned / unverified** | Local in-memory storage is a development fallback, not PostgreSQL failover, backup, restore, or data reconciliation. |
 
 ---
 
@@ -195,18 +207,21 @@ npm run test:e2e
 
 ---
 
-## 7. Security Rules & Guardrails Enforced
+## 7. Security Controls & Boundaries
 
-1. **Air-Gap Data Sovereignty**: Zero outbound cloud telemetry or inference traffic in on-premise deployment mode.
-2. **Pre-Retrieval RBAC**: Vector searches in Qdrant and relational queries in PostgreSQL enforce hard `tenant_id` and asset clearance boundaries before candidate ranking.
-3. **OSHA 1910.147 Compliance**: Procedure steps with safety gates enforce mandatory technician sign-off prior to advancing execution.
-4. **No Secrets in Source**: All credentials, tokens, and endpoints are runtime-validated via Zod schemas and loaded from environment variables.
+1. **Enterprise network isolation**: the included Enterprise Compose network is configured as an internal Docker network. This constrains containers attached to that network; host operating-system traffic, other containers/networks, physical plant networks, and deployment-specific firewall rules remain the operator's responsibility.
+2. **Outbound application guard**: the API wraps Node.js `globalThis.fetch` in strict Enterprise mode. This is defense-in-depth, not a universal interceptor for every runtime, native client, subprocess, or Python library.
+3. **Authorization**: API tests exercise tenant, plant, and role authorization paths. This is not a substitute for deployment security testing.
+4. **Maintenance safety gates**: software workflow checks do not certify OSHA compliance or replace site procedures, training, or qualified human sign-off.
+5. **No secrets in source**: production secrets must be supplied through deployment secrets management; example Compose defaults are for local development only and must be overridden.
 
 ---
 
-## 8. Enterprise Air-Gapped Deployment (`docker-compose.enterprise.yml`)
+## 8. Enterprise Local-Network Deployment
 
-ForgeX AI can be run with **ZERO outbound internet calls** in an air-gapped on-premise industrial plant. The stack includes PostgreSQL 16, Qdrant vector database, MinIO object storage, local Ollama inference, the API server with air-gap egress guards, the background ingestion worker, and the Nginx web shell.
+The included [infra/docker-compose.yml](./infra/docker-compose.yml) describes an Enterprise-oriented local stack. Its services communicate on a Docker internal network. “Offline” here means **no internet is required for runtime, while the client still needs a connection to the local ForgeX server and its plant-network services**. It does not mean the phone can operate without a network or server. SaaS is a separate cloud-connected deployment path and is not air-gapped.
+
+The Compose network is a container-level control, not proof of zero packets from the host or the entire plant. Validate the built deployment with host/network firewall rules and packet capture before making a zero-egress claim. Preload container images, dependencies, and model weights through an approved offline transfer process; build-time downloads are not runtime-isolated by this network.
 
 ### 1. Configuration & Secrets (.env)
 
@@ -244,7 +259,7 @@ WEB_PORT=80
 ### 2. Launch the Air-Gapped Stack
 
 ```bash
-docker compose -f docker-compose.enterprise.yml up -d
+docker compose -f infra/docker-compose.yml up -d
 ```
 
 ### 3. Pull Required On-Premise Models into Ollama
@@ -272,7 +287,7 @@ Access the web interface at `http://localhost`. Administrators will see the live
 - **Storage**: MinIO S3-compatible path-style bucket status (`S3_FORCE_PATH_STYLE=true`).
 - **Database**: PostgreSQL connection readiness.
 - **Worker**: Asynchronous ingestion and outbox relay status.
-- **Air-Gap Outbound Guard**: Confirms 0 egress calls; any outbound call to a non-allowlisted host is intercepted and blocked with an `Air-Gap Policy Violation` error.
+- **Outbound guard**: the API `fetch` wrapper rejects non-allowlisted destinations in strict Enterprise mode. This health display is not a system-wide egress measurement.
 
 ### 5. Single-Origin Mode (`SERVE_WEB=true`) & On-Prem HTTPS
 
@@ -290,9 +305,9 @@ SERVE_WEB=true
   - Pre-configured reverse proxy configurations for on-premise TLS termination are provided in `deploy/caddy/Caddyfile` and `deploy/nginx/nginx-tls.conf`.
   - For full step-by-step certificate guidance (mkcert, corporate internal CA, Active Directory), see [docs/ON_PREM_HTTPS.md](file:///e:/BIG%20PROJECTS/New%20folder/docs/ON_PREM_HTTPS.md).
 
-### 6. Verifying Zero External Requests in Browser DevTools
+### 6. Checking Browser Requests (Client Only)
 
-To verify that the frontend web app makes zero outbound calls to the internet:
+This check observes browser-originated requests only; it does not verify API, worker, container, host, or plant-network egress:
 
 1. Build the production web bundle:
    ```bash
@@ -305,11 +320,9 @@ To verify that the frontend web app makes zero outbound calls to the internet:
    - Check **Preserve log** and **Disable cache**.
    - In the filter input box, type `-domain:localhost` (or `-domain:<your-onprem-ip>`).
 6. Reload the application (`Ctrl + Shift + R`).
-7. **Expected Result**: The network table should be completely **EMPTY**.
+7. **Expected Result**: No unexpected external browser origins should appear.
    - Fonts (`@fontsource/inter` and `@fontsource/jetbrains-mono`) load locally from `/assets/*.woff2`.
    - PDF Worker loads locally from `/assets/pdf.worker.min-*.mjs`.
    - Three.js 3D viewers use local studio lighting with 0 remote HDR downloads.
    - Google Identity Services (`gsi/client`) is not loaded in Enterprise mode.
    - No external CDNs, tracking pixels, or third-party origins are contacted.
-
-

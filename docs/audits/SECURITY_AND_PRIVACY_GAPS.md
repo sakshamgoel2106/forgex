@@ -138,13 +138,15 @@ ForgeX AI operates across two deployment profiles with distinct threat models:
 
 ## 3. Data Flow Audit: SaaS vs. Enterprise Air-Gap
 
+The table below is a historical static-review snapshot, not packet-capture or production verification. Repository code/tests alone do not prove zero host or plant-network egress.
+
 | Data Stream | SaaS Cloud Mode | Enterprise Air-Gapped Mode | Audit Assessment |
 | :--- | :--- | :--- | :--- |
-| **User Queries** | Sent to Cloud AI Gateway (TLS 1.3) | Kept on Local LAN (`http://127.0.0.1:11434`) | Verified. Air-gapped mode strictly throws error if cloud provider is configured ([`aiProviderFactory.ts:21`](file:///e:/BIG%20PROJECTS/New%20folder/apps/api/src/ai/aiProviderFactory.ts#L21)). |
-| **Manual Documents** | Stored in S3 Bucket | Stored in Local Encrypted Volume (`./data/storage`) | Verified. Local containment isolates files to server-side directory. |
-| **Vector Embeddings** | Managed Vector Cloud | Local Qdrant / Local Memory | Verified. Air-gap mode isolates vectors. |
-| **Audit Logs** | PostgreSQL / Cloud Logging | Local PostgreSQL (`forgex_audit_events` table) | Verified. Tamper-evident hash chain preserved in local DB. |
-| **Telemetry & Metrics** | Aggregated in Prometheus / `/api/v1/metrics` | Local Prometheus `/api/v1/metrics` only | Verified. Zero external outbound telemetry pings detected. |
+| **User Queries** | Cloud use depends on provider configuration | Enterprise policy rejects selected cloud inference configuration | Code-path restriction is testable; zero network egress is not established by that check. |
+| **Manual Documents** | Storage depends on configured adapter | Local storage is possible in local deployment | At-rest encryption and host isolation depend on deployment configuration; not universally verified here. |
+| **Vector Embeddings** | Provider/storage depends on configuration | Local Qdrant or in-memory adapters are available | Local adapter configuration does not itself prove the host has no external route. |
+| **Audit Logs** | PostgreSQL-backed event logging | Hash chaining and ordinary update/delete/truncate triggers added by migration 033; optional S3 Object Lock archive command | WORM credentials/bucket, privileged-database resistance, host monitoring, and deployment validation remain unverified. |
+| **Telemetry & Metrics** | Depends on deployed monitoring/provider configuration | Telemetry settings can disable selected application telemetry | No packet-level zero-egress measurement is established by this repository review. |
 
 ---
 

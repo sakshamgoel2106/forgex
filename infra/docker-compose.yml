@@ -154,6 +154,10 @@ services:
       S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-forgex_minio_admin}
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-forgex_minio_secret_2026}
       OLLAMA_BASE_URL: http://ollama:11434
+      RERANKER_MODEL: ${RERANKER_MODEL:-heuristic-v1}
+      RERANKER_MODEL_PATH: /models/reranker
+    volumes:
+      - ./models/reranker:/models/reranker:ro
     ports:
       - "${WORKER_PORT:-8001}:8000"
     depends_on:
@@ -215,6 +219,26 @@ services:
   # 8. ForgeX Core Backend API: Node.js / Express
   # Domain services, RAG copilot, maintenance workflows, RBAC & audit
   # =========================================================================
+  migrate:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-forgex_admin}:${POSTGRES_PASSWORD:-forgex_dev_secret_2026}@postgres:5432/${POSTGRES_DB:-forgex_db}
+      POSTGRES_USER: ${POSTGRES_USER:-forgex_admin}
+      FORGEX_APP_USER: ${FORGEX_APP_USER:-forgex_app}
+      FORGEX_APP_PASSWORD: ${FORGEX_APP_PASSWORD:-forgex_app_dev_secret_2026_change_me}
+    command:
+      - sh
+      - -c
+      - node apps/api/dist/db/runMigrationsCli.js && node apps/api/dist/db/provisionAppRole.js
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - forgex_internal
+
   api:
     build:
       context: ..
@@ -225,7 +249,8 @@ services:
       NODE_ENV: production
       DEPLOYMENT_MODE: enterprise
       PORT: 4000
-      DATABASE_URL: postgresql://${POSTGRES_USER:-forgex_admin}:${POSTGRES_PASSWORD:-forgex_dev_secret_2026}@postgres:5432/${POSTGRES_DB:-forgex_db}
+      DATABASE_URL: postgresql://${FORGEX_APP_USER:-forgex_app}:${FORGEX_APP_PASSWORD:-forgex_app_dev_secret_2026_change_me}@postgres:5432/${POSTGRES_DB:-forgex_db}
+      AUTO_MIGRATE: "false"
       REDIS_URL: redis://redis:6379
       QDRANT_URL: http://qdrant:6333
       S3_ENDPOINT: http://minio:9000
@@ -235,6 +260,8 @@ services:
       INFERENCE_MODE: local_ollama
       INFERENCE_PROVIDER: ollama
       OLLAMA_BASE_URL: http://ollama:11434
+      RERANKER_MODEL: ${RERANKER_MODEL:-heuristic-v1}
+      WORKER_ENDPOINT: http://worker:8000
       WORKER_URL: http://worker:8000
       FASTER_WHISPER_URL: http://faster-whisper:8000
       PIPER_TTS_URL: http://piper-tts:5000
@@ -250,6 +277,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       qdrant:
@@ -308,5 +337,6 @@ volumes:
 networks:
   forgex_internal:
     driver: bridge
-    # In strict air-gap installations, external internet routing is disabled:
-    # internal: true
+    # Container egress is isolated for this Enterprise-oriented stack.
+    # Host and physical network egress still require separate firewall policy.
+    internal: true

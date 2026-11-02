@@ -59,10 +59,7 @@ export function validateUpload(file: {
     throw new Error('Security Violation: Malware or virus test signature detected. File rejected.');
   }
 
-  // 2. Check Dangerous Extensions
-  checkDangerousExtension(file.originalname);
-
-  // 3. Check Magic Bytes
+  // 2. Check executable signatures before extensions to return the most specific rejection.
   // Reject executables / dangerous scripts immediately
   if (buffer.length >= 2 && buffer[0] === 0x4d && buffer[1] === 0x5a) {
     throw new Error('Security Violation: Windows PE executable format rejected.');
@@ -70,6 +67,9 @@ export function validateUpload(file: {
   if (buffer.length >= 4 && buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46) {
     throw new Error('Security Violation: ELF binary format rejected.');
   }
+
+  // 3. Check Dangerous Extensions
+  checkDangerousExtension(file.originalname);
 
   // PDF: %PDF- (0x25 0x50 0x44 0x46)
   if (
@@ -544,4 +544,3 @@ export function sanitizeFilename(filename: string): string {
   const trimmed = clean.replace(/^[._]+/, '');
   return trimmed.slice(0, 200) || 'document';
 }
-

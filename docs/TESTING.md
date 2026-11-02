@@ -69,6 +69,13 @@ npm run test:e2e --workspace=@forgex/web
 
 ## 3. Core Test Scenarios & Acceptance Criteria
 
+### 3.0 Deployment and labeled-benchmark checks
+- `python scripts\verify_enterprise_egress.py --static-only` checks the resolved Enterprise Compose network declaration; without `--static-only`, it also checks networks attached to currently running Compose containers. It does not validate host firewall rules, physical plant routing, or packet captures.
+- `python benchmarks\diagnostics\evaluate_benchmark.py <approved.jsonl>` reports retrieval metrics separately from expert-reviewed answer-claim correctness and evidence support. The repository has no representative labeled benchmark, so it intentionally publishes no accuracy score.
+- `pnpm --filter @forgex/api db:verify-audit-chain [organization-id]` checks persisted hash chains. `pnpm --filter @forgex/api db:archive-audit-chain <organization-id>` verifies a chain and, only when explicitly configured, archives it to S3 Object Lock.
+
+Automated tests establish only the behaviors exercised by their fixtures. Passing unit/integration tests do not establish industrial field accuracy, safety approval, regulatory compliance, production availability, zero network egress, or mobile operation without a server. The repository currently has no published representative human-labeled benchmark for retrieval relevance, generated-answer correctness, acoustic fault detection, or visual fault detection. Do not interpret heuristic scores (including `0.85`) as calibrated probabilities.
+
 ### 3.1 Container Health & Diagnostics
 - Verify `GET /healthz` returns `200 OK` with `{ status: "UP" }`.
 - Verify `GET /readyz` returns `200 OK` when dependencies are initialized.
@@ -81,4 +88,4 @@ npm run test:e2e --workspace=@forgex/web
 
 ### 3.3 Guided SOP Safety Gates (OSHA 1910.147)
 - Verify that the procedure runner blocks advance to Step 2 if the Lockout/Tagout (LOTO) acknowledgement checkbox is false.
-- Verify that entering a measured torque outside `[32.5 - 35.5 Nm]` immediately records an immutable deviation flag in the audit trail.
+- Verify that entering a measured torque outside `[32.5 - 35.5 Nm]` immediately records a deviation event. PostgreSQL audit rows use a hash chain after migration 033; legacy rows and database-owner tampering remain outside ordinary trigger protection.

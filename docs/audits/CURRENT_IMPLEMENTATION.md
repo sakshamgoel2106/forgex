@@ -5,6 +5,8 @@
 **Audit Scope:** Entire repository (`apps/api`, `apps/web`, `packages/shared-types`, `docs/`)  
 **Audit Constraint:** READ-ONLY AUDIT. Zero modifications to runtime code, dependencies, or configuration.
 
+> Historical snapshot from October 20, 2026. Its statuses and source locations have not been re-audited after that date; do not use it as the current feature-status overview. See the README feature matrix for the current documentation snapshot.
+
 ---
 
 ## 1. Executive System Architecture Overview
@@ -34,7 +36,7 @@ ForgeX AI is configured as an npm monorepo with three workspace packages:
 |        * MaintenanceWorkflowEngine (Symptom diagnosis, LOTO checklists, repair review)             |
 |        * MachineRecoveryService (Nameplate evidence intake, claim extraction, anti-self-approval)  |
 |        * VisualIntelligenceEngine (Image/schematic inspection, label filtering, RAG grounding)     |
-|        * SecurityEventService (Threat detection, tamper-evident audit ledger)                      |
+|        * SecurityEventService (Threat detection and audit-event recording)                         |
 |                                                                                                    |
 |    - Adapters & Infrastructure:                                                                    |
 |        * DataStore: PgDataStore (13 SQL migrations) | InMemoryDataStore (4,280 LOC)                |
@@ -257,4 +259,4 @@ The audit traced the complete execution path through the live application:
 | **User Profile Management** | **UI/mock only** | `apps/web/src/components/watermelon/.../profile-menu.tsx` | Dropdown items ("Profile", "Settings", "Sign out") lack click handlers and routes. |
 | **Security Event & Threat Monitoring** | **Implemented & verified by executed tests** | `tests/securityEventMonitoring.test.ts` | Automated detection rules, alert generation, and admin investigation routes. |
 | **Health & Readiness Container Probes** | **Implemented & verified by executed tests** | `tests/deploymentReadiness.test.ts` | `GET /livez`, `GET /readyz`, `GET /api/v1/health`, `GET /api/v1/metrics`. |
-| **Air-Gapped Sovereign Enforcement** | **Implemented & verified by executed tests** | `tests/deploymentModes.test.ts` | Rejects cloud configuration in Enterprise mode; guarantees zero egress. |
+| **Enterprise Cloud-Provider Policy** | **Partially implemented and test-covered** | `tests/deploymentModes.test.ts` | Rejects selected cloud inference configuration in Enterprise mode. This does not guarantee zero process/host/network egress. |
