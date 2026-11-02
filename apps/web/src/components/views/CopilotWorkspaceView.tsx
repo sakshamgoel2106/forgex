@@ -1,18 +1,46 @@
 export function sanitizeCopilotContent(raw: string): string {
   if (!raw) return '';
-  return raw
+  let text = raw
     .replace(/\[Asset:[^\]]*\]/gi, '')
     .replace(/\[OCR EXTRACTED[^\]]*\]/gi, '')
     .replace(/\[Chunk ID:[^\]]*\]/gi, '')
     .replace(/\[Doc ID:[^\]]*\]/gi, '')
     .replace(/\[Section:[^\]]*\]/gi, '')
-    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '')
-    .split('\n')
-    .map((line) => {
-      const trimmed = line.trim();
-      if (/^[-*•]\s*$/.test(trimmed)) return '';
-      return line;
-    })
+    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '');
+
+  // Separate inline or shouting headers
+  text = text
+    .replace(/(?:^|\n|\.\s+)(ROOT CAUSES|ROOT CAUSES & VERIFIED FINDINGS)\s*[-:]?\s*/gi, '\n\n### Root Causes\n')
+    .replace(/(?:^|\n|\.\s+)(IMMEDIATE CHECKS & DIAGNOSTIC INSPECTION|IMMEDIATE CHECKS & REMEDIATION STEPS|IMMEDIATE CHECKS)\s*[-:]?\s*/gi, '\n\n### Immediate Checks & Diagnostic Inspection\n')
+    .replace(/(?:^|\n|\.\s+)(SAFETY & ENGINEERING SPECIFICATIONS|SAFETY & OPERATIONAL SPECIFICATIONS|SAFETY & SPECIFICATIONS)\s*[-:]?\s*/gi, '\n\n### Safety & Engineering Specifications\n')
+    .replace(/(?:^|\n|\.\s+)(GOVERNED EXPERT FIELD FIX[^\n]*)\s*[-:]?\s*/gi, '\n\n> 💡 **Governed Expert Field Fix**\n');
+
+  // Convert fused dashes to bullet list items
+  text = text.replace(/([^\n])\s+-\s+([A-Z0-9])/g, '$1\n- $2');
+
+  // Convert fused numbers to numbered list items
+  text = text.replace(/([^\n])\s+(\d+)\.\s+([A-Z0-9])/g, '$1\n$2. $3');
+
+  // If a line is predominantly uppercase shouting, convert to clean sentence casing
+  const cleanLines = text.split('\n').map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('#') || trimmed.startsWith('>') || trimmed.startsWith('|')) return line;
+    
+    const bulletMatch = trimmed.match(/^([-*•]|\d+\.)\s+(.*)$/);
+    const prefix = bulletMatch ? bulletMatch[1] + ' ' : '';
+    const body = bulletMatch ? bulletMatch[2] : trimmed;
+
+    const letters = body.replace(/[^a-zA-Z]/g, '');
+    const isShouting = letters.length > 8 && letters.split('').filter((c) => c === c.toUpperCase()).length / letters.length > 0.65;
+    if (isShouting) {
+      const normalizedBody = body.charAt(0).toUpperCase() + body.slice(1).toLowerCase().replace(/(\.\s+)([a-z])/g, (_, p1, p2) => p1 + p2.toUpperCase());
+      return (line.startsWith(' ') ? '  ' : '') + prefix + normalizedBody;
+    }
+    return line;
+  });
+
+  return cleanLines
     .filter((line, idx, arr) => !(line === '' && arr[idx - 1] === ''))
     .join('\n')
     .trim();
@@ -54,7 +82,6 @@ import {
   Camera,
   Zap,
   Plus,
-  FileText,
   Menu,
 } from 'lucide-react';
 import { StatusBadge } from '../ui/StatusBadge';
@@ -2117,59 +2144,6 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                   {/* Structured Markdown Body Content */}
                   <CopilotMarkdown content={msg.content} />
 
-                  {/* Citations as Tappable Chips (Strictly hidden if unverified or insufficient evidence) */}
-                  {!isUnverifiedMessage && msg.citations && msg.citations.length > 0 ? (
-                    <div className="pt-2 space-y-1.5 border-t border-slate-100">
-                      <div className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                        <FileText className="w-3 h-3 text-blue-600" />
-                        <span>Source Citations · Tap to View PDF ({msg.citations.length})</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {msg.citations.map((cit, cIdx) => (
-                          <button
-                            key={cit.id || cIdx}
-                            type="button"
-                            onClick={() => setActiveCitationModal(cit)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 text-blue-900 text-xs font-medium transition cursor-pointer text-left max-w-full shadow-2xs"
-                            title={`Open Page ${cit.pageNumber} in full-screen PDF viewer`}
-                          >
-                            <BookOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                            <span className="font-semibold truncate max-w-[180px] sm:max-w-xs">
-                              {cit.documentTitle || cit.documentNumber || 'OEM Manual'}
-                            </span>
-                            <span className="font-mono text-[10px] bg-blue-200/70 text-blue-800 px-1.5 py-0.2 rounded font-bold shrink-0">
-                              p. {cit.pageNumber || 1}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (!isUnverifiedMessage && selectedMachine) ? (
-                    <div className="pt-1.5 border-t border-slate-100">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setActiveCitationModal({
-                            id: `cit-${selectedMachine.assetTag}`,
-                            documentId: selectedMachine.id,
-                            documentNumber: `OEM-${selectedMachine.assetTag}`,
-                            documentTitle: `${selectedMachine.manufacturer || 'OEM'} ${selectedMachine.name} Manual`,
-                            documentVersionId: 'v1.0',
-                            pageNumber: 1,
-                            chunkId: 'chunk-0',
-                            snippet: `OEM Technical manual, maintenance standards, and schematics for ${selectedMachine.assetTag}.`,
-                            confidenceScore: 0.96,
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50/80 hover:bg-blue-100 active:bg-blue-200 border border-blue-200 text-blue-900 text-xs font-medium transition cursor-pointer text-left shadow-2xs"
-                      >
-                        <BookOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                        <span className="font-semibold">{selectedMachine.assetTag} Manual &amp; Schematics</span>
-                        <span className="font-mono text-[10px] bg-blue-200/70 text-blue-800 px-1.5 py-0.2 rounded font-bold">p. 1</span>
-                      </button>
-                    </div>
-                  ) : null}
-
                   {/* Specialist Ticket Banner if Dispatched */}
                   {msg.ticketNumber && (
                     <div className="p-3 bg-cyan-50 border border-cyan-200 rounded-lg flex items-center justify-between text-xs font-sans">
@@ -2183,114 +2157,83 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     </div>
                   )}
 
-                  {/* Operational Feedback Controls & RCA Escalation */}
-                  <div className="pt-3 border-t border-[#E2E8F0] flex items-center justify-between text-xs font-sans">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-[#64748B]">Engineer Evaluation:</span>
-                      {msg.feedback ? (
-                        <div className="flex items-center gap-1.5 text-[#0F766E] bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-[10px] font-semibold">
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>Rated: {msg.feedback.rating}</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => {
-                              setFeedbackMessageId(msg.id);
-                              setFeedbackRating('HELPFUL');
-                            }}
-                            className="p-1.5 rounded hover:bg-[#F1F5F9] text-[#64748B] hover:text-emerald-700 transition"
-                            title="Mark as Helpful & Verified"
-                          >
-                            <ThumbsUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              setFeedbackMessageId(msg.id);
-                              setFeedbackRating('UNHELPFUL');
-                            }}
-                            className="p-1.5 rounded hover:bg-[#F1F5F9] text-[#64748B] hover:text-rose-700 transition"
-                            title="Report Inaccuracy or Hazard"
-                          >
-                            <ThumbsDown className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Actionable Engineering Solution Controls (Hidden for general questions or insufficient evidence) */}
-                    {(() => {
-                      const hasActionableSolution =
-                        !msg.isInsufficientEvidence &&
-                        msg.confidence !== 'INSUFFICIENT_EVIDENCE' &&
-                        msg.questionMode !== 'GENERAL' &&
-                        (
-                          Boolean(selectedMachine) ||
-                          Boolean(msg.acousticTelemetry) ||
-                          Boolean(msg.visionDiagnostic) ||
-                          (Boolean(msg.safetyAlerts) && (msg.safetyAlerts?.length ?? 0) > 0) ||
-                          msg.questionMode === 'MACHINE_SPECIFIC' ||
-                          msg.questionMode === 'RESTRICTED_SAFETY_CRITICAL' ||
-                          (Boolean(msg.citations) && (msg.citations?.length ?? 0) > 0 && Boolean(selectedMachine))
-                        );
-
-                      if (!hasActionableSolution) {
-                        return (
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-[#64748B] font-mono">
-                              ID: {msg.id.slice(0, 16)}...
-                            </span>
+                  {/* Operational Feedback Controls & Action Buttons (Exact Match with Image 2) */}
+                  <div className="pt-3 border-t border-[#E2E8F0] space-y-1.5 text-xs font-sans">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-[#64748B]">Engineer Evaluation:</span>
+                        {msg.feedback ? (
+                          <div className="flex items-center gap-1.5 text-[#0F766E] bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-[10px] font-semibold">
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Rated: {msg.feedback.rating}</span>
                           </div>
-                        );
-                      }
-
-                      const isLotoRelevant =
-                        msg.questionMode === 'RESTRICTED_SAFETY_CRITICAL' ||
-                        ((msg.safetyAlerts?.length ?? 0) > 0) ||
-                        /loto|lockout|tagout|isolation|zero-energy/i.test(msg.content);
-
-                      return (
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {/* Vision-Guided LOTO Quick Launcher (only when safety / isolation is involved) */}
-                          {isLotoRelevant && (
+                        ) : (
+                          <div className="flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={() => setIsLotoModalOpen(true)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-300 text-emerald-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                              title="OSHA 1910.147 Vision-Locked Lockout/Tagout protocol with camera zero-energy verification"
+                              onClick={() => {
+                                setFeedbackMessageId(msg.id);
+                                setFeedbackRating('HELPFUL');
+                              }}
+                              className="p-1.5 rounded hover:bg-[#F1F5F9] text-[#64748B] hover:text-emerald-700 transition cursor-pointer"
+                              title="Mark as Helpful & Verified"
                             >
-                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                              <span>Start Vision-Guided LOTO</span>
+                              <ThumbsUp className="w-3.5 h-3.5" />
                             </button>
-                          )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFeedbackMessageId(msg.id);
+                                setFeedbackRating('UNHELPFUL');
+                              }}
+                              className="p-1.5 rounded hover:bg-[#F1F5F9] text-[#64748B] hover:text-rose-700 transition cursor-pointer"
+                              title="Report Inaccuracy or Hazard"
+                            >
+                              <ThumbsDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
 
-                          {/* Raise Ticket Button */}
-                          <button
-                            type="button"
-                            onClick={() => setIsRcaModalOpen(true)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-rose-50 to-red-50 hover:from-rose-100 hover:to-red-100 active:from-rose-200 active:to-red-200 border border-rose-300 text-rose-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                            title="Raise and dispatch a technician ticket for this issue"
-                          >
-                            <span>🚨 Raise Ticket</span>
-                          </button>
+                      {/* Image 2 Action Buttons: ALWAYS Visible & Fully Functional */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* 1. Start Vision-Guided LOTO */}
+                        <button
+                          type="button"
+                          onClick={() => setIsLotoModalOpen(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-300 text-emerald-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                          title="OSHA 1910.147 Vision-Guided Lockout/Tagout protocol"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>Start Vision-Guided LOTO</span>
+                        </button>
 
-                          {/* 1-Click RCA / Deep-Dive in RCA Copilot */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeepDiveRca(msg)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                            title="Open full 5-Why and Investigation Steps workflow in RCA Copilot"
-                          >
-                            <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
-                            <span>1-Click RCA / Deep-Dive &rarr;</span>
-                          </button>
+                        {/* 2. Raise Ticket */}
+                        <button
+                          type="button"
+                          onClick={() => setIsRcaModalOpen(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-rose-50 to-red-50 hover:from-rose-100 hover:to-red-100 active:from-rose-200 active:to-red-200 border border-rose-300 text-rose-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                          title="Raise and dispatch a technician work order"
+                        >
+                          <span>🚨 Raise Ticket</span>
+                        </button>
 
-                          <span className="text-[10px] text-[#64748B] font-mono">
-                            ID: {msg.id.slice(0, 16)}...
-                          </span>
-                        </div>
-                      );
-                    })()}
+                        {/* 3. 1-Click RCA / Deep-Dive */}
+                        <button
+                          type="button"
+                          onClick={() => handleDeepDiveRca(msg)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                          title="Deep-dive into 5-Why and Root Cause Analysis"
+                        >
+                          <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
+                          <span>1-Click RCA / Deep-Dive &rarr;</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] text-[#64748B] font-mono pl-0.5">
+                      ID: {msg.id.slice(0, 16)}...
+                    </div>
                   </div>
                 </div>
               );
