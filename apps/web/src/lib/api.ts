@@ -35,7 +35,13 @@ export function getStoredWorkspaceConfig(): StoredWorkspaceConfig | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(WORKSPACE_CONFIG_KEY);
-    return raw ? JSON.parse(raw) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.baseUrl?.includes('api.forgex.industrial.ai') && typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+      localStorage.removeItem(WORKSPACE_CONFIG_KEY);
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }

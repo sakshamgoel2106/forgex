@@ -246,7 +246,11 @@ export const RuntimeConfigProvider: React.FC<RuntimeConfigProviderProps> = ({ ch
 
       // No stored server config: probe current origin to determine if origin is a ForgeX API
       const isOriginApi = await probeCurrentOriginApi();
-      if (!isOriginApi) {
+      const isLocalhost =
+        typeof window !== 'undefined' &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+      if (!isOriginApi && !isLocalhost) {
         // App is NOT served from a ForgeX API origin and has no stored config:
         // Show first-launch "Connect to your workspace" screen
         setNeedsWorkspaceConnect(true);

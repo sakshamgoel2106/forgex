@@ -21,7 +21,10 @@ export interface ConnectWorkspaceViewProps {
 
 const DEFAULT_SAAS_URL =
   (import.meta.env?.VITE_SAAS_API_URL as string) ||
-  'https://api.forgex.industrial.ai';
+  (import.meta.env?.VITE_API_URL as string) ||
+  (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? window.location.origin
+    : 'http://localhost:4000');
 
 interface QrWorkspacePayload {
   server: string;
