@@ -17,6 +17,9 @@ import {
   Upload,
   X,
   ArrowLeft,
+  Camera,
+  FileUp,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../../lib/AuthContext';
 import { usePlant } from '../../lib/PlantContext';
@@ -79,6 +82,12 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
   const [ingestRevision, setIngestRevision] = useState('');
   const [ingesting, setIngesting] = useState(false);
   const [ingestResult, setIngestResult] = useState<any | null>(null);
+  const [ingestFile, setIngestFile] = useState<File | null>(null);
+  const [ingestBase64, setIngestBase64] = useState<string | null>(null);
+  const [isScanningImage, setIsScanningImage] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const ingestFileInputRef = useRef<HTMLInputElement | null>(null);
+  const ingestCameraInputRef = useRef<HTMLInputElement | null>(null);
 
   // Review Form State
   const [reviewingClaimId, setReviewingClaimId] = useState<string | null>(null);
@@ -438,11 +447,56 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
     }
   };
 
+  // Scan attached image with AI Vision OCR
+  const scanImageWithAI = async (file: File, base64: string) => {
+    setIsScanningImage(true);
+    try {
+      const res = await fetch('/api/v1/recovery/evidence/scan-image', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          imageBuffer: base64,
+          filename: file.name,
+          machineId: selectedMachineId,
+        }),
+      });
+      const json = await safeJsonParse(res, { success: false });
+      if (res.ok && json.success && json.data?.extractedText) {
+        setIngestRawText(json.data.extractedText);
+        toast.success(
+          'AI Vision OCR Scan Complete',
+          `Extracted specifications from ${file.name}. Review values below.`
+        );
+      } else {
+        toast.info('File Attached', `Attached ${file.name}. Review or enter observation notes.`);
+      }
+    } catch (err: any) {
+      toast.info('File Attached', `Attached ${file.name}. You can edit observation notes below.`);
+    } finally {
+      setIsScanningImage(false);
+    }
+  };
+
+  const handleIngestFileSelect = (file: File) => {
+    if (file.size > 25 * 1024 * 1024) {
+      toast.error('File Too Large', 'Please select a file smaller than 25MB.');
+      return;
+    }
+    setIngestFile(file);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result as string;
+      setIngestBase64(base64);
+      await scanImageWithAI(file, base64);
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Handle Evidence Ingestion & AI Extraction
   const handleIngestEvidence = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedMachineId || !ingestRawText.trim()) {
-      const msg = 'Evidence text or manual excerpt cannot be empty.';
+    if (!selectedMachineId || (!ingestRawText.trim() && !ingestBase64)) {
+      const msg = 'Please upload a nameplate photo/document or provide evidence observation notes.';
       setErrorMessage(msg);
       toast.error('Validation Error', msg);
       return;
@@ -458,8 +512,10 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
         body: JSON.stringify({
           machineId: selectedMachineId,
           evidenceType: ingestType,
-          rawText: ingestRawText,
+          rawText: ingestRawText || `[Attached ${ingestFile?.name || "Nameplate Image"}]`,
           sourceRevision: ingestRevision || undefined,
+          imageBuffer: ingestBase64 || undefined,
+          filename: ingestFile?.name || undefined,
         }),
       });
 
@@ -472,6 +528,8 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
       setIngestResult(json.data);
       setSuccessMessage(json.message);
       setIngestRawText('');
+      setIngestFile(null);
+      setIngestBase64(null);
       await loadMachineProfile(selectedMachineId);
       await loadOverviewData();
     } catch (err: any) {
@@ -1262,10 +1320,184 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                         </div>
                       </div>
 
-                      <div>
-                        <label className="block text-[11px] font-medium text-[#475569] mb-1">
-                          Extracted Text, OCR Stream, or Observation Notes
+                      {/* Evidence File Upload & Image Dropzone */}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-medium text-[#475569]">
+                          Upload Machine Photograph or Evidence Document
+                          <span className="ml-1 text-[10px] text-blue-600 font-normal">(Instant AI Vision & OCR Extraction)</span>
                         </label>
+
+                        {/* Hidden file and camera inputs */}
+                        <input
+                          ref={ingestFileInputRef}
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/*,application/pdf"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleIngestFileSelect(f);
+                          }}
+                        />
+                        <input
+                          ref={ingestCameraInputRef}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleIngestFileSelect(f);
+                          }}
+                        />
+
+                        {!ingestFile ? (
+                          <div
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              setIsDragOver(true);
+                            }}
+                            onDragLeave={() => setIsDragOver(false)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setIsDragOver(false);
+                              const f = e.dataTransfer.files?.[0];
+                              if (f) handleIngestFileSelect(f);
+                            }}
+                            className={`border-2 border-dashed rounded-xl p-4 transition text-center cursor-pointer ${
+                              isDragOver
+                                ? 'border-blue-500 bg-blue-50/60'
+                                : 'border-[#CBD5E1] hover:border-blue-400 bg-white hover:bg-slate-50/60'
+                            }`}
+                            onClick={() => ingestFileInputRef.current?.click()}
+                          >
+                            <div className="flex flex-col items-center justify-center gap-1.5">
+                              <div className="w-10 h-10 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600">
+                                <Upload className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <span className="text-xs font-semibold text-[#1A202C]">
+                                  Click to upload or drag &amp; drop photograph
+                                </span>
+                                <p className="text-[11px] text-[#64748B] mt-0.5">
+                                  Physical machine nameplate, rating stamp, OEM manual, or P&amp;ID drawing
+                                </p>
+                              </div>
+
+                              <div className="pt-2 flex items-center gap-2 flex-wrap justify-center">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    ingestFileInputRef.current?.click();
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                                >
+                                  <FileUp className="w-3.5 h-3.5" />
+                                  <span>Browse Image / PDF</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    ingestCameraInputRef.current?.click();
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                                  title="Capture direct machine photo using device camera"
+                                >
+                                  <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>Capture Photo</span>
+                                </button>
+                              </div>
+                              <span className="text-[10px] text-slate-400 font-mono mt-1">
+                                Supported formats: JPG, PNG, WEBP, PDF &bull; Max 25MB
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="bg-white border border-blue-200 rounded-xl p-3 shadow-xs space-y-2">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                {ingestBase64 && ingestFile.type.startsWith('image/') ? (
+                                  <img
+                                    src={ingestBase64}
+                                    alt="Nameplate preview"
+                                    className="w-12 h-12 object-cover rounded-lg border border-slate-200 shrink-0"
+                                  />
+                                ) : (
+                                  <div className="w-12 h-12 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 shrink-0">
+                                    <FileText className="w-6 h-6" />
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-[#1A202C] truncate max-w-[240px]">
+                                    {ingestFile.name}
+                                  </p>
+                                  <div className="flex items-center gap-2 text-[10px] text-[#64748B]">
+                                    <span>{(ingestFile.size / 1024).toFixed(1)} KB</span>
+                                    <span>&bull;</span>
+                                    {isScanningImage ? (
+                                      <span className="text-blue-600 font-semibold flex items-center gap-1">
+                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                        Scanning with AI Vision OCR...
+                                      </span>
+                                    ) : (
+                                      <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                        AI Optical Stream Extracted
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={isScanningImage}
+                                  onClick={() => ingestBase64 && scanImageWithAI(ingestFile, ingestBase64)}
+                                  className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                                  title="Re-run AI Vision OCR on this image"
+                                >
+                                  <Sparkles className="w-3 h-3 text-blue-600" />
+                                  <span>Re-scan</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => ingestFileInputRef.current?.click()}
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                                  title="Change uploaded file"
+                                >
+                                  <span>Change</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIngestFile(null);
+                                    setIngestBase64(null);
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                  title="Remove image"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[11px] font-medium text-[#475569]">
+                            Extracted Text, OCR Stream, or Observation Notes
+                          </label>
+                          {ingestFile && (
+                            <span className="text-[10px] text-blue-600 font-medium flex items-center gap-1">
+                              <Sparkles className="w-3 h-3" />
+                              Populated from {ingestFile.name}
+                            </span>
+                          )}
+                        </div>
                         <textarea
                           rows={4}
                           placeholder="Paste OCR text, scanned nameplate readings, or technician observations here..."
@@ -1281,7 +1513,7 @@ export const MachineRecoveryView: React.FC<MachineRecoveryViewProps> = ({ onNavi
                         </span>
                         <button
                           type="submit"
-                          disabled={ingesting || !ingestRawText.trim()}
+                          disabled={ingesting || (!ingestRawText.trim() && !ingestBase64)}
                           className="px-4 py-1.5 bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-sm"
                         >
                           {ingesting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
