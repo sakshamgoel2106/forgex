@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Sparkles,
   Lock,
   ShieldCheck,
   Activity,
@@ -8,7 +7,6 @@ import {
   Gauge,
   Send,
   Plus,
-  Zap,
 } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/button';
@@ -39,12 +37,26 @@ export interface RcaTicketModalProps {
   onOpenInRca?: (assetTag: string, symptom: string) => void;
 }
 
+/**
+ * Filter non-machine messages (e.g. personal logistics, injuries, chit-chat)
+ * so they are not treated as machine symptoms.
+ */
+export function isMachineSymptom(text: string): boolean {
+  if (!text) return false;
+  const t = text.toLowerCase().trim();
+  const nonMachinePattern = /\b(bleed|blood|hurt|injur|pain|hospital|doctor|dizzy|unconscious|not well|sick|helmet|shoe|boot|goggle|goggles|glove|gloves|earplug|ppe|wear|home|forgot|left my|cricket|weather|football|movie|joke|song|hi|hello|hey|thanks|thank you)\b/i;
+  if (nonMachinePattern.test(t)) return false;
+
+  const technicalPattern = /\b(vibration|noise|leak|pressure|temperature|temp|bearing|shaft|seal|motor|pump|crusher|compressor|conveyor|valve|coupling|stator|rotor|rpm|torque|overheat|hot|smoke|jam|clog|stalled|trip|tripped|fault|error|alarm|loto|css|clearance|misalign|cavitation|flow|psi|bar)\b/i;
+  return technicalPattern.test(t) || /[A-Z0-9]+-[0-9]+/.test(text);
+}
+
 export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
   isOpen,
   onClose,
   conversationId,
-  assetId = 'COMP-101-A',
-  assetTag = 'COMP-101-A',
+  assetId = '',
+  assetTag = '',
   machines = [],
   messages = [],
   acousticTelemetry,
@@ -59,11 +71,10 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Determine initial machine tag
+  // Determine initial machine tag - do NOT default blindly to COMP-101-A
   const initialTag = useMemo(() => {
-    // If assetTag passed, sanitize it
     const cleanTag = (assetTag || assetId || '').replace(/\s*\([^)]*\).*/, '').trim();
-    if (cleanTag) {
+    if (cleanTag && cleanTag !== 'GENERAL') {
       const match = machines.find(
         (m) =>
           m.assetTag.toLowerCase() === cleanTag.toLowerCase() ||
@@ -73,8 +84,17 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
       if (match) return match.assetTag;
       return cleanTag;
     }
-    return machines[0]?.assetTag || 'COMP-101-A';
-  }, [assetTag, assetId, machines]);
+    // Inspect thread to check if a specific machine was mentioned
+    for (const m of messages || []) {
+      const content = (m.content || '').toLowerCase();
+      for (const mach of machines) {
+        if (content.includes(mach.assetTag.toLowerCase())) {
+          return mach.assetTag;
+        }
+      }
+    }
+    return '';
+  }, [assetTag, assetId, machines, messages]);
 
   // Form State
   const [selectedAssetTag, setSelectedAssetTag] = useState<string>(initialTag);
@@ -82,7 +102,6 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
   const [severity, setSeverity] = useState<MaintenanceCaseSeverity>('HIGH');
   const [symptoms, setSymptoms] = useState<string[]>([]);
   const [newSymptomInput, setNewSymptomInput] = useState('');
-  const [rootCauseAnalysis, setRootCauseAnalysis] = useState('');
   const [recommendedParts, setRecommendedParts] = useState<string[]>([]);
   const [newPartInput, setNewPartInput] = useState('');
   const [lotoStatus, setLotoStatus] = useState<'VERIFIED_ZERO_ENERGY' | 'PENDING_ISOLATION'>('PENDING_ISOLATION');
@@ -92,32 +111,36 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
   // Sync initial tag and pre-fill fields immediately when modal opens
   useEffect(() => {
     if (isOpen) {
-      const activeTag = initialTag || (machines && machines[0]?.assetTag) || 'COMP-101-A';
-      setSelectedAssetTag(activeTag);
+      setSelectedAssetTag(initialTag);
 
       const threadUserMessages = (messages || [])
         .filter((m) => m.senderType === 'USER' || m.role === 'USER' || m.role === 'user')
         .map((m) => m.content.trim())
-        .filter((c) => c.length > 3);
+        .filter((c) => c.length > 3 && isMachineSymptom(c));
 
-      const latestQuery = threadUserMessages[threadUserMessages.length - 1] || `Operational inspection on ${activeTag}`;
-      setTitle(`${activeTag}: ${latestQuery.length > 60 ? latestQuery.slice(0, 57) + '...' : latestQuery}`);
-      setSymptoms([latestQuery]);
+      const latestQuery = threadUserMessages[threadUserMessages.length - 1];
+      if (latestQuery) {
+        const prefix = initialTag ? `${initialTag}: ` : '';
+        setTitle(`${prefix}${latestQuery.length > 60 ? latestQuery.slice(0, 57) + '...' : latestQuery}`);
+        setSymptoms([latestQuery]);
+      } else {
+        setTitle(initialTag ? `Operational Inspection on ${initialTag}` : 'Plant Maintenance Field Support Request');
+        setSymptoms([]);
+      }
     }
-  }, [isOpen, initialTag, messages, machines]);
+  }, [isOpen, initialTag, messages]);
 
-  // Trigger Gemini Multimodal RCA Synthesis on open
+  // Trigger Gemini Multimodal RCA Synthesis on open if an asset is selected
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !selectedAssetTag) return;
 
     const synthesizeRca = async () => {
       setIsLoading(true);
 
-      // Extract current thread symptoms
       const threadUserMessages = (messages || [])
         .filter((m) => m.senderType === 'USER' || m.role === 'USER' || m.role === 'user')
         .map((m) => m.content.trim())
-        .filter((c) => c.length > 5);
+        .filter((c) => c.length > 5 && isMachineSymptom(c));
 
       const latestUserQuery = threadUserMessages[threadUserMessages.length - 1] || `Issue reported on ${selectedAssetTag}`;
 
@@ -147,12 +170,8 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
           const data: AutoRcaTicketPayload = json.data;
           setTitle(data.title || `${selectedAssetTag}: ${latestUserQuery}`);
           setSeverity(data.severity || 'HIGH');
-          setSymptoms(
-            data.detectedSymptoms && data.detectedSymptoms.length > 0
-              ? data.detectedSymptoms
-              : [latestUserQuery]
-          );
-          setRootCauseAnalysis(data.rootCauseAnalysis);
+          const cleanSymptoms = (data.detectedSymptoms || []).filter(isMachineSymptom);
+          setSymptoms(cleanSymptoms.length > 0 ? cleanSymptoms : [latestUserQuery]);
           setRecommendedParts(data.recommendedParts || []);
           setLotoStatus(data.lotoVerificationStatus || 'PENDING_ISOLATION');
           setEstimatedDowntime(data.estimatedDowntimeMinutes || 60);
@@ -163,7 +182,6 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
       } catch (err: any) {
         console.warn('RCA synthesis fallback notice:', err);
 
-        // Clean fallback pre-fill strictly from current thread
         const currentSymptom = latestUserQuery;
         setTitle(`${selectedAssetTag}: ${currentSymptom.length > 60 ? currentSymptom.slice(0, 57) + '...' : currentSymptom}`);
         setSeverity(visionDiagnostic?.safetyStatus === 'CRITICAL_OVERPRESSURE' ? 'CRITICAL' : 'HIGH');
@@ -174,12 +192,6 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
         ]);
 
         const isCompressor = selectedAssetTag.includes('COMP') || selectedAssetTag.includes('AIR');
-        setRootCauseAnalysis(
-          isCompressor
-            ? `Operational deviation recorded on ${selectedAssetTag}. Triangulated observations indicate vibration or load instability. Physical inspection of mechanical couplings, foundation mounting bolts, and bearing housing vibration recommended.`
-            : `Operational deviation recorded on ${selectedAssetTag}. Recommended checks include dynamic seal integrity, operating temperature, and mechanical alignment.`
-        );
-
         setRecommendedParts(
           isCompressor
             ? [
@@ -224,38 +236,7 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
     setRecommendedParts((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // 1. Open in RCA Copilot
-  const handleOpenInRca = () => {
-    const primarySymptom = symptoms[0] || title || `Operational anomaly on ${selectedAssetTag}`;
-    const cleanCause = rootCauseAnalysis
-      ? rootCauseAnalysis.replace(/^[#\s*•-]+/, '').slice(0, 140)
-      : 'Mechanical vibration & alignment deviation';
-
-    try {
-      const ticketPayload = {
-        assetTag: selectedAssetTag,
-        symptom: primarySymptom,
-        errorCode: 'DIAG-ALERT-01',
-        topRootCause: cleanCause,
-        loadDirectRca: true,
-        createdAt: new Date().toISOString(),
-      };
-      sessionStorage.setItem('forgex_rca_ticket', JSON.stringify(ticketPayload));
-      sessionStorage.setItem('forgex_rca_handoff', JSON.stringify(ticketPayload));
-
-      window.dispatchEvent(
-        new CustomEvent('forgex:navigate', { detail: { module: 'troubleshooting', state: ticketPayload } })
-      );
-      window.dispatchEvent(new CustomEvent('forgex:load_rca', { detail: ticketPayload }));
-      window.location.hash = '#troubleshooting';
-    } catch {}
-
-    onOpenInRca?.(selectedAssetTag, primarySymptom);
-    toast.success('RCA Copilot Initialized', `Loaded ${selectedAssetTag} and investigation context into Troubleshooting & RCA.`);
-    onClose();
-  };
-
-  // 2. Dispatch work order into enterprise cases table
+  // Dispatch work order into enterprise cases table
   const handleDispatchWorkOrder = async () => {
     if (!title.trim()) {
       toast.error('Validation Error', 'Work order title is required.');
@@ -265,20 +246,19 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
     setIsSubmitting(true);
     const fullSymptomDescription = [
       ...symptoms,
-      `RCA Grounding: ${rootCauseAnalysis.trim()}`,
-      `Recommended Spares: ${recommendedParts.join(', ')}`,
+      recommendedParts.length > 0 ? `Recommended Spares: ${recommendedParts.join(', ')}` : '',
       `Assigned Queue: ${assignedQueue}`,
       `LOTO Status: ${lotoStatus === 'VERIFIED_ZERO_ENERGY' ? 'Zero-Energy Certified (OSHA 1910.147)' : 'Pending Isolation'}`,
       `Est Downtime: ${estimatedDowntime} mins`,
-    ].join(' | ');
+    ].filter(Boolean).join(' | ');
 
     try {
       const res = await apiFetch('/api/v1/maintenance/cases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          assetId: selectedAssetTag,
-          assetTag: selectedAssetTag,
+          assetId: selectedAssetTag || undefined,
+          assetTag: selectedAssetTag || undefined,
           title: title.trim(),
           severity,
           symptomDescription: fullSymptomDescription,
@@ -321,8 +301,8 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Technician Escalation & RCA Dispatch"
-      subtitle="AI Triangulated Industrial Diagnostics & Queue Dispatch"
+      title="Raise Field Support Ticket"
+      subtitle="Direct Plant Maintenance Dispatch & Work Order Creation"
       maxWidth="2xl"
       footer={
         <div className="flex flex-col sm:flex-row items-center justify-between w-full gap-2">
@@ -330,61 +310,27 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
             Cancel
           </Button>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-            <Button
-              variant="secondary"
-              size="sm"
-              type="button"
-              onClick={handleOpenInRca}
-              disabled={isLoading || isSubmitting}
-              className="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-bold border border-indigo-200 flex items-center gap-1.5"
-            >
-              <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
-              <span>⚡ Open in RCA Copilot</span>
-            </Button>
-
-            <Button
-              variant="primary"
-              size="sm"
-              type="button"
-              onClick={handleDispatchWorkOrder}
-              disabled={isLoading || isSubmitting || !title.trim()}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-1.5"
-            >
-              {isSubmitting ? (
-                <span>Dispatching Ticket...</span>
-              ) : (
-                <>
-                  <Send className="w-3.5 h-3.5" />
-                  <span>📨 Dispatch Ticket to Technician Queue &rarr;</span>
-                </>
-              )}
-            </Button>
-          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            type="button"
+            onClick={handleDispatchWorkOrder}
+            disabled={isLoading || isSubmitting || !title.trim()}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-1.5"
+          >
+            {isSubmitting ? (
+              <span>Dispatching Ticket...</span>
+            ) : (
+              <>
+                <Send className="w-3.5 h-3.5 mr-1" />
+                <span>Dispatch Ticket to Technician Queue &rarr;</span>
+              </>
+            )}
+          </Button>
         </div>
       }
     >
       <div className="space-y-4 font-sans text-xs">
-        {/* Top AI Synthesis Status Banner */}
-        <div className="p-3 bg-gradient-to-r from-blue-900 to-indigo-950 border border-blue-500/40 rounded-xl text-white flex items-center justify-between gap-3 shadow-sm">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-500/20 border border-blue-400/40 flex items-center justify-center text-blue-300 shrink-0">
-              <Sparkles className="w-4 h-4 text-blue-300" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-xs tracking-wide">AI Triangulated Escalation &amp; RCA</span>
-                <span className="text-[9px] font-mono bg-blue-500/30 text-blue-200 border border-blue-400/30 px-1.5 py-0.2 rounded font-bold uppercase">
-                  Verified Context
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-300 mt-0.5">
-                Targeted machine specifications, active thread symptoms, and plant documentation synthesized for prompt triage.
-              </p>
-            </div>
-          </div>
-        </div>
-
         {/* Loading Spinner */}
         {isLoading ? (
           <div className="p-12 text-center space-y-3">
@@ -442,18 +388,25 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
                 </label>
                 <select
                   value={selectedAssetTag}
-                  onChange={(e) => setSelectedAssetTag(e.target.value)}
+                  onChange={(e) => {
+                    const tag = e.target.value;
+                    setSelectedAssetTag(tag);
+                    if (tag && (!title || title === 'Plant Maintenance Field Support Request')) {
+                      setTitle(`Operational Inspection on ${tag}`);
+                    }
+                  }}
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
                 >
+                  <option value="">-- Select Target Machine / Asset --</option>
                   {machines.length > 0 ? (
                     machines.map((m) => (
                       <option key={m.id || m.assetTag} value={m.assetTag}>
                         {m.assetTag} — {m.name} ({m.area || 'Plant Floor'})
                       </option>
                     ))
-                  ) : (
+                  ) : selectedAssetTag ? (
                     <option value={selectedAssetTag}>{selectedAssetTag}</option>
-                  )}
+                  ) : null}
                 </select>
               </div>
 
@@ -507,26 +460,30 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
               </div>
             </div>
 
-            {/* Detected Symptoms Chips strictly from current thread */}
+            {/* Detected Symptoms Chips strictly from filtered machine signals */}
             <div className="space-y-1.5">
               <label className="text-[11px] font-semibold text-slate-700 block">Current Thread Symptoms &amp; Observations:</label>
-              <div className="flex flex-wrap gap-1.5">
-                {symptoms.map((s, idx) => (
-                  <span
-                    key={idx}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs shadow-2xs font-mono"
-                  >
-                    <span>{s}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveSymptom(idx)}
-                      className="text-blue-400 hover:text-blue-700"
+              {symptoms.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {symptoms.map((s, idx) => (
+                    <span
+                      key={idx}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs shadow-2xs font-mono"
                     >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
+                      <span>{s}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSymptom(idx)}
+                        className="text-blue-400 hover:text-blue-700"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic">No machine symptoms extracted from thread. Add observed symptoms below.</p>
+              )}
               <div className="flex items-center gap-2 pt-1">
                 <input
                   type="text"
@@ -540,20 +497,6 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
                   <Plus className="w-3 h-3" /> Add
                 </Button>
               </div>
-            </div>
-
-            {/* Engineering Root Cause Analysis (Editable) */}
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700 flex items-center justify-between">
-                <span>Grounded Engineering Root Cause Analysis (RCA):</span>
-                <span className="text-[10px] font-mono text-slate-400">Grounded in Active Manuals &amp; Notes</span>
-              </label>
-              <textarea
-                rows={3}
-                value={rootCauseAnalysis}
-                onChange={(e) => setRootCauseAnalysis(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-sans text-slate-900 focus:outline-none focus:border-blue-600 leading-relaxed shadow-2xs"
-              />
             </div>
 
             {/* Recommended OEM Parts & Spares */}
@@ -598,39 +541,44 @@ export const RcaTicketModal: React.FC<RcaTicketModalProps> = ({
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
+                    min={5}
+                    step={5}
                     value={estimatedDowntime}
-                    onChange={(e) => setEstimatedDowntime(Number(e.target.value) || 30)}
-                    min={15}
-                    max={480}
-                    step={15}
+                    onChange={(e) => setEstimatedDowntime(Number(e.target.value) || 60)}
                     className="w-24 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900"
                   />
-                  <span className="text-slate-500 text-xs">Minutes target MTTR</span>
+                  <span className="text-[11px] text-slate-500 font-mono">mins scheduled</span>
                 </div>
               </div>
 
               <div className="space-y-1">
-                <label className="text-[11px] font-semibold text-slate-700 block">LOTO Safety Gate:</label>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-bold border ${
+                <label className="text-[11px] font-semibold text-slate-700 block">LOTO Safety Gate Protocol:</label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setLotoStatus('VERIFIED_ZERO_ENERGY')}
+                    className={`py-1.5 px-2 rounded-lg text-[10px] font-mono font-bold border transition flex items-center justify-center gap-1 cursor-pointer ${
                       lotoStatus === 'VERIFIED_ZERO_ENERGY'
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : 'bg-amber-100 text-amber-800 border-amber-300'
+                        ? 'bg-emerald-600 text-white border-emerald-700 shadow-2xs'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                   >
-                    {lotoStatus === 'VERIFIED_ZERO_ENERGY' ? (
-                      <>
-                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>VERIFIED ZERO ENERGY</span>
-                      </>
-                    ) : (
-                      <>
-                        <Lock className="w-3.5 h-3.5 text-amber-600" />
-                        <span>PENDING ISOLATION GATE</span>
-                      </>
-                    )}
-                  </span>
+                    <ShieldCheck className="w-3 h-3 shrink-0" />
+                    <span>Zero Energy Verified</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLotoStatus('PENDING_ISOLATION')}
+                    className={`py-1.5 px-2 rounded-lg text-[10px] font-mono font-bold border transition flex items-center justify-center gap-1 cursor-pointer ${
+                      lotoStatus === 'PENDING_ISOLATION'
+                        ? 'bg-amber-600 text-white border-amber-700 shadow-2xs'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Lock className="w-3 h-3 shrink-0" />
+                    <span>Pending Isolation</span>
+                  </button>
                 </div>
               </div>
             </div>

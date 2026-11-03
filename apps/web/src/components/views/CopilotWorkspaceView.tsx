@@ -75,6 +75,8 @@ import {
   Wrench,
   Gauge,
   ShieldCheck,
+  ShieldAlert,
+  AlertCircle,
   Square,
   Play,
   Radio,
@@ -2018,14 +2020,23 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                 </div>
               ) : (
                 (() => {
-                  const isEmergencyMessage = msg.content.includes('CRITICAL PLANT EMERGENCY DETECTED');
-                  const isPpeMessage = msg.content.includes('Scope & PPE Compliance Notice');
-                  const isOutOfScopeMessage = msg.content.includes('Out of Operational Scope');
+                  const isEmergencyMessage =
+                    msg.category === 'MEDICAL_OR_INJURY' ||
+                    msg.content.includes('CRITICAL PLANT EMERGENCY DETECTED') ||
+                    msg.content.includes('IMMEDIATE MEDICAL PROTOCOL');
+                  const isPpeMessage =
+                    msg.category === 'PPE_OR_SAFETY_COMPLIANCE' ||
+                    msg.content.includes('Scope & PPE Compliance Notice') ||
+                    msg.content.includes('Mandatory Plant EHS & PPE Compliance Notice');
+                  const isOutOfScopeMessage =
+                    msg.category === 'IRRELEVANT_CHIT_CHAT' ||
+                    msg.content.includes('Out of Operational Scope');
                   const isUnverifiedMessage = Boolean(
                     !isEmergencyMessage &&
                     !isPpeMessage &&
                     !isOutOfScopeMessage &&
-                    (msg.isUnverified ||
+                    (msg.category === 'UNUPLOADED_MACHINE_QUERY' ||
+                    msg.isUnverified ||
                     msg.isInsufficientEvidence ||
                     msg.confidence === 'INSUFFICIENT_EVIDENCE' ||
                     msg.content.includes('No verified information was found') ||
@@ -2033,6 +2044,9 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     msg.content.includes('No Verified Data Found') ||
                     msg.content.includes('Insufficient evidence in authorized plant documentation'))
                   );
+                  const isUploadedMachineQuery =
+                    msg.category === 'UPLOADED_MACHINE_QUERY' ||
+                    (!msg.category && !isEmergencyMessage && !isPpeMessage && !isOutOfScopeMessage && !isUnverifiedMessage);
 
                   return (
                     /* Assistant Grounded Response Card */
@@ -2042,35 +2056,35 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                         <div className="flex items-center gap-2 flex-wrap">
                           {isEmergencyMessage ? (
                             <>
-                              <AlertTriangle className="w-4 h-4 text-rose-600 animate-pulse" />
+                              <AlertTriangle className="w-4 h-4 text-rose-600 animate-pulse shrink-0" />
                               <span className="text-xs font-sans font-bold text-rose-900 tracking-wide">
-                                🚨 CRITICAL PLANT EMERGENCY
+                                CRITICAL PLANT EMERGENCY
                               </span>
                               <StatusBadge label="MANDATORY E-STOP" tone="critical" />
                             </>
                           ) : isPpeMessage ? (
                             <>
-                              <AlertTriangle className="w-4 h-4 text-amber-600" />
+                              <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
                               <span className="text-xs font-sans font-bold text-amber-900 tracking-wide">
-                                🛑 SAFETY & PPE COMPLIANCE
+                                SAFETY &amp; PPE COMPLIANCE
                               </span>
                               <StatusBadge label="MANDATORY PLANT EHS POLICY" tone="critical" />
                             </>
                           ) : isOutOfScopeMessage ? (
                             <>
-                              <AlertTriangle className="w-4 h-4 text-slate-600" />
+                              <AlertCircle className="w-4 h-4 text-slate-500 shrink-0" />
                               <span className="text-xs font-sans font-bold text-slate-800 tracking-wide">
-                                ⚠️ OUT OF OPERATIONAL SCOPE
+                                OUT OF OPERATIONAL SCOPE
                               </span>
                               <StatusBadge label="CLOSED INDUSTRIAL DOMAIN" tone="neutral" />
                             </>
                           ) : isUnverifiedMessage ? (
                             <>
-                              <AlertTriangle className="w-4 h-4 text-amber-600" />
+                              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                               <span className="text-xs font-sans font-bold text-amber-900 tracking-wide">
-                                ⚠️ UNVERIFIED INQUIRY
+                                UNVERIFIED INQUIRY
                               </span>
-                              <StatusBadge label="⚠️ UNVERIFIED / NO MANUAL MATCH" tone="critical" />
+                              <StatusBadge label="NO MANUAL MATCH" tone="critical" />
                               <StatusBadge label="INSUFFICIENT EVIDENCE" tone="critical" />
                             </>
                           ) : (
@@ -2160,12 +2174,12 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     </div>
                   )}
 
-                  {/* Insufficient Evidence State Banner */}
+                  {/* Insufficient Evidence State Banner (Single clean card) */}
                   {isUnverifiedMessage && (
                     <div className="p-4 rounded-xl bg-amber-50 border-2 border-amber-300 text-xs space-y-3 shadow-xs">
                       <div className="flex items-center gap-2 text-amber-900 font-bold">
                         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                        <span>⚠️ No Verified Plant Records Found in Uploaded Manuals/Notes</span>
+                        <span>No Verified Plant Records Found in Uploaded Manuals/Notes</span>
                       </div>
                       <p className="text-amber-800 text-xs leading-relaxed">
                         We could not find any manuals, SOPs, or expert notes matching this machine or issue in your uploaded repository. To prevent guessing and ensure operational safety, please escalate this directly to a field technician or specialist.
@@ -2177,14 +2191,15 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                           onClick={() => handleEscalateToTechnician(msg)}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-bold text-xs shadow-xs transition cursor-pointer"
                         >
-                          <span>🚨 Escalate to Technician</span>
+                          <Send className="w-3.5 h-3.5" />
+                          <span>Escalate to Technician</span>
                         </button>
                       </div>
                     </div>
                   )}
 
-                  {/* Structured Markdown Body Content */}
-                  <CopilotMarkdown content={msg.content} />
+                  {/* Structured Markdown Body Content (Filtered on unverified to prevent duplicate text) */}
+                  {!isUnverifiedMessage && <CopilotMarkdown content={msg.content} />}
 
                   {/* Specialist Ticket Banner if Dispatched */}
                   {msg.ticketNumber && (
@@ -2237,40 +2252,43 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                         )}
                       </div>
 
-                      {/* Image 2 Action Buttons: ALWAYS Visible & Fully Functional */}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {/* 1. Start Vision-Guided LOTO */}
-                        <button
-                          type="button"
-                          onClick={() => setIsLotoModalOpen(true)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-300 text-emerald-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                          title="OSHA 1910.147 Vision-Guided Lockout/Tagout protocol"
-                        >
-                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                          <span>Start Vision-Guided LOTO</span>
-                        </button>
+                      {/* Action Buttons: Visible strictly for uploaded machine queries */}
+                      {isUploadedMachineQuery && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {/* 1. Start Vision-Guided LOTO */}
+                          <button
+                            type="button"
+                            onClick={() => setIsLotoModalOpen(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-300 text-emerald-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                            title="OSHA 1910.147 Vision-Guided Lockout/Tagout protocol"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>Start Vision-Guided LOTO</span>
+                          </button>
 
-                        {/* 2. Raise Ticket */}
-                        <button
-                          type="button"
-                          onClick={() => setIsRcaModalOpen(true)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-rose-50 to-red-50 hover:from-rose-100 hover:to-red-100 active:from-rose-200 active:to-red-200 border border-rose-300 text-rose-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                          title="Raise and dispatch a technician work order"
-                        >
-                          <span>🚨 Raise Ticket</span>
-                        </button>
+                          {/* 2. Raise Ticket */}
+                          <button
+                            type="button"
+                            onClick={() => setIsRcaModalOpen(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-rose-50 to-red-50 hover:from-rose-100 hover:to-red-100 active:from-rose-200 active:to-red-200 border border-rose-300 text-rose-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                            title="Raise and dispatch a technician work order"
+                          >
+                            <Send className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                            <span>Raise Ticket</span>
+                          </button>
 
-                        {/* 3. 1-Click RCA / Deep-Dive */}
-                        <button
-                          type="button"
-                          onClick={() => handleDeepDiveRca(msg)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
-                          title="Deep-dive into 5-Why and Root Cause Analysis"
-                        >
-                          <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
-                          <span>1-Click RCA / Deep-Dive &rarr;</span>
-                        </button>
-                      </div>
+                          {/* 3. 1-Click RCA / Deep-Dive */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeepDiveRca(msg)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 active:from-blue-200 active:to-indigo-200 border border-blue-300 text-blue-900 text-[11px] font-bold rounded-lg transition shadow-2xs hover:shadow-xs cursor-pointer"
+                            title="Deep-dive into 5-Why and Root Cause Analysis"
+                          >
+                            <Zap className="w-3.5 h-3.5 text-blue-600 shrink-0 fill-blue-600" />
+                            <span>1-Click RCA / Deep-Dive &rarr;</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     <div className="text-[10px] text-[#64748B] font-mono pl-0.5">

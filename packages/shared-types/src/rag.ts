@@ -105,7 +105,15 @@ export interface VisionDiagnosticResult {
   samplePresetId?: string;
 }
 
+export type CopilotResponseCategory =
+  | 'MEDICAL_OR_INJURY'
+  | 'PPE_OR_SAFETY_COMPLIANCE'
+  | 'UPLOADED_MACHINE_QUERY'
+  | 'UNUPLOADED_MACHINE_QUERY'
+  | 'IRRELEVANT_CHIT_CHAT';
+
 export interface CopilotMessage {
+  category?: CopilotResponseCategory;
   id: string;
   conversationId: string;
   senderType: MessageSenderType;

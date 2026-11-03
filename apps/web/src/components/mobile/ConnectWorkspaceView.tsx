@@ -77,6 +77,12 @@ export const ConnectWorkspaceView: React.FC<ConnectWorkspaceViewProps> = ({
     const safe = getSafeDefaultSaasUrl();
     return safe.includes('api.forgex.industrial.ai') ? (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000') : safe;
   });
+
+  useEffect(() => {
+    if (saasUrl?.includes('api.forgex.industrial.ai')) {
+      setSaasUrl(typeof window !== 'undefined' ? window.location.origin : 'http://localhost:4000');
+    }
+  }, [saasUrl]);
   const [serverUrl, setServerUrl] = useState<string>('');
   const [companyCode, setCompanyCode] = useState<string>('');
 

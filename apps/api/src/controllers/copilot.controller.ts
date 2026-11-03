@@ -193,6 +193,7 @@ export class CopilotController {
       const sanitizedAssistantMessage = {
         ...result.assistantMessage,
         citations: effectiveCitations,
+          category: (result as any).category || result.assistantMessage.category,
           isUnverified: isUnverifiedResult,
       };
 

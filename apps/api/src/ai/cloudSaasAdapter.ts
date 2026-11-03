@@ -153,17 +153,14 @@ Your objective is to synthesize a clean, authoritative, highly actionable engine
 
 MANDATORY RESPONSE STRUCTURE:
 Format your answer with clear Markdown headings:
-### Root Causes
-Explain the likely mechanical, electrical, thermal, or operational root causes directly matching the equipment and symptom.
+### 1. Diagnostic Overview & Root Causes
+Provide 2-3 clean bullet points in Sentence Case explaining the likely mechanical, electrical, thermal, or operational root causes directly matching the equipment and symptom.
 
-### Immediate Checks & Diagnostic Inspection
-List physical checks (e.g. vibration FFT spectrum, shaft alignment, bearing play, foundation bolt torque, dynamic pressure, lubrication quality).
+### 2. Step-by-Step Inspection & Remediation
+Provide strict sequential numbering (1., 2., 3., 4...) with each step on its own separate line. Detail physical diagnostic checks and maintenance actions in clean Sentence Case.
 
-### Safety & Engineering Specifications
-State exact torque limits, pressure/temperature thresholds, LOTO isolation protocols, or vibration velocity tolerances mentioned in the authorized documentation.
-
-### Step-by-Step Remediation Plan
-Provide numbered, unambiguous procedural steps for maintenance engineers to isolate, inspect, and rectify the issue.
+### 3. Mandatory Safety & Engineering Specifications
+Detail exact LOTO isolation protocols, fastener torque specifications (Nm), and operational limits/tolerances (MAWP pressure, max temperature, vibration RMS) from the authorized documentation.
 
 CLOSED DOMAIN & OUT-OF-SCOPE REFUSAL RULES:
 - You are strictly a Closed-Domain Industrial Maintenance & Engineering Assistant for active plant equipment.
@@ -521,7 +518,7 @@ Respond in strict JSON with:
     let answerText = '';
 
     // 1. Root Causes Section
-    answerText += `### Root Causes\n`;
+    answerText += `### 1. Diagnostic Overview & Root Causes\n`;
     if (isJawCrusher) {
       answerText += `- Toggle plate deflection or toggle seat looseness causing excessive pitman clearance.\n`;
       answerText += `- Eccentric shaft bearing grease degradation or elevated friction temperature (>75°C).\n`;
@@ -562,7 +559,7 @@ Respond in strict JSON with:
     }
 
     // 3. Immediate Checks & Diagnostic Inspection
-    answerText += `\n### Immediate Checks & Diagnostic Inspection\n`;
+    answerText += `\n### 2. Step-by-Step Inspection & Remediation\n`;
     if (isJawCrusher) {
       answerText += `1. **Measure Closed Side Setting (CSS)**: Verify target discharge gap is within 75–100 mm using lead plug or calibrated caliper gauge.\n`;
       answerText += `2. **Thermal & Vibration Audit**: Confirm eccentric shaft bearing temperature is below 75°C limit and overall vibration velocity does not exceed 4.5 mm/s RMS.\n`;
@@ -589,7 +586,7 @@ Respond in strict JSON with:
     }
 
     // 4. Safety & Engineering Specifications
-    answerText += `\n### Safety & Engineering Specifications\n`;
+    answerText += `\n### 3. Mandatory Safety & Engineering Specifications\n`;
     if (isJawCrusher) {
       answerText += `- **LOTO Isolation**: Lock out 4160V/480V feeder breaker CR-CB-01 and apply mechanical flywheel wedge lock.\n`;
       answerText += `- **Fastener Torque Specs**: Toggle seat clamp bolts: **650 Nm** | Cheek plate clamp bolts: **480 Nm** | Flywheel hub bolts: **820 Nm**.\n`;
