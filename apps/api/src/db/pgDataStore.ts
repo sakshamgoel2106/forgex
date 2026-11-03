@@ -6013,6 +6013,39 @@ export class PgDataStore implements IDataStore {
          data_classification, equipment_tags, uploaded_by_user_id, review_notes, error_message
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+       ON CONFLICT (organization_id, unique_drawing_number)
+       DO UPDATE SET
+         plant_id = COALESCE(EXCLUDED.plant_id, engineering_drawings.plant_id),
+         machine_id = COALESCE(EXCLUDED.machine_id, engineering_drawings.machine_id),
+         drawing_title = EXCLUDED.drawing_title,
+         drawing_type = EXCLUDED.drawing_type,
+         discipline = EXCLUDED.discipline,
+         revision = CASE 
+           WHEN EXCLUDED.revision IS NOT NULL AND EXCLUDED.revision NOT IN ('Rev A', '1.0')
+           THEN EXCLUDED.revision
+           WHEN engineering_drawings.revision ~ '^[0-9]+(\.[0-9]+)?$' 
+           THEN (ROUND((engineering_drawings.revision)::numeric + 0.1, 1))::text
+           WHEN engineering_drawings.revision LIKE 'Rev %'
+           THEN 'Rev ' || CHR(ASCII(SUBSTRING(engineering_drawings.revision FROM 5 FOR 1)) + 1)
+           ELSE '1.1'
+         END,
+         effective_date = COALESCE(EXCLUDED.effective_date, engineering_drawings.effective_date),
+         source = EXCLUDED.source,
+         storage_key = EXCLUDED.storage_key,
+         original_file_name = EXCLUDED.original_file_name,
+         file_format = EXCLUDED.file_format,
+         file_size_bytes = EXCLUDED.file_size_bytes,
+         file_hash_sha256 = EXCLUDED.file_hash_sha256,
+         status = EXCLUDED.status,
+         data_classification = EXCLUDED.data_classification,
+         equipment_tags = CASE 
+           WHEN jsonb_array_length(EXCLUDED.equipment_tags) > 0 THEN EXCLUDED.equipment_tags 
+           ELSE engineering_drawings.equipment_tags 
+         END,
+         uploaded_by_user_id = EXCLUDED.uploaded_by_user_id,
+         review_notes = COALESCE(EXCLUDED.review_notes, engineering_drawings.review_notes),
+         error_message = EXCLUDED.error_message,
+         updated_at = NOW()
        RETURNING *`,
       [
         id,
@@ -6235,9 +6268,20 @@ export class PgDataStore implements IDataStore {
            reviewed_at = CASE WHEN $1 IS NOT NULL THEN NOW() ELSE reviewed_at END,
            review_notes = COALESCE($3, review_notes),
            revision = COALESCE($4, revision),
+           drawing_title = COALESCE($7, drawing_title),
+           storage_key = COALESCE($8, storage_key),
+           original_file_name = COALESCE($9, original_file_name),
+           file_format = COALESCE($10, file_format),
+           file_size_bytes = COALESCE($11, file_size_bytes),
+           file_hash_sha256 = COALESCE($12, file_hash_sha256),
+           machine_id = COALESCE($13, machine_id),
+           plant_id = COALESCE($14, plant_id),
+           data_classification = COALESCE($15, data_classification),
+           equipment_tags = CASE WHEN $16::jsonb IS NOT NULL THEN $16::jsonb ELSE equipment_tags END,
+           uploaded_by_user_id = COALESCE($17, uploaded_by_user_id),
            updated_at = NOW()
        WHERE id = $5 AND organization_id = $6
-       RETURNING *`,
+       RETURNING *`, 
       [
         updates.status ?? null,
         updates.reviewedByUserId ?? null,
@@ -6245,6 +6289,17 @@ export class PgDataStore implements IDataStore {
         updates.revision ?? null,
         drawingId,
         organizationId,
+        updates.drawingTitle ?? null,
+        updates.storageKey ?? null,
+        updates.originalFileName ?? null,
+        updates.fileFormat ?? null,
+        updates.fileSizeBytes !== undefined && updates.fileSizeBytes !== null ? Number(updates.fileSizeBytes) : null,
+        updates.fileHashSha256 ?? null,
+        updates.machineId ?? null,
+        updates.plantId ?? null,
+        updates.dataClassification ?? null,
+        updates.equipmentTags ? JSON.stringify(updates.equipmentTags) : null,
+        updates.uploadedByUserId ?? null,
       ]
     );
     if (res.rows.length === 0) return null;

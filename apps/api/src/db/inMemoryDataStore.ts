@@ -3384,13 +3384,6 @@ export class InMemoryDataStore implements IDataStore {
     const id = crypto.randomUUID();
     const drawingNumber = data.uniqueDrawingNumber || data.drawingNumber || `DWG-${id.slice(0, 8)}`;
     const drawingTitle = data.drawingTitle || data.title || drawingNumber;
-
-    for (const d of this.engineeringDrawings.values()) {
-      if (d.organizationId === organizationId && d.uniqueDrawingNumber.toLowerCase() === drawingNumber.toLowerCase()) {
-        throw new Error(`Engineering drawing with number '${drawingNumber}' already exists in this organization.`);
-      }
-    }
-
     const now = new Date().toISOString();
     let status: EngineeringAssetStatus = data.status ?? 'NEEDS_REVIEW';
     let errorMessage: string | undefined = undefined;
@@ -3400,6 +3393,46 @@ export class InMemoryDataStore implements IDataStore {
     if (sizeBytes <= 0) {
       status = 'PROCESSING_FAILED';
       errorMessage = 'Empty or unreadable drawing file payload.';
+    }
+
+    const existing = Array.from(this.engineeringDrawings.values()).find(
+      (d) => d.organizationId === organizationId && d.uniqueDrawingNumber.toLowerCase() === drawingNumber.toLowerCase()
+    );
+    if (existing) {
+      existing.drawingTitle = drawingTitle;
+      existing.plantId = data.plantId || existing.plantId;
+      if (data.machineId !== undefined) existing.machineId = data.machineId;
+      existing.drawingType = data.drawingType || existing.drawingType;
+      existing.discipline = data.discipline || existing.discipline;
+      existing.revision = data.revision && data.revision !== 'Rev A' && data.revision !== '1.0'
+        ? data.revision
+        : existing.revision.startsWith('Rev ')
+        ? `Rev ${String.fromCharCode(existing.revision.charCodeAt(4) + 1)}`
+        : `${(parseFloat(existing.revision) + 0.1 || 1.1).toFixed(1)}`;
+      existing.storageKey = data.storageKey || existing.storageKey;
+      existing.originalFileName = data.originalFileName || existing.originalFileName;
+      existing.fileFormat = (data.fileFormat as any) || existing.fileFormat;
+      existing.fileSizeBytes = sizeBytes;
+      existing.fileHashSha256 = data.fileHashSha256 || existing.fileHashSha256;
+      existing.status = status;
+      existing.dataClassification = data.dataClassification || existing.dataClassification;
+      if (data.equipmentTags && data.equipmentTags.length > 0) {
+        existing.equipmentTags = data.equipmentTags;
+      }
+      existing.uploadedByUserId = data.uploadedByUserId || existing.uploadedByUserId;
+      existing.reviewNotes = data.reviewNotes !== undefined ? data.reviewNotes : existing.reviewNotes;
+      existing.errorMessage = errorMessage;
+      existing.updatedAt = now;
+      if (existing.machineId && status === 'APPROVED' && (existing.drawingType === 'PID' || existing.drawingType === 'PROCESS_FLOW')) {
+        const machine = this.machines.get(existing.machineId);
+        if (machine && machine.organizationId === organizationId) {
+          machine.hasPidDiagram = true;
+          machine.pidStorageKey = existing.storageKey;
+          machine.revision += 1;
+          machine.updatedAt = now;
+        }
+      }
+      return { ...existing };
     }
 
     const dwg: EngineeringDrawing = {

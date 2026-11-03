@@ -12,7 +12,7 @@ import type {
 } from '../db/dataStore.interface.js';
 import type { IStorageAdapter } from '../storage/storage.interface.js';
 import { requireRole } from '../middleware/auth.middleware.js';
-import type { CADFileFormat, DrawingType, DocumentType } from '@forgex/shared-types';
+import type { CADFileFormat, DrawingType, DocumentType, EngineeringDrawing } from '@forgex/shared-types';
 import type { IngestionQueue } from '../jobs/ingestionQueue.js';
 import type { IVectorStoreAdapter } from '../vector/vectorStore.interface.js';
 import { config } from '../config/env.js';
@@ -2487,6 +2487,8 @@ export function createEngineeringRouter(
         return;
       }
 
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
       // Handle PDF
       if (dwg.fileFormat === 'PDF' || ext === 'pdf') {
         res.setHeader('Content-Type', 'application/pdf');
@@ -2601,24 +2603,67 @@ export function createEngineeringRouter(
         const declaredTags = mappings.map((m) => m.pidTag).filter(Boolean);
         const equipmentTags = declaredTags.length > 0 ? declaredTags : STANDARD_PID_EQUIPMENT_TAGS;
 
-        const drawing = await dataStore.createEngineeringDrawing(orgId, {
-          plantId: machine.plantId || 'PLANT-TX-04',
-          machineId: machine.id,
-          drawingTitle: sanitizedName,
-          uniqueDrawingNumber: `PID-${machine.assetTag}`,
-          drawingType: 'PID',
-          discipline: 'Process',
-          revision: '1.0',
-          source: 'Engineering Upload',
-          storageKey,
-          originalFileName: sanitizedName,
-          fileFormat: (ext === 'JPEG' ? 'JPG' : ext) as any,
-          fileSizeBytes: file.size,
-          fileHashSha256: crypto.createHash('sha256').update(file.buffer).digest('hex'),
-          dataClassification: machine.dataClassification || 'CONFIDENTIAL',
-          equipmentTags,
-          uploadedByUserId: req.auth!.user.id,
-        });
+        const targetDrawingNum = `PID-${machine.assetTag}`;
+        const existingList = await dataStore.listEngineeringDrawings(orgId, { machineId: machine.id });
+        let existingDwg: EngineeringDrawing | undefined = existingList.find(
+          (d) => d.uniqueDrawingNumber.toLowerCase() === targetDrawingNum.toLowerCase()
+        ) || existingList[0];
+
+        if (!existingDwg) {
+          const allDrawings = await dataStore.listEngineeringDrawings(orgId);
+          existingDwg = allDrawings.find(
+            (d) => d.uniqueDrawingNumber.toLowerCase() === targetDrawingNum.toLowerCase()
+          );
+        }
+
+        let nextRevision = '1.0';
+        if (existingDwg?.revision) {
+          const num = parseFloat(existingDwg.revision.replace(/[^0-9.]/g, ''));
+          if (!isNaN(num)) {
+            nextRevision = (Math.round((num + 0.1) * 10) / 10).toFixed(1);
+          } else {
+            nextRevision = 'Rev B';
+          }
+        }
+
+        let drawing: EngineeringDrawing;
+        if (existingDwg) {
+          const updated = await dataStore.updateEngineeringDrawing(orgId, existingDwg.id, {
+            machineId: machine.id,
+            plantId: machine.plantId || existingDwg.plantId || 'PLANT-TX-04',
+            drawingTitle: sanitizedName,
+            storageKey,
+            originalFileName: sanitizedName,
+            fileFormat: (ext === 'JPEG' ? 'JPG' : ext) as any,
+            fileSizeBytes: file.size,
+            fileHashSha256: crypto.createHash('sha256').update(file.buffer).digest('hex'),
+            revision: nextRevision,
+            status: 'APPROVED',
+            dataClassification: machine.dataClassification || existingDwg.dataClassification || 'CONFIDENTIAL',
+            equipmentTags,
+          });
+          drawing = (updated || existingDwg)!;
+        } else {
+          drawing = await dataStore.createEngineeringDrawing(orgId, {
+            plantId: machine.plantId || 'PLANT-TX-04',
+            machineId: machine.id,
+            drawingTitle: sanitizedName,
+            uniqueDrawingNumber: targetDrawingNum,
+            drawingType: 'PID',
+            discipline: 'Process',
+            revision: nextRevision,
+            status: 'APPROVED',
+            source: 'Engineering Upload',
+            storageKey,
+            originalFileName: sanitizedName,
+            fileFormat: (ext === 'JPEG' ? 'JPG' : ext) as any,
+            fileSizeBytes: file.size,
+            fileHashSha256: crypto.createHash('sha256').update(file.buffer).digest('hex'),
+            dataClassification: machine.dataClassification || 'CONFIDENTIAL',
+            equipmentTags,
+            uploadedByUserId: req.auth!.user.id,
+          });
+        }
 
         await dataStore.updateMachine(orgId, machine.id, {
           hasPidDiagram: true,
@@ -2659,6 +2704,20 @@ export function createEngineeringRouter(
 
       let drawings = await dataStore.listEngineeringDrawings(orgId, { machineId });
       const mappings = await dataStore.listComponentMappings(orgId, machineId);
+
+      if (drawings.length === 0) {
+        const allDrawings = await dataStore.listEngineeringDrawings(orgId);
+        const matched = allDrawings.find(
+          (d) => d.uniqueDrawingNumber.toLowerCase() === `pid-${machine.assetTag}`.toLowerCase()
+        );
+        if (matched) {
+          if (matched.machineId !== machine.id) {
+            await dataStore.updateEngineeringDrawing(orgId, matched.id, { machineId: machine.id });
+            matched.machineId = machine.id;
+          }
+          drawings = [matched];
+        }
+      }
 
       if (drawings.length === 0 && (machine.hasPidDiagram || machine.pidStorageKey || (machine.technicalSpecs as any)?.pidFileName)) {
         const specs = (machine.technicalSpecs || {}) as Record<string, any>;
