@@ -249,6 +249,27 @@ export async function bootstrapInitialData(
       });
     }
 
+    let hpu = await dataStore.getMachineByAssetTag(org.id, 'HPU-602-B');
+    if (!hpu) {
+      hpu = await dataStore.createMachine(org.id, {
+        plantId: plant.id,
+        assetTag: 'HPU-602-B',
+        name: 'Primary Hydraulic Power Unit (HPU)',
+        machineType: 'Hydraulic Power Unit',
+        area: 'Heavy Forming Hydraulic Cell B',
+        manufacturer: 'Bosch Rexroth',
+        modelNumber: 'ABPAC-160-PRO',
+        serialNumber: 'BR-HPU-602-B-2026',
+        operationalState: 'OPTIMAL',
+        criticality: 'HIGH',
+        dataClassification: 'INTERNAL',
+        verificationState: 'VERIFIED',
+        documentationReadiness: 'READY',
+        hasModel3d: false,
+        hasPidDiagram: true,
+      });
+    }
+
     // Bootstrap Employee Badge for Lead Engineer
     const existingBadge = await dataStore.getEmployeeBadgeByUserId(org.id, user.id);
     if (!existingBadge) {

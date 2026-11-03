@@ -41,13 +41,16 @@ export function isMachineSymptom(text: string): boolean {
  * Extracts specific PPE item name for tailored compliance notices.
  */
 function extractPpeGearName(q: string): string {
-  if (/\b(helmet|hard\s*hat)\b/i.test(q)) return 'Safety Helmet (Hard Hat)';
-  if (/\b(shoe|shoes|boot|boots|footwear)\b/i.test(q)) return 'Certified Steel-Toe Safety Boots';
-  if (/\b(goggle|goggles|glass|glasses|eye\s*protection|chashma)\b/i.test(q)) return 'Certified Eye Protection Goggles';
-  if (/\b(glove|gloves|dastane)\b/i.test(q)) return 'Abrasion & Chemical Protective Gloves';
-  if (/\b(earplug|earplugs|ear\s*muff|ear\s*muffs|ear\s*protection)\b/i.test(q)) return 'Hearing Protection (Earplugs / Muffs)';
-  if (/\b(respirator|mask|dust\s*mask)\b/i.test(q)) return 'Particulate / Chemical Respirator';
-  if (/\b(vest|jacket|hi-vis|high-vis)\b/i.test(q)) return 'High-Visibility Safety Vest';
+  const gears: string[] = [];
+  if (/\b(goggle|goggles|glass|glasses|eye\s*protection|face\s*shield|chashma)\b/i.test(q)) gears.push('Certified Safety Goggles & Eye Protection');
+  if (/\b(glove|gloves|insulated\s*gloves|dastane)\b/i.test(q)) gears.push('Certified Insulated Protective Gloves');
+  if (/\b(helmet|hard\s*hat)\b/i.test(q)) gears.push('Safety Helmet (Hard Hat)');
+  if (/\b(shoe|shoes|boot|boots|footwear)\b/i.test(q)) gears.push('Certified Steel-Toe Safety Boots');
+  if (/\b(earplug|earplugs|ear\s*muff|ear\s*muffs|ear\s*protection)\b/i.test(q)) gears.push('Hearing Protection (Earplugs / Muffs)');
+  if (/\b(respirator|mask|dust\s*mask)\b/i.test(q)) gears.push('Particulate / Chemical Respirator');
+  if (/\b(vest|jacket|hi-vis|high-vis)\b/i.test(q)) gears.push('High-Visibility Safety Vest');
+
+  if (gears.length > 0) return gears.join(' and ');
   return 'Certified PPE Equipment';
 }
 
@@ -84,20 +87,18 @@ export function analyzeIntentLocally(query: string, assetTag?: string): IntentAn
     };
   }
 
-  // 2. PPE_OR_SAFETY_COMPLIANCE Category
+  // 2. PPE_OR_SAFETY_COMPLIANCE Category - TOP PRIORITY (Strictly enforced before routine checks/machine manuals)
+  const ppeNouns = '(?:helmet|hard\\s*hat|boots?|shoes?|footwear|glasses|goggles|face\\s*shield|gloves?|insulated\\s*gloves?|earplugs?|ear\\s*muffs?|ear\\s*protection|ppe|vest|jacket|mask|respirator|dastane|chashma)';
+  const ppeIssueVerbs = '(?:broke|broken|damaged?|cracked?|scratched?|scratch|torn|tear|lost|missing|left\\s+at\\s+home|left\\s+my|forgot(?:ten)?|forget|bhul|toot|phat|kharab|expired)';
+
   const isPpeIssue =
-    /\b(helmet|hard\s*hat|boots|shoes|glasses|goggles|gloves|earplugs|ear\s*muffs|ear\s*protection|ppe|vest|jacket|mask|respirator)\b.*?\b(broke|broken|damaged|cracked|lost|missing|torn|nahi)\b/i.test(
-      q
-    ) ||
-    /\b(broke|broken|damaged|cracked|lost|missing|torn)\b.*?\b(helmet|hard\s*hat|boots|shoes|glasses|goggles|gloves|earplugs|ear\s*muffs|ear\s*protection|ppe|vest|jacket|mask|respirator)\b/i.test(
-      q
-    ) ||
-    /\b(left\s+my|forgot\s+my|lost\s+my|(?:do\s+not|don'?t)\s+have(?:\s+my)?|without(?:\s+a|\s+my)?|at\s+home|missing|no|broken|damaged)\s+(?:safety\s+)?(helmet|hard\s*hat|boots|shoes|glasses|goggles|gloves|earplugs|ear\s*muffs|ear\s*protection|ppe|vest|jacket|mask|respirator)\b/i.test(
-      q
-    ) ||
-    /\b(missing\s+ppe|no\s+ppe|without\s+ppe|forgot\s+helmet|left\s+helmet|forgot\s+boots|forgot\s+goggles|no\s+helmet|no\s+boots|no\s+shoes|wearing\s+sneakers|no\s+gloves)\b/i.test(
-      q
-    ) ||
+    new RegExp(`\\b${ppeNouns}\\b.*?\\b${ppeIssueVerbs}\\b`, 'i').test(q) ||
+    new RegExp(`\\b${ppeIssueVerbs}\\b.*?\\b${ppeNouns}\\b`, 'i').test(q) ||
+    new RegExp(`\\b(?:left\\s+my|forgot(?:ten)?(?:\\s+my)?|lost\\s+my|(?:do\\s+not|don'?t)\\s+have(?:\\s+my)?|without(?:\\s+a|\\s+my|\\s+proper|\\s+certified)?|at\\s+home|missing|no|broken|damaged|scratched?)\\s+(?:safety\\s+|insulated\\s+|certified\\s+)?${ppeNouns}\\b`, 'i').test(q) ||
+    new RegExp(`\\b(?:routine\\s+check|inspect|work|operate|maintenance|panel).*?\\bwithout\\b.*?${ppeNouns}\\b`, 'i').test(q) ||
+    new RegExp(`\\bwithout\\b.*?${ppeNouns}\\b.*?(?:routine\\s+check|inspect|work|operate|panel|machine)`, 'i').test(q) ||
+    /\b(scratched?\s*(?:safety\s+)?goggles?|scratched?\s*glasses|damaged?\s*(?:safety\s+)?goggles?|scratched?\s*face\s*shield)\b/i.test(q) ||
+    /\b(missing\s+ppe|no\s+ppe|without\s+ppe|forgot\s+helmet|left\s+helmet|forgot\s+boots|forgot\s+goggles|no\s+helmet|no\s+boots|no\s+shoes|wearing\s+sneakers|no\s+gloves|without\s+insulated\s+gloves|routine\s+check\s+without)\b/i.test(q) ||
     /\b(helmet\s*ghar|shoes\s*bhul|ppe\s*nahi|chashma\s*nahi|gloves\s*nahi|helmet\s*toot|shoes\s*phat)\b/i.test(q);
 
   const isHrOrLogistics =
@@ -109,10 +110,10 @@ export function analyzeIntentLocally(query: string, assetTag?: string): IntentAn
     const gearName = extractPpeGearName(q);
     const response = `🛑 Mandatory Plant EHS & PPE Compliance Notice:
 
-Per ForgeX Plant EHS Standard Operating Procedures, **DO NOT enter the operational shop floor or operate any machinery without certified ${gearName}**.
+Performing inspections, routine checks, or operating machinery (including electrical panels, pumps, or shop floor equipment) without certified, undamaged PPE (including ${gearName}) is strictly prohibited under Plant Safety Regulations.
 
-- **Immediate Action**: Report directly to the **Plant Tool Crib / Safety Store** or notify your **Shift Supervisor** to issue temporary or replacement certified ${gearName} before entering production areas.
-- **Operational Restriction**: Working without certified protective gear is a direct violation of OSHA / Plant Safety Regulations and presents severe risk of injury.`;
+- **Immediate Action**: Report directly to the **Plant Tool Crib / Safety Store** or notify your **Shift Supervisor** immediately to obtain replacement certified gear before conducting any checks or entering production areas.
+- **Zero-Tolerance Safety Protocol**: Scratched, damaged, or missing PPE invalidates personal protection and exposes you to severe hazard (arc flash, projectile debris, chemical splash, or crush injury). Work must not proceed without compliant gear.`;
 
     return {
       category: 'PPE_OR_SAFETY_COMPLIANCE',

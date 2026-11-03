@@ -101,11 +101,41 @@ export class HistoricalFaultService {
     const cleanMachineId = sanitizeMachineOrAssetId(machineId);
 
     // 1. Validate Machine and Organization Ownership
-    const machine =
+    let machine =
       (await this.dataStore.getMachineById(organizationId, cleanMachineId)) ||
-      (await this.dataStore.getMachineById(organizationId, machineId));
+      (await this.dataStore.getMachineById(organizationId, machineId)) ||
+      (await this.dataStore.getMachineByAssetTag(organizationId, machineId));
     if (!machine) {
-      throw new Error(`Machine '${machineId}' not found in this organization.`);
+      return {
+        machineId: cleanMachineId,
+        machineAssetTag: machineId,
+        query: query || '',
+        totalHistoryCount: 0,
+        matchedCount: 0,
+        matches: [],
+        recurrenceAnalysis: {
+          machineId: cleanMachineId,
+          machineAssetTag: machineId,
+          isRecurringFault: false,
+          recurrenceCount: 0,
+          faultCategory: 'UNKNOWN',
+          incidentTimeline: [],
+          relatedRecordIds: [],
+          confirmedRootCauses: [],
+          suspectedRootCauses: [],
+          unknownRootCauseCount: 0,
+          confidence: 'INSUFFICIENT_DATA',
+          evidenceSummary: 'No records found',
+          recommendedInspectionSteps: [],
+          isSafetyCritical: false,
+          requiresSafetyHold: false,
+          requiresRestartApproval: false,
+        },
+        conflictingDiagnoses: [],
+        hasConflictingEvidence: false,
+        searchStatus: 'INSUFFICIENT_HISTORY',
+        patternDisclaimer: 'Historical fault matches reflect documented past incidents and verified repairs.',
+      };
     }
 
     const targetMachineId = sanitizeUuid(machine.id) || machine.id || cleanMachineId;

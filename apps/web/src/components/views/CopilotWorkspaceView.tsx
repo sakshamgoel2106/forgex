@@ -8,12 +8,16 @@ export function sanitizeCopilotContent(raw: string): string {
     .replace(/\[Section:[^\]]*\]/gi, '')
     .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '');
 
-  // Separate inline or shouting headers
+  // Separate inline or shouting headers into clean structured markdown headings
   text = text
-    .replace(/(?:^|\n|\.\s+)(ROOT CAUSES|ROOT CAUSES & VERIFIED FINDINGS)\s*[-:]?\s*/gi, '\n\n### Root Causes\n')
-    .replace(/(?:^|\n|\.\s+)(IMMEDIATE CHECKS & DIAGNOSTIC INSPECTION|IMMEDIATE CHECKS & REMEDIATION STEPS|IMMEDIATE CHECKS)\s*[-:]?\s*/gi, '\n\n### Immediate Checks & Diagnostic Inspection\n')
-    .replace(/(?:^|\n|\.\s+)(SAFETY & ENGINEERING SPECIFICATIONS|SAFETY & OPERATIONAL SPECIFICATIONS|SAFETY & SPECIFICATIONS)\s*[-:]?\s*/gi, '\n\n### Safety & Engineering Specifications\n')
-    .replace(/(?:^|\n|\.\s+)(GOVERNED EXPERT FIELD FIX[^\n]*)\s*[-:]?\s*/gi, '\n\n> 💡 **Governed Expert Field Fix**\n');
+    .replace(/(?:^|\n|\.\s+)(?:###\s*)?(?:1\.\s*)?(ROOT CAUSES|ROOT CAUSES & VERIFIED FINDINGS|DIAGNOSTIC OVERVIEW & ROOT CAUSES)\s*[-:]?\s*/gi, '\n\n### 1. Diagnostic Overview & Root Causes\n\n')
+    .replace(/(?:^|\n|\.\s+)(?:###\s*)?(?:2\.\s*)?(IMMEDIATE CHECKS & DIAGNOSTIC INSPECTION|IMMEDIATE CHECKS & REMEDIATION STEPS|STEP-BY-STEP INSPECTION & REMEDIATION|IMMEDIATE CHECKS)\s*[-:]?\s*/gi, '\n\n### 2. Step-by-Step Inspection & Remediation\n\n')
+    .replace(/(?:^|\n|\.\s+)(?:###\s*)?(?:3\.\s*)?(MANDATORY SAFETY & ENGINEERING SPECIFICATIONS|SAFETY & ENGINEERING SPECIFICATIONS|SAFETY & OPERATIONAL SPECIFICATIONS|SAFETY & SPECIFICATIONS)\s*[-:]?\s*/gi, '\n\n### 3. Mandatory Safety & Engineering Specifications\n\n')
+    .replace(/(?:^|\n|\.\s+)(GOVERNED EXPERT FIELD FIX[^\n]*)\s*[-:]?\s*/gi, '\n\n> 💡 **Governed Expert Field Fix**\n\n');
+
+  // Strip compound bullet characters like - •, * •, • •, - -, • -
+  text = text.replace(/^[-*•\s]*[-*•]\s*[•\s-]+\s*/gm, '- ');
+  text = text.replace(/([^\n])\s+[-*•]\s*[•\s-]+\s*/g, '$1\n- ');
 
   // Convert fused dashes to bullet list items
   text = text.replace(/([^\n])\s+-\s+([A-Z0-9])/g, '$1\n- $2');
@@ -21,15 +25,23 @@ export function sanitizeCopilotContent(raw: string): string {
   // Convert fused numbers to numbered list items
   text = text.replace(/([^\n])\s+(\d+)\.\s+([A-Z0-9])/g, '$1\n$2. $3');
 
+  // Ensure headings always have line breaks before and after
+  text = text.replace(/([^\n])\n(#{1,3}\s+[^\n]+)/g, '$1\n\n$2');
+  text = text.replace(/(#{1,3}\s+[^\n]+)\n([^\n#])/g, '$1\n\n$2');
+
   // If a line is predominantly uppercase shouting, convert to clean sentence casing
   const cleanLines = text.split('\n').map((line) => {
     const trimmed = line.trim();
     if (!trimmed) return '';
     if (trimmed.startsWith('#') || trimmed.startsWith('>') || trimmed.startsWith('|')) return line;
     
-    const bulletMatch = trimmed.match(/^([-*•]|\d+\.)\s+(.*)$/);
+    // Clean any residual compound bullets from the line start
+    const cleanLine = trimmed.replace(/^[-*•]\s*[•-]+\s*/, '- ');
+    const bulletMatch = cleanLine.match(/^([-*•]|\d+\.)\s+(.*)$/);
     const prefix = bulletMatch ? bulletMatch[1] + ' ' : '';
-    const body = bulletMatch ? bulletMatch[2] : trimmed;
+    let body = bulletMatch ? bulletMatch[2] : cleanLine;
+    // Strip leading • or - if body still has it
+    body = body.replace(/^[•-]+\s*/, '');
 
     const letters = body.replace(/[^a-zA-Z]/g, '');
     const isShouting = letters.length > 8 && letters.split('').filter((c) => c === c.toUpperCase()).length / letters.length > 0.65;
@@ -37,7 +49,7 @@ export function sanitizeCopilotContent(raw: string): string {
       const normalizedBody = body.charAt(0).toUpperCase() + body.slice(1).toLowerCase().replace(/(\.\s+)([a-z])/g, (_, p1, p2) => p1 + p2.toUpperCase());
       return (line.startsWith(' ') ? '  ' : '') + prefix + normalizedBody;
     }
-    return line;
+    return (line.startsWith(' ') ? '  ' : '') + prefix + body;
   });
 
   return cleanLines
@@ -79,8 +91,7 @@ import {
   AlertCircle,
   Square,
   Play,
-  Radio,
-  Building2,
+    Building2,
   Camera,
   Zap,
   Plus,
@@ -123,69 +134,139 @@ const CopilotMarkdown: React.FC<{ content: string }> = ({ content }) => {
   const blocks = useMemo(() => {
     if (!content) return [];
     const cleanContent = sanitizeCopilotContent(content);
-    const rawParagraphs = cleanContent.split(/\n\s*\n/);
+    const lines = cleanContent.split('\n');
     const parsedBlocks: Array<{
-      type: 'h1' | 'h2' | 'h3' | 'table' | 'ul' | 'ol' | 'p';
+      type: 'h1' | 'h2' | 'h3' | 'callout' | 'table' | 'ul' | 'ol' | 'p';
       content: string;
       rows?: string[][];
       headers?: string[];
       items?: string[];
     }> = [];
 
-    for (const para of rawParagraphs) {
-      const trimmed = para.trim();
-      if (!trimmed) continue;
+    let currentListType: 'ul' | 'ol' | null = null;
+    let currentListItems: string[] = [];
 
-      // Check for Markdown Table
-      if (trimmed.includes('|') && trimmed.split('\n').filter((l) => l.trim().startsWith('|')).length >= 2) {
-        const lines = trimmed.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|'));
-        const parseRow = (line: string) => line.split('|').slice(1, -1).map((c) => c.trim());
-        const headers = parseRow(lines[0]);
-        const dataRows = lines.slice(lines[1].includes('---') ? 2 : 1).map(parseRow);
-        parsedBlocks.push({ type: 'table', content: trimmed, headers, rows: dataRows });
-        continue;
+    const flushList = () => {
+      if (currentListType && currentListItems.length > 0) {
+        parsedBlocks.push({
+          type: currentListType,
+          content: '',
+          items: [...currentListItems],
+        });
+        currentListType = null;
+        currentListItems = [];
       }
+    };
 
-      // Check for Headings
-      if (trimmed.startsWith('### ')) {
-        parsedBlocks.push({ type: 'h3', content: trimmed.replace(/^###\s+/, '') });
-        continue;
-      }
-      if (trimmed.startsWith('## ')) {
-        parsedBlocks.push({ type: 'h2', content: trimmed.replace(/^##\s+/, '') });
-        continue;
-      }
-      if (trimmed.startsWith('# ')) {
-        parsedBlocks.push({ type: 'h1', content: trimmed.replace(/^#\s+/, '') });
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i].trim();
+      if (!line) {
+        flushList();
+        i++;
         continue;
       }
 
-      // Check for Bullet List
-      const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
-      const isBulletList = lines.every((l) => l.startsWith('- ') || l.startsWith('* ') || l.startsWith('• '));
-      if (isBulletList && lines.length > 0) {
-        const items = lines.map((l) => l.replace(/^[-*•]\s+/, ''));
-        parsedBlocks.push({ type: 'ul', content: trimmed, items });
+      // 1. Headings
+      if (line.startsWith('### ')) {
+        flushList();
+        parsedBlocks.push({ type: 'h3', content: line.replace(/^###\s+/, '').replace(/^\d+\.\s*/, '') });
+        i++;
+        continue;
+      }
+      if (line.startsWith('## ')) {
+        flushList();
+        parsedBlocks.push({ type: 'h2', content: line.replace(/^##\s+/, '') });
+        i++;
+        continue;
+      }
+      if (line.startsWith('# ')) {
+        flushList();
+        parsedBlocks.push({ type: 'h1', content: line.replace(/^#\s+/, '') });
+        i++;
         continue;
       }
 
-      // Check for Numbered List
-      const isNumberedList = lines.every((l) => /^\d+\.\s+/.test(l));
-      if (isNumberedList && lines.length > 0) {
-        const items = lines.map((l) => l.replace(/^\d+\.\s+/, ''));
-        parsedBlocks.push({ type: 'ol', content: trimmed, items });
+      // 2. Callout / Quote block (> 💡 ...)
+      if (line.startsWith('>')) {
+        flushList();
+        let calloutText = line.replace(/^>\s*/, '');
+        while (i + 1 < lines.length && lines[i + 1].trim().startsWith('>')) {
+          i++;
+          calloutText += '\n' + lines[i].trim().replace(/^>\s*/, '');
+        }
+        parsedBlocks.push({ type: 'callout', content: calloutText });
+        i++;
         continue;
       }
 
-      // Default to Paragraph
-      parsedBlocks.push({ type: 'p', content: trimmed });
+      // 3. Table
+      if (line.startsWith('|')) {
+        flushList();
+        const tableLines: string[] = [];
+        while (i < lines.length && lines[i].trim().startsWith('|')) {
+          tableLines.push(lines[i].trim());
+          i++;
+        }
+        if (tableLines.length >= 2) {
+          const parseRow = (l: string) => l.split('|').slice(1, -1).map((c) => c.trim());
+          const headers = parseRow(tableLines[0]);
+          const dataRows = tableLines.slice(tableLines[1].includes('---') ? 2 : 1).map(parseRow);
+          parsedBlocks.push({ type: 'table', content: '', headers, rows: dataRows });
+        }
+        continue;
+      }
+
+      // 4. Bullet List item
+      const bulletMatch = line.match(/^[-*•]\s+(.*)$/);
+      if (bulletMatch) {
+        if (currentListType !== 'ul') {
+          flushList();
+          currentListType = 'ul';
+        }
+        const itemText = bulletMatch[1].replace(/^[•-]+\s*/, '').trim();
+        currentListItems.push(itemText);
+        i++;
+        continue;
+      }
+
+      // 5. Numbered List item
+      const numberMatch = line.match(/^\d+\.\s+(.*)$/);
+      if (numberMatch) {
+        if (currentListType !== 'ol') {
+          flushList();
+          currentListType = 'ol';
+        }
+        const itemText = numberMatch[1].trim();
+        currentListItems.push(itemText);
+        i++;
+        continue;
+      }
+
+      // 6. Regular Paragraph
+      flushList();
+      let para = line;
+      while (
+        i + 1 < lines.length &&
+        lines[i + 1].trim() &&
+        !lines[i + 1].trim().startsWith('#') &&
+        !lines[i + 1].trim().startsWith('>') &&
+        !lines[i + 1].trim().startsWith('|') &&
+        !lines[i + 1].trim().match(/^([-*•]|\d+\.)\s+/)
+      ) {
+        i++;
+        para += ' ' + lines[i].trim();
+      }
+      parsedBlocks.push({ type: 'p', content: para });
+      i++;
     }
+    flushList();
 
     return parsedBlocks;
   }, [content]);
 
   const renderInline = (text: string) => {
-    const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+    const parts = text.split(/(\bhttps?:\/\/[^\s]+\b|\*\*[^*]+\*\*|`[^`]+`)/g);
     return parts.map((part, i) => {
       if (part.startsWith('**') && part.endsWith('**')) {
         return <strong key={i} className="font-semibold text-[#1A202C]">{part.slice(2, -2)}</strong>;
@@ -213,15 +294,28 @@ const CopilotMarkdown: React.FC<{ content: string }> = ({ content }) => {
             );
           case 'h2':
             return (
-              <h2 key={idx} className="text-sm font-bold text-[#1A202C] mt-2.5 mb-1 text-blue-900">
+              <h2 key={idx} className="text-sm font-bold text-blue-900 mt-2.5 mb-1">
                 {renderInline(block.content)}
               </h2>
             );
           case 'h3':
             return (
-              <h3 key={idx} className="text-xs font-bold text-[#1A202C] mt-2 mb-0.5 uppercase tracking-wide text-slate-800">
-                {renderInline(block.content)}
-              </h3>
+              <div key={idx} className="mt-3.5 mb-1.5 flex items-center gap-2">
+                <span className="w-1.5 h-3.5 bg-blue-600 rounded-xs shrink-0" />
+                <h3 className="text-xs font-bold text-slate-900 tracking-tight">
+                  {renderInline(block.content)}
+                </h3>
+              </div>
+            );
+          case 'callout':
+            return (
+              <div key={idx} className="my-2.5 p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-950 space-y-1">
+                {block.content.split('\n').map((cline, cIdx) => (
+                  <div key={cIdx} className="text-xs leading-relaxed font-sans">
+                    {renderInline(cline)}
+                  </div>
+                ))}
+              </div>
             );
           case 'table':
             return (
@@ -254,22 +348,24 @@ const CopilotMarkdown: React.FC<{ content: string }> = ({ content }) => {
             );
           case 'ul':
             return (
-              <ul key={idx} className="space-y-1.5 my-1.5 pl-1">
+              <ul key={idx} className="space-y-1.5 my-1.5 pl-1.5">
                 {block.items?.map((item, iIdx) => (
-                  <li key={iIdx} className="flex items-start gap-2">
-                    <span className="text-[#2563EB] font-bold mt-1 text-[8px] select-none">•</span>
-                    <span className="flex-1 text-slate-800 leading-relaxed">{renderInline(item)}</span>
+                  <li key={iIdx} className="flex items-start gap-2 text-slate-800">
+                    <span className="text-blue-600 font-bold mt-0.5 text-xs select-none">•</span>
+                    <span className="leading-relaxed">{renderInline(item)}</span>
                   </li>
                 ))}
               </ul>
             );
           case 'ol':
             return (
-              <ol key={idx} className="space-y-1.5 my-1.5 pl-1">
+              <ol key={idx} className="space-y-2 my-2 pl-0.5">
                 {block.items?.map((item, iIdx) => (
-                  <li key={iIdx} className="flex items-start gap-2">
-                    <span className="font-mono font-semibold text-[#2563EB] text-[11px] shrink-0 select-none">{iIdx + 1}.</span>
-                    <span className="flex-1 text-slate-800 leading-relaxed">{renderInline(item)}</span>
+                  <li key={iIdx} className="flex items-start gap-2 text-slate-800">
+                    <span className="shrink-0 w-4 h-4 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-mono font-bold flex items-center justify-center mt-0.5 select-none">
+                      {iIdx + 1}
+                    </span>
+                    <span className="leading-relaxed">{renderInline(item)}</span>
                   </li>
                 ))}
               </ol>
@@ -2021,21 +2117,21 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
               ) : (
                 (() => {
                   const isEmergencyMessage =
-                    msg.category === 'MEDICAL_OR_INJURY' ||
+                    (msg as any).category === 'MEDICAL_OR_INJURY' ||
                     msg.content.includes('CRITICAL PLANT EMERGENCY DETECTED') ||
                     msg.content.includes('IMMEDIATE MEDICAL PROTOCOL');
                   const isPpeMessage =
-                    msg.category === 'PPE_OR_SAFETY_COMPLIANCE' ||
+                    (msg as any).category === 'PPE_OR_SAFETY_COMPLIANCE' ||
                     msg.content.includes('Scope & PPE Compliance Notice') ||
                     msg.content.includes('Mandatory Plant EHS & PPE Compliance Notice');
                   const isOutOfScopeMessage =
-                    msg.category === 'IRRELEVANT_CHIT_CHAT' ||
+                    (msg as any).category === 'IRRELEVANT_CHIT_CHAT' ||
                     msg.content.includes('Out of Operational Scope');
                   const isUnverifiedMessage = Boolean(
                     !isEmergencyMessage &&
                     !isPpeMessage &&
                     !isOutOfScopeMessage &&
-                    (msg.category === 'UNUPLOADED_MACHINE_QUERY' ||
+                    ((msg as any).category === 'UNUPLOADED_MACHINE_QUERY' ||
                     msg.isUnverified ||
                     msg.isInsufficientEvidence ||
                     msg.confidence === 'INSUFFICIENT_EVIDENCE' ||
@@ -2045,8 +2141,8 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                     msg.content.includes('Insufficient evidence in authorized plant documentation'))
                   );
                   const isUploadedMachineQuery =
-                    msg.category === 'UPLOADED_MACHINE_QUERY' ||
-                    (!msg.category && !isEmergencyMessage && !isPpeMessage && !isOutOfScopeMessage && !isUnverifiedMessage);
+                    (msg as any).category === 'UPLOADED_MACHINE_QUERY' ||
+                    (!(msg as any).category && !isEmergencyMessage && !isPpeMessage && !isOutOfScopeMessage && !isUnverifiedMessage);
 
                   return (
                     /* Assistant Grounded Response Card */
@@ -2201,18 +2297,7 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
                   {/* Structured Markdown Body Content (Filtered on unverified to prevent duplicate text) */}
                   {!isUnverifiedMessage && <CopilotMarkdown content={msg.content} />}
 
-                  {/* Specialist Ticket Banner if Dispatched */}
-                  {msg.ticketNumber && (
-                    <div className="p-3 bg-cyan-50 border border-cyan-200 rounded-lg flex items-center justify-between text-xs font-sans">
-                      <div className="flex items-center gap-2 text-cyan-900 font-medium">
-                        <Radio className="w-4 h-4 text-cyan-700" />
-                        <span>Specialist Dispatch: Ticket {msg.ticketNumber} Dispatched</span>
-                      </div>
-                      <span className="text-[10px] bg-cyan-100 px-2 py-0.5 rounded text-cyan-800 font-semibold">
-                        RESOLVING AMBIGUITY
-                      </span>
-                    </div>
-                  )}
+
 
                   {/* Operational Feedback Controls & Action Buttons (Exact Match with Image 2) */}
                   <div className="pt-3 border-t border-[#E2E8F0] space-y-1.5 text-xs font-sans">
@@ -2647,8 +2732,32 @@ export const CopilotWorkspaceView: React.FC<CopilotWorkspaceViewProps> = ({ init
           } catch {}
           onNavigate?.('tech');
         }}
-        onOpenInRca={() => {
+        onOpenInRca={(tag, symptom) => {
+          setIsRcaModalOpen(false);
+          const handoffPayload = {
+            assetTag: tag || activeMachineContext.assetTag,
+            symptom: symptom || activeMachineContext.symptom || 'Vibration anomaly and equipment check',
+            faultCode: '',
+            errorCode: 'DIAG-ALERT-01',
+            machineStatus: 'Running - Abnormal',
+            loadDirectRca: false,
+            createdAt: new Date().toISOString(),
+          };
+          try {
+            sessionStorage.setItem('forgex_rca_handoff', JSON.stringify(handoffPayload));
+            sessionStorage.setItem('forgex_rca_ticket', JSON.stringify(handoffPayload));
+            if (window.history && window.history.pushState) {
+              window.history.pushState(handoffPayload, '', '#troubleshooting');
+            }
+            window.dispatchEvent(
+              new CustomEvent('forgex:navigate', {
+                detail: { module: 'troubleshooting', state: handoffPayload },
+              })
+            );
+            window.dispatchEvent(new CustomEvent('forgex:load_rca', { detail: handoffPayload }));
+          } catch {}
           onNavigate?.('troubleshooting');
+          toast.success('Navigating to RCA Copilot', `Loaded ${tag || activeMachineContext.assetTag} into Troubleshooting & RCA.`);
         }}
       />
 

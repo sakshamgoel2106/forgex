@@ -66,21 +66,19 @@ export function evaluateOperationalGuardrails(
     };
   }
 
-  // 2. Smart Handling for Personal PPE / HR / Logistics Queries (e.g., "I left my helmet at home")
+  // 2. Smart Handling for Personal PPE / HR / Logistics Queries - TOP PRIORITY over routine checks
+  const ppeNouns = '(?:helmet|hard\\s*hat|boots?|shoes?|footwear|glasses|goggles|face\\s*shield|gloves?|insulated\\s*gloves?|earplugs?|ear\\s*muffs?|ear\\s*protection|ppe|vest|jacket|mask|respirator|dastane|chashma)';
+  const ppeIssueVerbs = '(?:broke|broken|damaged?|cracked?|scratched?|scratch|torn|tear|lost|missing|left\\s+at\\s+home|left\\s+my|forgot(?:ten)?|forget|bhul|toot|phat|kharab|expired)';
+
   const isPpeIssue =
-    /\b(helmet|hard\s*hat|boots|shoes|glasses|goggles|gloves|earplugs|ear\s*muffs|ear\s*protection|ppe|vest|jacket|mask|respirator)\b.*?\b(broke|broken|damaged|cracked|lost|missing|torn|nahi)\b/i.test(
-      q
-    ) ||
-    /\b(broke|broken|damaged|cracked|lost|missing|torn)\b.*?\b(helmet|hard\s*hat|boots|shoes|glasses|goggles|gloves|earplugs|ear\s*muffs|ear\s*protection|ppe|vest|jacket|mask|respirator)\b/i.test(
-      q
-    ) ||
-    /\b(left\s+my|forgot\s+my|lost\s+my|(?:do\s+not|don'?t)\s+have(?:\s+my)?|without(?:\s+a|\s+my)?|at\s+home|missing|no|broken|damaged)\s+(?:safety\s+)?(helmet|hard\s*hat|boots|shoes|glasses|goggles|gloves|earplugs|ear\s*muffs|ear\s*protection|ppe|vest|jacket|mask|respirator)\b/i.test(
-      q
-    ) ||
-    /\b(missing\s+ppe|no\s+ppe|without\s+ppe|forgot\s+helmet|left\s+helmet|forgot\s+boots|forgot\s+goggles|no\s+helmet|no\s+boots|no\s+shoes|wearing\s+sneakers|no\s+gloves)\b/i.test(
-      q
-    ) ||
-    /\b(helmet\s*ghar|shoes\s*bhul|ppe\s*nahi|chashma\s*nahi|gloves\s*nahi)\b/i.test(q);
+    new RegExp(`\\b${ppeNouns}\\b.*?\\b${ppeIssueVerbs}\\b`, 'i').test(q) ||
+    new RegExp(`\\b${ppeIssueVerbs}\\b.*?\\b${ppeNouns}\\b`, 'i').test(q) ||
+    new RegExp(`\\b(?:left\\s+my|forgot(?:ten)?(?:\\s+my)?|lost\\s+my|(?:do\\s+not|don'?t)\\s+have(?:\\s+my)?|without(?:\\s+a|\\s+my|\\s+proper|\\s+certified)?|at\\s+home|missing|no|broken|damaged|scratched?)\\s+(?:safety\\s+|insulated\\s+|certified\\s+)?${ppeNouns}\\b`, 'i').test(q) ||
+    new RegExp(`\\b(?:routine\\s+check|inspect|work|operate|maintenance|panel).*?\\bwithout\\b.*?${ppeNouns}\\b`, 'i').test(q) ||
+    new RegExp(`\\bwithout\\b.*?${ppeNouns}\\b.*?(?:routine\\s+check|inspect|work|operate|panel|machine)`, 'i').test(q) ||
+    /\b(scratched?\s*(?:safety\s+)?goggles?|scratched?\s*glasses|damaged?\s*(?:safety\s+)?goggles?|scratched?\s*face\s*shield)\b/i.test(q) ||
+    /\b(missing\s+ppe|no\s+ppe|without\s+ppe|forgot\s+helmet|left\s+helmet|forgot\s+boots|forgot\s+goggles|no\s+helmet|no\s+boots|no\s+shoes|wearing\s+sneakers|no\s+gloves|without\s+insulated\s+gloves|routine\s+check\s+without)\b/i.test(q) ||
+    /\b(helmet\s*ghar|shoes\s*bhul|ppe\s*nahi|chashma\s*nahi|gloves\s*nahi|helmet\s*toot|shoes\s*phat)\b/i.test(q);
 
   const isHrOrLogistics =
     /\b(salary|payroll|paycheck|leave\s*application|sick\s*leave|vacation|attendance|punch\s*in|punch\s*out|punch\s*card|hr\s*department|hr\s*policy|lunch\s*break|shift\s*swap|shift\s*timing|bonus|appraisal)\b/i.test(

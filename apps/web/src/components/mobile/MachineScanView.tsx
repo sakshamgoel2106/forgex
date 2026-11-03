@@ -47,6 +47,22 @@ export interface MachineScanViewProps {
 // Comprehensive catalog of seeded machines with ISO 14224 classifications & real reliability telemetry
 export const SEEDED_MACHINES_CATALOG: ScannedMachine[] = [
   {
+    id: 'mach-hpu-602-b',
+    assetTag: 'HPU-602-B',
+    name: 'Primary Hydraulic Power Unit (HPU)',
+    isoClass: 'Hydraulic Equipment / Power Unit (HY-PU)',
+    status: 'OPTIMAL',
+    area: 'Heavy Forming Hydraulic Cell B',
+    manufacturer: 'Bosch Rexroth',
+    modelNumber: 'ABPAC-160-PRO',
+    serialNumber: 'BR-HPU-602-B-2026',
+    healthScore: 91,
+    vibrationRms: '2.4 mm/s',
+    bearingTemp: '58.5 °C',
+    runHours: 14200,
+    mtbfHours: 7800,
+  },
+  {
     id: 'mach-pump-204-b',
     assetTag: 'PUMP-204-B',
     name: 'Centrifugal Slurry Bottoms Pump',

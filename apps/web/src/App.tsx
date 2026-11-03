@@ -331,7 +331,7 @@ const AppContent: React.FC = () => {
         }
         return (
           <MaintenanceHistoryView
-            onNavigate={(mod) => setActiveModule(mod as NavModule)}
+            onNavigate={(mod: string) => setActiveModule(mod as NavModule)}
             onNavigateToWorkOrder={(_ticket) => setActiveModule('maintenance')}
           />
         );

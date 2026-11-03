@@ -513,7 +513,9 @@ Respond in strict JSON with:
     const isPump = qLower.includes('pump') || qLower.includes('sv') || qLower.includes('centrifugal');
     const isCompressor = qLower.includes('compress') || qLower.includes('comp') || qLower.includes('gas');
     const isCoolingTower = qLower.includes('cooling') || qLower.includes('tower') || qLower.includes('ctwr');
-    const isConveyor = qLower.includes('convey') || qLower.includes('conv') || qLower.includes('belt');
+    const isConveyor = qLower.includes('convey') || qLower.includes('conv');
+    const isHpu = qLower.includes('hpu') || qLower.includes('hydraulic') || qLower.includes('hydro') || qLower.includes('power unit') || qLower.includes('press');
+    const hasDriveOrBearing = (qLower.includes('belt') || qLower.includes('slip')) && (qLower.includes('bearing') || qLower.includes('noise') || qLower.includes('vibrat'));
 
     let answerText = '';
 
@@ -539,6 +541,10 @@ Respond in strict JSON with:
       answerText += `- Belt wander/mistracking exceeding the ±25 mm lateral tolerance threshold.\n`;
       answerText += `- Head pulley vulcanized ceramic lagging abrasion or rubber buildup.\n`;
       answerText += `- Tail take-up carriage guide rail binding preventing correct tension absorption.\n`;
+    } else if (isHpu || hasDriveOrBearing) {
+      answerText += `- Drive belt tension loss, sheave groove glazing, or fluid mist contamination on pulley faces causing rotational slippage.\n`;
+      answerText += `- Bearing raceway micro-spalling or lubricant breakdown in the electric drive motor / hydraulic pump assembly inducing abnormal acoustic noise.\n`;
+      answerText += `- Hydraulic suction cavitation or fluid aeration causing pressure ripple and mechanical vibration.\n`;
     } else if (uniqueLines.length > 0) {
       const mid = Math.ceil(uniqueLines.length / 2);
       answerText += uniqueLines.slice(0, mid).map((l) => `- ${l}`).join('\n') + '\n';
@@ -580,6 +586,11 @@ Respond in strict JSON with:
       answerText += `1. **Belt Tension Check**: Verify counterweight take-up carriage travels freely and maintains 35 kN nominal belt tension.\n`;
       answerText += `2. **Tracking Audit**: Inspect carrying and return training idlers; verify belt edge does not contact structure framework.\n`;
       answerText += `3. **Pull-Wire Switch Test**: Mechanically trip emergency pull-cord switches along left and right walkways to verify safety interlock.\n`;
+    } else if (isHpu || hasDriveOrBearing) {
+      answerText += `1. **Drive Belt & Pulley Inspection**: De-energize unit; check V-belt tension using sonic gauge; inspect pulleys for wear and degrease contact surfaces.\n`;
+      answerText += `2. **Bearing Noise & Thermal Scan**: Use acoustic FFT analyzer and infrared pyrometer to locate bearing hotspot (bearing temperature limit: 70°C).\n`;
+      answerText += `3. **Hydraulic Fluid & Pressure Audit**: Verify reservoir oil level in sight glass, check filter differential pressure (< 1.5 bar), and verify nominal circuit pressure (160–210 bar).\n`;
+      answerText += `4. **Shaft Alignment & Fastener Check**: Check parallel/angular alignment with dial indicators; verify motor and pump mounting bolt torques.\n`;
     } else if (uniqueLines.length > 0) {
       const mid = Math.ceil(uniqueLines.length / 2);
       answerText += uniqueLines.slice(mid).map((l, i) => `${i + 1}. ${l}`).join('\n') + '\n';
@@ -607,6 +618,10 @@ Respond in strict JSON with:
       answerText += `- **LOTO Isolation**: Lock out drive motor MCC breaker CR-CV-01 and engage chute isolation gate.\n`;
       answerText += `- **Fastener Torque Specs**: Pillow block bearing bolts: **420 Nm** | Take-up carriage bolts: **180 Nm**.\n`;
       answerText += `- **Operating Limits**: Max belt wander: **±25 mm** | Nominal belt tension: **35 kN** | Max bearing temp: **70°C**.\n`;
+    } else if (isHpu || hasDriveOrBearing) {
+      answerText += `- **LOTO Isolation**: De-energize 480V MCC breaker, apply padlock and tag; bleed hydraulic accumulator pressure to 0 bar zero-energy state.\n`;
+      answerText += `- **Fastener Torque Specs**: Motor base mounting bolts: **140 Nm** | Hydraulic pump flange bolts: **95 Nm** | Pulley taper-lock bushing: **75 Nm**.\n`;
+      answerText += `- **Operating Limits**: Max continuous pressure: **210 bar (3045 PSI)** | Max bearing temp: **75°C** | Max vibration: **3.5 mm/s RMS**.\n`;
     } else {
       answerText += `- **LOTO Isolation**: Perform electrical de-energization and zero-energy mechanical lock before opening asset inspection panels.\n`;
       answerText += `- **Fastener & Spec Verification**: Retorque all structural mounting bolts according to manufacturer torque tables.\n`;
