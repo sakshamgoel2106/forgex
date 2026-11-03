@@ -224,7 +224,7 @@ Output strictly valid JSON with this shape:
     clearTimeout(timeout);
 
     if (res.ok) {
-      const data = await res.json();
+      const data = (await res.json()) as any;
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (rawText) {
         const parsed = JSON.parse(rawText);

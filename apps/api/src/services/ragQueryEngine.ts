@@ -32,8 +32,6 @@ import { SpecialistRoutingService } from './specialistRouting.service.js';
 import { HistoricalFaultService } from './historicalFaultService.js';
 import { isUuid, sanitizeMachineOrAssetId, sanitizeUuid } from '../utils/uuid.js';
 import { evaluateOperationalGuardrails } from './operationalGuardrails.js';
-import { analyzeIntentLocally } from '../ai/intentContextAnalyzer.js';
-import type { CopilotResponseCategory } from '@forgex/shared-types';
 
 export interface RAGContext {
   organizationId: string;
